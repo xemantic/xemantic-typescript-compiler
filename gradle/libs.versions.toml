@@ -1,11 +1,11 @@
 [versions]
-kotlinTarget = "2.2"
+kotlinTarget = "2.3"
 javaTarget = "17"
 
-kotlin = "2.2.21"
+kotlin = "2.3.10"
 asm = "9.9.1"
 
-xemanticKotlinTest = "1.17.2"
+xemanticKotlinTest = "1.17.3"
 
 versionsPlugin = "0.53.0"
 dokkaPlugin = "2.1.0"
