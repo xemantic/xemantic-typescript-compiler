@@ -1,0 +1,25 @@
+# Builds the release and publishes to Maven Central
+name: Build release
+
+on:
+  release:
+    types: [ published ]
+
+jobs:
+  extract_version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+  build:
+    needs: extract_version
+    uses: xemantic/.github/.github/workflows/build-gradle.yml@main
+    secrets: inherit
+    with:
+      gradle_args: -Pversion=${{ needs.extract_version.outputs.version }} build publishToMavenCentral jreleaserAnnounce --no-configuration-cache
+      maven_central: true
+      jreleaser: true
