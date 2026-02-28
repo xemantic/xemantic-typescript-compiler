@@ -1,7 +1,6 @@
-@file:OptIn(ExperimentalWasmDsl::class, ExperimentalKotlinGradlePluginApi::class)
+@file:OptIn(ExperimentalKotlinGradlePluginApi::class)
 
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
-import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 import org.jreleaser.model.Active
@@ -9,7 +8,6 @@ import org.jreleaser.model.Active
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.plugin.power.assert)
-    alias(libs.plugins.kotlinx.binary.compatibility.validator)
     alias(libs.plugins.dokka)
     alias(libs.plugins.versions)
     alias(libs.plugins.maven.publish)
@@ -17,13 +15,11 @@ plugins {
     alias(libs.plugins.xemantic.conventions)
 }
 
-// TODO change the group
-group = "com.xemantic.template"
+group = "com.xemantic.typescript"
 
-// TODO fill up the details
 xemantic {
-    description = "A template repository for Xemantic's Kotlin multiplatform projects"
-    inceptionYear = "2025"
+    description = "TypeScript to JavaScript transpiler in Kotlin Multiplatform"
+    inceptionYear = "2026"
     applyAllConventions()
 }
 
@@ -39,9 +35,6 @@ val javaTarget = libs.versions.javaTarget.get()
 val kotlinTarget = KotlinVersion.fromVersion(libs.versions.kotlinTarget.get())
 
 kotlin {
-
-    // TODO remove for a non-library project
-    explicitApi()
 
     compilerOptions {
         apiVersion = kotlinTarget
@@ -66,55 +59,22 @@ kotlin {
         }
     }
 
-    js {
-        browser()
-        nodejs()
-        // TODO remove for a non-library project
-        binaries.library()
-    }
-
-    wasmJs {
-        browser()
-        nodejs()
-        d8()
-        // TODO remove for a non-library project
-        binaries.library()
-    }
-
-    wasmWasi {
-        nodejs()
-        // TODO remove for a non-library project
-        binaries.library()
-    }
-
     // native, see https://kotlinlang.org/docs/native-target-support.html
     // tier 1
-    macosX64()
-    macosArm64()
-    iosSimulatorArm64()
-    iosX64()
-    iosArm64()
+    macosX64 {
+        binaries.executable()
+    }
+    macosArm64 {
+        binaries.executable()
+    }
 
     // tier 2
-    linuxX64()
-    linuxArm64()
-    watchosSimulatorArm64()
-    watchosX64()
-    watchosArm32()
-    watchosArm64()
-    tvosSimulatorArm64()
-    tvosX64()
-    tvosArm64()
-
-    // tier 3
-    androidNativeArm32()
-    androidNativeArm64()
-    androidNativeX86()
-    androidNativeX64()
-    mingwX64()
-    watchosDeviceArm64()
-
-    swiftExport {}
+    linuxX64 {
+        binaries.executable()
+    }
+    linuxArm64 {
+        binaries.executable()
+    }
 
     sourceSets {
 
@@ -140,25 +100,6 @@ configurations.all {
         }
     }
 }
-
-// skip tests which require XCode components to be installed
-tasks {
-    named("tvosSimulatorArm64Test") { enabled = false }
-    named("watchosSimulatorArm64Test") { enabled = false }
-}
-
-// TODO only relevant for private projects, public project snapshots are released to maven central
-//publishing {
-//    if (isPublishingToGitHub) {
-//        repositories {
-//            maven {
-//                name = "GitHubPackages"
-//                url = uri("https://maven.pkg.github.com/xemantic/xemantic-kotlin-core")
-//                credentials(PasswordCredentials::class)
-//            }
-//        }
-//    }
-//}
 
 powerAssert {
     functions = listOf(
