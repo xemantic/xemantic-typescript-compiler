@@ -6,6 +6,7 @@ kotlin = "2.3.10"
 asm = "9.9.1"
 
 xemanticKotlinTest = "1.17.3"
+kotlinxIo = "0.8.2"
 
 versionsPlugin = "0.53.0"
 dokkaPlugin = "2.1.0"
@@ -16,6 +17,7 @@ xemanticConventionsPlugin = "0.6.8"
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 xemantic-kotlin-test = { module = "com.xemantic.kotlin:xemantic-kotlin-test", version.ref = "xemanticKotlinTest" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinxIo" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

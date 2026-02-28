@@ -31,6 +31,19 @@ fun MavenPomDeveloperSpec.projectDevs() {
     }
 }
 
+/**
+ * Runs a shell command, streaming its output to the Gradle console.
+ * Throws an [IllegalStateException] if the process exits with a non-zero code.
+ */
+fun runCommand(vararg cmd: String, workingDir: File = projectDir) {
+    val exitCode = ProcessBuilder(*cmd)
+        .directory(workingDir)
+        .inheritIO()
+        .start()
+        .waitFor()
+    check(exitCode == 0) { "Command failed (exit $exitCode): ${cmd.joinToString(" ")}" }
+}
+
 val javaTarget = libs.versions.javaTarget.get()
 val kotlinTarget = KotlinVersion.fromVersion(libs.versions.kotlinTarget.get())
 
@@ -79,9 +92,11 @@ kotlin {
     sourceSets {
 
         commonTest {
+            kotlin.srcDir(layout.buildDirectory.dir("generated/typescript-tests"))
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.xemantic.kotlin.test)
+                implementation(libs.kotlinx.io.core)
             }
         }
 
@@ -106,8 +121,8 @@ val typeScriptRepoDir = projectDir.resolve("typescript-repo")
  * The clone is idempotent: if `typescript-repo/.git` already exists the task
  * reports the fact and exits immediately, making repeated builds fast.
  *
- * Run explicitly before the first test run, or simply invoke `jvmTest`
- * (which depends on this task):
+ * Run explicitly before the first test run, or simply invoke any test task
+ * (which depends on this task transitively via `generateTypeScriptTests`):
  * ```
  * ./gradlew cloneTypeScriptRepo
  * ./gradlew jvmTest
@@ -116,6 +131,7 @@ val typeScriptRepoDir = projectDir.resolve("typescript-repo")
 val cloneTypeScriptRepo by tasks.registering {
     group = "typescript"
     description = "Sparse-clones the TypeScript repository (tests only) for the compiler test harness."
+    outputs.dir(typeScriptRepoDir)
 
     doLast {
         if (typeScriptRepoDir.resolve(".git").exists()) {
@@ -127,38 +143,158 @@ val cloneTypeScriptRepo by tasks.registering {
 
         // Step 1: shallow clone with no blob objects and sparse-checkout enabled.
         //         Only tree/commit objects are fetched; blobs are lazy-loaded on demand.
-        project.exec {
-            commandLine(
-                "git", "clone",
-                "--depth=1",
-                "--filter=blob:none",
-                "--sparse",
-                "https://github.com/microsoft/TypeScript.git",
-                typeScriptRepoDir.absolutePath,
-            )
-        }
+        runCommand(
+            "git", "clone",
+            "--depth=1",
+            "--filter=blob:none",
+            "--sparse",
+            "https://github.com/microsoft/TypeScript.git",
+            typeScriptRepoDir.absolutePath,
+        )
 
         // Step 2: restrict the working tree to only the paths we need.
         //         Git will now fetch blobs exclusively for these two directories.
-        project.exec {
-            workingDir = typeScriptRepoDir
-            commandLine(
-                "git", "sparse-checkout", "set",
-                "tests/cases/compiler",
-                "tests/baselines/reference",
-            )
-        }
+        runCommand(
+            "git", "sparse-checkout", "set",
+            "tests/cases/compiler",
+            "tests/baselines/reference",
+            workingDir = typeScriptRepoDir,
+        )
 
         logger.lifecycle("TypeScript repository cloned successfully.")
     }
 }
 
-// Pass the TypeScript repo location to the JVM test runner so the harness can
-// locate the test cases.  The task also depends on cloneTypeScriptRepo so that
-// a plain `./gradlew jvmTest` is all that's needed.
-tasks.named<org.gradle.api.tasks.testing.Test>("jvmTest") {
+/**
+ * Generates Kotlin multiplatform `@Test` functions from the official TypeScript compiler
+ * test suite. Each TypeScript test case and its baseline reference files become one or more
+ * standard `kotlin.test.@Test` functions with descriptive backtick names.
+ *
+ * Generated tests live in `build/generated/typescript-tests/` which is wired into the
+ * `commonTest` source set. Run this task (or any test task, which depends on it) to
+ * regenerate after the TypeScript repo is updated:
+ * ```
+ * ./gradlew generateTypeScriptTests
+ * ./gradlew jvmTest
+ * ```
+ *
+ * ### Test naming
+ * Test names use Kotlin backtick syntax so they read as sentences, e.g.:
+ * - `` `2dArrays.ts compiles to JavaScript matching 2dArrays.js` ``
+ * - `` `2dArrays.ts has expected compilation errors matching 2dArrays.errors.txt` ``
+ *
+ * This allows an LLM running `./gradlew jvmTest` to immediately understand which
+ * TypeScript file failed and what baseline was expected.
+ *
+ * ### Assertions
+ * JavaScript output tests use [String?.sameAs(Path)][com.xemantic.typescript.compiler.sameAs]
+ * which produces a unified diff on failure — giving the LLM a precise, token-efficient
+ * signal about what changed.
+ */
+val generateTypeScriptTests by tasks.registering {
+    group = "typescript"
+    description = "Generates Kotlin test cases from the TypeScript compiler test suite."
+
     dependsOn(cloneTypeScriptRepo)
-    systemProperty("typescript.repo.dir", typeScriptRepoDir.absolutePath)
+
+    val testsDir = typeScriptRepoDir.resolve("tests/cases/compiler")
+    val baselinesDir = typeScriptRepoDir.resolve("tests/baselines/reference")
+    val outputDir = layout.buildDirectory.dir("generated/typescript-tests")
+
+    inputs.dir(testsDir).optional()
+    outputs.dir(outputDir)
+
+    doLast {
+        val packageDir = outputDir.get().asFile
+            .resolve("com/xemantic/typescript/compiler")
+        packageDir.mkdirs()
+
+        if (!testsDir.exists()) {
+            logger.lifecycle("TypeScript test cases not found — skipping test generation.")
+            logger.lifecycle("Run: ./gradlew cloneTypeScriptRepo generateTypeScriptTests")
+            return@doLast
+        }
+
+        val testFiles = testsDir.listFiles { f -> f.isFile && f.extension == "ts" }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+
+        logger.lifecycle("Generating Kotlin tests for ${testFiles.size} TypeScript test cases...")
+
+        // $ sign for use in generated Kotlin string templates
+        val D = "\$"
+
+        // Group by first character to keep individual files manageable
+        val groups = testFiles.groupBy { file ->
+            val ch = file.nameWithoutExtension.first()
+            if (ch.isLetter()) ch.uppercaseChar() else '#'
+        }
+
+        for ((groupChar, files) in groups.entries.sortedBy { it.key }) {
+            val suffix = if (groupChar == '#') "Numeric" else groupChar.toString()
+            val className = "TypeScriptCompilerTests_$suffix"
+            val sb = StringBuilder()
+
+            sb.appendLine("// Auto-generated by ./gradlew generateTypeScriptTests. Do not edit.")
+            sb.appendLine("package com.xemantic.typescript.compiler")
+            sb.appendLine()
+            sb.appendLine("import kotlinx.io.files.Path")
+            sb.appendLine("import kotlin.test.Test")
+            sb.appendLine("import kotlin.test.assertTrue")
+            sb.appendLine()
+            sb.appendLine("class $className {")
+
+            for (file in files) {
+                val name = file.nameWithoutExtension
+                val jsBaseline = baselinesDir.resolve("$name.js")
+                val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
+
+                if (jsBaseline.exists()) {
+                    sb.appendLine()
+                    sb.appendLine("    @Test")
+                    sb.appendLine("    fun `$name.ts compiles to JavaScript matching $name.js`() {")
+                    sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").javascript")
+                    sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
+                    sb.appendLine("    }")
+                }
+
+                if (errorsBaseline.exists()) {
+                    sb.appendLine()
+                    sb.appendLine("    @Test")
+                    sb.appendLine("    fun `$name.ts has expected compilation errors matching $name.errors.txt`() {")
+                    sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                    sb.appendLine("        assertTrue(")
+                    sb.appendLine("            actual = TypeScriptCompiler().compile(source, \"$name.ts\").hasErrors,")
+                    sb.appendLine("            message = \"Expected compilation errors for $name.ts but none were produced\"")
+                    sb.appendLine("        )")
+                    sb.appendLine("    }")
+                }
+            }
+
+            sb.appendLine()
+            sb.appendLine("}")
+
+            packageDir.resolve("$className.kt").writeText(sb.toString())
+        }
+
+        val totalTests = testFiles.count { file ->
+            val name = file.nameWithoutExtension
+            baselinesDir.resolve("$name.js").exists() || baselinesDir.resolve("$name.errors.txt").exists()
+        }
+        logger.lifecycle("Generated $totalTests test functions across ${groups.size} files in: $packageDir")
+    }
+}
+
+// Make every Kotlin test compilation task depend on the generator so that
+// `./gradlew jvmTest` (or any platform test) is all that's needed.
+tasks.matching { it.name.startsWith("compile") && "Test" in it.name && "Kotlin" in it.name }
+    .configureEach { dependsOn(generateTypeScriptTests) }
+
+// Ensure tests run with the project root as working directory so that
+// kotlinx.io's Path("typescript-repo") resolves correctly on all platforms.
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    workingDir = projectDir
 }
 
 // ---------------------------------------------------------------------------
