@@ -89,6 +89,80 @@ kotlin {
 
 }
 
+// ---------------------------------------------------------------------------
+// TypeScript compiler test harness
+// ---------------------------------------------------------------------------
+
+/**
+ * The local directory where the TypeScript repository is sparse-cloned.
+ * Listed in .gitignore — persists across `./gradlew clean` runs.
+ */
+val typeScriptRepoDir = projectDir.resolve("typescript-repo")
+
+/**
+ * Performs a sparse, shallow clone of the Microsoft TypeScript repository,
+ * fetching only the compiler test cases and their expected baselines.
+ *
+ * The clone is idempotent: if `typescript-repo/.git` already exists the task
+ * reports the fact and exits immediately, making repeated builds fast.
+ *
+ * Run explicitly before the first test run, or simply invoke `jvmTest`
+ * (which depends on this task):
+ * ```
+ * ./gradlew cloneTypeScriptRepo
+ * ./gradlew jvmTest
+ * ```
+ */
+val cloneTypeScriptRepo by tasks.registering {
+    group = "typescript"
+    description = "Sparse-clones the TypeScript repository (tests only) for the compiler test harness."
+
+    doLast {
+        if (typeScriptRepoDir.resolve(".git").exists()) {
+            logger.lifecycle("TypeScript repository already present at: $typeScriptRepoDir")
+            return@doLast
+        }
+
+        logger.lifecycle("Cloning TypeScript repository (sparse checkout) into: $typeScriptRepoDir ...")
+
+        // Step 1: shallow clone with no blob objects and sparse-checkout enabled.
+        //         Only tree/commit objects are fetched; blobs are lazy-loaded on demand.
+        project.exec {
+            commandLine(
+                "git", "clone",
+                "--depth=1",
+                "--filter=blob:none",
+                "--sparse",
+                "https://github.com/microsoft/TypeScript.git",
+                typeScriptRepoDir.absolutePath,
+            )
+        }
+
+        // Step 2: restrict the working tree to only the paths we need.
+        //         Git will now fetch blobs exclusively for these two directories.
+        project.exec {
+            workingDir = typeScriptRepoDir
+            commandLine(
+                "git", "sparse-checkout", "set",
+                "tests/cases/compiler",
+                "tests/baselines/reference",
+            )
+        }
+
+        logger.lifecycle("TypeScript repository cloned successfully.")
+    }
+}
+
+// Pass the TypeScript repo location to the JVM test runner so the harness can
+// locate the test cases.  The task also depends on cloneTypeScriptRepo so that
+// a plain `./gradlew jvmTest` is all that's needed.
+tasks.named<org.gradle.api.tasks.testing.Test>("jvmTest") {
+    dependsOn(cloneTypeScriptRepo)
+    systemProperty("typescript.repo.dir", typeScriptRepoDir.absolutePath)
+}
+
+// ---------------------------------------------------------------------------
+
 repositories {
     mavenCentral()
 }
