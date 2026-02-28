@@ -43,3 +43,8 @@ bin/
 .DS_Store
 
 /*.hprof
+
+### TypeScript compiler test harness ###
+# Sparse-cloned TypeScript repository used by the JVM test harness.
+# Clone it with: ./gradlew cloneTypeScriptRepo
+/typescript-repo/
