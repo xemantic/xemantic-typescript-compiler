@@ -31,7 +31,7 @@ package com.xemantic.typescript.compiler
  * - `0` — compilation succeeded (possibly with warnings)
  * - `1` — compilation failed with errors, or invalid arguments
  */
-public fun main(args: Array<String>) {
+fun main(args: Array<String>) {
     if (args.isEmpty()) {
         error("Usage: xemantic-typescript-compiler <input.ts> [output.js]\nError: no input file specified")
     }

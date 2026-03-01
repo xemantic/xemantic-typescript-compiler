@@ -24,12 +24,12 @@ package com.xemantic.typescript.compiler
  * @property diagnostics The list of diagnostic messages (errors, warnings, hints)
  *   produced during compilation.
  */
-public data class CompilationResult(
+data class CompilationResult(
     val javascript: String?,
     val diagnostics: List<Diagnostic> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
-    public val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
+    val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
 }
 
 /**
@@ -43,7 +43,7 @@ public data class CompilationResult(
  * @property line The 1-based line number within [fileName], or `null` if not applicable.
  * @property character The 1-based column number within the line, or `null` if not applicable.
  */
-public data class Diagnostic(
+data class Diagnostic(
     val message: String,
     val category: DiagnosticCategory,
     val code: Int,
@@ -56,7 +56,7 @@ public data class Diagnostic(
  * The severity category of a [Diagnostic] message, mirroring the TypeScript SDK's
  * `DiagnosticCategory` enum.
  */
-public enum class DiagnosticCategory {
+enum class DiagnosticCategory {
     Warning,
     Error,
     Message,
@@ -76,7 +76,7 @@ public enum class DiagnosticCategory {
  * println(result.javascript)
  * ```
  */
-public class TypeScriptCompiler {
+class TypeScriptCompiler {
 
     /**
      * Compiles the given TypeScript [source] string to JavaScript.
@@ -90,7 +90,7 @@ public class TypeScriptCompiler {
      * @return A [CompilationResult] containing the JavaScript output and any diagnostics.
      * @throws NotImplementedError until the compiler is implemented.
      */
-    public fun compile(
+    fun compile(
         source: String,
         fileName: String = "input.ts",
     ): CompilationResult {
