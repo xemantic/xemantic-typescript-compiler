@@ -246,13 +246,16 @@ val generateTypeScriptTests by tasks.registering {
 
             for (file in files) {
                 val name = file.nameWithoutExtension
+                // Kotlin 2.x does not allow dots in JVM method names, even in backtick-quoted identifiers.
+                // Replace every dot in the base name with an underscore for the function identifier.
+                val id = name.replace('.', '_')
                 val jsBaseline = baselinesDir.resolve("$name.js")
                 val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
 
                 if (jsBaseline.exists()) {
                     sb.appendLine()
                     sb.appendLine("    @Test")
-                    sb.appendLine("    fun `$name.ts compiles to JavaScript matching $name.js`() {")
+                    sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
                     sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
                     sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").javascript")
                     sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
@@ -262,7 +265,7 @@ val generateTypeScriptTests by tasks.registering {
                 if (errorsBaseline.exists()) {
                     sb.appendLine()
                     sb.appendLine("    @Test")
-                    sb.appendLine("    fun `$name.ts has expected compilation errors matching $name.errors.txt`() {")
+                    sb.appendLine("    fun `${id}_ts has expected compilation errors matching ${id}_errors_txt`() {")
                     sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
                     sb.appendLine("        assertTrue(")
                     sb.appendLine("            actual = TypeScriptCompiler().compile(source, \"$name.ts\").hasErrors,")

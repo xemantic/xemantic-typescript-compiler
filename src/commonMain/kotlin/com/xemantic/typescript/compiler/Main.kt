@@ -16,8 +16,6 @@
 
 package com.xemantic.typescript.compiler
 
-import kotlin.system.exitProcess
-
 /**
  * CLI entry point for the xemantic TypeScript compiler.
  *
@@ -35,9 +33,7 @@ import kotlin.system.exitProcess
  */
 public fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        println("Usage: xemantic-typescript-compiler <input.ts> [output.js]")
-        println("Error: no input file specified")
-        exitProcess(1)
+        error("Usage: xemantic-typescript-compiler <input.ts> [output.js]\nError: no input file specified")
     }
 
     val inputPath = args[0]
@@ -46,8 +42,7 @@ public fun main(args: Array<String>) {
     println("xemantic-typescript-compiler: $inputPath -> $outputPath")
 
     // TODO: read input file and compile with TypeScriptCompiler, then write output
-    println("Error: TypeScript compilation is not yet implemented")
-    exitProcess(1)
+    error("TypeScript compilation is not yet implemented")
 }
 
 private fun deriveOutputPath(inputPath: String): String =
