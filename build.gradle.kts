@@ -75,18 +75,26 @@ kotlin {
     // native, see https://kotlinlang.org/docs/native-target-support.html
     // tier 1
     macosX64 {
-        binaries.executable()
+        binaries.executable {
+            entryPoint = "com.xemantic.typescript.compiler.main"
+        }
     }
     macosArm64 {
-        binaries.executable()
+        binaries.executable {
+            entryPoint = "com.xemantic.typescript.compiler.main"
+        }
     }
 
     // tier 2
     linuxX64 {
-        binaries.executable()
+        binaries.executable {
+            entryPoint = "com.xemantic.typescript.compiler.main"
+        }
     }
     linuxArm64 {
-        binaries.executable()
+        binaries.executable {
+            entryPoint = "com.xemantic.typescript.compiler.main"
+        }
     }
 
     sourceSets {
