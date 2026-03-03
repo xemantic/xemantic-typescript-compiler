@@ -310,11 +310,11 @@ class Emitter(
                 }
             }
         }
-        write("; ")
+        write(if (node.condition != null) "; " else ";")
         if (node.condition != null) {
             emitExpression(node.condition)
         }
-        write("; ")
+        write(if (node.incrementor != null) "; " else ";")
         if (node.incrementor != null) {
             emitExpression(node.incrementor)
         }
