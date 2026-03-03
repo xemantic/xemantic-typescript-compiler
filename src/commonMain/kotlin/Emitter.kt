@@ -34,6 +34,10 @@ class Emitter(
     private val sb = StringBuilder()
     private var indentLevel = 0
     private var isStartOfLine = true
+    // When true the next writeIndent() call is a no-op (consumed immediately).
+    // Used so that labeled-statement chains (target1: target2: while…) can chain
+    // all labels on the same line without the body statement re-indenting.
+    private var skipNextIndent = false
 
     /**
      * Emits the given [sourceFile] as JavaScript and returns the resulting source text.
@@ -473,12 +477,16 @@ class Emitter(
 
     private fun emitLabeledStatement(node: LabeledStatement) {
         writeIndent()
-        write(node.label.text)
-        write(":")
-        writeNewLine()
-        indentLevel++
-        emitStatement(node.statement)
-        indentLevel--
+        // Chain all nested labels onto the same line: "target1: target2: while …"
+        var current: Statement = node
+        while (current is LabeledStatement) {
+            write(current.label.text)
+            write(": ")
+            current = current.statement
+        }
+        // Emit the body statement on the same line (suppress its writeIndent call)
+        skipNextIndent = true
+        emitStatement(current)
     }
 
     private fun emitThrowStatement(node: ThrowStatement) {
@@ -1189,6 +1197,7 @@ class Emitter(
                 if (index > 0) write(", ")
                 emitExpression(element)
             }
+            if (node.hasTrailingComma) write(",")
             write("]")
         }
     }
@@ -1320,10 +1329,26 @@ class Emitter(
         if (node.questionDotToken) {
             write("?.")
         } else {
+            // A plain integer numeric literal followed by `.name` is ambiguous in JS
+            // because `1.` is a valid decimal literal.  Emit an extra `.` to fix:
+            // NumericLiteralNode("1")  -> write "1" then "." then ".foo"  -> "1..foo"
+            val expr = node.expression
+            if (expr is NumericLiteralNode && numericNeedsExtraDot(expr.text)) {
+                write(".")
+            }
             write(".")
         }
         write(node.name.text)
     }
+
+    /** True if a numeric literal text needs an extra '.' before property access
+     *  to avoid the ambiguity where `1.foo` is parsed as decimal `1.` then identifier. */
+    private fun numericNeedsExtraDot(text: String): Boolean =
+        !text.contains('.') &&
+        !text.lowercase().contains('e') &&
+        !text.startsWith("0x") &&
+        !text.startsWith("0b") &&
+        !text.startsWith("0o")
 
     private fun emitElementAccess(node: ElementAccessExpression) {
         emitExpression(node.expression)
@@ -1528,6 +1553,7 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitObjectBindingPattern(node: ObjectBindingPattern) {
+        if (node.elements.isEmpty()) { write("{}"); return }
         write("{ ")
         for ((index, element) in node.elements.withIndex()) {
             if (index > 0) write(", ")
@@ -1725,6 +1751,7 @@ class Emitter(
     }
 
     private fun writeIndent() {
+        if (skipNextIndent) { skipNextIndent = false; return }
         repeat(indentLevel) {
             sb.append("    ")
         }
