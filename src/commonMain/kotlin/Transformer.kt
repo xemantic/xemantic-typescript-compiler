@@ -624,10 +624,21 @@ class Transformer(private val options: CompilerOptions) {
             is SatisfiesExpression -> transformExpression(expr.expression)
             is TypeAssertionExpression -> transformExpression(expr.expression)
 
-            // Parenthesized: recurse
-            is ParenthesizedExpression -> expr.copy(
-                expression = transformExpression(expr.expression)
-            )
+            // Parenthesized: if the inner was a type-erasure node (e.g., (<T>expr)),
+            // the outer () were just syntax for the assertion — drop them unless the
+            // resulting expression really needs parens (object literals, function exprs…)
+            is ParenthesizedExpression -> {
+                val wasTypeErasure = expr.expression is TypeAssertionExpression
+                        || expr.expression is AsExpression
+                        || expr.expression is NonNullExpression
+                        || expr.expression is SatisfiesExpression
+                val transformed = transformExpression(expr.expression)
+                if (wasTypeErasure && !typeAssertionResultNeedsParens(transformed)) {
+                    transformed
+                } else {
+                    expr.copy(expression = transformed)
+                }
+            }
 
             // Binary: recurse
             is BinaryExpression -> expr.copy(
@@ -643,11 +654,32 @@ class Transformer(private val options: CompilerOptions) {
             )
 
             // New: strip type arguments, recurse
-            is NewExpression -> expr.copy(
-                expression = transformExpression(expr.expression),
-                typeArguments = null,
-                arguments = expr.arguments?.map { transformExpression(it) },
-            )
+            is NewExpression -> {
+                val constructorExpr = expr.expression
+                val transformedConstructor = transformExpression(constructorExpr)
+                // When `new` has no explicit arg list and the original constructor was
+                // (<T>callExpr), the () are semantically significant:
+                //   new (A())  ≠  new A()   (the former calls A first, then newing the result)
+                // Re-wrap in () if the type erasure dropped them around a CallExpression.
+                val finalConstructor = if (expr.arguments == null
+                    && constructorExpr is ParenthesizedExpression
+                    && isTypeErasureNode(constructorExpr.expression)
+                    && transformedConstructor is CallExpression
+                ) {
+                    ParenthesizedExpression(
+                        expression = transformedConstructor,
+                        pos = transformedConstructor.pos,
+                        end = transformedConstructor.end,
+                    )
+                } else {
+                    transformedConstructor
+                }
+                expr.copy(
+                    expression = finalConstructor,
+                    typeArguments = null,
+                    arguments = expr.arguments?.map { transformExpression(it) },
+                )
+            }
 
             // Property access: recurse
             is PropertyAccessExpression -> expr.copy(
@@ -2089,5 +2121,30 @@ class Transformer(private val options: CompilerOptions) {
             name = qn.right,
             pos = qn.pos, end = qn.end,
         )
+    }
+
+    private fun isTypeErasureNode(expr: Expression): Boolean =
+        expr is TypeAssertionExpression || expr is AsExpression
+                || expr is NonNullExpression || expr is SatisfiesExpression
+
+    /**
+     * Returns true if [expr] (the result of stripping a type assertion) still needs
+     * enclosing parentheses to be unambiguous JavaScript.
+     *
+     * - ObjectLiteralExpression: needs `()` in statement position to avoid being parsed as a block
+     * - FunctionExpression / ClassExpression: needs `()` to avoid being parsed as a declaration
+     * - ArrowFunction: needs `()` for immediate invocation `(()=>{})(...)`
+     * - NewExpression without arguments: needs `()` for member access — `new A.foo` ≠ `(new A).foo`
+     * - Prefix unary / keyword-prefix ops: needs `()` for member access — `(-A).x` ≠ `-A.x`
+     */
+    private fun typeAssertionResultNeedsParens(expr: Expression): Boolean = when (expr) {
+        is ObjectLiteralExpression -> true
+        is FunctionExpression, is ClassExpression -> true
+        is ArrowFunction -> true
+        is NewExpression -> expr.arguments == null
+        is PrefixUnaryExpression -> true
+        is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
+        is AwaitExpression, is YieldExpression -> true
+        else -> false
     }
 }

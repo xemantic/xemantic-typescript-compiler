@@ -1774,19 +1774,27 @@ class Parser(private val source: String, private val fileName: String) {
                 }
 
                 LessThan -> {
-                    // Try type arguments for call/new
-                    val typeArgs = tryParseTypeArguments()
-                    if (typeArgs != null && token == SyntaxKind.OpenParen) {
-                        val args = parseArgumentList()
-                        CallExpression(
-                            expression = result,
-                            typeArguments = typeArgs,
-                            arguments = args,
-                            pos = result.pos,
-                            end = getEnd()
-                        )
+                    // Try type arguments for call/new — wrap in tryScan so if no `(` follows,
+                    // scanner is restored to before `<` (fixing `i < 10` in for-loop conditions)
+                    val callExpr: Expression? = scanner.tryScan {
+                        val typeArgs = tryParseTypeArguments()
+                        if (typeArgs != null && token == SyntaxKind.OpenParen) {
+                            val args = parseArgumentList()
+                            CallExpression(
+                                expression = result,
+                                typeArguments = typeArgs,
+                                arguments = args,
+                                pos = result.pos,
+                                end = getEnd()
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                    if (callExpr != null) {
+                        callExpr
                     } else {
-                        // Sync parser token with scanner after failed/unused type argument parse
+                        // tryScan restored scanner to before `<`; re-sync parser token
                         token = scanner.getToken()
                         return result
                     }
