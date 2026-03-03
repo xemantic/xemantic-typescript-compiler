@@ -32,6 +32,11 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **CommonJS transform**: Applied AFTER all other transforms. The `transformToCommonJS` receives already-transformed statements (so `ImportEqualsDeclaration` is already a `VariableStatement` with `require()` call). The `isModuleFile` check uses the ORIGINAL source file statements to detect module files.
 - **Property-to-constructor trailing comments**: When moving class property initializers to the constructor, copy `trailingComments` from the `PropertyDeclaration` to the generated `ExpressionStatement`.
 
+### Kotlin idioms
+
+- **Enum context resolution in `when`** (Kotlin 2.1+): When a `when` subject is an enum type, use unqualified entry names in branch conditions — write `NewKeyword`, not `SyntaxKind.NewKeyword`. Caveat: if a data class has the same name as an enum entry (e.g. `LabeledStatement`), keep the `SyntaxKind.` prefix to avoid ambiguity. This only applies to branch conditions, not expressions inside branch bodies.
+- **`in 0..<x` range checks**: Prefer `pos in 0..<end` over `pos >= 0 && end > pos` for range validation — uses Kotlin's `rangeUntil` (`..<`) operator for exclusive upper bound.
+
 ## Anti-patterns to avoid
 
 - Do not add content to this file that is already discoverable by reading the source or build scripts — that inflates context without adding signal, reducing AI agent task success rates (see [arxiv 2602.11988](https://arxiv.org/abs/2602.11988)).
