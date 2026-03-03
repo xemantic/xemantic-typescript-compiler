@@ -2,9 +2,10 @@
 
 ## Current Status (2026-03-03)
 
-**Test results**: 2,846 / 8,625 passing (33.0%)
-- 5,413 JS output tests, 3,212 error detection tests
-- Tests_A: 214/596 passing (35.9%)
+**Test results**: 2,910 / 8,627 passing (33.7%)
+- Tests_A: 228/596 passing (38.3%)
+
+Previous: 2,846 / 8,625 passing (33.0%), Tests_A: 216/596 (36.2%)
 
 **What exists**:
 - Full pipeline: Scanner → Parser → Transformer → Emitter → BaselineFormatter
@@ -21,12 +22,17 @@
 
 ## Known Regressions to Investigate
 
-A ~36-test regression was introduced in this session (from 2,882 to 2,846). Possible causes:
+A ~36-test regression was introduced in a previous session (from 2,882 to 2,846). These regressions were partially recovered by the new fixes. Remaining potential causes:
 1. **`emitIfStatementCore` rewrite** — changed how if/else is emitted. The new code handles `} else` on the same line for non-multiline blocks, and `}\nelse` for multiline blocks. May have edge cases.
 2. **CommonJS transform** — may incorrectly detect some files as "module files" and add CommonJS preamble. Check `isModuleFile()` logic.
 3. **`reScanGreaterToken`** — was disabled because it caused 4-test net regression. The scanner function exists but the parser doesn't call it.
 
-**Action**: Before implementing new features, run a bisection to identify and fix the regression. Compare test results with and without each change.
+## Fixes Applied (2026-03-03)
+
+- **Trailing commas in multiline objects/arrays**: Added `hasTrailingComma` to AST, parse and emit it
+- **Generated constructor multiLine**: When param-property initializers added to empty constructor body, set `multiLine=true`
+- **Leading comments on erased declarations**: Return `NotEmittedStatement(leadingComments=...)` instead of `emptyList()` from transformer; emitter emits those comments
+- **Trailing comments on enum/namespace**: Added `trailingComments` parsing to `parseEnumDeclaration` and `parseModuleDeclaration`
 
 ## Priority Fixes (by impact)
 
