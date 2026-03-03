@@ -812,7 +812,7 @@ class Emitter(
         val hasBindings = node.namedBindings != null
 
         if (hasName) {
-            write(node.name!!.text)
+            write(node.name.text)
             if (hasBindings) {
                 write(", ")
             }
@@ -1575,7 +1575,7 @@ class Emitter(
         // Filter out parameters that are type-only (e.g., `this` parameter in TS)
         val emittableParams = parameters.filter { param ->
             // skip `this` parameter
-            !(param.name is Identifier && (param.name as Identifier).text == "this")
+            !(param.name is Identifier && param.name.text == "this")
         }
         for ((index, param) in emittableParams.withIndex()) {
             if (index > 0) write(", ")
