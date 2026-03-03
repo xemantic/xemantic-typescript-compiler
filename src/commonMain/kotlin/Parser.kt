@@ -1786,6 +1786,8 @@ class Parser(private val source: String, private val fileName: String) {
                             end = getEnd()
                         )
                     } else {
+                        // Sync parser token with scanner after failed/unused type argument parse
+                        token = scanner.getToken()
                         return result
                     }
                 }
