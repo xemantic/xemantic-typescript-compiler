@@ -86,16 +86,16 @@ class Transformer(private val options: CompilerOptions) {
         return sourceFile.copy(statements = transformed)
     }
 
-    private fun isModuleFile(sourceFile: SourceFile): Boolean {
-        return sourceFile.statements.any { stmt ->
-            stmt is ImportDeclaration || stmt is ExportDeclaration ||
-                    stmt is ImportEqualsDeclaration || stmt is ExportAssignment ||
-                    (stmt is Declaration && ModifierFlag.Export in (stmt as? ClassDeclaration)?.modifiers.orEmpty()) ||
-                    (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
-                    (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                    (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                    (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers)
-        }
+    private fun isModuleFile(
+        sourceFile: SourceFile
+    ) = sourceFile.statements.any { stmt ->
+        stmt is ImportDeclaration || stmt is ExportDeclaration ||
+                stmt is ImportEqualsDeclaration || stmt is ExportAssignment ||
+                (stmt is Declaration && ModifierFlag.Export in (stmt as? ClassDeclaration)?.modifiers.orEmpty()) ||
+                (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
+                (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers)
     }
 
     // -----------------------------------------------------------------
@@ -509,27 +509,29 @@ class Transformer(private val options: CompilerOptions) {
     // Declare modifier detection
     // -----------------------------------------------------------------
 
-    private fun hasDeclareModifier(statement: Declaration): Boolean {
-        return when (statement) {
-            is FunctionDeclaration -> ModifierFlag.Declare in statement.modifiers
-            is ClassDeclaration -> ModifierFlag.Declare in statement.modifiers
-            is InterfaceDeclaration -> ModifierFlag.Declare in statement.modifiers
-            is TypeAliasDeclaration -> ModifierFlag.Declare in statement.modifiers
-            is EnumDeclaration -> ModifierFlag.Declare in statement.modifiers
-            is ModuleDeclaration -> ModifierFlag.Declare in statement.modifiers
-            is VariableDeclaration -> false // handled via VariableStatement
-            is ImportDeclaration -> false
-            is ImportEqualsDeclaration -> false
-            is ExportDeclaration -> false
-            is ExportAssignment -> false
-        }
+    private fun hasDeclareModifier(
+        statement: Declaration
+    ) = when (statement) {
+        is FunctionDeclaration -> ModifierFlag.Declare in statement.modifiers
+        is ClassDeclaration -> ModifierFlag.Declare in statement.modifiers
+        is InterfaceDeclaration -> ModifierFlag.Declare in statement.modifiers
+        is TypeAliasDeclaration -> ModifierFlag.Declare in statement.modifiers
+        is EnumDeclaration -> ModifierFlag.Declare in statement.modifiers
+        is ModuleDeclaration -> ModifierFlag.Declare in statement.modifiers
+        is VariableDeclaration -> false // handled via VariableStatement
+        is ImportDeclaration -> false
+        is ImportEqualsDeclaration -> false
+        is ExportDeclaration -> false
+        is ExportAssignment -> false
     }
 
     // -----------------------------------------------------------------
     // Function declaration transform
     // -----------------------------------------------------------------
 
-    private fun transformFunctionDeclaration(decl: FunctionDeclaration): List<Statement> {
+    private fun transformFunctionDeclaration(
+        decl: FunctionDeclaration
+    ): List<Statement> {
         // Overload signatures (no body, not declare) are erased
         if (decl.body == null) return emptyList()
 
