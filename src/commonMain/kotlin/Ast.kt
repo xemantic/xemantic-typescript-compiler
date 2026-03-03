@@ -548,6 +548,7 @@ data class TemplateSpan(
 data class ArrayLiteralExpression(
     val elements: List<Expression>,
     val multiLine: Boolean = false,
+    val hasTrailingComma: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -559,6 +560,7 @@ data class ArrayLiteralExpression(
 data class ObjectLiteralExpression(
     val properties: List<Node>,
     val multiLine: Boolean = false,
+    val hasTrailingComma: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

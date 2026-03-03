@@ -104,7 +104,11 @@ class Emitter(
 
     private fun emitStatements(statements: List<Statement>) {
         for (statement in statements) {
-            if (shouldSkipStatement(statement)) continue
+            if (shouldSkipStatement(statement)) {
+                // NotEmittedStatement carries orphaned comments from erased declarations
+                if (statement is NotEmittedStatement) emitLeadingComments(statement)
+                continue
+            }
             emitLeadingComments(statement)
             emitStatement(statement)
             emitTrailingCommentsBeforeNewline(statement)
@@ -113,7 +117,10 @@ class Emitter(
 
     private fun emitBlockStatements(statements: List<Statement>) {
         for (statement in statements) {
-            if (shouldSkipStatement(statement)) continue
+            if (shouldSkipStatement(statement)) {
+                if (statement is NotEmittedStatement) emitLeadingComments(statement)
+                continue
+            }
             emitLeadingComments(statement)
             emitStatement(statement)
             emitTrailingCommentsBeforeNewline(statement)
@@ -1167,7 +1174,8 @@ class Emitter(
             for ((index, element) in node.elements.withIndex()) {
                 writeIndent()
                 emitExpression(element)
-                if (index < node.elements.size - 1) {
+                val isLast = index == node.elements.size - 1
+                if (!isLast || node.hasTrailingComma) {
                     write(",")
                 }
                 writeNewLine()
@@ -1198,7 +1206,8 @@ class Emitter(
             for ((index, prop) in node.properties.withIndex()) {
                 writeIndent()
                 emitObjectProperty(prop)
-                if (index < node.properties.size - 1) {
+                val isLast = index == node.properties.size - 1
+                if (!isLast || node.hasTrailingComma) {
                     write(",")
                 }
                 writeNewLine()
