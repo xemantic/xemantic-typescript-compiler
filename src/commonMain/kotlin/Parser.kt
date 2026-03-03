@@ -138,7 +138,7 @@ class Parser(private val source: String, private val fileName: String) {
         At -> { parseDecorators(); parseStatement() }
         SyntaxKind.LabeledStatement -> null // won't appear as token
         else -> {
-            if (isIdentifier() && lookAhead { nextToken(); token == SyntaxKind.Colon }) {
+            if (isIdentifier() && lookAhead { nextToken(); token == Colon }) {
                 parseLabeledStatement()
             } else {
                 parseExpressionStatement()
@@ -215,8 +215,8 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseBindingNameOrPattern(): Expression {
         return when (token) {
-            SyntaxKind.OpenBrace -> parseObjectBindingPattern()
-            SyntaxKind.OpenBracket -> parseArrayBindingPattern()
+            OpenBrace -> parseObjectBindingPattern()
+            OpenBracket -> parseArrayBindingPattern()
             else -> parseIdentifier()
         }
     }
@@ -344,8 +344,8 @@ class Parser(private val source: String, private val fileName: String) {
         parseExpected(SyntaxKind.OpenParen)
 
         val initializer: Node? = when (token) {
-            SyntaxKind.VarKeyword, SyntaxKind.LetKeyword, SyntaxKind.ConstKeyword -> parseVariableDeclarationList()
-            SyntaxKind.Semicolon -> null
+            VarKeyword, LetKeyword, ConstKeyword -> parseVariableDeclarationList()
+            Semicolon -> null
             else -> parseExpression()
         }
 
@@ -1194,9 +1194,9 @@ class Parser(private val source: String, private val fileName: String) {
         if (parseOptional(SyntaxKind.DefaultKeyword)) {
             val modifiers = setOf(ModifierFlag.Export, ModifierFlag.Default)
             return when (token) {
-                SyntaxKind.FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
-                SyntaxKind.ClassKeyword -> parseClassDeclaration(modifiers, comments)
-                SyntaxKind.AbstractKeyword -> {
+                FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
+                ClassKeyword -> parseClassDeclaration(modifiers, comments)
+                AbstractKeyword -> {
                     if (scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.ClassKeyword }) {
                         nextToken()
                         parseClassDeclaration(modifiers + ModifierFlag.Abstract, comments)
@@ -1559,13 +1559,13 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseExpressionSuffix(expr: Expression): Expression {
         // Handle 'as' and 'satisfies' that appear after binary expressions
         return when (token) {
-            SyntaxKind.AsKeyword -> {
+            AsKeyword -> {
                 nextToken()
                 val type = parseType()
                 parseExpressionSuffix(AsExpression(expression = expr, type = type, pos = expr.pos, end = getEnd()))
             }
 
-            SyntaxKind.SatisfiesKeyword -> {
+            SatisfiesKeyword -> {
                 nextToken()
                 val type = parseType()
                 parseExpressionSuffix(
@@ -1612,7 +1612,7 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = leadingComments()
         return when (token) {
-            SyntaxKind.PlusPlus, SyntaxKind.MinusMinus -> {
+            PlusPlus, MinusMinus -> {
                 val op = token; nextToken()
                 PrefixUnaryExpression(
                     operator = op,
@@ -1623,7 +1623,7 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.Plus, SyntaxKind.Minus, SyntaxKind.Tilde, SyntaxKind.Exclamation -> {
+            Plus, Minus, Tilde, Exclamation -> {
                 val op = token; nextToken()
                 PrefixUnaryExpression(
                     operator = op,
@@ -1634,7 +1634,7 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.DeleteKeyword -> {
+            DeleteKeyword -> {
                 nextToken(); DeleteExpression(
                     expression = parseUnaryExpression(),
                     pos = pos,
@@ -1643,7 +1643,7 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.TypeOfKeyword -> {
+            TypeOfKeyword -> {
                 nextToken(); TypeOfExpression(
                     expression = parseUnaryExpression(),
                     pos = pos,
@@ -1652,7 +1652,7 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.VoidKeyword -> {
+            VoidKeyword -> {
                 nextToken(); VoidExpression(
                     expression = parseUnaryExpression(),
                     pos = pos,
@@ -1661,7 +1661,7 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.AwaitKeyword -> {
+            AwaitKeyword -> {
                 if (inAsyncContext) {
                     nextToken(); AwaitExpression(
                         expression = parseUnaryExpression(),
@@ -1674,7 +1674,7 @@ class Parser(private val source: String, private val fileName: String) {
                 }
             }
 
-            SyntaxKind.LessThan -> {
+            LessThan -> {
                 // Could be <Type>expr type assertion or JSX — try type assertion
                 parseTypeAssertion()
             }
@@ -1709,31 +1709,31 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseLeftHandSideExpression(): Expression {
         var expr = when (token) {
-            SyntaxKind.NewKeyword -> parseNewExpression()
-            SyntaxKind.SuperKeyword -> {
+            NewKeyword -> parseNewExpression()
+            SuperKeyword -> {
                 val pos = getPos(); nextToken(); Identifier(text = "super", pos = pos, end = getEnd())
             }
 
-            SyntaxKind.ImportKeyword -> {
-                if (scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.OpenParen }) {
+            ImportKeyword -> {
+                if (scanner.lookAhead { scanner.scan(); scanner.getToken() == OpenParen }) {
                     // import(...)
                     val pos = getPos()
                     nextToken()
-                    parseExpected(SyntaxKind.OpenParen)
+                    parseExpected(OpenParen)
                     val arg = parseAssignmentExpression()
-                    parseExpected(SyntaxKind.CloseParen)
+                    parseExpected(CloseParen)
                     CallExpression(
                         expression = Identifier("import", pos = pos),
                         arguments = listOf(arg),
                         pos = pos,
                         end = getEnd()
                     )
-                } else if (scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Dot }) {
+                } else if (scanner.lookAhead { scanner.scan(); scanner.getToken() == Dot }) {
                     val pos = getPos()
                     nextToken()
-                    parseExpected(SyntaxKind.Dot)
+                    parseExpected(Dot)
                     val name = parseIdentifier()
-                    MetaProperty(keywordToken = SyntaxKind.ImportKeyword, name = name, pos = pos, end = getEnd())
+                    MetaProperty(keywordToken = ImportKeyword, name = name, pos = pos, end = getEnd())
                 } else {
                     parseIdentifier()
                 }
@@ -1744,17 +1744,19 @@ class Parser(private val source: String, private val fileName: String) {
         return parseCallAndAccess(expr)
     }
 
-    private fun parseCallAndAccess(expr: Expression): Expression {
+    private fun parseCallAndAccess(
+        expr: Expression
+    ): Expression {
         var result = expr
         while (true) {
             result = when (token) {
-                SyntaxKind.Dot -> {
+                Dot -> {
                     nextToken()
                     val name = parseIdentifierName()
                     PropertyAccessExpression(expression = result, name = name, pos = result.pos, end = getEnd())
                 }
 
-                SyntaxKind.OpenBracket -> {
+                OpenBracket -> {
                     nextToken()
                     val arg = parseExpression()
                     parseExpected(SyntaxKind.CloseBracket)
@@ -1766,12 +1768,12 @@ class Parser(private val source: String, private val fileName: String) {
                     )
                 }
 
-                SyntaxKind.OpenParen -> {
+                OpenParen -> {
                     val args = parseArgumentList()
                     CallExpression(expression = result, arguments = args, pos = result.pos, end = getEnd())
                 }
 
-                SyntaxKind.LessThan -> {
+                LessThan -> {
                     // Try type arguments for call/new — wrap in tryScan so if no `(` follows,
                     // scanner is restored to before `<` (fixing `i < 10` in for-loop conditions)
                     val callExpr: Expression? = scanner.tryScan {
@@ -1798,10 +1800,10 @@ class Parser(private val source: String, private val fileName: String) {
                     }
                 }
 
-                SyntaxKind.QuestionDot -> {
+                QuestionDot -> {
                     nextToken()
                     when (token) {
-                        SyntaxKind.OpenBracket -> {
+                        OpenBracket -> {
                             nextToken()
                             val arg = parseExpression()
                             parseExpected(SyntaxKind.CloseBracket)
@@ -1814,7 +1816,7 @@ class Parser(private val source: String, private val fileName: String) {
                             )
                         }
 
-                        SyntaxKind.OpenParen -> {
+                        OpenParen -> {
                             val args = parseArgumentList()
                             CallExpression(
                                 expression = result,
@@ -1838,12 +1840,12 @@ class Parser(private val source: String, private val fileName: String) {
                     }
                 }
 
-                SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.TemplateHead -> {
+                NoSubstitutionTemplateLiteral, TemplateHead -> {
                     val template = parseTemplateLiteral()
                     TaggedTemplateExpression(tag = result, template = template, pos = result.pos, end = getEnd())
                 }
 
-                SyntaxKind.Exclamation -> {
+                Exclamation -> {
                     if (!scanner.hasPrecedingLineBreak()) {
                         nextToken()
                         NonNullExpression(expression = result, pos = result.pos, end = getEnd())
@@ -1857,15 +1859,15 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseNewExpression(): Expression {
         val pos = getPos()
-        parseExpected(SyntaxKind.NewKeyword)
-        if (token == SyntaxKind.Dot) {
+        parseExpected(NewKeyword)
+        if (token == Dot) {
             nextToken()
             val name = parseIdentifier()
-            return MetaProperty(keywordToken = SyntaxKind.NewKeyword, name = name, pos = pos, end = getEnd())
+            return MetaProperty(keywordToken = NewKeyword, name = name, pos = pos, end = getEnd())
         }
         val expr = parseCallAndAccess(parsePrimaryExpression())
         val typeArgs = tryParseTypeArguments()
-        val args = if (token == SyntaxKind.OpenParen) parseArgumentList() else null
+        val args = if (token == OpenParen) parseArgumentList() else null
         return NewExpression(expression = expr, typeArguments = typeArgs, arguments = args, pos = pos, end = getEnd())
     }
 
@@ -1873,8 +1875,8 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = leadingComments()
         return when (token) {
-            SyntaxKind.NumericLiteral -> parseNumericLiteral()
-            SyntaxKind.BigIntLiteral -> {
+            NumericLiteral -> parseNumericLiteral()
+            BigIntLiteral -> {
                 val text = scanner.getTokenValue(); nextToken(); BigIntLiteralNode(
                     text = text,
                     pos = pos,
@@ -1882,8 +1884,8 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.StringLiteral -> parseStringLiteral()
-            SyntaxKind.NoSubstitutionTemplateLiteral -> {
+            StringLiteral -> parseStringLiteral()
+            NoSubstitutionTemplateLiteral -> {
                 val text = scanner.getTokenText(); nextToken(); NoSubstitutionTemplateLiteralNode(
                     text = text,
                     pos = pos,
@@ -1891,8 +1893,8 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.TemplateHead -> parseTemplateExpression()
-            SyntaxKind.RegularExpressionLiteral -> {
+            TemplateHead -> parseTemplateExpression()
+            RegularExpressionLiteral -> {
                 val text = scanner.getTokenText(); nextToken(); RegularExpressionLiteralNode(
                     text = text,
                     pos = pos,
@@ -1900,9 +1902,9 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.Slash, SyntaxKind.SlashEquals -> {
+            Slash, SlashEquals -> {
                 val regexToken = scanner.reScanSlashToken()
-                if (regexToken == SyntaxKind.RegularExpressionLiteral) {
+                if (regexToken == RegularExpressionLiteral) {
                     val text = scanner.getTokenText(); nextToken()
                     RegularExpressionLiteralNode(text = text, pos = pos, end = getEnd())
                 } else {
@@ -1910,32 +1912,32 @@ class Parser(private val source: String, private val fileName: String) {
                 }
             }
 
-            SyntaxKind.OpenParen -> parseParenthesizedOrArrow()
-            SyntaxKind.OpenBracket -> parseArrayLiteral()
-            SyntaxKind.OpenBrace -> parseObjectLiteral()
-            SyntaxKind.FunctionKeyword -> parseFunctionExpression()
-            SyntaxKind.ClassKeyword -> parseClassExpression()
-            SyntaxKind.TrueKeyword -> {
+            OpenParen -> parseParenthesizedOrArrow()
+            OpenBracket -> parseArrayLiteral()
+            OpenBrace -> parseObjectLiteral()
+            FunctionKeyword -> parseFunctionExpression()
+            ClassKeyword -> parseClassExpression()
+            TrueKeyword -> {
                 nextToken(); Identifier(text = "true", pos = pos, end = getEnd())
             }
 
-            SyntaxKind.FalseKeyword -> {
+            FalseKeyword -> {
                 nextToken(); Identifier(text = "false", pos = pos, end = getEnd())
             }
 
-            SyntaxKind.NullKeyword -> {
+            NullKeyword -> {
                 nextToken(); Identifier(text = "null", pos = pos, end = getEnd())
             }
 
-            SyntaxKind.UndefinedKeyword -> {
+            UndefinedKeyword -> {
                 nextToken(); Identifier(text = "undefined", pos = pos, end = getEnd())
             }
 
-            SyntaxKind.ThisKeyword -> {
+            ThisKeyword -> {
                 nextToken(); Identifier(text = "this", pos = pos, end = getEnd())
             }
 
-            SyntaxKind.AsyncKeyword -> {
+            AsyncKeyword -> {
                 // Could be "async function" or "async () =>"
                 if (scanner.lookAhead { scanner.scan(); !scanner.hasPrecedingLineBreak() && scanner.getToken() == SyntaxKind.FunctionKeyword }) {
                     nextToken()
@@ -2042,7 +2044,7 @@ class Parser(private val source: String, private val fileName: String) {
         val closeBracketPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBracket)
         val multiLine =
-            if (openBracketPos >= 0 && closeBracketPos > openBracketPos && closeBracketPos <= source.length) {
+            if (openBracketPos in 0..<closeBracketPos && closeBracketPos <= source.length) {
                 source.substring(openBracketPos, closeBracketPos).contains('\n')
             } else false
         return ArrayLiteralExpression(elements = elements, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd())
@@ -2065,7 +2067,7 @@ class Parser(private val source: String, private val fileName: String) {
         }
         val closeBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBrace)
-        val multiLine = if (openBracePos >= 0 && closeBracePos > openBracePos && closeBracePos <= source.length) {
+        val multiLine = if (openBracePos in 0..<closeBracePos && closeBracePos <= source.length) {
             source.substring(openBracePos, closeBracePos).contains('\n')
         } else false
         return ObjectLiteralExpression(properties = properties, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd())
@@ -2517,28 +2519,28 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parsePrimaryType(): TypeNode {
         val pos = getPos()
         return when (token) {
-            SyntaxKind.AnyKeyword, SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword,
-            SyntaxKind.BooleanKeyword, SyntaxKind.BigIntKeyword, SyntaxKind.SymbolKeyword,
-            SyntaxKind.VoidKeyword, SyntaxKind.NeverKeyword, SyntaxKind.ObjectKeyword,
-            SyntaxKind.UnknownKeyword, SyntaxKind.UndefinedKeyword, SyntaxKind.NullKeyword -> {
+            AnyKeyword, StringKeyword, NumberKeyword,
+            BooleanKeyword, BigIntKeyword, SymbolKeyword,
+            VoidKeyword, NeverKeyword, ObjectKeyword,
+            UnknownKeyword, UndefinedKeyword, NullKeyword -> {
                 val kw = token; nextToken()
                 KeywordTypeNode(kind = kw, pos = pos, end = getEnd())
             }
 
-            SyntaxKind.ThisKeyword -> {
+            ThisKeyword -> {
                 nextToken(); ThisType(pos = pos, end = getEnd())
             }
 
-            SyntaxKind.OpenParen -> parseFunctionOrParenthesizedType()
-            SyntaxKind.OpenBracket -> parseTupleType()
-            SyntaxKind.OpenBrace -> parseTypeLiteralOrMappedType()
-            SyntaxKind.StringLiteral, SyntaxKind.NumericLiteral, SyntaxKind.TrueKeyword,
-            SyntaxKind.FalseKeyword -> {
+            OpenParen -> parseFunctionOrParenthesizedType()
+            OpenBracket -> parseTupleType()
+            OpenBrace -> parseTypeLiteralOrMappedType()
+            StringLiteral, NumericLiteral, TrueKeyword,
+            FalseKeyword -> {
                 val literal = parsePrimaryExpression()
                 LiteralType(literal = literal, pos = pos, end = getEnd())
             }
 
-            SyntaxKind.Minus -> {
+            Minus -> {
                 nextToken()
                 val literal = parsePrimaryExpression()
                 LiteralType(
@@ -2551,13 +2553,13 @@ class Parser(private val source: String, private val fileName: String) {
                 )
             }
 
-            SyntaxKind.NewKeyword -> parseConstructorType()
-            SyntaxKind.ImportKeyword -> parseImportType()
-            SyntaxKind.DotDotDot -> {
+            NewKeyword -> parseConstructorType()
+            ImportKeyword -> parseImportType()
+            DotDotDot -> {
                 nextToken(); RestType(type = parseType(), pos = pos, end = getEnd())
             }
 
-            SyntaxKind.Backtick, SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.TemplateHead -> {
+            Backtick, NoSubstitutionTemplateLiteral, TemplateHead -> {
                 // Template literal type — skip for simplicity
                 skipTemplateType()
                 KeywordTypeNode(kind = SyntaxKind.StringKeyword, pos = pos, end = getEnd())
@@ -2769,21 +2771,24 @@ class Parser(private val source: String, private val fileName: String) {
         return result
     }
 
-    private fun tokenToString(kind: SyntaxKind): String = when (kind) {
-        SyntaxKind.OpenBrace -> "{"
-        SyntaxKind.CloseBrace -> "}"
-        SyntaxKind.OpenParen -> "("
-        SyntaxKind.CloseParen -> ")"
-        SyntaxKind.OpenBracket -> "["
-        SyntaxKind.CloseBracket -> "]"
-        SyntaxKind.Semicolon -> ";"
-        SyntaxKind.Comma -> ","
-        SyntaxKind.Colon -> ":"
-        SyntaxKind.Dot -> "."
-        SyntaxKind.Equals -> "="
-        SyntaxKind.LessThan -> "<"
-        SyntaxKind.GreaterThan -> ">"
-        SyntaxKind.EqualsGreaterThan -> "=>"
+    private fun tokenToString(
+        kind: SyntaxKind
+    ) = when (kind) {
+        OpenBrace -> "{"
+        CloseBrace -> "}"
+        OpenParen -> "("
+        CloseParen -> ")"
+        OpenBracket -> "["
+        CloseBracket -> "]"
+        Semicolon -> ";"
+        Comma -> ","
+        Colon -> ":"
+        Dot -> "."
+        Equals -> "="
+        LessThan -> "<"
+        GreaterThan -> ">"
+        EqualsGreaterThan -> "=>"
         else -> kind.name
     }
+
 }
