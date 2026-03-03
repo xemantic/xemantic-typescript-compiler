@@ -1016,13 +1016,15 @@ class Parser(private val source: String, private val fileName: String) {
             if (!parseOptional(SyntaxKind.Comma)) break
         }
         parseExpected(SyntaxKind.CloseBrace)
+        val trailing = trailingComments()
         return EnumDeclaration(
             name = name,
             members = members,
             modifiers = modifiers,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailing,
         )
     }
 
@@ -1054,13 +1056,15 @@ class Parser(private val source: String, private val fileName: String) {
             nextToken()
             parseModuleDeclaration(modifiers)
         } else null
+        val trailing = trailingComments()
         return ModuleDeclaration(
             name = name,
             body = body,
             modifiers = modifiers,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailing,
         )
     }
 
@@ -2011,10 +2015,12 @@ class Parser(private val source: String, private val fileName: String) {
         val openBracketPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenBracket)
         val elements = mutableListOf<Expression>()
+        var hasTrailingComma = false
         while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
             if (token == SyntaxKind.Comma) {
                 elements.add(OmittedExpression(pos = getPos(), end = getPos()))
                 nextToken()
+                hasTrailingComma = (token == SyntaxKind.CloseBracket)
                 continue
             }
             if (token == SyntaxKind.DotDotDot) {
@@ -2024,7 +2030,12 @@ class Parser(private val source: String, private val fileName: String) {
             } else {
                 elements.add(parseAssignmentExpression())
             }
-            if (!parseOptional(SyntaxKind.Comma)) break
+            if (parseOptional(SyntaxKind.Comma)) {
+                hasTrailingComma = (token == SyntaxKind.CloseBracket)
+            } else {
+                hasTrailingComma = false
+                break
+            }
         }
         val closeBracketPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBracket)
@@ -2032,7 +2043,7 @@ class Parser(private val source: String, private val fileName: String) {
             if (openBracketPos >= 0 && closeBracketPos > openBracketPos && closeBracketPos <= source.length) {
                 source.substring(openBracketPos, closeBracketPos).contains('\n')
             } else false
-        return ArrayLiteralExpression(elements = elements, multiLine = multiLine, pos = pos, end = getEnd())
+        return ArrayLiteralExpression(elements = elements, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd())
     }
 
     private fun parseObjectLiteral(): ObjectLiteralExpression {
@@ -2040,16 +2051,22 @@ class Parser(private val source: String, private val fileName: String) {
         val openBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenBrace)
         val properties = mutableListOf<Node>()
+        var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             properties.add(parseObjectLiteralElement())
-            if (!parseOptional(SyntaxKind.Comma)) break
+            if (parseOptional(SyntaxKind.Comma)) {
+                hasTrailingComma = (token == SyntaxKind.CloseBrace)
+            } else {
+                hasTrailingComma = false
+                break
+            }
         }
         val closeBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBrace)
         val multiLine = if (openBracePos >= 0 && closeBracePos > openBracePos && closeBracePos <= source.length) {
             source.substring(openBracePos, closeBracePos).contains('\n')
         } else false
-        return ObjectLiteralExpression(properties = properties, multiLine = multiLine, pos = pos, end = getEnd())
+        return ObjectLiteralExpression(properties = properties, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd())
     }
 
     private fun parseObjectLiteralElement(): Node {
