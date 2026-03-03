@@ -403,13 +403,13 @@ class Transformer(private val options: CompilerOptions) {
     private fun transformStatement(statement: Statement): List<Statement> {
         // Declarations with `declare` modifier produce no output
         if (statement is Declaration && hasDeclareModifier(statement)) {
-            return emptyList()
+            return orphanedComments(statement)
         }
 
         return when (statement) {
             // --- Type erasure: remove type-only declarations ---
-            is InterfaceDeclaration -> emptyList()
-            is TypeAliasDeclaration -> emptyList()
+            is InterfaceDeclaration -> orphanedComments(statement)
+            is TypeAliasDeclaration -> orphanedComments(statement)
 
             // --- Enum transform ---
             is EnumDeclaration -> transformEnum(statement)
@@ -1232,7 +1232,10 @@ class Transformer(private val options: CompilerOptions) {
 
                 Constructor(
                     parameters = transformedParams,
-                    body = existingBody.copy(statements = bodyStatements),
+                    body = existingBody.copy(
+                        statements = bodyStatements,
+                        multiLine = bodyStatements.isNotEmpty() || existingBody.multiLine,
+                    ),
                     modifiers = stripMemberModifiers(existingConstructor.modifiers),
                     pos = existingConstructor.pos, end = existingConstructor.end,
                     leadingComments = existingConstructor.leadingComments,
@@ -2049,6 +2052,15 @@ class Transformer(private val options: CompilerOptions) {
     // -----------------------------------------------------------------
     // Helper utilities
     // -----------------------------------------------------------------
+
+    /**
+     * Returns a [NotEmittedStatement] carrying any leading comments from the erased [statement],
+     * or an empty list if there are no comments to preserve.
+     */
+    private fun orphanedComments(statement: Statement): List<Statement> {
+        val comments = statement.leadingComments ?: return emptyList()
+        return listOf(NotEmittedStatement(leadingComments = comments))
+    }
 
     private fun syntheticId(name: String): Identifier {
         return Identifier(text = name, pos = -1, end = -1)
