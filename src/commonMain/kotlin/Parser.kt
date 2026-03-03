@@ -776,17 +776,15 @@ class Parser(private val source: String, private val fileName: String) {
         )
     }
 
-    private fun parsePropertyName(): Expression {
-        return when (token) {
-            SyntaxKind.StringLiteral -> parseStringLiteral()
-            SyntaxKind.NumericLiteral -> parseNumericLiteral()
-            SyntaxKind.OpenBracket -> parseComputedPropertyName()
-            SyntaxKind.Hash -> {
-                nextToken(); parseIdentifierName()
-            }
-
-            else -> parseIdentifierName()
+    private fun parsePropertyName() = when (token) {
+        StringLiteral -> parseStringLiteral()
+        NumericLiteral -> parseNumericLiteral()
+        OpenBracket -> parseComputedPropertyName()
+        Hash -> {
+            nextToken(); parseIdentifierName()
         }
+
+        else -> parseIdentifierName()
     }
 
     private fun parseComputedPropertyName(): ComputedPropertyName {
@@ -1586,27 +1584,29 @@ class Parser(private val source: String, private val fileName: String) {
         }
     }
 
-    private fun getBinaryOperatorPrecedence(kind: SyntaxKind): Int = when (kind) {
-        SyntaxKind.BarBar -> 1
-        SyntaxKind.AmpersandAmpersand -> 2
-        SyntaxKind.QuestionQuestion -> 1
-        SyntaxKind.Bar -> 3
-        SyntaxKind.Caret -> 4
-        SyntaxKind.Ampersand -> 5
-        SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
-        SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals -> 6
+    private fun getBinaryOperatorPrecedence(
+        kind: SyntaxKind
+    ) = when (kind) {
+        BarBar -> 1
+        AmpersandAmpersand -> 2
+        QuestionQuestion -> 1
+        Bar -> 3
+        Caret -> 4
+        Ampersand -> 5
+        EqualsEquals, ExclamationEquals,
+        EqualsEqualsEquals, ExclamationEqualsEquals -> 6
 
-        SyntaxKind.LessThan, SyntaxKind.GreaterThan,
-        SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
-        SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword,
-        SyntaxKind.AsKeyword, SyntaxKind.SatisfiesKeyword -> 7
+        LessThan, GreaterThan,
+        LessThanEquals, GreaterThanEquals,
+        InstanceOfKeyword, InKeyword,
+        AsKeyword, SatisfiesKeyword -> 7
 
-        SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
-        SyntaxKind.GreaterThanGreaterThanGreaterThan -> 8
+        LessThanLessThan, GreaterThanGreaterThan,
+        GreaterThanGreaterThanGreaterThan -> 8
 
-        SyntaxKind.Plus, SyntaxKind.Minus -> 9
-        SyntaxKind.Asterisk, SyntaxKind.Slash, SyntaxKind.Percent -> 10
-        SyntaxKind.AsteriskAsterisk -> 11
+        Plus, Minus -> 9
+        Asterisk, Slash, Percent -> 10
+        AsteriskAsterisk -> 11
         else -> 0
     }
 
