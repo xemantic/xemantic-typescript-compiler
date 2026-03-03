@@ -47,5 +47,10 @@ fun main(args: Array<String>) {
     error("TypeScript compilation is not yet implemented")
 }
 
-private fun deriveOutputPath(inputPath: String): String =
-    if (inputPath.endsWith(".ts")) inputPath.dropLast(3) + ".js" else "$inputPath.js"
+private fun deriveOutputPath(
+    inputPath: String
+) = if (inputPath.endsWith(".ts")) {
+    inputPath.dropLast(3) + ".js"
+} else {
+    "$inputPath.js"
+}

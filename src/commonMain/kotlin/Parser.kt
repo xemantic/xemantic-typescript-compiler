@@ -108,45 +108,40 @@ class Parser(private val source: String, private val fileName: String) {
 
     // ── Statements ──────────────────────────────────────────────────────────
 
-    private fun parseStatement(): Statement? {
-        return when (token) {
-            SyntaxKind.OpenBrace -> parseBlock()
-            SyntaxKind.Semicolon -> parseEmptyStatement()
-            SyntaxKind.VarKeyword, SyntaxKind.LetKeyword, SyntaxKind.ConstKeyword -> parseVariableStatement()
-            SyntaxKind.FunctionKeyword -> parseFunctionDeclarationOrExpression()
-            SyntaxKind.ClassKeyword -> parseClassDeclaration()
-            SyntaxKind.IfKeyword -> parseIfStatement()
-            SyntaxKind.DoKeyword -> parseDoStatement()
-            SyntaxKind.WhileKeyword -> parseWhileStatement()
-            SyntaxKind.ForKeyword -> parseForStatement()
-            SyntaxKind.ContinueKeyword -> parseContinueStatement()
-            SyntaxKind.BreakKeyword -> parseBreakStatement()
-            SyntaxKind.ReturnKeyword -> parseReturnStatement()
-            SyntaxKind.WithKeyword -> parseWithStatement()
-            SyntaxKind.SwitchKeyword -> parseSwitchStatement()
-            SyntaxKind.ThrowKeyword -> parseThrowStatement()
-            SyntaxKind.TryKeyword -> parseTryStatement()
-            SyntaxKind.DebuggerKeyword -> parseDebuggerStatement()
-            SyntaxKind.ImportKeyword -> parseImportDeclaration()
-            SyntaxKind.ExportKeyword -> parseExportDeclaration()
-            SyntaxKind.InterfaceKeyword -> parseInterfaceDeclaration()
-            SyntaxKind.TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
-            SyntaxKind.EnumKeyword -> parseEnumDeclaration()
-            SyntaxKind.NamespaceKeyword, SyntaxKind.ModuleKeyword -> parseModuleDeclaration()
-            SyntaxKind.AbstractKeyword -> parseAbstractOrDeclaration()
-            SyntaxKind.AsyncKeyword -> parseAsyncOrExpression()
-            SyntaxKind.DeclareKeyword -> parseDeclareDeclaration()
-            SyntaxKind.At -> {
-                parseDecorators(); parseStatement()
-            }
-
-            SyntaxKind.LabeledStatement -> null // won't appear as token
-            else -> {
-                if (isIdentifier() && lookAhead { nextToken(); token == SyntaxKind.Colon }) {
-                    parseLabeledStatement()
-                } else {
-                    parseExpressionStatement()
-                }
+    private fun parseStatement(): Statement? = when (token) {
+        OpenBrace -> parseBlock()
+        Semicolon -> parseEmptyStatement()
+        VarKeyword, LetKeyword, ConstKeyword -> parseVariableStatement()
+        FunctionKeyword -> parseFunctionDeclarationOrExpression()
+        ClassKeyword -> parseClassDeclaration()
+        IfKeyword -> parseIfStatement()
+        DoKeyword -> parseDoStatement()
+        WhileKeyword -> parseWhileStatement()
+        ForKeyword -> parseForStatement()
+        ContinueKeyword -> parseContinueStatement()
+        BreakKeyword -> parseBreakStatement()
+        ReturnKeyword -> parseReturnStatement()
+        WithKeyword -> parseWithStatement()
+        SwitchKeyword -> parseSwitchStatement()
+        ThrowKeyword -> parseThrowStatement()
+        TryKeyword -> parseTryStatement()
+        DebuggerKeyword -> parseDebuggerStatement()
+        ImportKeyword -> parseImportDeclaration()
+        ExportKeyword -> parseExportDeclaration()
+        InterfaceKeyword -> parseInterfaceDeclaration()
+        TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
+        EnumKeyword -> parseEnumDeclaration()
+        NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration()
+        AbstractKeyword -> parseAbstractOrDeclaration()
+        AsyncKeyword -> parseAsyncOrExpression()
+        DeclareKeyword -> parseDeclareDeclaration()
+        At -> { parseDecorators(); parseStatement() }
+        SyntaxKind.LabeledStatement -> null // won't appear as token
+        else -> {
+            if (isIdentifier() && lookAhead { nextToken(); token == SyntaxKind.Colon }) {
+                parseLabeledStatement()
+            } else {
+                parseExpressionStatement()
             }
         }
     }
@@ -159,7 +154,7 @@ class Parser(private val source: String, private val fileName: String) {
         val stmts = parseStatements()
         val closeBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBrace)
-        val multiLine = if (openBracePos >= 0 && closeBracePos > openBracePos && closeBracePos <= source.length) {
+        val multiLine = if (openBracePos in 0..<closeBracePos && closeBracePos <= source.length) {
             source.substring(openBracePos, closeBracePos).contains('\n')
         } else true
         return Block(statements = stmts, multiLine = multiLine, pos = pos, end = getEnd(), leadingComments = comments)
@@ -1290,29 +1285,26 @@ class Parser(private val source: String, private val fileName: String) {
         // export var/let/const/function/class/interface/type/enum/namespace/declare/abstract/async
         val modifiers = setOf(ModifierFlag.Export)
         return when (token) {
-            SyntaxKind.VarKeyword, SyntaxKind.LetKeyword, SyntaxKind.ConstKeyword -> parseVariableStatement(
-                modifiers,
-                comments
-            )
+            VarKeyword, LetKeyword -> parseVariableStatement(modifiers, comments)
+            ConstKeyword -> if (lookAhead { nextToken(); token == EnumKeyword }) {
+                nextToken(); parseEnumDeclaration(modifiers + ModifierFlag.Const, comments)
+            } else {
+                parseVariableStatement(modifiers, comments)
+            }
 
-            SyntaxKind.FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
-            SyntaxKind.ClassKeyword -> parseClassDeclaration(modifiers, comments)
-            SyntaxKind.InterfaceKeyword -> parseInterfaceDeclaration(modifiers, comments)
-            SyntaxKind.TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
-            SyntaxKind.EnumKeyword -> parseEnumDeclaration(modifiers, comments)
-            SyntaxKind.NamespaceKeyword, SyntaxKind.ModuleKeyword -> parseModuleDeclaration(modifiers, comments)
-            SyntaxKind.DeclareKeyword -> parseDeclareDeclaration(modifiers, comments)
-            SyntaxKind.AbstractKeyword -> {
+            FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
+            ClassKeyword -> parseClassDeclaration(modifiers, comments)
+            InterfaceKeyword -> parseInterfaceDeclaration(modifiers, comments)
+            TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
+            EnumKeyword -> parseEnumDeclaration(modifiers, comments)
+            NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration(modifiers, comments)
+            DeclareKeyword -> parseDeclareDeclaration(modifiers, comments)
+            AbstractKeyword -> {
                 nextToken(); parseClassDeclaration(modifiers + ModifierFlag.Abstract, comments)
             }
 
-            SyntaxKind.AsyncKeyword -> {
+            AsyncKeyword -> {
                 nextToken(); parseFunctionDeclarationOrExpression(modifiers + ModifierFlag.Async, comments)
-            }
-
-            SyntaxKind.ConstKeyword -> {
-                nextToken()
-                parseEnumDeclaration(modifiers + ModifierFlag.Const, comments)
             }
 
             else -> parseExpressionStatement()
@@ -1391,22 +1383,24 @@ class Parser(private val source: String, private val fileName: String) {
         nextToken() // skip 'declare'
         val modifiers = existingModifiers + ModifierFlag.Declare
         return when (token) {
-            SyntaxKind.VarKeyword, SyntaxKind.LetKeyword, SyntaxKind.ConstKeyword -> parseVariableStatement(
-                modifiers,
-                comments
-            )
+            VarKeyword, LetKeyword -> parseVariableStatement(modifiers, comments)
+            ConstKeyword -> if (lookAhead { nextToken(); token == EnumKeyword }) {
+                nextToken(); parseEnumDeclaration(modifiers + ModifierFlag.Const, comments)
+            } else {
+                parseVariableStatement(modifiers, comments)
+            }
 
-            SyntaxKind.FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
-            SyntaxKind.ClassKeyword -> parseClassDeclaration(modifiers, comments)
-            SyntaxKind.InterfaceKeyword -> parseInterfaceDeclaration(modifiers, comments)
-            SyntaxKind.TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
-            SyntaxKind.EnumKeyword -> parseEnumDeclaration(modifiers, comments)
-            SyntaxKind.NamespaceKeyword, SyntaxKind.ModuleKeyword -> parseModuleDeclaration(modifiers, comments)
-            SyntaxKind.AbstractKeyword -> {
+            FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
+            ClassKeyword -> parseClassDeclaration(modifiers, comments)
+            InterfaceKeyword -> parseInterfaceDeclaration(modifiers, comments)
+            TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
+            EnumKeyword -> parseEnumDeclaration(modifiers, comments)
+            NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration(modifiers, comments)
+            AbstractKeyword -> {
                 nextToken(); parseClassDeclaration(modifiers + ModifierFlag.Abstract, comments)
             }
 
-            SyntaxKind.GlobalKeyword -> parseModuleDeclaration(modifiers, comments)
+            GlobalKeyword -> parseModuleDeclaration(modifiers, comments)
             else -> parseVariableStatement(modifiers, comments)
         }
     }
