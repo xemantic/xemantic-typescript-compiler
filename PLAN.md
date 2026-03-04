@@ -2,9 +2,9 @@
 
 ## Current Status (2026-03-04)
 
-**Test results**: 3,190 / 8,627 passing (37.0%)
+**Test results**: 3,221 / 8,627 passing (37.3%)
 
-Previous: 2,957 / 8,627 passing (34.3%)
+Previous: 3,190 / 8,627 passing (37.0%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -63,7 +63,11 @@ For error tests:
 
 1. **`reScanGreaterToken`** — was disabled because it caused 4-test net regression. The scanner function exists but the parser doesn't call it.
 
-## Fixes Applied (2026-03-04)
+## Fixes Applied (2026-03-04, session 2)
+
+- **Detached comment preservation** (+31 tests): `orphanedComments()` in Transformer now emits a `NotEmittedStatement` for leading comments that are separated from the erased declaration by a blank line (≥2 newlines). Adjacent comments (no blank line) are dropped with the declaration. Rule: `source.substring(comment.end, statement.pos).count { it == '\n' } >= 2`. Requires `sourceText` field stored at start of `transform()`.
+
+## Fixes Applied (2026-03-04, session 1)
 
 - **`await`/`yield` disambiguation**: `await(...)` in non-async context is a call expression; `await literal` in sync context emits as `yield`
 - **Nested paren type erasure collapse**: `((<T>expr))` → `(expr)` — extended `wasTypeErasure` to handle double-paren wrapping
