@@ -64,7 +64,12 @@ class Transformer(private val options: CompilerOptions) {
     // Used so that a second enum/namespace with the same name doesn't emit var X; again.
     private val emittedVarNames = mutableSetOf<String>()
 
+    // Source text of the file being transformed (set at the start of transform()).
+    // Used in orphanedComments() to detect blank-line-separated comments.
+    private var sourceText = ""
+
     fun transform(sourceFile: SourceFile): SourceFile {
+        sourceText = sourceFile.text
         val transformed = transformStatements(sourceFile.statements)
 
         // CommonJS module transform
@@ -2270,10 +2275,27 @@ class Transformer(private val options: CompilerOptions) {
     // -----------------------------------------------------------------
 
     /**
-     * Returns an empty list — erased declarations do not preserve leading comments in JS output.
+     * Returns a NotEmittedStatement carrying "detached" leading comments from the erased
+     * declaration — comments that are separated from the declaration by a blank line.
+     * Comments directly adjacent to the declaration (no blank line) are dropped along with it.
      */
     private fun orphanedComments(statement: Statement): List<Statement> {
-        return emptyList()
+        val comments = statement.leadingComments ?: return emptyList()
+        // A comment is "detached" (should be preserved) if there's a blank line (>=2 newlines)
+        // between the comment's end and the declaration's start. Directly adjacent comments
+        // (only one newline) are considered part of the declaration and are erased with it.
+        val detached = comments.filter { comment ->
+            val between = sourceText.substring(
+                comment.end.coerceIn(0, sourceText.length),
+                statement.pos.coerceIn(0, sourceText.length)
+            )
+            between.count { it == '\n' } >= 2
+        }
+        return if (detached.isNotEmpty()) {
+            listOf(NotEmittedStatement(leadingComments = detached, pos = statement.pos, end = statement.pos))
+        } else {
+            emptyList()
+        }
     }
 
     private fun syntheticId(name: String): Identifier {
