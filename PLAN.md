@@ -2,9 +2,9 @@
 
 ## Current Status (2026-03-04)
 
-**Test results**: 3,221 / 8,627 passing (37.3%)
+**Test results**: 3,664 / 8,627 passing (42.5%)
 
-Previous: 3,190 / 8,627 passing (37.0%)
+Previous: 3,221 / 8,627 passing (37.3%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -63,8 +63,20 @@ For error tests:
 
 1. **`reScanGreaterToken`** — was disabled because it caused 4-test net regression. The scanner function exists but the parser doesn't call it.
 
-## Fixes Applied (2026-03-04, session 2)
+## Fixes Applied (2026-03-04, session 3)
 
+- **Enum member comment preservation**: Parser now captures `leadingComments()` and `scanner.getTrailingComments()` per enum member. Transformer copies those to generated `ExpressionStatement` nodes.
+- **Constructor prologue ordering**: When inserting parameter-property initializers into an existing constructor body, skip past any prologue directives (`"use strict"`, `"ngInject"`, etc.) — insert after the last prologue, not at index 0.
+- **`emitPropertyAssignment` comment fix**: Replaced broken `write(":")` + manual spacing with `write(": ")` + `onNewLine` tracking to avoid extra blank lines between consecutive comments on initializer values. Fixed `commentsOnPropertyOfObjectLiteral1`.
+- **Parser: post-colon inline comments on property assignments**: `parseObjectLiteralElement` captures `scanner.getTrailingComments()` after the `:` separator and merges them into the initializer's leading comments. Added `hasPrecedingNewLine` field to `Comment` (set by scanner).
+- **Template literal raw content**: Scanner preserves `\` escape sequences verbatim in template literals (no decoding). Fixes many template literal tests.
+- **Tagged template type arguments**: Parser's `LessThan` branch now also recognizes template literal tokens (NoSubstitutionTemplateLiteral, TemplateHead) after type args, enabling `tag<T>\`...\`` syntax.
+- **Arrow function / function expression leading comments**: `emitArrowFunction` and `parseFunctionExpression` capture and emit leading comments on expression bodies and inline function expressions.
+- **Parameter leading comments**: `parseParameter` captures `leadingComments()`; `emitParameters` emits them on separate lines when any parameter has leading comments.
+- **LF vs CRLF newline handling**: `BaselineFormatter` respects `@newline: LF` compiler option.
+- **TSX extension**: `BaselineFormatter` and `TypeScriptCompiler` emit `.jsx` only when `@jsx: preserve`.
+- **Scanner `NumberFormatException` fix**: Empty hex/unicode escape sequences no longer crash (`\x` → `"\\x"`, `\u` → `"\\u"`).
+- **`emitBlock` empty single-line**: Standalone empty blocks with `!multiLine` emit `{ }` (not newlined).
 - **Detached comment preservation** (+31 tests): `orphanedComments()` in Transformer now emits a `NotEmittedStatement` for leading comments that are separated from the erased declaration by a blank line (≥2 newlines). Adjacent comments (no blank line) are dropped with the declaration. Rule: `source.substring(comment.end, statement.pos).count { it == '\n' } >= 2`. Requires `sourceText` field stored at start of `transform()`.
 
 ## Fixes Applied (2026-03-04, session 1)

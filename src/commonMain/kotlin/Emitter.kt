@@ -53,8 +53,33 @@ class Emitter(
     private fun emitEmptyExportIfNeeded(originalSourceFile: SourceFile, transformedSourceFile: SourceFile) {
         if (!hasModuleStatements(originalSourceFile)) return
 
-        val hasNonSkippedStatements = transformedSourceFile.statements.any { !shouldSkipStatement(it) }
-        if (!hasNonSkippedStatements) {
+        // Only emit export {} for ES module format files
+        val effectiveModule = options.effectiveModule
+        val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
+                effectiveModule == ModuleKind.ES2020 ||
+                effectiveModule == ModuleKind.ES2022 ||
+                effectiveModule == ModuleKind.ESNext
+        if (!isESModuleFormat) return
+
+        // Emit export {} when the transformed file has no module-level statements remaining.
+        // This covers (1) fully erased files and (2) files with non-export code only.
+        // TypeScript uses export {} to preserve module semantics even when all export
+        // declarations were erased (e.g., export declare class → erased).
+        val hasTransformedModuleStatements = transformedSourceFile.statements.any { stmt ->
+            if (shouldSkipStatement(stmt)) return@any false
+            when (stmt) {
+                is ImportDeclaration -> true
+                is ExportDeclaration -> true
+                is ExportAssignment -> true
+                is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+                else -> false
+            }
+        }
+        if (!hasTransformedModuleStatements) {
             writeLine("export {};")
         }
     }
@@ -76,19 +101,18 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitUseStrict(sourceFile: SourceFile) {
-        val shouldEmitStrict = options.effectiveAlwaysStrict ||
-                options.target >= ScriptTarget.ES2015
-
-        if (!shouldEmitStrict) return
-
-        // Check if the file is an ES module (has import/export statements) AND
-        // the module format is ES — ES modules are inherently strict
+        // Check if the file is an ES module format — ESM files are inherently strict,
+        // no explicit "use strict" needed. Node16/NodeNext produce ES modules.
         val effectiveModule = options.effectiveModule
         val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
                 effectiveModule == ModuleKind.ES2020 ||
                 effectiveModule == ModuleKind.ES2022 ||
-                effectiveModule == ModuleKind.ESNext
+                effectiveModule == ModuleKind.ESNext ||
+                effectiveModule == ModuleKind.Node16 ||
+                effectiveModule == ModuleKind.NodeNext
         if (hasModuleStatements(sourceFile) && isESModuleFormat) return
+
+        // All non-ESM formats (CommonJS, AMD, System, None) always get "use strict"
 
         // Check if the source already has "use strict" as the first statement
         val firstStmt = sourceFile.statements.firstOrNull()
@@ -194,6 +218,9 @@ class Emitter(
 
             is NotEmittedStatement -> { /* skip */
             }
+            is RawStatement -> {
+                sb.append(statement.code)
+            }
         }
     }
 
@@ -272,6 +299,7 @@ class Emitter(
                 writeNewLine()
                 indentLevel++
                 emitStatement(node.thenStatement)
+                emitTrailingCommentsBeforeNewline(node.thenStatement)
                 indentLevel--
                 writeIndent()
                 write("else")
@@ -955,13 +983,17 @@ class Emitter(
 
     private fun emitBlock(block: Block, standalone: Boolean = false) {
         if (standalone) writeIndent()
-        write("{")
-        writeNewLine()
-        indentLevel++
-        emitBlockStatements(block.statements)
-        indentLevel--
-        writeIndent()
-        write("}")
+        if (block.statements.isEmpty() && !block.multiLine) {
+            write("{ }")
+        } else {
+            write("{")
+            writeNewLine()
+            indentLevel++
+            emitBlockStatements(block.statements)
+            indentLevel--
+            writeIndent()
+            write("}")
+        }
         if (standalone) writeNewLine()
     }
 
@@ -1062,7 +1094,10 @@ class Emitter(
         trailingOnSameLine: Boolean = false,
     ) {
         if (statement is Block) {
-            emitBlockBody(statement)
+            // Control-flow bodies (if/while/for) are always emitted multiline,
+            // even if the source block was on a single line.
+            val forceMultiLine = statement.statements.isNotEmpty()
+            emitBlockBody(if (forceMultiLine && !statement.multiLine) statement.copy(multiLine = true) else statement)
             if (!trailingOnSameLine) {
                 writeNewLine()
             }
@@ -1070,6 +1105,7 @@ class Emitter(
             writeNewLine()
             indentLevel++
             emitStatement(statement)
+            emitTrailingCommentsBeforeNewline(statement)
             indentLevel--
         }
     }
@@ -1077,6 +1113,19 @@ class Emitter(
     // ---------------------------------------------------------------------------
     // Expression dispatch
     // ---------------------------------------------------------------------------
+
+    private fun emitInlineLeadingComments(node: Node) {
+        if (options.removeComments) return
+        val comments = node.leadingComments ?: return
+        for (comment in comments) {
+            write(comment.text)
+            if (comment.hasTrailingNewLine) {
+                writeNewLine()
+            } else {
+                write(" ")
+            }
+        }
+    }
 
     private fun emitExpression(node: Expression) {
         when (node) {
@@ -1193,6 +1242,14 @@ class Emitter(
                 }
                 writeNewLine()
             }
+            // Emit any comments that appeared before the closing `]`
+            if (!options.removeComments && node.trailingComments != null) {
+                for (comment in node.trailingComments) {
+                    writeIndent()
+                    write(comment.text)
+                    writeNewLine()
+                }
+            }
             indentLevel--
             writeIndent()
             write("]")
@@ -1218,13 +1275,23 @@ class Emitter(
             writeNewLine()
             indentLevel++
             for ((index, prop) in node.properties.withIndex()) {
+                emitLeadingComments(prop)
                 writeIndent()
                 emitObjectProperty(prop)
                 val isLast = index == node.properties.size - 1
                 if (!isLast || node.hasTrailingComma) {
                     write(",")
                 }
+                emitTrailingComments(prop)
                 writeNewLine()
+            }
+            // Emit any comments that appeared before the closing `}`
+            if (!options.removeComments && node.trailingComments != null) {
+                for (comment in node.trailingComments) {
+                    writeIndent()
+                    write(comment.text)
+                    writeNewLine()
+                }
             }
             indentLevel--
             writeIndent()
@@ -1259,6 +1326,25 @@ class Emitter(
     private fun emitPropertyAssignment(node: PropertyAssignment) {
         emitPropertyName(node.name)
         write(": ")
+        val initComments = if (!options.removeComments) node.initializer.leadingComments else null
+        if (!initComments.isNullOrEmpty()) {
+            var onNewLine = false
+            for (comment in initComments) {
+                if (comment.hasPrecedingNewLine && !onNewLine) {
+                    writeNewLine()
+                    writeIndent()
+                }
+                write(comment.text)
+                if (comment.hasTrailingNewLine) {
+                    writeNewLine()
+                    writeIndent()
+                    onNewLine = true
+                } else {
+                    write(" ")
+                    onNewLine = false
+                }
+            }
+        }
         emitExpression(node.initializer)
     }
 
@@ -1378,8 +1464,12 @@ class Emitter(
         }
         // type arguments erased
         write("(")
-        for ((index, arg) in node.arguments.withIndex()) {
-            if (index > 0) write(", ")
+        var firstArg = true
+        for (arg in node.arguments) {
+            if (arg is OmittedExpression) continue // skip missing arguments
+            if (!firstArg) write(", ")
+            firstArg = false
+            emitInlineLeadingComments(arg)
             emitExpression(arg)
         }
         write(")")
@@ -1391,8 +1481,11 @@ class Emitter(
         // type arguments erased
         if (node.arguments != null) {
             write("(")
-            for ((index, arg) in node.arguments.withIndex()) {
-                if (index > 0) write(", ")
+            var firstArg = true
+            for (arg in node.arguments) {
+                if (arg is OmittedExpression) continue // skip missing arguments
+                if (!firstArg) write(", ")
+                firstArg = false
                 emitExpression(arg)
             }
             write(")")
@@ -1401,6 +1494,7 @@ class Emitter(
 
     private fun emitTaggedTemplateExpression(node: TaggedTemplateExpression) {
         emitExpression(node.tag)
+        write(" ") // TypeScript always emits a space between tag and template
         // type arguments erased
         when (val template = node.template) {
             is NoSubstitutionTemplateLiteralNode -> emitNoSubstitutionTemplateLiteral(template)
@@ -1427,7 +1521,8 @@ class Emitter(
         if (node.name != null) {
             write(" ")
             write(node.name.text)
-        } else if (!node.asteriskToken) {
+        } else {
+            // Always write space before `(`: `function ()`, `function* ()`, `async function ()`
             write(" ")
         }
         write("(")
@@ -1464,7 +1559,15 @@ class Emitter(
             }
 
             is Expression -> {
-                write(" ")
+                val bodyComments = if (!options.removeComments) body.leadingComments else null
+                if (!bodyComments.isNullOrEmpty()) {
+                    // Leading comments on the body expression go on their own line(s)
+                    write(" ")
+                    writeNewLine()
+                    emitLeadingComments(body)
+                } else {
+                    write(" ")
+                }
                 if (body is ObjectLiteralExpression) {
                     write("(")
                     emitExpression(body)
@@ -1482,6 +1585,7 @@ class Emitter(
     private fun emitPrefixKeywordExpression(keyword: String, expression: Expression) {
         write(keyword)
         write(" ")
+        emitInlineLeadingComments(expression)
         emitExpression(expression)
     }
 
@@ -1614,9 +1718,21 @@ class Emitter(
             // skip `this` parameter
             !(param.name is Identifier && param.name.text == "this")
         }
-        for ((index, param) in emittableParams.withIndex()) {
-            if (index > 0) write(", ")
-            emitParameter(param)
+        val anyHasLeadingComments = !options.removeComments && emittableParams.any { it.leadingComments != null }
+        if (anyHasLeadingComments) {
+            // Emit each parameter on its own line with leading comment
+            for ((index, param) in emittableParams.withIndex()) {
+                writeNewLine()
+                emitLeadingComments(param)
+                writeIndent()
+                emitParameter(param)
+                if (index < emittableParams.size - 1) write(", ")
+            }
+        } else {
+            for ((index, param) in emittableParams.withIndex()) {
+                if (index > 0) write(", ")
+                emitParameter(param)
+            }
         }
     }
 
@@ -1658,9 +1774,19 @@ class Emitter(
         if (options.removeComments) return
         val comments = node.leadingComments ?: return
         for (comment in comments) {
-            writeIndent()
-            write(comment.text)
-            writeNewLine()
+            if (!comment.hasTrailingNewLine && comment.kind == SyntaxKind.MultiLineComment) {
+                // Inline block comment (e.g. /*comment*/ before a statement on the same line).
+                // Emit on the same line; suppress the next writeIndent() so the statement
+                // body follows immediately.
+                writeIndent()
+                write(comment.text)
+                write(" ")
+                skipNextIndent = true
+            } else {
+                writeIndent()
+                write(comment.text)
+                writeNewLine()
+            }
         }
     }
 
