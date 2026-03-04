@@ -61,7 +61,7 @@ class Emitter(
 
     private fun hasModuleStatements(sourceFile: SourceFile): Boolean = sourceFile.statements.any {
         it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
-                (it is ImportEqualsDeclaration) ||
+                (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference) ||
                 (it is VariableStatement && ModifierFlag.Export in it.modifiers) ||
                 (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
                 (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||
@@ -502,7 +502,9 @@ class Emitter(
         write("try")
         emitBlockBody(node.tryBlock)
         if (node.catchClause != null) {
-            write(" catch")
+            writeNewLine()
+            writeIndent()
+            write("catch")
             if (node.catchClause.variableDeclaration != null) {
                 write(" (")
                 emitExpression(node.catchClause.variableDeclaration.name)
@@ -511,7 +513,9 @@ class Emitter(
             emitBlockBody(node.catchClause.block)
         }
         if (node.finallyBlock != null) {
-            write(" finally")
+            writeNewLine()
+            writeIndent()
+            write("finally")
             emitBlockBody(node.finallyBlock)
         }
         writeNewLine()
@@ -1097,7 +1101,7 @@ class Emitter(
             is DeleteExpression -> emitPrefixKeywordExpression("delete", node.expression)
             is TypeOfExpression -> emitPrefixKeywordExpression("typeof", node.expression)
             is VoidExpression -> emitPrefixKeywordExpression("void", node.expression)
-            is AwaitExpression -> emitPrefixKeywordExpression("await", node.expression)
+            is AwaitExpression -> emitPrefixKeywordExpression(if (node.inAsyncContext) "await" else "yield", node.expression)
             is PrefixUnaryExpression -> emitPrefixUnaryExpression(node)
             is PostfixUnaryExpression -> emitPostfixUnaryExpression(node)
             is BinaryExpression -> emitBinaryExpression(node)
@@ -1180,6 +1184,7 @@ class Emitter(
             writeNewLine()
             indentLevel++
             for ((index, element) in node.elements.withIndex()) {
+                emitLeadingComments(element)
                 writeIndent()
                 emitExpression(element)
                 val isLast = index == node.elements.size - 1
@@ -1326,6 +1331,12 @@ class Emitter(
 
     private fun emitPropertyAccess(node: PropertyAccessExpression) {
         emitExpression(node.expression)
+        if (node.newLineBefore) {
+            writeNewLine()
+            indentLevel++
+            writeIndent()
+            indentLevel--
+        }
         if (node.questionDotToken) {
             write("?.")
         } else {
