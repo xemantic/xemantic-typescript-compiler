@@ -125,7 +125,11 @@ class TypeScriptCompiler {
             val jsOutputs = mutableListOf<Pair<String, String>>() // jsName -> javascript
 
             for (file in parsed.files) {
-                sourceEchoes.add(file.fileName to file.content)
+                // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
+                val baseName = file.fileName.substringAfterLast('/')
+                if (baseName != "tsconfig.json") {
+                    sourceEchoes.add(file.fileName to file.content)
+                }
 
                 // Skip non-TS files (e.g., .json, .d.ts, .js)
                 if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx")) {

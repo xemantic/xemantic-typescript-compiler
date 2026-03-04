@@ -212,9 +212,12 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
             }
         } else {
             if (inGlobalDirectives && currentFileName == null) {
-                // Non-directive line before any @Filename — part of first file
-                if (trimmed.isNotEmpty()) inGlobalDirectives = false
-                currentLines.add(line)
+                // Non-directive line before any @Filename — part of first file only if non-empty
+                if (trimmed.isNotEmpty()) {
+                    inGlobalDirectives = false
+                    currentLines.add(line)
+                }
+                // Skip blank lines that appear between global directives (before first @Filename)
             } else {
                 currentLines.add(line)
             }

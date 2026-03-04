@@ -573,6 +573,8 @@ data class PropertyAccessExpression(
     val expression: Expression,
     val name: Identifier,
     val questionDotToken: Boolean = false,
+    /** True when the `.` appears on a new line relative to the preceding expression (chained calls). */
+    val newLineBefore: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -715,6 +717,7 @@ data class VoidExpression(
 
 data class AwaitExpression(
     val expression: Expression,
+    val inAsyncContext: Boolean = true,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -854,6 +857,54 @@ data class OmittedExpression(
     override val trailingComments: List<Comment>? = null,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.OmittedExpression
+}
+
+/**
+ * Returns a copy of this expression with [comments] as its leading comments.
+ * Used to propagate leading trivia comments (e.g., inside array literals).
+ * Falls back to `this` for uncommon expression types.
+ */
+fun Expression.withLeadingComments(comments: List<Comment>?): Expression {
+    if (comments.isNullOrEmpty()) return this
+    return when (this) {
+        is Identifier -> copy(leadingComments = comments)
+        is StringLiteralNode -> copy(leadingComments = comments)
+        is NumericLiteralNode -> copy(leadingComments = comments)
+        is BigIntLiteralNode -> copy(leadingComments = comments)
+        is RegularExpressionLiteralNode -> copy(leadingComments = comments)
+        is NoSubstitutionTemplateLiteralNode -> copy(leadingComments = comments)
+        is TemplateExpression -> copy(leadingComments = comments)
+        is ArrayLiteralExpression -> copy(leadingComments = comments)
+        is ObjectLiteralExpression -> copy(leadingComments = comments)
+        is PropertyAccessExpression -> copy(leadingComments = comments)
+        is ElementAccessExpression -> copy(leadingComments = comments)
+        is CallExpression -> copy(leadingComments = comments)
+        is NewExpression -> copy(leadingComments = comments)
+        is TaggedTemplateExpression -> copy(leadingComments = comments)
+        is TypeAssertionExpression -> copy(leadingComments = comments)
+        is ParenthesizedExpression -> copy(leadingComments = comments)
+        is FunctionExpression -> copy(leadingComments = comments)
+        is ArrowFunction -> copy(leadingComments = comments)
+        is DeleteExpression -> copy(leadingComments = comments)
+        is TypeOfExpression -> copy(leadingComments = comments)
+        is VoidExpression -> copy(leadingComments = comments)
+        is AwaitExpression -> copy(leadingComments = comments)
+        is PrefixUnaryExpression -> copy(leadingComments = comments)
+        is PostfixUnaryExpression -> copy(leadingComments = comments)
+        is BinaryExpression -> copy(leadingComments = comments)
+        is ConditionalExpression -> copy(leadingComments = comments)
+        is YieldExpression -> copy(leadingComments = comments)
+        is SpreadElement -> copy(leadingComments = comments)
+        is ClassExpression -> copy(leadingComments = comments)
+        is AsExpression -> copy(leadingComments = comments)
+        is NonNullExpression -> copy(leadingComments = comments)
+        is SatisfiesExpression -> copy(leadingComments = comments)
+        is MetaProperty -> copy(leadingComments = comments)
+        is OmittedExpression -> copy(leadingComments = comments)
+        is ComputedPropertyName -> copy(leadingComments = comments)
+        is ObjectBindingPattern -> copy(leadingComments = comments)
+        is ArrayBindingPattern -> copy(leadingComments = comments)
+    }
 }
 
 // ===========================================================================

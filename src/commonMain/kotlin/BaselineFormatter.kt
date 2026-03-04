@@ -92,8 +92,10 @@ fun formatMultiFileBaseline(
 
     // Source echo sections
     for ((fileName, content) in sourceEchoes) {
+        // Use just the filename (basename), not the full subdirectory path
+        val baseName = fileName.substringAfterLast('/')
         sb.append("//// [")
-        sb.append(fileName)
+        sb.append(baseName)
         sb.append("]\r\n")
         sb.append(content.replace("\r", ""))
         sb.append("\r\n")
@@ -104,8 +106,10 @@ fun formatMultiFileBaseline(
 
     // JS output sections
     for ((jsName, javascript) in jsOutputs) {
+        // Use just the filename (basename), not the full subdirectory path
+        val baseJsName = jsName.substringAfterLast('/')
         sb.append("//// [")
-        sb.append(jsName)
+        sb.append(baseJsName)
         sb.append("]\r\n")
         sb.append(toCRLF(javascript))
         sb.append("\r\n")
