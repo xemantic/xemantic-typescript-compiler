@@ -317,6 +317,7 @@ class Scanner(private val text: String) {
                                 pos = commentStart,
                                 end = pos,
                                 hasTrailingNewLine = hasTrailingNewLine,
+                                hasPrecedingNewLine = seenLineBreak,
                             )
                             if (seenLineBreak) {
                                 if (leadingComments == null) {
@@ -353,6 +354,7 @@ class Scanner(private val text: String) {
                                 pos = commentStart,
                                 end = pos,
                                 hasTrailingNewLine = hasTrailingNewLine,
+                                hasPrecedingNewLine = seenLineBreak,
                             )
                             if (seenLineBreak) {
                                 if (leadingComments == null) {
@@ -539,7 +541,7 @@ class Scanner(private val text: String) {
             'x' -> {
                 // \xHH
                 val hex = readHexChars(2)
-                hex.toInt(16).toChar().toString()
+                if (hex.isEmpty()) "\\x" else hex.toInt(16).toChar().toString()
             }
 
             'u' -> {
@@ -552,12 +554,12 @@ class Scanner(private val text: String) {
                         pos++
                     }
                     if (pos < end) pos++ // skip }
-                    val codePoint = sb.toString().toInt(16)
-                    codePointToString(codePoint)
+                    val str = sb.toString()
+                    if (str.isEmpty()) "\\u{}" else codePointToString(str.toInt(16))
                 } else {
                     // \uHHHH
                     val hex = readHexChars(4)
-                    hex.toInt(16).toChar().toString()
+                    if (hex.isEmpty()) "\\u" else hex.toInt(16).toChar().toString()
                 }
             }
 
@@ -599,10 +601,13 @@ class Scanner(private val text: String) {
                 return SyntaxKind.TemplateHead
             }
             if (ch == '\\') {
+                // Preserve raw escape sequences in template literals (do not decode them).
+                // The JS engine decodes them at runtime; we emit the source as-is.
+                sb.append('\\')
                 pos++
                 if (pos < end) {
-                    val escaped = scanEscapeSequence()
-                    sb.append(escaped)
+                    sb.append(text[pos])
+                    pos++
                 }
                 continue
             }
@@ -637,10 +642,12 @@ class Scanner(private val text: String) {
                 return SyntaxKind.TemplateMiddle
             }
             if (ch == '\\') {
+                // Preserve raw escape sequences in template literals (do not decode them).
+                sb.append('\\')
                 pos++
                 if (pos < end) {
-                    val escaped = scanEscapeSequence()
-                    sb.append(escaped)
+                    sb.append(text[pos])
+                    pos++
                 }
                 continue
             }

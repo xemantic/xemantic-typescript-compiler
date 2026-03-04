@@ -30,9 +30,13 @@ fun formatBaseline(
     fileName: String,
     cleanedSource: String,
     javascript: String,
+    sourceMap: Boolean = false,
+    newLine: String? = null,
+    jsx: String? = null,
 ): String {
     val baseName = fileName.substringAfterLast('/')
-    val jsName = baseName.replace(".ts", ".js").replace(".tsx", ".jsx")
+    val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
+    val jsName = baseName.replace(".tsx", tsxExtension).replace(".ts", ".js")
 
     val sb = StringBuilder()
 
@@ -61,11 +65,15 @@ fun formatBaseline(
     sb.append(jsName)
     sb.append("]\r\n")
 
-    // JS output with CRLF endings
-    sb.append(toCRLF(javascript))
+    // JS output: use LF if @newline: LF is specified, otherwise CRLF
+    val useLF = newLine?.lowercase() == "lf"
+    sb.append(if (useLF) toLF(javascript) else toCRLF(javascript))
 
-    // Trailing CRLF
-    sb.append("\r\n")
+    // Trailing newline
+    sb.append(if (useLF) "\n" else "\r\n")
+    if (sourceMap) {
+        sb.append("//# sourceMappingURL=$jsName.map")
+    }
 
     return sb.toString()
 }
@@ -77,6 +85,7 @@ fun formatMultiFileBaseline(
     testFileName: String,
     sourceEchoes: List<Pair<String, String>>,
     jsOutputs: List<Pair<String, String>>,
+    sourceMap: Boolean = false,
 ): String {
     val baseName = testFileName.substringAfterLast('/')
 
@@ -105,7 +114,8 @@ fun formatMultiFileBaseline(
     sb.append("\r\n")
 
     // JS output sections
-    for ((jsName, javascript) in jsOutputs) {
+    for ((index, entry) in jsOutputs.withIndex()) {
+        val (jsName, javascript) = entry
         // Use just the filename (basename), not the full subdirectory path
         val baseJsName = jsName.substringAfterLast('/')
         sb.append("//// [")
@@ -113,6 +123,13 @@ fun formatMultiFileBaseline(
         sb.append("]\r\n")
         sb.append(toCRLF(javascript))
         sb.append("\r\n")
+        if (sourceMap) {
+            sb.append("//# sourceMappingURL=$baseJsName.map")
+            // Add CRLF separator between JS sections, but not after the last one
+            if (index < jsOutputs.size - 1) {
+                sb.append("\r\n")
+            }
+        }
     }
 
     return sb.toString()
@@ -121,4 +138,8 @@ fun formatMultiFileBaseline(
 private fun toCRLF(text: String): String {
     // First normalize to LF, then convert to CRLF
     return text.replace("\r\n", "\n").replace("\n", "\r\n")
+}
+
+private fun toLF(text: String): String {
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 }

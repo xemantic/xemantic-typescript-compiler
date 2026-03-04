@@ -68,9 +68,14 @@ class Transformer(private val options: CompilerOptions) {
     // Used in orphanedComments() to detect blank-line-separated comments.
     private var sourceText = ""
 
+    // True once we've seen a runtime (non-erased) statement at the top level.
+    // Orphaned comments from erased declarations are only preserved before any runtime code.
+    private var hasSeenRuntimeStatement = false
+
     fun transform(sourceFile: SourceFile): SourceFile {
         sourceText = sourceFile.text
-        val transformed = transformStatements(sourceFile.statements)
+        hasSeenRuntimeStatement = false
+        val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
         // CommonJS module transform
         if (options.effectiveModule == ModuleKind.CommonJS && isModuleFile(sourceFile)) {
@@ -78,7 +83,64 @@ class Transformer(private val options: CompilerOptions) {
             return sourceFile.copy(statements = cjsStatements)
         }
 
-        return sourceFile.copy(statements = transformed)
+        // ES module import elision: erase imports whose bindings are unused in value positions
+        val elided = elideUnusedESModuleImports(transformed)
+        return sourceFile.copy(statements = elided)
+    }
+
+    /**
+     * Erases ES module `import` declarations whose bindings are never referenced in value positions
+     * after type erasure. This mirrors TypeScript's import elision behavior.
+     * Side-effect imports (`import "mod"`) are always kept.
+     */
+    private fun elideUnusedESModuleImports(statements: List<Statement>): List<Statement> {
+        val imports = statements.filterIsInstance<ImportDeclaration>()
+        if (imports.isEmpty()) return statements
+
+        // Collect value-position references from all non-import statements
+        val nonImportStmts = statements.filter { it !is ImportDeclaration }
+        val referenced = collectValueReferences(nonImportStmts)
+
+        val result = mutableListOf<Statement>()
+        for (stmt in statements) {
+            if (stmt !is ImportDeclaration) {
+                result.add(stmt)
+                continue
+            }
+            val clause = stmt.importClause
+            if (clause == null) {
+                // Side-effect import: always keep
+                result.add(stmt)
+                continue
+            }
+            // Check default import name
+            val defaultName = clause.name?.text
+            val defaultUsed = defaultName != null && defaultName in referenced
+            // Check namespace import
+            val nsName = (clause.namedBindings as? NamespaceImport)?.name?.text
+            val nsUsed = nsName != null && nsName in referenced
+            // Check named imports
+            val namedImports = clause.namedBindings as? NamedImports
+            val usedNamedElements = namedImports?.elements?.filter { spec ->
+                val localName = spec.name.text
+                localName in referenced
+            }
+            val hasUsedNamedImports = usedNamedElements != null && usedNamedElements.isNotEmpty()
+
+            // If nothing is used, drop this import entirely
+            if (!defaultUsed && !nsUsed && !hasUsedNamedImports) continue
+
+            // If all named imports are used (or there are no named imports), keep as-is
+            if (namedImports == null || usedNamedElements == namedImports.elements) {
+                result.add(stmt)
+            } else {
+                // Keep only the used named imports
+                val newBindings = if (usedNamedElements!!.isEmpty()) null
+                else namedImports.copy(elements = usedNamedElements)
+                result.add(stmt.copy(importClause = clause.copy(namedBindings = newBindings)))
+            }
+        }
+        return result
     }
 
     private fun isModuleFile(
@@ -86,11 +148,13 @@ class Transformer(private val options: CompilerOptions) {
     ) = sourceFile.statements.any { stmt ->
         stmt is ImportDeclaration || stmt is ExportDeclaration ||
                 (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) || stmt is ExportAssignment ||
-                (stmt is Declaration && ModifierFlag.Export in (stmt as? ClassDeclaration)?.modifiers.orEmpty()) ||
                 (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
                 (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                 (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers)
+                (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                (stmt is InterfaceDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                (stmt is TypeAliasDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                (stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers)
     }
 
     // -----------------------------------------------------------------
@@ -112,12 +176,58 @@ class Transformer(private val options: CompilerOptions) {
             result.add(makeEsModulePreamble())
         }
 
+        // Track whether helper functions are needed
+        var needsImportStar = false
+        var needsImportDefault = false
+        var needsExportStar = false
+
+        // Map from original import name → CJS replacement expression
+        // e.g. "Namespace" → b_1.default, "a" (from {a}) → y_1.a
+        val renameMap = mutableMapOf<String, Expression>()
+
         // Collect exported names for hoisting (exports.x = void 0)
         val exportedVarNames = mutableListOf<String>()
         // Collect export assignments to emit at the end
         val deferredExportAssignments = mutableListOf<Statement>()
+        // Collect function export stubs (exports.fn = fn) to insert after void0 hoists.
+        // Function declarations are JS-hoisted, so their export stubs must appear BEFORE
+        // any variable initializer assignments that might override the same name.
+        val functionExportStubs = mutableListOf<Statement>()
 
-        for (stmt in statements) {
+        // Pre-scan original source for exported namespace/enum names. Their var declarations
+        // have no export modifier in the transformed code (it was stripped during namespace/enum
+        // transform), so we need to track them separately for hoisting and IIFE arg rewriting.
+        // Skip `declare` declarations — they produce no runtime output.
+        val exportedNsEnumNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers &&
+                        !hasDeclareModifier(stmt) ->
+                    extractIdentifierName(stmt.name)?.let { exportedNsEnumNames.add(it) }
+                stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
+                        !hasDeclareModifier(stmt) &&
+                        (options.preserveConstEnums || ModifierFlag.Const !in stmt.modifiers) ->
+                    exportedNsEnumNames.add(stmt.name.text)
+            }
+        }
+        for (name in exportedNsEnumNames) {
+            if (name !in exportedVarNames) exportedVarNames.add(name)
+        }
+
+        // Detect and strip "use strict" prologue directives so they can be re-inserted at the
+        // very top of the transformed output (before helpers and preamble).
+        var hasUseStrictPrologue = false
+        val statementsToProcess = statements.filter { stmt ->
+            if (stmt is ExpressionStatement) {
+                val expr = stmt.expression
+                if (expr is StringLiteralNode && expr.text == "use strict") {
+                    hasUseStrictPrologue = true
+                    false // strip from body
+                } else true
+            } else true
+        }
+
+        for (stmt in statementsToProcess) {
             when (stmt) {
                 // import x = require("y") → already transformed to var x = require("y")
                 // but it needs to use 'const' not 'var' for CommonJS
@@ -136,23 +246,63 @@ class Transformer(private val options: CompilerOptions) {
                             // const x = require("y") — keep as-is but remove export modifier
                             result.add(stmt.copy(modifiers = strippedModifiers))
                         } else {
-                            // Exported variable: hoist exports.x = void 0, emit var, then exports.x = x
-                            var hasInitializer = false
+                            // Exported variable: hoist exports.x = void 0 via exportedVarNames.
+                            // TypeScript uses two different strategies depending on the initializer:
+                            //   FunctionExpression/ArrowFunction/ClassExpression → keep-declaration +
+                            //     emit exports.x = x; right after (so the named function is preserved)
+                            //   Other initializers → emit exports.x = value; directly
+                            //   No initializer → just the void0 hoist, no declaration emitted
                             for (decl in stmt.declarationList.declarations) {
                                 val name = extractIdentifierName(decl.name)
-                                if (name != null) {
-                                    exportedVarNames.add(name)
-                                    if (decl.initializer != null) {
-                                        hasInitializer = true
-                                        deferredExportAssignments.add(makeExportAssignment(name))
+                                if (name != null) exportedVarNames.add(name)
+                            }
+                            val hasComplexPattern = stmt.declarationList.declarations.any {
+                                extractIdentifierName(it.name) == null
+                            }
+                            // Keep-declaration mode if any initializer is a function/arrow/class
+                            val needsKeepDeclaration = hasComplexPattern ||
+                                    stmt.declarationList.declarations.any { decl ->
+                                        decl.initializer is FunctionExpression ||
+                                                decl.initializer is ArrowFunction ||
+                                                decl.initializer is ClassExpression
+                                    }
+                            if (needsKeepDeclaration) {
+                                // Keep declaration + emit exports.x = x; right after
+                                result.add(stmt.copy(modifiers = strippedModifiers))
+                                for (decl in stmt.declarationList.declarations) {
+                                    val name = extractIdentifierName(decl.name)
+                                    if (name != null && decl.initializer != null) {
+                                        result.add(makeExportAssignment(name))
+                                    }
+                                }
+                            } else {
+                                // Direct: emit exports.x = value; for each declarator
+                                var isFirst = true
+                                for (decl in stmt.declarationList.declarations) {
+                                    val name = extractIdentifierName(decl.name)
+                                    if (name != null && decl.initializer != null) {
+                                        val leadingComments = if (isFirst) stmt.leadingComments else null
+                                        result.add(
+                                            ExpressionStatement(
+                                                expression = BinaryExpression(
+                                                    left = PropertyAccessExpression(
+                                                        expression = syntheticId("exports"),
+                                                        name = Identifier(text = name, pos = -1, end = -1),
+                                                        pos = -1, end = -1,
+                                                    ),
+                                                    operator = SyntaxKind.Equals,
+                                                    right = decl.initializer,
+                                                    pos = -1, end = -1,
+                                                ),
+                                                leadingComments = leadingComments,
+                                                pos = -1, end = -1,
+                                            )
+                                        )
+                                        isFirst = false
                                     }
                                 }
                             }
-                            // Only emit the var declaration if at least one var has an initializer;
-                            // a declaration without initializer is fully represented by exports.x = void 0
-                            if (hasInitializer) {
-                                result.add(stmt.copy(modifiers = strippedModifiers))
-                            }
+                            // If no initializer and simple names: only void0 hoist, no declaration
                         }
                     } else {
                         result.add(stmt)
@@ -166,17 +316,19 @@ class Transformer(private val options: CompilerOptions) {
                     if (isExported) {
                         val strippedModifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default
                         val emitted = stmt.copy(modifiers = strippedModifiers)
+                        val name = stmt.name?.text
                         if (isDefault) {
-                            result.add(emitted)
-                            val name = stmt.name?.text
                             if (name != null) {
-                                result.add(makeExportAssignment("default", syntheticId(name)))
+                                // exports.default = foo goes in stubs (before function declaration),
+                                // since function declarations are JS-hoisted and available early.
+                                functionExportStubs.add(makeExportAssignment("default", syntheticId(name)))
                             }
+                            result.add(emitted)
                         } else {
-                            val name = stmt.name?.text
                             if (name != null) {
-                                // exports.funcName = funcName before the declaration
-                                result.add(makeExportsProperty(name))
+                                // Collect stub to insert after void0 hoists (before var initializers),
+                                // since function declarations are hoisted and can be referenced early.
+                                functionExportStubs.add(makeExportsProperty(name))
                             }
                             result.add(emitted)
                         }
@@ -243,7 +395,7 @@ class Transformer(private val options: CompilerOptions) {
                             ExpressionStatement(
                                 expression = CallExpression(
                                     expression = syntheticId("require"),
-                                    arguments = listOf(moduleSpecifier),
+                                    arguments = listOf(normalizeModuleSpecifier(moduleSpecifier)),
                                     pos = -1, end = -1,
                                 ),
                                 pos = -1, end = -1,
@@ -253,30 +405,111 @@ class Transformer(private val options: CompilerOptions) {
                     } else {
                         val bindings = clause.namedBindings
                         if (clause.name != null && bindings == null) {
-                            // Default import: const x = require("y")
-                            // With esModuleInterop: const x_1 = __importDefault(require("y"))
-                            result.add(makeRequireConst(clause.name.text, moduleSpecifier, stmt.leadingComments))
+                            // Default import: const b_1 = __importDefault(require("./b"))
+                            // TypeScript uses the module specifier basename as temp name, not the local name
+                            needsImportDefault = true
+                            val localName = clause.name.text
+                            val tempName = generateModuleTempName(moduleSpecifier)
+                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                            // Rename: Namespace → b_1.default
+                            renameMap[localName] = PropertyAccessExpression(
+                                expression = syntheticId(tempName),
+                                name = syntheticId("default"),
+                                pos = -1, end = -1,
+                            )
                         } else if (bindings is NamespaceImport) {
-                            // import * as x from "y" → const x = require("y")
-                            result.add(makeRequireConst(bindings.name.text, moduleSpecifier, stmt.leadingComments))
+                            // import * as x from "y" → const x = __importStar(require("y"))
+                            needsImportStar = true
+                            result.add(makeImportHelperConst(bindings.name.text, "__importStar", moduleSpecifier, stmt.leadingComments))
+                            // Namespace keeps its name, no rename needed
                         } else if (bindings is NamedImports) {
-                            // import { a, b } from "y" → const y_1 = require("y")
+                            // import { a, b as c } from "y" → const y_1 = require("y")
                             val tempName = generateModuleTempName(moduleSpecifier)
                             result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments))
+                            // Rename: a → y_1.a, c → y_1.b
+                            for (element in bindings.elements) {
+                                val importedName = (element.propertyName ?: element.name).text
+                                val localAlias = element.name.text
+                                renameMap[localAlias] = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId(importedName),
+                                    pos = -1, end = -1,
+                                )
+                            }
                         } else if (clause.name != null && bindings != null) {
                             // Combined default + named: complex case
-                            result.add(makeRequireConst(clause.name.text, moduleSpecifier, stmt.leadingComments))
+                            needsImportDefault = true
+                            val localName = clause.name.text
+                            val tempName = generateModuleTempName(moduleSpecifier)
+                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                            renameMap[localName] = PropertyAccessExpression(
+                                expression = syntheticId(tempName),
+                                name = syntheticId("default"),
+                                pos = -1, end = -1,
+                            )
                         }
                     }
                 }
 
                 is ExportDeclaration -> {
-                    if (stmt.moduleSpecifier != null) {
-                        // Re-export: export { x } from "y" — complex, skip for now
-                        result.add(stmt)
+                    if (stmt.isTypeOnly) {
+                        // Type-only re-export: completely erased
+                    } else if (stmt.moduleSpecifier != null) {
+                        when (val clause = stmt.exportClause) {
+                            null -> {
+                                // export * from "x" → __exportStar(require("x"), exports)
+                                needsExportStar = true
+                                // Note: __exportStar needs __createBinding (emitted via CREATE_BINDING_HELPER)
+                                // but does NOT need the full __importStar/__setModuleDefault helpers
+                                val normalizedSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
+                                result.add(ExpressionStatement(
+                                    expression = CallExpression(
+                                        expression = syntheticId("__exportStar"),
+                                        arguments = listOf(
+                                            CallExpression(
+                                                expression = syntheticId("require"),
+                                                arguments = listOf(normalizedSpec),
+                                                pos = -1, end = -1,
+                                            ),
+                                            syntheticId("exports"),
+                                        ),
+                                        pos = -1, end = -1,
+                                    ),
+                                    pos = -1, end = -1,
+                                    leadingComments = stmt.leadingComments,
+                                ))
+                            }
+                            is NamedExports -> {
+                                // export { x as y } from "m" → Object.defineProperty for each
+                                val tempName = generateModuleTempName(stmt.moduleSpecifier)
+                                val nonTypeSpecs = clause.elements.filter { !it.isTypeOnly }
+                                if (nonTypeSpecs.isNotEmpty()) {
+                                    // Hoist exports.name = void 0 for re-exported names
+                                    for (spec in nonTypeSpecs) {
+                                        val exportName = spec.name.text
+                                        if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                    }
+                                    result.add(makeRequireConst(tempName, stmt.moduleSpecifier, stmt.leadingComments, useVar = true))
+                                    for (spec in nonTypeSpecs) {
+                                        val importedName = (spec.propertyName ?: spec.name).text
+                                        val exportName = spec.name.text
+                                        result.add(makeReExportGetter(exportName, tempName, importedName))
+                                    }
+                                }
+                            }
+                            is NamespaceExport -> {
+                                // export * as ns from "m" → Object.defineProperty(exports, "ns", ...)
+                                needsImportStar = true
+                                val tempName = generateModuleTempName(stmt.moduleSpecifier)
+                                result.add(makeImportHelperConst(tempName, "__importStar", stmt.moduleSpecifier, stmt.leadingComments))
+                                result.add(makeReExportGetter(clause.name.text, tempName, null))
+                            }
+                            else -> result.add(stmt)
+                        }
                     } else if (stmt.exportClause is NamedExports) {
                         // export { x, y } — emit exports.x = x, exports.y = y
                         for (spec in (stmt.exportClause as NamedExports).elements) {
+                            if (spec.isTypeOnly) continue
                             val exportName = spec.propertyName?.text ?: spec.name.text
                             val localName = spec.name.text
                             result.add(makeExportAssignment(exportName, syntheticId(localName)))
@@ -284,36 +517,170 @@ class Transformer(private val options: CompilerOptions) {
                     }
                 }
 
-                else -> result.add(stmt)
+                else -> {
+                    // Check if this is a namespace/enum IIFE for an exported name.
+                    // If so, rewrite the IIFE arg from N || (N = {}) to N || (exports.N = N = {}).
+                    val iifeNameForExport = extractSimpleIifeName(stmt)
+                    if (iifeNameForExport != null && iifeNameForExport in exportedNsEnumNames) {
+                        result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
+                    } else {
+                        result.add(stmt)
+                    }
+                }
             }
         }
 
-        // Emit hoisted exports.x = void 0
-        val hoistedExports = exportedVarNames.map { name ->
-            ExpressionStatement(
-                expression = BinaryExpression(
+        // Emit hoisted exports: TypeScript chains them as a single assignment expression.
+        // e.g. exports.z = exports.y = exports.x = void 0;
+        // The chain is built in declaration order so the last-declared name is leftmost.
+        if (exportedVarNames.isNotEmpty()) {
+            val void0 = VoidExpression(
+                expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+            val hoistExpr: Expression = exportedVarNames.fold(void0 as Expression) { acc, name ->
+                BinaryExpression(
                     left = PropertyAccessExpression(
                         expression = syntheticId("exports"),
                         name = syntheticId(name),
                         pos = -1, end = -1,
                     ),
                     operator = SyntaxKind.Equals,
-                    right = syntheticId("void 0"),
+                    right = acc,
                     pos = -1, end = -1,
-                ),
-                pos = -1, end = -1,
-            )
+                )
+            }
+            val hoistStmt = ExpressionStatement(expression = hoistExpr, pos = -1, end = -1)
+            result.add(if (hasExportEquals) 0 else 1, hoistStmt)
         }
 
-        // Insert hoisted exports after the __esModule preamble
-        if (hoistedExports.isNotEmpty()) {
-            result.addAll(1, hoistedExports)
+        // Insert function export stubs after void0 hoists and Object.defineProperty preamble.
+        // They must come before variable initializer assignments so the hoisted function
+        // reference is captured before any same-name var overrides it.
+        if (functionExportStubs.isNotEmpty()) {
+            val insertPos = when {
+                hasExportEquals -> 0
+                exportedVarNames.isEmpty() -> 1 // after Object.defineProperty only
+                else -> 2 // after Object.defineProperty + void0 hoist
+            }
+            result.addAll(insertPos, functionExportStubs)
         }
 
         // Append deferred export assignments
         result.addAll(deferredExportAssignments)
 
+        // Step 1: Apply import identifier renaming to non-import statements FIRST.
+        // (Renaming must happen before elision so elision can see the renamed references.)
+        val requireImportStmts = result.filterIsInstance<VariableStatement>().filter { stmt ->
+            stmt.declarationList.declarations.size == 1 && isRequireImport(stmt.declarationList.declarations[0].initializer)
+        }
+        if (renameMap.isNotEmpty() && requireImportStmts.isNotEmpty()) {
+            val requireImportSet = requireImportStmts.toHashSet()
+            val rewritten = result.map { stmt ->
+                if (stmt !in requireImportSet) rewriteIdInStatement(stmt, renameMap) else stmt
+            }
+            result.clear()
+            result.addAll(rewritten)
+        }
+
+        // Step 2: Import elision — drop require imports whose bound name is never referenced.
+        if (requireImportStmts.isNotEmpty()) {
+            val requireImportSet = requireImportStmts.toHashSet()
+            val nonImportStmts = result.filter { it !in requireImportSet }
+            val referenced = collectValueReferences(nonImportStmts)
+            val toElide = mutableSetOf<VariableStatement>()
+            for (stmt in requireImportStmts) {
+                val name = extractIdentifierName(stmt.declarationList.declarations[0].name) ?: continue
+                if (name !in referenced) toElide.add(stmt)
+            }
+            if (toElide.isNotEmpty()) {
+                // If we're eliding all __importStar uses, we don't need the helper
+                val allStarElided = requireImportStmts.filter { isImportStarWrapper(it) }.all { it in toElide }
+                if (allStarElided) needsImportStar = false
+                val allDefaultElided = requireImportStmts.filter { isImportDefaultWrapper(it) }.all { it in toElide }
+                if (allDefaultElided) needsImportDefault = false
+                result.removeAll(toElide)
+            }
+        }
+
+        // Insert runtime helpers at the start (before Object.defineProperty preamble)
+        // These must be at position 0 (before everything else)
+        if (needsImportStar || needsImportDefault || needsExportStar) {
+            val helpers = buildString {
+                // __createBinding is needed by both __importStar and __exportStar
+                if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
+                // __setModuleDefault + __importStar only needed for namespace imports
+                if (needsImportStar) append(IMPORT_STAR_ONLY_HELPERS)
+                if (needsExportStar) append(EXPORT_STAR_HELPER)
+                if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
+            }
+            result.add(0, RawStatement(code = helpers))
+        }
+
+        // Re-insert "use strict" at the very top (before helpers and preamble).
+        // emitUseStrict sees this in the original source and skips, so the transformed
+        // statements must emit it themselves at the correct position.
+        if (hasUseStrictPrologue) {
+            result.add(0, ExpressionStatement(
+                expression = StringLiteralNode(text = "use strict"),
+            ))
+        }
+
         return result
+    }
+
+    /**
+     * If [stmt] is a namespace/enum IIFE with arg `N || (N = {})`, returns `N`. Otherwise null.
+     * Used to detect top-level namespace/enum IIFEs that need CJS export rewriting.
+     */
+    private fun extractSimpleIifeName(stmt: Statement): String? {
+        if (stmt !is ExpressionStatement) return null
+        val call = stmt.expression as? CallExpression ?: return null
+        val parenFn = call.expression as? ParenthesizedExpression ?: return null
+        if (parenFn.expression !is FunctionExpression) return null
+        val fn = parenFn.expression as FunctionExpression
+        if (fn.parameters.size != 1) return null
+        val paramName = (fn.parameters[0].name as? Identifier)?.text ?: return null
+        if (call.arguments.size != 1) return null
+        val arg = call.arguments[0]
+        // Simple form: N || (N = {})
+        if (arg !is BinaryExpression || arg.operator != SyntaxKind.BarBar) return null
+        val leftId = arg.left as? Identifier ?: return null
+        if (leftId.text != paramName) return null
+        return paramName
+    }
+
+    /**
+     * Rewrites `N || (N = {})` IIFE arg to `N || (exports.N = N = {})` for CJS export.
+     */
+    private fun rewriteIifeArgForCjsExport(stmt: ExpressionStatement, name: String): ExpressionStatement {
+        val call = stmt.expression as CallExpression
+        val nsId = syntheticId(name)
+        val exportsProp = PropertyAccessExpression(
+            expression = syntheticId("exports"),
+            name = Identifier(text = name, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        val newArg = BinaryExpression(
+            left = nsId,
+            operator = SyntaxKind.BarBar,
+            right = ParenthesizedExpression(
+                expression = BinaryExpression(
+                    left = exportsProp,
+                    operator = SyntaxKind.Equals,
+                    right = BinaryExpression(
+                        left = syntheticId(name),
+                        operator = SyntaxKind.Equals,
+                        right = ObjectLiteralExpression(properties = emptyList(), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+        return stmt.copy(expression = call.copy(arguments = listOf(newArg)))
     }
 
     private fun makeEsModulePreamble(): Statement {
@@ -366,11 +733,17 @@ class Transformer(private val options: CompilerOptions) {
         return makeExportAssignment(name, syntheticId(name))
     }
 
+    // TypeScript normalizes module specifier paths to double quotes in require() calls.
+    private fun normalizeModuleSpecifier(spec: Expression): Expression =
+        if (spec is StringLiteralNode) spec.copy(singleQuote = false) else spec
+
     private fun makeRequireConst(
         name: String,
         moduleSpecifier: Expression,
-        comments: List<Comment>? = null
+        comments: List<Comment>? = null,
+        useVar: Boolean = false, // TypeScript uses var for re-export requires, const for regular imports
     ): Statement {
+        val normalizedSpecifier = normalizeModuleSpecifier(moduleSpecifier)
         return VariableStatement(
             declarationList = VariableDeclarationList(
                 declarations = listOf(
@@ -378,7 +751,44 @@ class Transformer(private val options: CompilerOptions) {
                         name = Identifier(text = name, pos = -1, end = -1),
                         initializer = CallExpression(
                             expression = syntheticId("require"),
-                            arguments = listOf(moduleSpecifier),
+                            arguments = listOf(normalizedSpecifier),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                ),
+                flags = if (useVar) SyntaxKind.VarKeyword else SyntaxKind.ConstKeyword,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+            leadingComments = comments,
+        )
+    }
+
+    /**
+     * Creates `const name = helperFn(require("specifier"))` for `__importStar`/`__importDefault`.
+     */
+    private fun makeImportHelperConst(
+        name: String,
+        helperName: String,
+        moduleSpecifier: Expression,
+        comments: List<Comment>? = null
+    ): Statement {
+        val normalizedSpecifier = normalizeModuleSpecifier(moduleSpecifier)
+        return VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(
+                    VariableDeclaration(
+                        name = Identifier(text = name, pos = -1, end = -1),
+                        initializer = CallExpression(
+                            expression = syntheticId(helperName),
+                            arguments = listOf(
+                                CallExpression(
+                                    expression = syntheticId("require"),
+                                    arguments = listOf(normalizedSpecifier),
+                                    pos = -1, end = -1,
+                                )
+                            ),
                             pos = -1, end = -1,
                         ),
                         pos = -1, end = -1,
@@ -392,6 +802,82 @@ class Transformer(private val options: CompilerOptions) {
         )
     }
 
+    /**
+     * Creates `Object.defineProperty(exports, "name", { enumerable: true, get: function() { return src.prop; } })`
+     * for re-export. If [importedProp] is null, get returns the whole [sourceName].
+     */
+    private fun makeReExportGetter(exportName: String, sourceName: String, importedProp: String?): Statement {
+        val returnExpr: Expression = if (importedProp != null) {
+            PropertyAccessExpression(
+                expression = syntheticId(sourceName),
+                name = syntheticId(importedProp),
+                pos = -1, end = -1,
+            )
+        } else {
+            syntheticId(sourceName)
+        }
+        return ExpressionStatement(
+            expression = CallExpression(
+                expression = PropertyAccessExpression(
+                    expression = syntheticId("Object"),
+                    name = syntheticId("defineProperty"),
+                    pos = -1, end = -1,
+                ),
+                arguments = listOf(
+                    syntheticId("exports"),
+                    StringLiteralNode(text = exportName, pos = -1, end = -1),
+                    ObjectLiteralExpression(
+                        properties = listOf(
+                            PropertyAssignment(
+                                name = syntheticId("enumerable"),
+                                initializer = syntheticId("true"),
+                                pos = -1, end = -1,
+                            ),
+                            PropertyAssignment(
+                                name = syntheticId("get"),
+                                initializer = FunctionExpression(
+                                    parameters = emptyList(),
+                                    body = Block(
+                                        statements = listOf(
+                                            ReturnStatement(expression = returnExpr, pos = -1, end = -1)
+                                        ),
+                                        multiLine = false,
+                                        pos = -1, end = -1,
+                                    ),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                ),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+    }
+
+    /** Returns true if the expression is a `require("...")` call. */
+    private fun isRequireCall(expr: Expression?): Boolean =
+        expr is CallExpression && (expr.expression as? Identifier)?.text == "require"
+
+    /** Returns true if the expression is `require(...)` or `__importStar/Default(require(...))`. */
+    private fun isRequireImport(expr: Expression?): Boolean =
+        isRequireCall(expr) || (expr is CallExpression &&
+                ((expr.expression as? Identifier)?.text?.let { it == "__importStar" || it == "__importDefault" } == true) &&
+                isRequireCall(expr.arguments.firstOrNull()))
+
+    private fun isImportStarWrapper(stmt: VariableStatement): Boolean {
+        val init = stmt.declarationList.declarations.firstOrNull()?.initializer as? CallExpression
+        return (init?.expression as? Identifier)?.text == "__importStar"
+    }
+
+    private fun isImportDefaultWrapper(stmt: VariableStatement): Boolean {
+        val init = stmt.declarationList.declarations.firstOrNull()?.initializer as? CallExpression
+        return (init?.expression as? Identifier)?.text == "__importDefault"
+    }
+
     private fun generateModuleTempName(moduleSpecifier: Expression): String {
         val specText = (moduleSpecifier as? StringLiteralNode)?.text ?: "module"
         val baseName = specText.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
@@ -402,10 +888,15 @@ class Transformer(private val options: CompilerOptions) {
     // Statement transforms
     // -----------------------------------------------------------------
 
-    private fun transformStatements(statements: List<Statement>): List<Statement> {
+    private fun transformStatements(statements: List<Statement>, atTopLevel: Boolean = false): List<Statement> {
         val result = mutableListOf<Statement>()
         for (stmt in statements) {
-            result.addAll(transformStatement(stmt))
+            val transformed = transformStatement(stmt)
+            result.addAll(transformed)
+            // At top level: once we see runtime output, stop preserving orphaned comments.
+            if (atTopLevel && transformed.any { it !is NotEmittedStatement }) {
+                hasSeenRuntimeStatement = true
+            }
             // Track class/function names in declaration order.
             // This allows namespace/module IIFEs to skip var N; when a class or
             // function with the same name was declared BEFORE the namespace.
@@ -438,7 +929,10 @@ class Transformer(private val options: CompilerOptions) {
             is EnumDeclaration -> transformEnum(statement)
 
             // --- Namespace / module declaration transform ---
-            is ModuleDeclaration -> transformModuleDeclaration(statement)
+            is ModuleDeclaration -> {
+                val result = transformModuleDeclaration(statement)
+                if (result.isEmpty()) orphanedComments(statement) else result
+            }
 
             // --- Class transform ---
             is ClassDeclaration -> transformClassDeclaration(statement)
@@ -512,6 +1006,7 @@ class Transformer(private val options: CompilerOptions) {
             is ContinueStatement -> listOf(statement)
             is DebuggerStatement -> listOf(statement)
             is NotEmittedStatement -> listOf(statement)
+            is RawStatement -> listOf(statement)
         }
     }
 
@@ -575,8 +1070,8 @@ class Transformer(private val options: CompilerOptions) {
     // -----------------------------------------------------------------
 
     private fun transformVariableStatement(stmt: VariableStatement): List<Statement> {
-        // Declare modifier on the variable statement
-        if (ModifierFlag.Declare in stmt.modifiers) return emptyList()
+        // Declare modifier on the variable statement — erase, but preserve detached comments
+        if (ModifierFlag.Declare in stmt.modifiers) return orphanedComments(stmt)
 
         val transformedList = transformVariableDeclarationList(stmt.declarationList)
         val strippedModifiers = stripTypeScriptModifiers(stmt.modifiers)
@@ -1122,7 +1617,7 @@ class Transformer(private val options: CompilerOptions) {
             is ExternalModuleReference -> {
                 CallExpression(
                     expression = syntheticId("require"),
-                    arguments = listOf(transformExpression(ref.expression)),
+                    arguments = listOf(normalizeModuleSpecifier(transformExpression(ref.expression))),
                     pos = -1, end = -1,
                 )
             }
@@ -1266,8 +1761,13 @@ class Transformer(private val options: CompilerOptions) {
                     instanceProperties.add(member)
                 }
 
-                member is Constructor -> {
+                member is Constructor && member.body != null -> {
+                    // Only use constructors with a body; overload signatures (body == null) are erased
                     existingConstructor = member
+                }
+
+                member is Constructor && member.body == null -> {
+                    // Constructor overload signature: erase (type-only)
                 }
 
                 member is IndexSignature -> {
@@ -1325,6 +1825,7 @@ class Transformer(private val options: CompilerOptions) {
                                     pos = -1, end = -1,
                                 ),
                                 pos = -1, end = -1,
+                                leadingComments = prop.leadingComments,
                                 trailingComments = prop.trailingComments,
                             )
                         )
@@ -1349,15 +1850,18 @@ class Transformer(private val options: CompilerOptions) {
                     // Insert after super() call
                     bodyStatements.addAll(superIndex + 1, propInitStatements)
                 } else {
-                    // Insert at beginning
-                    bodyStatements.addAll(0, propInitStatements)
+                    // Insert after any prologue directives ("use strict", "ngInject", etc.)
+                    val insertAt = bodyStatements.indexOfFirst { stmt ->
+                        !(stmt is ExpressionStatement && stmt.expression is StringLiteralNode)
+                    }.let { if (it < 0) bodyStatements.size else it }
+                    bodyStatements.addAll(insertAt, propInitStatements)
                 }
 
                 Constructor(
                     parameters = transformedParams,
                     body = existingBody.copy(
                         statements = bodyStatements,
-                        multiLine = bodyStatements.isNotEmpty() || existingBody.multiLine,
+                        multiLine = propInitStatements.isNotEmpty() || existingBody.multiLine,
                     ),
                     modifiers = stripMemberModifiers(existingConstructor.modifiers),
                     pos = existingConstructor.pos, end = existingConstructor.end,
@@ -1565,7 +2069,11 @@ class Transformer(private val options: CompilerOptions) {
      * })(E || (E = {}));
      * ```
      */
-    private fun transformEnum(decl: EnumDeclaration): List<Statement> {
+    private fun transformEnum(
+        decl: EnumDeclaration,
+        nested: Boolean = false,
+        parentNsName: String? = null,
+    ): List<Statement> {
         // const enum without preserveConstEnums → remove
         if (ModifierFlag.Const in decl.modifiers && !options.preserveConstEnums) {
             return emptyList()
@@ -1582,35 +2090,31 @@ class Transformer(private val options: CompilerOptions) {
             val memberName = extractEnumMemberName(member.name)
             val memberNameExpr = memberNameToString(member.name)
 
-            when {
+            val stmt: ExpressionStatement = when {
                 member.initializer != null -> {
                     val initExpr = transformExpression(member.initializer)
                     if (isStringLiteral(initExpr)) {
                         // String enum member: E["B"] = "hello" (no reverse mapping)
-                        iifeBody.add(
-                            ExpressionStatement(
-                                expression = BinaryExpression(
-                                    left = ElementAccessExpression(
-                                        expression = syntheticId(enumName),
-                                        argumentExpression = memberNameExpr,
-                                        pos = -1, end = -1,
-                                    ),
-                                    operator = SyntaxKind.Equals,
-                                    right = initExpr,
-                                    pos = -1, end = -1,
-                                ),
-                                pos = -1, end = -1,
-                            )
-                        )
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
+                        ExpressionStatement(
+                            expression = BinaryExpression(
+                                left = ElementAccessExpression(
+                                    expression = syntheticId(enumName),
+                                    argumentExpression = memberNameExpr,
+                                    pos = -1, end = -1,
+                                ),
+                                operator = SyntaxKind.Equals,
+                                right = initExpr,
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
                     } else {
                         // Numeric / expression initializer: E[E["X"] = expr] = "X"
-                        iifeBody.add(makeReverseMapStatement(enumName, memberNameExpr, initExpr))
-
-                        // Try to track auto-increment value
                         val numericValue = tryEvaluateNumericLiteral(initExpr)
                         nextAutoValue = if (numericValue != null) numericValue + 1 else nextAutoValue
+                        makeReverseMapStatement(enumName, memberNameExpr, initExpr)
                     }
                 }
 
@@ -1620,10 +2124,21 @@ class Transformer(private val options: CompilerOptions) {
                         text = nextAutoValue.toString(),
                         pos = -1, end = -1,
                     )
-                    iifeBody.add(makeReverseMapStatement(enumName, memberNameExpr, valueExpr))
                     nextAutoValue++
+                    makeReverseMapStatement(enumName, memberNameExpr, valueExpr)
                 }
             }
+            // Copy leading/trailing comments from the enum member to the generated statement
+            iifeBody.add(
+                if (member.leadingComments != null || member.trailingComments != null) {
+                    stmt.copy(
+                        leadingComments = member.leadingComments,
+                        trailingComments = member.trailingComments,
+                    )
+                } else {
+                    stmt
+                }
+            )
         }
 
         // Emit var E; unless a class/function declared this name before the enum
@@ -1631,6 +2146,17 @@ class Transformer(private val options: CompilerOptions) {
         val needsVarDecl = enumName !in declaredNames && enumName !in emittedVarNames
         emittedVarNames.add(enumName)
         declaredNames.add(enumName)
+        // In ES module format, preserve the `export` modifier so the file is still recognized
+        // as a module file (e.g. `export enum E {}` → `export var E; IIFE`).
+        // In CommonJS format the CommonJS transform handles exports separately, so no modifier.
+        val isEsModuleFormat = options.effectiveModule in setOf(
+            ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022, ModuleKind.ESNext
+        )
+        val varModifiers = if (isEsModuleFormat && ModifierFlag.Export in decl.modifiers) {
+            setOf(ModifierFlag.Export)
+        } else {
+            emptySet()
+        }
         val varDecl = if (needsVarDecl) VariableStatement(
             declarationList = VariableDeclarationList(
                 declarations = listOf(
@@ -1639,9 +2165,10 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                 ),
-                flags = SyntaxKind.VarKeyword,
+                flags = if (nested) SyntaxKind.LetKeyword else SyntaxKind.VarKeyword,
                 pos = -1, end = -1,
             ),
+            modifiers = varModifiers,
             pos = -1, end = -1,
             leadingComments = decl.leadingComments,
         ) else null
@@ -1666,24 +2193,59 @@ class Transformer(private val options: CompilerOptions) {
                     pos = -1, end = -1,
                 ),
                 arguments = listOf(
-                    // E || (E = {})
-                    BinaryExpression(
-                        left = enumId,
-                        operator = SyntaxKind.BarBar,
-                        right = ParenthesizedExpression(
-                            expression = BinaryExpression(
-                                left = syntheticId(enumName),
-                                operator = SyntaxKind.Equals,
-                                right = ObjectLiteralExpression(
-                                    properties = emptyList(),
+                    if (parentNsName != null) {
+                        // E = Parent.E || (Parent.E = {})
+                        val parentProp = PropertyAccessExpression(
+                            expression = syntheticId(parentNsName),
+                            name = Identifier(text = enumName, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        BinaryExpression(
+                            left = enumId,
+                            operator = SyntaxKind.Equals,
+                            right = BinaryExpression(
+                                left = parentProp,
+                                operator = SyntaxKind.BarBar,
+                                right = ParenthesizedExpression(
+                                    expression = BinaryExpression(
+                                        left = PropertyAccessExpression(
+                                            expression = syntheticId(parentNsName),
+                                            name = Identifier(text = enumName, pos = -1, end = -1),
+                                            pos = -1, end = -1,
+                                        ),
+                                        operator = SyntaxKind.Equals,
+                                        right = ObjectLiteralExpression(
+                                            properties = emptyList(),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    ),
                                     pos = -1, end = -1,
                                 ),
                                 pos = -1, end = -1,
                             ),
                             pos = -1, end = -1,
-                        ),
-                        pos = -1, end = -1,
-                    )
+                        )
+                    } else {
+                        // E || (E = {})
+                        BinaryExpression(
+                            left = enumId,
+                            operator = SyntaxKind.BarBar,
+                            right = ParenthesizedExpression(
+                                expression = BinaryExpression(
+                                    left = syntheticId(enumName),
+                                    operator = SyntaxKind.Equals,
+                                    right = ObjectLiteralExpression(
+                                        properties = emptyList(),
+                                        pos = -1, end = -1,
+                                    ),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    }
                 ),
                 pos = -1, end = -1,
             ),
@@ -1816,8 +2378,19 @@ class Transformer(private val options: CompilerOptions) {
             else -> return emptyList()
         }
 
+        // Each namespace body is a separate IIFE scope, so names declared inside
+        // one body (e.g. `let Color;`) must not suppress declarations in sibling bodies.
+        // Save and restore both sets so inner-scope names don't pollute the outer scope.
+        val savedEmittedVarNames = emittedVarNames.toMutableSet()
+        val savedDeclaredNames = declaredNames.toMutableSet()
+
         // Transform body statements, rewriting exports
         val transformedBody = transformNamespaceBody(moduleName, bodyStatements)
+
+        emittedVarNames.clear()
+        emittedVarNames.addAll(savedEmittedVarNames)
+        declaredNames.clear()
+        declaredNames.addAll(savedDeclaredNames)
 
         return wrapInNamespaceIife(moduleName, transformedBody, decl, nested = nested, parentNsName = parentNsName)
     }
@@ -1842,6 +2415,16 @@ class Transformer(private val options: CompilerOptions) {
         // Top-level namespace declarations use `var` (for hoisting compatibility).
         val varKeyword = if (nested) SyntaxKind.LetKeyword else SyntaxKind.VarKeyword
 
+        // In ES module format, preserve the `export` modifier so the file is still recognized
+        // as a module file (e.g. `export namespace N {}` → `export var N; IIFE`).
+        val isEsModuleFormat = options.effectiveModule in setOf(
+            ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022, ModuleKind.ESNext
+        )
+        val varModifiers = if (!nested && isEsModuleFormat && ModifierFlag.Export in outerDecl.modifiers) {
+            setOf(ModifierFlag.Export)
+        } else {
+            emptySet()
+        }
         val varDecl = if (needsVarDecl) {
             VariableStatement(
                 declarationList = VariableDeclarationList(
@@ -1854,6 +2437,7 @@ class Transformer(private val options: CompilerOptions) {
                     flags = varKeyword,
                     pos = -1, end = -1,
                 ),
+                modifiers = varModifiers,
                 pos = -1, end = -1,
                 leadingComments = outerDecl.leadingComments,
             )
@@ -2094,6 +2678,10 @@ class Transformer(private val options: CompilerOptions) {
                     val transformed = transformFunctionDeclaration(strippedStmt)
                     result.addAll(transformed)
 
+                    // Track function name so a subsequent same-named namespace/enum
+                    // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
+                    stmt.name?.text?.let { declaredNames.add(it) }
+
                     if (isExported && stmt.name != null) {
                         result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
                     }
@@ -2113,6 +2701,10 @@ class Transformer(private val options: CompilerOptions) {
                     val transformed = transformClassDeclaration(strippedStmt)
                     result.addAll(transformed)
 
+                    // Track class name so a subsequent same-named namespace/enum
+                    // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
+                    stmt.name?.text?.let { declaredNames.add(it) }
+
                     if (isExported && stmt.name != null) {
                         result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
                     }
@@ -2122,12 +2714,11 @@ class Transformer(private val options: CompilerOptions) {
                     val strippedStmt = stmt.copy(
                         modifiers = stmt.modifiers - ModifierFlag.Export,
                     )
-                    val transformed = transformEnum(strippedStmt)
+                    // Exported nested enums embed the parent assignment in the IIFE arg
+                    // (E = Parent.E || (Parent.E = {})) — no separate export assignment needed.
+                    val parentForIife = if (isExported) nsName else null
+                    val transformed = transformEnum(strippedStmt, nested = true, parentNsName = parentForIife)
                     result.addAll(transformed)
-
-                    if (isExported) {
-                        result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
-                    }
                 }
 
                 is ModuleDeclaration -> {
@@ -2237,6 +2828,7 @@ class Transformer(private val options: CompilerOptions) {
             is TypeAliasDeclaration -> true
             is ImportDeclaration -> stmt.importClause?.isTypeOnly == true
             is ExportDeclaration -> stmt.isTypeOnly
+            is ModuleDeclaration -> isTypeOnlyNamespace(stmt)
             else -> false
         }
     }
@@ -2280,14 +2872,21 @@ class Transformer(private val options: CompilerOptions) {
      * Comments directly adjacent to the declaration (no blank line) are dropped along with it.
      */
     private fun orphanedComments(statement: Statement): List<Statement> {
+        // If runtime code has already appeared, this comment is not "orphaned" in the
+        // TypeScript sense — it belongs to the surrounding code context and should be
+        // dropped along with the erased declaration.
+        if (hasSeenRuntimeStatement) return emptyList()
         val comments = statement.leadingComments ?: return emptyList()
-        // A comment is "detached" (should be preserved) if there's a blank line (>=2 newlines)
-        // between the comment's end and the declaration's start. Directly adjacent comments
-        // (only one newline) are considered part of the declaration and are erased with it.
+        // A comment is detached (preserved) if there is a blank line (>=2 newlines) between
+        // the comment's end and the erased declaration's start position. This accounts for
+        // the case where multiple comments appear before a declaration: only those with
+        // a blank line separating them from the declaration are preserved; adjacent ones
+        // are considered part of the declaration and are dropped with it.
+        val stmtPos = statement.pos.coerceIn(0, sourceText.length)
         val detached = comments.filter { comment ->
             val between = sourceText.substring(
                 comment.end.coerceIn(0, sourceText.length),
-                statement.pos.coerceIn(0, sourceText.length)
+                stmtPos,
             )
             between.count { it == '\n' } >= 2
         }
@@ -2327,6 +2926,287 @@ class Transformer(private val options: CompilerOptions) {
         )
     }
 
+    /**
+     * Recursively collects all identifier names used in value positions from a list of statements.
+     * Used for import elision: if an import name never appears in value positions after type erasure,
+     * its `const X = require(...)` can be dropped.
+     */
+    private fun collectValueReferences(stmts: List<Statement>): Set<String> {
+        val result = mutableSetOf<String>()
+        stmts.forEach { collectRefsFromNode(it, result) }
+        return result
+    }
+
+    private fun collectRefsFromNode(node: Any?, refs: MutableSet<String>) {
+        when (node) {
+            null -> {}
+            // Statements
+            is Block -> node.statements.forEach { collectRefsFromNode(it, refs) }
+            is VariableStatement -> node.declarationList.declarations.forEach { decl ->
+                // Recurse into initializer (value position), but NOT the name (it's a binding)
+                collectRefsFromNode(decl.initializer, refs)
+            }
+            is ExpressionStatement -> collectRefsFromNode(node.expression, refs)
+            is IfStatement -> {
+                collectRefsFromNode(node.expression, refs)
+                collectRefsFromNode(node.thenStatement, refs)
+                collectRefsFromNode(node.elseStatement, refs)
+            }
+            is DoStatement -> { collectRefsFromNode(node.statement, refs); collectRefsFromNode(node.expression, refs) }
+            is WhileStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
+            is ForStatement -> {
+                collectRefsFromNode(node.initializer, refs)
+                collectRefsFromNode(node.condition, refs)
+                collectRefsFromNode(node.incrementor, refs)
+                collectRefsFromNode(node.statement, refs)
+            }
+            is ForInStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
+            is ForOfStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
+            is ReturnStatement -> collectRefsFromNode(node.expression, refs)
+            is ThrowStatement -> collectRefsFromNode(node.expression, refs)
+            is LabeledStatement -> collectRefsFromNode(node.statement, refs)
+            is WithStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
+            is TryStatement -> {
+                collectRefsFromNode(node.tryBlock, refs)
+                collectRefsFromNode(node.catchClause?.block, refs)
+                collectRefsFromNode(node.finallyBlock, refs)
+            }
+            is SwitchStatement -> {
+                collectRefsFromNode(node.expression, refs)
+                node.caseBlock.forEach { clause ->
+                    when (clause) {
+                        is CaseClause -> { collectRefsFromNode(clause.expression, refs); clause.statements.forEach { collectRefsFromNode(it, refs) } }
+                        is DefaultClause -> clause.statements.forEach { collectRefsFromNode(it, refs) }
+                        else -> {}
+                    }
+                }
+            }
+            is FunctionDeclaration -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is ClassDeclaration -> {
+                node.heritageClauses?.forEach { hc -> hc.types.forEach { collectRefsFromNode(it.expression, refs) } }
+                node.members.forEach { collectRefsFromNode(it, refs) }
+            }
+            // Expressions
+            is Identifier -> refs.add(node.text)
+            is BinaryExpression -> { collectRefsFromNode(node.left, refs); collectRefsFromNode(node.right, refs) }
+            is CallExpression -> {
+                collectRefsFromNode(node.expression, refs)
+                node.arguments.forEach { collectRefsFromNode(it, refs) }
+            }
+            is NewExpression -> {
+                collectRefsFromNode(node.expression, refs)
+                node.arguments?.forEach { collectRefsFromNode(it, refs) }
+            }
+            is PropertyAccessExpression -> collectRefsFromNode(node.expression, refs) // NOT node.name
+            is ElementAccessExpression -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.argumentExpression, refs) }
+            is ArrayLiteralExpression -> node.elements.forEach { collectRefsFromNode(it, refs) }
+            is ObjectLiteralExpression -> node.properties.forEach { prop ->
+                when (prop) {
+                    is PropertyAssignment -> collectRefsFromNode(prop.initializer, refs)
+                    is ShorthandPropertyAssignment -> { refs.add(prop.name.text); collectRefsFromNode(prop.objectAssignmentInitializer, refs) }
+                    is SpreadAssignment -> collectRefsFromNode(prop.expression, refs)
+                    is MethodDeclaration -> prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    is GetAccessor -> prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    is SetAccessor -> prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    else -> {}
+                }
+            }
+            is ArrowFunction -> collectRefsFromNode(node.body, refs)
+            is FunctionExpression -> node.body.statements.forEach { collectRefsFromNode(it, refs) }
+            is ConditionalExpression -> { collectRefsFromNode(node.condition, refs); collectRefsFromNode(node.whenTrue, refs); collectRefsFromNode(node.whenFalse, refs) }
+            is ParenthesizedExpression -> collectRefsFromNode(node.expression, refs)
+            is PrefixUnaryExpression -> collectRefsFromNode(node.operand, refs)
+            is PostfixUnaryExpression -> collectRefsFromNode(node.operand, refs)
+            is DeleteExpression -> collectRefsFromNode(node.expression, refs)
+            is TypeOfExpression -> collectRefsFromNode(node.expression, refs)
+            is VoidExpression -> collectRefsFromNode(node.expression, refs)
+            is AwaitExpression -> collectRefsFromNode(node.expression, refs)
+            is YieldExpression -> collectRefsFromNode(node.expression, refs)
+            is SpreadElement -> collectRefsFromNode(node.expression, refs)
+            is TaggedTemplateExpression -> { collectRefsFromNode(node.tag, refs); collectRefsFromNode(node.template, refs) }
+            is TemplateExpression -> node.templateSpans.forEach { collectRefsFromNode(it.expression, refs) }
+            is ClassExpression -> {
+                node.heritageClauses?.forEach { hc -> hc.types.forEach { collectRefsFromNode(it.expression, refs) } }
+                node.members.forEach { collectRefsFromNode(it, refs) }
+            }
+            is ComputedPropertyName -> collectRefsFromNode(node.expression, refs)
+            // Class elements
+            is PropertyDeclaration -> collectRefsFromNode(node.initializer, refs)
+            is MethodDeclaration -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is Constructor -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is GetAccessor -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is SetAccessor -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is ClassStaticBlockDeclaration -> node.body.statements.forEach { collectRefsFromNode(it, refs) }
+            // Variable declaration list (for `for` initializer)
+            is VariableDeclarationList -> node.declarations.forEach { collectRefsFromNode(it.initializer, refs) }
+            else -> {} // literals, type nodes, etc. — no identifiers to collect
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Import identifier rewriting
+    // -----------------------------------------------------------------
+
+    /**
+     * Rewrites identifier references in a statement using [renameMap].
+     * Only value-position identifiers are rewritten; declaration names, property keys,
+     * and member names are left unchanged.
+     */
+    private fun rewriteIdInStatement(stmt: Statement, map: Map<String, Expression>): Statement = when (stmt) {
+        is ExpressionStatement -> stmt.copy(expression = rewriteId(stmt.expression, map))
+        is VariableStatement -> stmt.copy(
+            declarationList = stmt.declarationList.copy(
+                declarations = stmt.declarationList.declarations.map { decl ->
+                    decl.copy(initializer = decl.initializer?.let { rewriteId(it, map) })
+                }
+            )
+        )
+        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map) })
+        is ThrowStatement -> stmt.copy(expression = rewriteId(stmt.expression, map))
+        is IfStatement -> stmt.copy(
+            expression = rewriteId(stmt.expression, map),
+            thenStatement = rewriteIdInStatement(stmt.thenStatement, map),
+            elseStatement = stmt.elseStatement?.let { rewriteIdInStatement(it, map) },
+        )
+        is Block -> stmt.copy(statements = stmt.statements.map { rewriteIdInStatement(it, map) })
+        is DoStatement -> stmt.copy(
+            statement = rewriteIdInStatement(stmt.statement, map),
+            expression = rewriteId(stmt.expression, map),
+        )
+        is WhileStatement -> stmt.copy(
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
+        )
+        is ForStatement -> stmt.copy(
+            initializer = stmt.initializer?.let { init ->
+                when (init) {
+                    is VariableDeclarationList -> init.copy(
+                        declarations = init.declarations.map { d -> d.copy(initializer = d.initializer?.let { rewriteId(it, map) }) }
+                    )
+                    is Expression -> rewriteId(init, map)
+                    else -> init
+                }
+            },
+            condition = stmt.condition?.let { rewriteId(it, map) },
+            incrementor = stmt.incrementor?.let { rewriteId(it, map) },
+            statement = rewriteIdInStatement(stmt.statement, map),
+        )
+        is ForInStatement -> stmt.copy(
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
+        )
+        is ForOfStatement -> stmt.copy(
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
+        )
+        is SwitchStatement -> stmt.copy(
+            expression = rewriteId(stmt.expression, map),
+            caseBlock = stmt.caseBlock.map { clause ->
+                when (clause) {
+                    is CaseClause -> clause.copy(
+                        expression = rewriteId(clause.expression, map),
+                        statements = clause.statements.map { rewriteIdInStatement(it, map) },
+                    )
+                    is DefaultClause -> clause.copy(
+                        statements = clause.statements.map { rewriteIdInStatement(it, map) },
+                    )
+                    else -> clause
+                }
+            }
+        )
+        is LabeledStatement -> stmt.copy(statement = rewriteIdInStatement(stmt.statement, map))
+        is WithStatement -> stmt.copy(
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
+        )
+        is TryStatement -> stmt.copy(
+            tryBlock = stmt.tryBlock.copy(statements = stmt.tryBlock.statements.map { rewriteIdInStatement(it, map) }),
+            catchClause = stmt.catchClause?.let { cc ->
+                cc.copy(block = cc.block.copy(statements = cc.block.statements.map { rewriteIdInStatement(it, map) }))
+            },
+            finallyBlock = stmt.finallyBlock?.let { fb ->
+                fb.copy(statements = fb.statements.map { rewriteIdInStatement(it, map) })
+            },
+        )
+        else -> stmt
+    }
+
+    /**
+     * Rewrites identifier references in an expression using [map].
+     * Only rewrites identifiers in value position; property names, computed keys, etc. are left alone.
+     */
+    private fun rewriteId(expr: Expression, map: Map<String, Expression>): Expression = when (expr) {
+        is Identifier -> map[expr.text] ?: expr
+        is PropertyAccessExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is ElementAccessExpression -> expr.copy(
+            expression = rewriteId(expr.expression, map),
+            argumentExpression = rewriteId(expr.argumentExpression, map),
+        )
+        is CallExpression -> expr.copy(
+            expression = rewriteId(expr.expression, map),
+            arguments = expr.arguments.map { rewriteId(it, map) },
+        )
+        is NewExpression -> expr.copy(
+            expression = rewriteId(expr.expression, map),
+            arguments = expr.arguments?.map { rewriteId(it, map) },
+        )
+        is BinaryExpression -> expr.copy(
+            left = rewriteId(expr.left, map),
+            right = rewriteId(expr.right, map),
+        )
+        is ConditionalExpression -> expr.copy(
+            condition = rewriteId(expr.condition, map),
+            whenTrue = rewriteId(expr.whenTrue, map),
+            whenFalse = rewriteId(expr.whenFalse, map),
+        )
+        is ParenthesizedExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is PrefixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map))
+        is PostfixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map))
+        is DeleteExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is TypeOfExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is VoidExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is AwaitExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteId(it, map) })
+        is SpreadElement -> expr.copy(expression = rewriteId(expr.expression, map))
+        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteId(it, map) })
+        is ObjectLiteralExpression -> expr.copy(
+            properties = expr.properties.map { prop ->
+                when (prop) {
+                    is PropertyAssignment -> prop.copy(initializer = rewriteId(prop.initializer, map))
+                    is ShorthandPropertyAssignment -> {
+                        val replacement = map[prop.name.text]
+                        if (replacement != null) {
+                            // { x } where x → y_1.x: expand to { x: y_1.x }
+                            PropertyAssignment(
+                                name = prop.name,
+                                initializer = replacement,
+                                pos = prop.pos, end = prop.end,
+                            )
+                        } else prop
+                    }
+                    is SpreadAssignment -> prop.copy(expression = rewriteId(prop.expression, map))
+                    else -> prop
+                }
+            }
+        )
+        is TaggedTemplateExpression -> expr.copy(tag = rewriteId(expr.tag, map))
+        is TemplateExpression -> expr.copy(
+            templateSpans = expr.templateSpans.map { span ->
+                span.copy(expression = rewriteId(span.expression, map))
+            }
+        )
+        is ArrowFunction -> expr.copy(body = when (val b = expr.body) {
+            is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, map) })
+            is Expression -> rewriteId(b, map)
+            else -> b
+        })
+        is FunctionExpression -> expr.copy(
+            body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, map) })
+        )
+        is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        else -> expr
+    }
+
     private fun isTypeErasureNode(expr: Expression): Boolean =
         expr is TypeAssertionExpression || expr is AsExpression
                 || expr is NonNullExpression || expr is SatisfiesExpression
@@ -2350,5 +3230,60 @@ class Transformer(private val options: CompilerOptions) {
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
         is AwaitExpression, is YieldExpression -> true
         else -> false
+    }
+
+    companion object {
+        /** TypeScript CJS `__createBinding` helper — needed by both `__importStar` and `__exportStar`. */
+        val CREATE_BINDING_HELPER = """var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+"""
+
+        /** `__setModuleDefault` + `__importStar` helpers — only needed for `import * as X from "module"`. */
+        val IMPORT_STAR_ONLY_HELPERS = """var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+"""
+
+        /** Combined helpers for backward-compat use — equals `CREATE_BINDING_HELPER + IMPORT_STAR_ONLY_HELPERS`. */
+        val IMPORT_STAR_HELPERS get() = CREATE_BINDING_HELPER + IMPORT_STAR_ONLY_HELPERS
+
+        /** TypeScript CJS helper emitted when `import X from "module"` (default import) is used. */
+        val IMPORT_DEFAULT_HELPER = """var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+"""
+
+        val EXPORT_STAR_HELPER = """var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+"""
     }
 }

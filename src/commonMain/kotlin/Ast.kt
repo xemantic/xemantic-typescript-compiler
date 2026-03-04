@@ -42,6 +42,7 @@ data class Comment(
     val pos: Int,
     val end: Int,
     val hasTrailingNewLine: Boolean = false,
+    val hasPrecedingNewLine: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -297,6 +298,20 @@ data class NotEmittedStatement(
     override val trailingComments: List<Comment>? = null,
 ) : Statement {
     override val kind: SyntaxKind = SyntaxKind.NotEmittedStatement
+}
+
+/**
+ * A synthetic statement containing raw JavaScript code to be emitted verbatim.
+ * Used for emitting TypeScript runtime helpers (e.g. `__importStar`, `__importDefault`).
+ */
+data class RawStatement(
+    val code: String,
+    override val pos: Int = -1,
+    override val end: Int = -1,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Statement {
+    override val kind: SyntaxKind = SyntaxKind.NotEmittedStatement // reuse kind for simplicity
 }
 
 // ===========================================================================

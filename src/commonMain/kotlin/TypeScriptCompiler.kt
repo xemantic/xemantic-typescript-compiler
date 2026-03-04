@@ -100,7 +100,7 @@ class TypeScriptCompiler {
         val options = parsed.options
         val diagnostics = mutableListOf<Diagnostic>()
 
-        if (parsed.files.size == 1) {
+        if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation
             val file = parsed.files[0]
             val parser = Parser(file.content, file.fileName)
@@ -113,7 +113,7 @@ class TypeScriptCompiler {
             val emitter = Emitter(options)
             val javascript = emitter.emit(transformed, sourceFile)
 
-            val baseline = formatBaseline(fileName, file.content, javascript)
+            val baseline = formatBaseline(fileName, file.content, javascript, options.sourceMap, options.newLine, options.jsx)
 
             return CompilationResult(
                 javascript = baseline,
@@ -150,13 +150,15 @@ class TypeScriptCompiler {
                 val emitter = Emitter(options)
                 val javascript = emitter.emit(transformed, sourceFile)
 
+                // .tsx → .jsx only when jsx=preserve; all other modes (react, react-jsx, etc.) produce .js
+                val tsxExtension = if (options.jsx?.lowercase() == "preserve") ".jsx" else ".js"
                 val jsName = file.fileName
-                    .replace(".tsx", ".jsx")
+                    .replace(".tsx", tsxExtension)
                     .replace(".ts", ".js")
                 jsOutputs.add(jsName to javascript)
             }
 
-            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, jsOutputs)
+            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, jsOutputs, options.sourceMap)
 
             return CompilationResult(
                 javascript = baseline,

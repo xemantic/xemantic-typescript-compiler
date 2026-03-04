@@ -121,10 +121,16 @@ data class SourceFileEntry(
 
 /**
  * Result of parsing compiler options and splitting multi-file sources.
+ *
+ * @property hasExplicitFilenames true when one or more `// @Filename:` directives were
+ *   present in the source, even if only a single file was declared. When true, the
+ *   multi-file baseline format must be used (filenames come from the directives, not
+ *   from the overall test-file name).
  */
 data class ParsedSource(
     val options: CompilerOptions,
     val files: List<SourceFileEntry>,
+    val hasExplicitFilenames: Boolean = false,
 )
 
 /**
@@ -198,7 +204,9 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                 if (key == "filename") {
                     // Start a new file
                     if (currentFileName != null) {
-                        fileEntries.add(SourceFileEntry(currentFileName, currentLines.joinToString("\n")))
+                        // Strip leading blank lines (artifacts of whitespace after the @filename directive)
+                        val fileContent = currentLines.joinToString("\n").trimStart('\n', '\r')
+                        fileEntries.add(SourceFileEntry(currentFileName, fileContent))
                         currentLines.clear()
                     }
                     currentFileName = value
@@ -226,7 +234,8 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
 
     // Flush the last file
     if (currentFileName != null) {
-        fileEntries.add(SourceFileEntry(currentFileName, currentLines.joinToString("\n")))
+        val fileContent = currentLines.joinToString("\n").trimStart('\n', '\r')
+        fileEntries.add(SourceFileEntry(currentFileName, fileContent))
     }
 
     var options = CompilerOptions()
@@ -240,7 +249,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
         return ParsedSource(options, listOf(SourceFileEntry(testFileName, cleanedSource)))
     }
 
-    return ParsedSource(options, fileEntries)
+    return ParsedSource(options, fileEntries, hasExplicitFilenames = true)
 }
 
 private fun applyDirective(options: CompilerOptions, key: String, value: String): CompilerOptions {
