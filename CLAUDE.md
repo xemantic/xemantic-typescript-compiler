@@ -64,9 +64,19 @@ A well-formed subagent brief for a fix in this codebase includes:
 5. **Relevant CLAUDE.md gotchas**: copy any gotcha entries that apply to the area being changed
 6. **Regression guard**: "run the full suite (`./gradlew jvmTest 2>&1 | grep -a 'tests completed'`) before finishing and report the before/after count"
 
-### Parallelism
+### Parallelism and branch isolation
 
-Independent fixes (e.g. binary-operator comments vs `use strict` over-emission) can be dispatched as parallel subagents. Each should commit its own change on completion so the main session can pull and rebase.
+Run parallel subagents in **separate branches** (use `isolation: "worktree"` in the Agent tool call). Without isolation, two agents writing to the same file at the same time produces conflicts — nearly every fix here touches `Parser.kt`, `Transformer.kt`, or `Emitter.kt`.
+
+Dispatch in **waves** to keep merge conflicts manageable:
+- Pick fixes that touch *different* primary files for a wave
+- Merge + resolve conflicts between waves before starting the next
+- Fixes that touch the same file heavily (e.g. two Transformer changes) should be sequential
+
+Example wave grouping for this codebase:
+- **Wave 1 (parallel):** `"use strict"` (TypeScriptCompiler.kt), AMD format (new Transformer fn), `removeComments` (Emitter.kt guards)
+- **Wave 2 (parallel):** `export {}` (Transformer), binary-op comments (Emitter), yield comments (Parser)
+- **Wave 3 (sequential):** CommonJS improvements (deep Transformer rewrite)
 
 ### Context discipline
 
