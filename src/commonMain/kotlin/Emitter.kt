@@ -136,6 +136,10 @@ class Emitter(
         // Non-module AMD files get "use strict" at the top level normally.
         if (effectiveModule == ModuleKind.AMD && hasModuleStatements(sourceFile)) return
 
+        // System format: for module files, "use strict" goes inside the System.register() function body.
+        // The System transformer inserts it as the first body statement.
+        if (effectiveModule == ModuleKind.System && hasModuleStatements(sourceFile)) return
+
         // All non-ESM formats (CommonJS, AMD, System, None) always get "use strict"
 
         // Check if the source already has "use strict" as the first statement
@@ -374,7 +378,18 @@ class Emitter(
                 emitEmbeddedStatement(node.elseStatement)
             }
         } else {
-            emitEmbeddedStatement(node.thenStatement)
+            // Synthetic if-statements (pos == -1) with a non-block then-statement emit inline:
+            //   if (cond) stmt;
+            // This is used by the System module helper (exportStar).
+            val stmt = node.thenStatement
+            if (node.pos == -1 && stmt !is Block && stmt is ExpressionStatement) {
+                write(" ")
+                emitExpression(stmt.expression)
+                write(";")
+                writeNewLine()
+            } else {
+                emitEmbeddedStatement(node.thenStatement)
+            }
         }
     }
 
