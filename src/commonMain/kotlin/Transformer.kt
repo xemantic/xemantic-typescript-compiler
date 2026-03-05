@@ -162,11 +162,13 @@ class Transformer(private val options: CompilerOptions) {
         // code appears in a later statement, __awaiter goes first and comments stay with
         // their statements.
         val withAwaiter = if (needsAwaiterHelper) {
+            // TypeScript emits the first statement's leading comments BEFORE __awaiter
+            // for all statement types EXCEPT FunctionDeclaration (which goes after).
             val firstOrigStmt = sourceFile.statements.firstOrNull()
-            val firstOrigIsAsync = firstOrigStmt != null && statementContainsAsync(firstOrigStmt)
+            val shouldLiftComments = firstOrigStmt != null && firstOrigStmt !is FunctionDeclaration
             val firstStmt = transformed.firstOrNull()
             val firstComments = firstStmt?.leadingComments
-            if (firstOrigIsAsync && !firstComments.isNullOrEmpty()) {
+            if (shouldLiftComments && !firstComments.isNullOrEmpty()) {
                 val commentHolder = NotEmittedStatement(leadingComments = firstComments)
                 val firstStripped: Statement? = when (firstStmt) {
                     is VariableStatement -> firstStmt.copy(leadingComments = null)
@@ -6756,32 +6758,6 @@ class Transformer(private val options: CompilerOptions) {
         is PrefixUnaryExpression -> true
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
         is AwaitExpression, is YieldExpression -> true
-        else -> false
-    }
-
-    /**
-     * Returns true if [stmt] is a variable statement (or expression statement) whose
-     * initializer is an async arrow/function expression. Used to decide whether to
-     * lift leading comments before the injected `__awaiter` helper.
-     *
-     * TypeScript emits the first statement's comments BEFORE `__awaiter` only when
-     * that statement is a variable declaration with an async initializer expression
-     * (e.g. `let foo = (async bar => bar)`). Top-level `async function` declarations
-     * keep their comments AFTER `__awaiter`.
-     */
-    private fun statementContainsAsync(stmt: Statement): Boolean = when (stmt) {
-        is VariableStatement -> stmt.declarationList.declarations.any { decl ->
-            exprContainsTopLevelAsync(decl.initializer)
-        }
-        is ExpressionStatement -> exprContainsTopLevelAsync(stmt.expression)
-        else -> false
-    }
-
-    private fun exprContainsTopLevelAsync(expr: Expression?): Boolean = when (expr) {
-        null -> false
-        is ArrowFunction -> ModifierFlag.Async in expr.modifiers
-        is FunctionExpression -> ModifierFlag.Async in expr.modifiers
-        is ParenthesizedExpression -> exprContainsTopLevelAsync(expr.expression)
         else -> false
     }
 

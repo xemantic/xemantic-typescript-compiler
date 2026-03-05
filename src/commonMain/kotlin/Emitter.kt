@@ -1870,8 +1870,11 @@ class Emitter(
         if (ModifierFlag.Async in node.modifiers) {
             write("async ")
         }
-        // Single simple parameter without parens
-        val singleSimpleParam = node.parameters.size == 1
+        // Single simple parameter without parens.
+        // Async arrow functions always use parens around parameters (TypeScript style).
+        val isAsync = ModifierFlag.Async in node.modifiers
+        val singleSimpleParam = !isAsync
+                && node.parameters.size == 1
                 && node.parameters[0].initializer == null
                 && !node.parameters[0].dotDotDotToken
                 && node.parameters[0].name is Identifier
