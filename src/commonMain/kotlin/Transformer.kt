@@ -155,9 +155,29 @@ class Transformer(private val options: CompilerOptions) {
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
-        // Inject __awaiter helper if any async function was downleveled
+        // Inject __awaiter helper if any async function was downleveled.
+        // If the first statement has leading comments, lift them to a NotEmittedStatement
+        // placed before the helper, so they appear in the correct order in the output.
         val withAwaiter = if (needsAwaiterHelper) {
-            listOf(RawStatement(code = AWAITER_HELPER)) + transformed
+            val firstStmt = transformed.firstOrNull()
+            val firstComments = firstStmt?.leadingComments
+            if (!firstComments.isNullOrEmpty()) {
+                val commentHolder = NotEmittedStatement(leadingComments = firstComments)
+                val firstStripped: Statement? = when (firstStmt) {
+                    is VariableStatement -> firstStmt.copy(leadingComments = null)
+                    is ExpressionStatement -> firstStmt.copy(leadingComments = null)
+                    is FunctionDeclaration -> firstStmt.copy(leadingComments = null)
+                    is ClassDeclaration -> firstStmt.copy(leadingComments = null)
+                    else -> null
+                }
+                if (firstStripped != null) {
+                    listOf(commentHolder, RawStatement(code = AWAITER_HELPER), firstStripped) + transformed.drop(1)
+                } else {
+                    listOf(RawStatement(code = AWAITER_HELPER)) + transformed
+                }
+            } else {
+                listOf(RawStatement(code = AWAITER_HELPER)) + transformed
+            }
         } else transformed
 
         // CommonJS module transform
@@ -3331,7 +3351,10 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     ))
                 }
-                result.addAll(0, combined)
+                // Insert hoisted vars AFTER any leading NotEmittedStatements (orphaned comments).
+                // This preserves orphaned comment ordering relative to hoisted var declarations.
+                val insertAt = result.indexOfFirst { it !is NotEmittedStatement }.takeIf { it >= 0 } ?: 0
+                result.addAll(insertAt, combined)
             }
         }
 
@@ -3979,10 +4002,12 @@ class Transformer(private val options: CompilerOptions) {
                 expression = transformExpression(expr.expression),
             )
 
-            // Await: convert to yield when inside a downleveled async body
+            // Await: convert to yield when inside a downleveled async body,
+            // or when await is used outside an async context at an older target
+            // (TypeScript emits yield for non-async-context await at targets < ES2017)
             is AwaitExpression -> {
                 val transformedInner = transformExpression(expr.expression)
-                if (inAsyncBody) {
+                if (inAsyncBody || (!expr.inAsyncContext && options.effectiveTarget < ScriptTarget.ES2017)) {
                     YieldExpression(
                         expression = transformedInner,
                         leadingComments = expr.leadingComments,
@@ -4330,8 +4355,31 @@ class Transformer(private val options: CompilerOptions) {
 
         // `import x = M.N` → `var x = M.N;`
         // `import x = require("mod")` → `const x = require("mod")`
+        // `import x = 5` (invalid, literal RHS) → `5;` (expression statement, TypeScript's error-recovery output)
         val ref = decl.moduleReference
         val isRequire = ref is ExternalModuleReference
+
+        // Literal module references (numbers, strings, null keyword) are invalid and produce expression statements.
+        // Since these are parsed via parseIdentifierName(), they appear as Identifier nodes:
+        //   - numeric literal: ref.text starts with a digit (e.g. "5")
+        //   - string literal: ref.rawText starts with a quote (e.g. rawText = "\"s\"")
+        //   - null keyword: ref.text == "null"
+        if (ref is Identifier) {
+            val isLiteralRef = ref.text == "null" ||
+                    (ref.text.isNotEmpty() && ref.text[0].isDigit()) ||
+                    (ref.rawText != null && (ref.rawText!!.startsWith("\"") || ref.rawText!!.startsWith("'")))
+            if (isLiteralRef) {
+                return listOf(
+                    ExpressionStatement(
+                        expression = ref,
+                        pos = decl.pos, end = decl.end,
+                        leadingComments = decl.leadingComments,
+                        trailingComments = decl.trailingComments,
+                    )
+                )
+            }
+        }
+
         val initializer: Expression = when (ref) {
             is ExternalModuleReference -> {
                 CallExpression(
