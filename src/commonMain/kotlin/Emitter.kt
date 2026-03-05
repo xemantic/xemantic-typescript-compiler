@@ -78,7 +78,14 @@ class Emitter(
             if (shouldSkipStatement(stmt)) return@any false
             when (stmt) {
                 is ImportDeclaration -> true
-                is ExportDeclaration -> true
+                is ExportDeclaration -> {
+                    // An ExportDeclaration with NamedExports counts as a module statement only if
+                    // at least one specifier is not type-only (i.e., has runtime value).
+                    // `export { type A }` or `export {}` (empty) do NOT count.
+                    val clause = stmt.exportClause
+                    if (clause is NamedExports) clause.elements.any { !it.isTypeOnly }
+                    else true // `export *` or `export * as ns` always count
+                }
                 // In ES module format, `export = X` is not a valid ES module statement
                 // (it will be dropped in emitExportAssignment); don't count it here so
                 // that `export {}` is emitted to preserve module semantics.
@@ -1020,20 +1027,25 @@ class Emitter(
             }
 
             is NamedExports -> {
-                write(" { ")
                 val nonTypeSpecifiers = exportClause.elements.filter { !it.isTypeOnly }
-                for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
-                    if (index > 0) write(", ")
-                    if (specifier.propertyName != null) {
-                        write(specifier.propertyName.text)
-                        write(" as ")
+                if (nonTypeSpecifiers.isEmpty() && node.moduleSpecifier == null) {
+                    // All specifiers are type-only and there's no re-export source — emit `export {}`
+                    write(" {}")
+                } else {
+                    write(" { ")
+                    for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
+                        if (index > 0) write(", ")
+                        if (specifier.propertyName != null) {
+                            write(specifier.propertyName.text)
+                            write(" as ")
+                        }
+                        write(specifier.name.text)
                     }
-                    write(specifier.name.text)
-                }
-                write(" }")
-                if (node.moduleSpecifier != null) {
-                    write(" from ")
-                    emitExpression(node.moduleSpecifier)
+                    write(" }")
+                    if (node.moduleSpecifier != null) {
+                        write(" from ")
+                        emitExpression(node.moduleSpecifier)
+                    }
                 }
             }
 
