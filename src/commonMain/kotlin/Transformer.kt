@@ -3536,13 +3536,24 @@ class Transformer(private val options: CompilerOptions) {
 
         if (isAsync) {
             needsAwaiterHelper = true
+            val transformedParams = transformParameters(decl.parameters)
+            // When any parameter has a default value, move all params to the generator
+            // and pass `arguments` as the 2nd arg to __awaiter so defaults can be re-evaluated.
+            // Otherwise keep params in the outer function and pass `void 0`.
+            val hasDefaultParams = decl.parameters.any { it.initializer != null }
+            val (outerParams, generatorParams, secondArg) = if (hasDefaultParams) {
+                Triple(emptyList<Parameter>(), transformedParams, syntheticId("arguments") as Expression)
+            } else {
+                val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+                Triple(transformedParams, emptyList<Parameter>(), void0 as Expression)
+            }
             val awaiterBody = Block(
-                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), transformedBody))),
+                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), secondArg, transformedBody, generatorParams))),
                 multiLine = true,
             )
             return listOf(decl.copy(
                 typeParameters = null,
-                parameters = transformParameters(decl.parameters),
+                parameters = outerParams,
                 type = null,
                 body = awaiterBody,
                 modifiers = strippedModifiers - ModifierFlag.Async,
@@ -3560,18 +3571,23 @@ class Transformer(private val options: CompilerOptions) {
         )
     }
 
-    /** Builds `__awaiter(thisArg, void 0, void 0, function* () { body })`. */
-    private fun makeAwaiterCall(thisArg: Expression, body: Block): CallExpression {
+    /** Builds `__awaiter(thisArg, secondArg, void 0, function* (params...) { body })`. */
+    private fun makeAwaiterCall(
+        thisArg: Expression,
+        secondArg: Expression? = null,
+        body: Block,
+        generatorParams: List<Parameter> = emptyList(),
+    ): CallExpression {
         val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
         val generatorFn = FunctionExpression(
-            parameters = emptyList(),
+            parameters = generatorParams,
             body = body,
             asteriskToken = true,
             pos = -1, end = -1,
         )
         return CallExpression(
             expression = syntheticId("__awaiter"),
-            arguments = listOf(thisArg, void0, void0, generatorFn),
+            arguments = listOf(thisArg, secondArg ?: void0, void0, generatorFn),
             pos = -1, end = -1,
         )
     }
@@ -3923,7 +3939,7 @@ class Transformer(private val options: CompilerOptions) {
                         typeParameters = null,
                         parameters = transformParameters(expr.parameters),
                         type = null,
-                        body = makeAwaiterCall(thisArg, generatorBody),
+                        body = makeAwaiterCall(thisArg, body = generatorBody),
                         modifiers = strippedModifiers - ModifierFlag.Async,
                         hasParenthesizedParameters = true,
                     )
@@ -3949,7 +3965,7 @@ class Transformer(private val options: CompilerOptions) {
                 if (isAsync) {
                     needsAwaiterHelper = true
                     val awaiterBody = Block(
-                        statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), transformedBody))),
+                        statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), body = transformedBody))),
                         multiLine = true,
                     )
                     expr.copy(
@@ -4177,7 +4193,7 @@ class Transformer(private val options: CompilerOptions) {
         if (isAsync && transformedBody != null) {
             needsAwaiterHelper = true
             val awaiterBody = Block(
-                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), transformedBody))),
+                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), body = transformedBody))),
                 multiLine = true,
             )
             return method.copy(
