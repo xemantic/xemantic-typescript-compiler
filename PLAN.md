@@ -2,9 +2,9 @@
 
 ## Current Status (2026-03-05)
 
-**Test results**: 4,018 / 8,627 passing (46.6%)
+**Test results**: 4,259 / 8,627 passing (49.4%)
 
-Previous: 4,012 / 8,627 passing (46.5%)
+Previous: 4,018 / 8,627 passing (46.6%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -122,7 +122,7 @@ Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "w
 |------|-------|----------------------|
 | 1 ✅ | A (already fixed), G (+2) | Emitter.kt |
 | 2 ✅ | B (+3), E (+2), F (+1) | Transformer.kt, Emitter.kt, Parser.kt |
-| 3 | D | Transformer.kt (new AMD fn) |
+| 3 ✅ | D (+241) | Transformer.kt (new AMD fn) |
 | 4 | C1, C2 | Transformer.kt (CommonJS) |
 | 5 | C3, C4, H, I, J | Various (complex / dependent) |
 
@@ -167,6 +167,10 @@ The CommonJS transform is implemented but incomplete. These sub-fixes are separa
 - **C4. Identifier rewriting** (~40 tests): `import A from './a'` → all references to `A` in the file become `a_1.default`. Requires a symbol table pass in the transformer.
 
 ---
+
+### ✅ D. AMD module format — FIXED (+241 tests)
+
+`transformToAMD()` implemented. `define([deps], function(require, exports, ...) { ... })` wrapper with `__importDefault`/`__importStar` helpers. Remaining failures: `outFile` bundling, `.d.ts` emit, source maps, cross-file const enum inlining.
 
 ### D. AMD module format (~57 tests) ★ LARGE, ISOLATED
 
