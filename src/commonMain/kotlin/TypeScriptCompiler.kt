@@ -100,6 +100,15 @@ class TypeScriptCompiler {
         val options = parsed.options
         val diagnostics = mutableListOf<Diagnostic>()
 
+        // TS5107: AMD module format is deprecated
+        if (options.module == ModuleKind.AMD) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'module=AMD' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
+                category = DiagnosticCategory.Error,
+                code = 5107,
+            ))
+        }
+
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation
             val file = parsed.files[0]
