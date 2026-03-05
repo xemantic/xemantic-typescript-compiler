@@ -162,8 +162,9 @@ fun parseCompilerOptions(source: String): Pair<CompilerOptions, String> {
     }
 
     val sourceLines = lines.filterIndexed { index, _ -> index !in directiveLines }
-    // Drop leading empty lines after directive removal
-    val trimmedLines = sourceLines.dropWhile { it.trim().trimEnd('\r').isEmpty() }
+    // Drop leading truly-empty lines after directive removal, but preserve lines
+    // that contain whitespace characters (they appear in baseline source echoes).
+    val trimmedLines = sourceLines.dropWhile { it.trimEnd('\r').isEmpty() }
     val strippedSource = trimmedLines.joinToString("\n")
 
     var options = CompilerOptions()
@@ -207,8 +208,9 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                         // Strip leading blank lines (artifacts of whitespace after the @filename directive)
                         val fileContent = currentLines.joinToString("\n").trimStart('\n', '\r')
                         fileEntries.add(SourceFileEntry(currentFileName, fileContent))
-                        currentLines.clear()
                     }
+                    // Clear any preamble lines collected before the first @Filename marker
+                    currentLines.clear()
                     currentFileName = value
                     inGlobalDirectives = false
                 } else {
@@ -217,6 +219,10 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                         globalDirectiveLines.add(line)
                     }
                 }
+            } else if (!inGlobalDirectives) {
+                // No colon — not a key:value directive (e.g. // @ts-ignore, // @ts-expect-error)
+                // Treat as regular source content
+                currentLines.add(line)
             }
         } else {
             if (inGlobalDirectives && currentFileName == null) {

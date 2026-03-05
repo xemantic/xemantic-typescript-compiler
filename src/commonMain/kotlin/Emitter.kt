@@ -38,11 +38,14 @@ class Emitter(
     // Used so that labeled-statement chains (target1: target2: while…) can chain
     // all labels on the same line without the body statement re-indenting.
     private var skipNextIndent = false
+    // Original source text, used for multi-line expression formatting decisions.
+    private var sourceText: String = ""
 
     /**
      * Emits the given [sourceFile] as JavaScript and returns the resulting source text.
      */
     fun emit(sourceFile: SourceFile, originalSourceFile: SourceFile? = null): String {
+        sourceText = (originalSourceFile ?: sourceFile).text
         emitUseStrict(originalSourceFile ?: sourceFile)
         emitStatements(sourceFile.statements)
         // If the file is a module but all statements were skipped, emit "export {}"
@@ -53,12 +56,14 @@ class Emitter(
     private fun emitEmptyExportIfNeeded(originalSourceFile: SourceFile, transformedSourceFile: SourceFile) {
         if (!hasModuleStatements(originalSourceFile)) return
 
-        // Only emit export {} for ES module format files
+        // Only emit export {} for ES module format files (including Node16/NodeNext which use ESM)
         val effectiveModule = options.effectiveModule
         val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
                 effectiveModule == ModuleKind.ES2020 ||
                 effectiveModule == ModuleKind.ES2022 ||
-                effectiveModule == ModuleKind.ESNext
+                effectiveModule == ModuleKind.ESNext ||
+                effectiveModule == ModuleKind.Node16 ||
+                effectiveModule == ModuleKind.NodeNext
         if (!isESModuleFormat) return
 
         // Emit export {} when the transformed file has no module-level statements remaining.
@@ -70,7 +75,10 @@ class Emitter(
             when (stmt) {
                 is ImportDeclaration -> true
                 is ExportDeclaration -> true
-                is ExportAssignment -> true
+                // In ES module format, `export = X` is not a valid ES module statement
+                // (it will be dropped in emitExportAssignment); don't count it here so
+                // that `export {}` is emitted to preserve module semantics.
+                is ExportAssignment -> !stmt.isExportEquals
                 is VariableStatement -> ModifierFlag.Export in stmt.modifiers
                 is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
                 is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
@@ -198,7 +206,7 @@ class Emitter(
             is LabeledStatement -> emitLabeledStatement(statement)
             is ThrowStatement -> emitThrowStatement(statement)
             is TryStatement -> emitTryStatement(statement)
-            is DebuggerStatement -> emitDebuggerStatement()
+            is DebuggerStatement -> emitDebuggerStatement(statement)
             is FunctionDeclaration -> emitFunctionDeclaration(statement)
             is ClassDeclaration -> emitClassDeclaration(statement)
             is EnumDeclaration -> emitEnumDeclaration(statement)
@@ -249,10 +257,12 @@ class Emitter(
             else -> "var"
         }
         write(keyword)
-        write(" ")
-        for ((index, decl) in node.declarations.withIndex()) {
-            if (index > 0) write(", ")
-            emitVariableDeclaration(decl)
+        if (node.declarations.isNotEmpty()) {
+            write(" ")
+            for ((index, decl) in node.declarations.withIndex()) {
+                if (index > 0) write(", ")
+                emitVariableDeclaration(decl)
+            }
         }
     }
 
@@ -268,6 +278,13 @@ class Emitter(
     private fun emitExpressionStatement(node: ExpressionStatement) {
         writeIndent()
         emitExpression(node.expression)
+        // Emit any inline comments between expression and `;` (e.g. `Array /*3*/;`)
+        if (!options.removeComments) {
+            node.preSemicolonComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                write(" ")
+                write(it.text)
+            }
+        }
         write(";")
         writeNewLine()
     }
@@ -285,7 +302,7 @@ class Emitter(
             // Emit then-block without trailing newline so we can put else on same/next line
             if (node.thenStatement is Block) {
                 val block = node.thenStatement
-                emitBlockBody(block)
+                emitBlockBody(block, emitOpenBraceComments = true)
                 if (block.multiLine || (block.statements.isEmpty() && block.multiLine)) {
                     // } is on its own line, else goes on next line
                     writeNewLine()
@@ -398,9 +415,11 @@ class Emitter(
     private fun emitContinueStatement(node: ContinueStatement) {
         writeIndent()
         write("continue")
+        emitTrailingComments(node.keywordTrailingComments)
         if (node.label != null) {
             write(" ")
             write(node.label.text)
+            emitTrailingComments(node.labelTrailingComments)
         }
         write(";")
         writeNewLine()
@@ -409,9 +428,11 @@ class Emitter(
     private fun emitBreakStatement(node: BreakStatement) {
         writeIndent()
         write("break")
+        emitTrailingComments(node.keywordTrailingComments)
         if (node.label != null) {
             write(" ")
             write(node.label.text)
+            emitTrailingComments(node.labelTrailingComments)
         }
         write(";")
         writeNewLine()
@@ -450,9 +471,22 @@ class Emitter(
                 }
             }
         }
+        // Emit comments after all clauses but before the closing `}`
+        if (!options.removeComments) {
+            node.closingComments?.let { comments ->
+                indentLevel++
+                for (comment in comments) {
+                    writeIndent()
+                    write(comment.text)
+                    writeNewLine()
+                }
+                indentLevel--
+            }
+        }
         writeIndent()
         write("}")
         writeNewLine()
+        // trailing comments are handled by emitTrailingCommentsBeforeNewline in the outer emitStatements loop
     }
 
     private fun emitCaseClause(node: CaseClause) {
@@ -469,13 +503,22 @@ class Emitter(
                 if (i > 0) write(" ")
                 emitStatementInline(stmt)
             }
+            emitTrailingComments(node.statements.last())
             isStartOfLine = saved
             writeNewLine()
         } else {
-            writeNewLine()
-            indentLevel++
-            emitBlockStatements(node.statements)
-            indentLevel--
+            // When the single statement is a multiLine block, emit { on the same line as case:
+            val singleBlock = node.statements.singleOrNull() as? Block
+            if (singleBlock != null && singleBlock.multiLine) {
+                emitBlockBody(singleBlock, emitOpenBraceComments = true)
+                writeNewLine()
+            } else {
+                emitTrailingComments(node.labelTrailingComments)
+                writeNewLine()
+                indentLevel++
+                emitBlockStatements(node.statements)
+                indentLevel--
+            }
         }
         indentLevel--
     }
@@ -492,13 +535,21 @@ class Emitter(
                 if (i > 0) write(" ")
                 emitStatementInline(stmt)
             }
+            emitTrailingComments(node.statements.last())
             isStartOfLine = saved
             writeNewLine()
         } else {
-            writeNewLine()
-            indentLevel++
-            emitBlockStatements(node.statements)
-            indentLevel--
+            val singleBlock = node.statements.singleOrNull() as? Block
+            if (singleBlock != null && singleBlock.multiLine) {
+                emitBlockBody(singleBlock, emitOpenBraceComments = true)
+                writeNewLine()
+            } else {
+                emitTrailingComments(node.labelTrailingComments)
+                writeNewLine()
+                indentLevel++
+                emitBlockStatements(node.statements)
+                indentLevel--
+            }
         }
         indentLevel--
     }
@@ -523,12 +574,13 @@ class Emitter(
         emitExpression(node.expression)
         write(";")
         writeNewLine()
+        // trailing comments handled by emitTrailingCommentsBeforeNewline in the outer emitStatements loop
     }
 
     private fun emitTryStatement(node: TryStatement) {
         writeIndent()
         write("try")
-        emitBlockBody(node.tryBlock)
+        emitBlockBody(node.tryBlock, emitOpenBraceComments = true)
         if (node.catchClause != null) {
             writeNewLine()
             writeIndent()
@@ -538,19 +590,21 @@ class Emitter(
                 emitExpression(node.catchClause.variableDeclaration.name)
                 write(")")
             }
-            emitBlockBody(node.catchClause.block)
+            emitBlockBody(node.catchClause.block, emitOpenBraceComments = true)
         }
         if (node.finallyBlock != null) {
             writeNewLine()
             writeIndent()
             write("finally")
-            emitBlockBody(node.finallyBlock)
+            emitBlockBody(node.finallyBlock, emitOpenBraceComments = true)
         }
         writeNewLine()
     }
 
-    private fun emitDebuggerStatement() {
-        writeLine("debugger;")
+    private fun emitDebuggerStatement(node: DebuggerStatement) {
+        writeIndent()
+        write("debugger;")
+        writeNewLine()
     }
 
     // ---------------------------------------------------------------------------
@@ -966,10 +1020,19 @@ class Emitter(
     }
 
     private fun emitExportAssignment(node: ExportAssignment) {
-        writeIndent()
         if (node.isExportEquals) {
+            // `export = X` is a CommonJS-only construct. For ES module format it is
+            // simply dropped; TypeScript emits `export {}` to preserve module semantics.
+            val effectiveModule = options.effectiveModule
+            val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
+                    effectiveModule == ModuleKind.ES2020 ||
+                    effectiveModule == ModuleKind.ES2022 ||
+                    effectiveModule == ModuleKind.ESNext
+            if (isESModuleFormat) return
+            writeIndent()
             write("module.exports = ")
         } else {
+            writeIndent()
             write("export default ")
         }
         emitExpression(node.expression)
@@ -1001,7 +1064,7 @@ class Emitter(
      * Emits a block `{ ... }` for function/class bodies where the opening brace
      * is placed on the same line as the preceding declaration.
      */
-    private fun emitBlockBody(block: Block, singleLineIfEmpty: Boolean = true) {
+    private fun emitBlockBody(block: Block, singleLineIfEmpty: Boolean = true, emitOpenBraceComments: Boolean = false) {
         if (block.statements.isEmpty() && !block.multiLine) {
             write(" { }")
         } else if (!block.multiLine && block.statements.isNotEmpty()) {
@@ -1017,6 +1080,9 @@ class Emitter(
             write(" }")
         } else {
             write(" {")
+            if (emitOpenBraceComments && !options.removeComments) {
+                emitTrailingComments(block.openBraceTrailingComments)
+            }
             writeNewLine()
             if (block.statements.isNotEmpty()) {
                 indentLevel++
@@ -1036,6 +1102,18 @@ class Emitter(
                     write(" ")
                     emitExpression(stmt.expression)
                 }
+                write(";")
+            }
+
+            is BreakStatement -> {
+                write("break")
+                if (stmt.label != null) { write(" "); write(stmt.label.text) }
+                write(";")
+            }
+
+            is ContinueStatement -> {
+                write("continue")
+                if (stmt.label != null) { write(" "); write(stmt.label.text) }
                 write(";")
             }
 
@@ -1071,8 +1149,12 @@ class Emitter(
             }
 
             is VariableStatement -> {
-                emitVariableStatement(stmt)
+                if (ModifierFlag.Export in stmt.modifiers) write("export ")
+                emitVariableDeclarationList(stmt.declarationList)
+                write(";")
             }
+
+            is DebuggerStatement -> write("debugger;")
 
             else -> {
                 // Fallback for complex statements
@@ -1097,7 +1179,7 @@ class Emitter(
             // Control-flow bodies (if/while/for) are always emitted multiline,
             // even if the source block was on a single line.
             val forceMultiLine = statement.statements.isNotEmpty()
-            emitBlockBody(if (forceMultiLine && !statement.multiLine) statement.copy(multiLine = true) else statement)
+            emitBlockBody(if (forceMultiLine && !statement.multiLine) statement.copy(multiLine = true) else statement, emitOpenBraceComments = true)
             if (!trailingOnSameLine) {
                 writeNewLine()
             }
@@ -1131,7 +1213,16 @@ class Emitter(
         when (node) {
             is Identifier -> emitIdentifier(node)
             is StringLiteralNode -> emitStringLiteral(node)
-            is NumericLiteralNode -> write(node.text)
+            is NumericLiteralNode -> {
+                write(node.text)
+                // Only emit same-line trailing comments (hasPrecedingNewLine=false).
+                // Own-line trailing comments are handled by the multiline array emitter.
+                if (!options.removeComments) {
+                    node.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                        write(" "); write(it.text)
+                    }
+                }
+            }
             is BigIntLiteralNode -> write(node.text)
             is RegularExpressionLiteralNode -> write(node.text)
             is NoSubstitutionTemplateLiteralNode -> emitNoSubstitutionTemplateLiteral(node)
@@ -1165,6 +1256,8 @@ class Emitter(
             is OmittedExpression -> { /* emit nothing */
             }
 
+            is CommaListExpression -> emitCommaListExpression(node)
+
             is ComputedPropertyName -> emitComputedPropertyName(node)
             is ObjectBindingPattern -> emitObjectBindingPattern(node)
             is ArrayBindingPattern -> emitArrayBindingPattern(node)
@@ -1182,7 +1275,9 @@ class Emitter(
     private fun emitStringLiteral(node: StringLiteralNode) {
         val quote = if (node.singleQuote) "'" else "\""
         write(quote)
-        write(escapeString(node.text, node.singleQuote))
+        // rawText preserves original escape sequences (e.g. \u2730) and is already
+        // adjusted for the current quote style (singleQuote flag)
+        write(if (node.rawText != null) node.rawText else escapeString(node.text, node.singleQuote))
         write(quote)
     }
 
@@ -1229,37 +1324,91 @@ class Emitter(
 
     private fun emitArrayLiteral(node: ArrayLiteralExpression) {
         if (node.multiLine) {
+            // Check if the first element starts on the same line as `[` (e.g., `[.../* c */\nexpr]`)
+            // In that case, emit the first element inline after `[` without initial newline/indent
+            val firstElemPos = node.elements.firstOrNull()?.pos ?: -1
+            val firstElemOnSameLine = firstElemPos > 0 && node.pos >= 0 && node.pos < firstElemPos &&
+                firstElemPos <= sourceText.length &&
+                !sourceText.substring(node.pos, firstElemPos).contains('\n')
             write("[")
-            writeNewLine()
-            indentLevel++
+            if (!firstElemOnSameLine) {
+                writeNewLine()
+                indentLevel++
+            }
             for ((index, element) in node.elements.withIndex()) {
                 emitLeadingComments(element)
-                writeIndent()
+                if (!firstElemOnSameLine || index > 0) writeIndent()
                 emitExpression(element)
                 val isLast = index == node.elements.size - 1
-                if (!isLast || node.hasTrailingComma) {
-                    write(",")
+                // Split trailing comments: same-line (hasPrecedingNewLine=false) go before comma;
+                // own-line (hasPrecedingNewLine=true) go on their own line before ` ,`
+                val sameLine = element.trailingComments?.filter { !it.hasPrecedingNewLine }
+                val ownLine = element.trailingComments?.filter { it.hasPrecedingNewLine }
+                // NumericLiteralNode already emits same-line trailing comments in emitExpression
+                if (!options.removeComments && element !is NumericLiteralNode) sameLine?.forEach { write(" "); write(it.text) }
+                if (!options.removeComments && !ownLine.isNullOrEmpty()) {
+                    // Own-line pre-comma comment: newline, indent, comment, " ,"
+                    writeNewLine()
+                    for (comment in ownLine) {
+                        writeIndent()
+                        write(comment.text)
+                    }
+                    write(" ,")
+                } else {
+                    if (!isLast || node.hasTrailingComma) write(",")
                 }
                 writeNewLine()
             }
             // Emit any comments that appeared before the closing `]`
             if (!options.removeComments && node.trailingComments != null) {
                 for (comment in node.trailingComments) {
-                    writeIndent()
-                    write(comment.text)
-                    writeNewLine()
+                    if (!comment.hasPrecedingNewLine) {
+                        // Same-line comment after the last comma/element: back up before last \n
+                        if (sb.isNotEmpty() && sb[sb.length - 1] == '\n') {
+                            sb.deleteCharAt(sb.length - 1)
+                            write(" ")
+                            write(comment.text)
+                            sb.append('\n')
+                            isStartOfLine = true
+                        }
+                    } else {
+                        // Own-line comment: emit on its own line
+                        writeIndent()
+                        write(comment.text)
+                        writeNewLine()
+                    }
                 }
             }
-            indentLevel--
+            if (!firstElemOnSameLine) indentLevel--
             writeIndent()
             write("]")
         } else {
             write("[")
+            // Emit inline comments that appeared right after `[` without a preceding newline
+            if (!options.removeComments && node.openBracketComments != null) {
+                if (node.elements.isEmpty()) {
+                    // Empty array: [ /* comment */]
+                    write(" ")
+                    for (comment in node.openBracketComments) {
+                        write(comment.text)
+                    }
+                } else {
+                    // Non-empty array: [/* comment */ elem, ...]
+                    for (comment in node.openBracketComments) {
+                        write(comment.text)
+                        if (!comment.hasTrailingNewLine) write(" ")
+                    }
+                }
+            }
             for ((index, element) in node.elements.withIndex()) {
                 if (index > 0) write(", ")
+                emitInlineLeadingComments(element)
                 emitExpression(element)
+                // NumericLiteralNode already emits same-line trailing comments in emitExpression
+                if (element !is NumericLiteralNode) emitTrailingComments(element)
             }
             if (node.hasTrailingComma) write(",")
+            emitTrailingComments(node.trailingComments)
             write("]")
         }
     }
@@ -1275,15 +1424,35 @@ class Emitter(
             writeNewLine()
             indentLevel++
             for ((index, prop) in node.properties.withIndex()) {
-                emitLeadingComments(prop)
-                writeIndent()
-                emitObjectProperty(prop)
                 val isLast = index == node.properties.size - 1
+                // Check if this property continues on the same line as the previous one.
+                val sameLineAsPrev = if (index == 0) false else {
+                    val prev = node.properties[index - 1]
+                    val prevEnd = prev.end; val currStart = prop.pos
+                    prevEnd > 0 && currStart > 0 && prevEnd <= currStart && currStart <= sourceText.length &&
+                        !sourceText.substring(prevEnd, currStart).contains('\n')
+                }
+                if (sameLineAsPrev) {
+                    write(" ")
+                } else {
+                    emitLeadingComments(prop)
+                    writeIndent()
+                }
+                emitObjectProperty(prop)
+                // Check if next property is on the same line as this one.
+                val nextOnSameLine = !isLast && run {
+                    val next = node.properties[index + 1]
+                    val currEnd = prop.end; val nextStart = next.pos
+                    currEnd > 0 && nextStart > 0 && currEnd <= nextStart && nextStart <= sourceText.length &&
+                        !sourceText.substring(currEnd, nextStart).contains('\n')
+                }
                 if (!isLast || node.hasTrailingComma) {
                     write(",")
                 }
-                emitTrailingComments(prop)
-                writeNewLine()
+                if (!nextOnSameLine) {
+                    emitTrailingComments(prop)
+                    writeNewLine()
+                }
             }
             // Emit any comments that appeared before the closing `}`
             if (!options.removeComments && node.trailingComments != null) {
@@ -1358,7 +1527,32 @@ class Emitter(
 
     private fun emitSpreadAssignment(node: SpreadAssignment) {
         write("...")
+        emitSpreadComments(node.expression)
         emitExpression(node.expression)
+    }
+
+    private fun emitSpreadComments(expr: Expression) {
+        if (options.removeComments) return
+        val comments = expr.leadingComments ?: return
+        for (comment in comments) {
+            if (comment.hasPrecedingNewLine) {
+                // Own-line comment: newline+indent, then comment
+                writeNewLine()
+                writeIndent()
+                write(comment.text)
+                // If comment has trailing newline, next content is on new line; else space before expression
+                if (comment.hasTrailingNewLine) {
+                    writeNewLine()
+                    writeIndent()
+                } else {
+                    write(" ")
+                }
+            } else {
+                // Same-line comment: space before it
+                write(" ")
+                write(comment.text)
+            }
+        }
     }
 
     private fun emitMethodInObjectLiteral(node: MethodDeclaration) {
@@ -1430,10 +1624,22 @@ class Emitter(
             // because `1.` is a valid decimal literal.  Emit an extra `.` to fix:
             // NumericLiteralNode("1")  -> write "1" then "." then ".foo"  -> "1..foo"
             val expr = node.expression
-            if (expr is NumericLiteralNode && numericNeedsExtraDot(expr.text)) {
+            // Extra dot needed for `1.foo` disambiguation, but NOT when the numeric
+            // literal has a trailing comment that will be emitted (comments act as
+            // whitespace in JS: `1 /*c*/.foo` is unambiguous). When removeComments is
+            // true, comments are not emitted so the extra dot is always required.
+            val hasEmittedTrailingComment = !options.removeComments && !expr.trailingComments.isNullOrEmpty()
+            if (expr is NumericLiteralNode && numericNeedsExtraDot(expr.text)
+                && !hasEmittedTrailingComment) {
                 write(".")
             }
             write(".")
+        }
+        if (node.newLineAfterDot) {
+            writeNewLine()
+            indentLevel++
+            writeIndent()
+            indentLevel--
         }
         write(node.name.text)
     }
@@ -1477,6 +1683,7 @@ class Emitter(
 
     private fun emitNewExpression(node: NewExpression) {
         write("new ")
+        emitInlineLeadingComments(leftmostExpression(node.expression))
         emitExpression(node.expression)
         // type arguments erased
         if (node.arguments != null) {
@@ -1585,8 +1792,20 @@ class Emitter(
     private fun emitPrefixKeywordExpression(keyword: String, expression: Expression) {
         write(keyword)
         write(" ")
-        emitInlineLeadingComments(expression)
+        // For `delete /*2*/ Array.toString`, the `/*2*/` is on the leftmost identifier,
+        // not on the outer PropertyAccessExpression. Walk left to find inline comments.
+        emitInlineLeadingComments(leftmostExpression(expression))
         emitExpression(expression)
+    }
+
+    /** Returns the leftmost "leaf" expression (traversing .expression chains). */
+    private fun leftmostExpression(expr: Expression): Expression = when (expr) {
+        is PropertyAccessExpression -> leftmostExpression(expr.expression)
+        is ElementAccessExpression -> leftmostExpression(expr.expression)
+        is CallExpression -> leftmostExpression(expr.expression)
+        is TaggedTemplateExpression -> leftmostExpression(expr.tag)
+        is NonNullExpression -> leftmostExpression(expr.expression)
+        else -> expr
     }
 
     private fun emitPrefixUnaryExpression(node: PrefixUnaryExpression) {
@@ -1604,20 +1823,106 @@ class Emitter(
         val op = operatorToString(node.operator)
         if (node.operator == SyntaxKind.InKeyword || node.operator == SyntaxKind.InstanceOfKeyword) {
             write(" $op ")
+            emitExpression(node.right)
         } else if (node.operator == SyntaxKind.Comma) {
             write("$op ")
+            emitExpression(node.right)
         } else {
-            write(" $op ")
+            // left.end = position after the operator token (scanner scans operator as lookahead)
+            // right.pos = start of right operand token (after trivia)
+            // If there's a newline between the operator and right operand, the operator stays
+            // at end of the current line and the right operand goes to the next indented line.
+            // Guard: node.left.end > 0 avoids false positives for synthesized nodes where
+            // left.end = 0 (default) but right has a real source position.
+            val rightNewLine = node.left.end > 0 && hasNewLineInSource(node.left.end, node.right.pos)
+            if (rightNewLine) {
+                write(" $op")
+                writeNewLine()
+                repeat(indentLevel + 1) { sb.append("    ") }
+                isStartOfLine = false
+            } else {
+                write(" $op ")
+            }
+            emitExpression(node.right)
         }
-        emitExpression(node.right)
+    }
+
+    /**
+     * Emits a class-expression comma list:
+     *   `(_a = class C {\n    },\n    _a.x = 1,\n    _a)`
+     * Each element after the first goes on its own line, indented one level.
+     */
+    /**
+     * Emits a class-expression comma list:
+     *   `(_a = class C {\n    },\n    _a.x = 1,\n    _a)`
+     * Increases indent so the class body closes at the right level, then each
+     * subsequent element gets its own line at the same indent.
+     */
+    private fun emitCommaListExpression(node: CommaListExpression) {
+        write("(")
+        indentLevel++
+        for ((i, elem) in node.elements.withIndex()) {
+            emitExpression(elem)
+            if (i < node.elements.size - 1) {
+                write(",")
+                writeNewLine()
+                repeat(indentLevel) { sb.append("    ") }
+                isStartOfLine = false
+            }
+        }
+        indentLevel--
+        write(")")
     }
 
     private fun emitConditionalExpression(node: ConditionalExpression) {
+        // condition.end = pos after '?' (scanner scans '?' as lookahead), so condition.end - 1 = pos of '?'
+        // whenTrue.end = pos after ':' (scanner scans ':' as lookahead), so whenTrue.end - 1 = pos of ':'
+        val questionMarkPos = node.condition.end - 1
+        val colonPos = node.whenTrue.end - 1
+        val newlineBeforeQ = hasNewLineInSource(node.condition.pos, questionMarkPos)
+        val newlineAfterQ = hasNewLineInSource(node.condition.end, node.whenTrue.pos)
+        val newlineBeforeColon = hasNewLineInSource(node.whenTrue.pos, colonPos)
+        val newlineAfterColon = hasNewLineInSource(node.whenTrue.end, node.whenFalse.pos)
+
+        val isMultiLine = newlineBeforeQ || newlineAfterQ || newlineBeforeColon || newlineAfterColon
+        if (isMultiLine) indentLevel++
+
         emitExpression(node.condition)
-        write(" ? ")
+        if (newlineBeforeQ) {
+            writeNewLine()
+            writeIndent()
+            write("? ")
+        } else if (newlineAfterQ) {
+            write(" ?")
+            writeNewLine()
+            writeIndent()
+        } else {
+            write(" ? ")
+        }
         emitExpression(node.whenTrue)
-        write(" : ")
+        if (newlineBeforeColon) {
+            writeNewLine()
+            writeIndent()
+            write(": ")
+        } else if (newlineAfterColon) {
+            write(" :")
+            writeNewLine()
+            writeIndent()
+        } else {
+            write(" : ")
+        }
         emitExpression(node.whenFalse)
+
+        if (isMultiLine) indentLevel--
+    }
+
+    /** Returns true if the source text between [startPos] and [endPos] contains a newline. */
+    private fun hasNewLineInSource(startPos: Int, endPos: Int): Boolean {
+        if (startPos < 0 || endPos < 0 || startPos >= endPos) return false
+        val from = startPos.coerceAtMost(sourceText.length)
+        val to = endPos.coerceAtMost(sourceText.length)
+        if (from >= to) return false
+        return sourceText.substring(from, to).contains('\n')
     }
 
     private fun emitYieldExpression(node: YieldExpression) {
@@ -1633,6 +1938,7 @@ class Emitter(
 
     private fun emitSpreadElement(node: SpreadElement) {
         write("...")
+        emitSpreadComments(node.expression)
         emitExpression(node.expression)
     }
 
@@ -1674,6 +1980,7 @@ class Emitter(
             if (index > 0) write(", ")
             emitBindingElement(element)
         }
+        if (node.hasTrailingComma) write(",")
         write(" }")
     }
 
@@ -1690,12 +1997,18 @@ class Emitter(
                 }
             }
         }
+        // If the last element is an OmittedExpression (elision), emit a trailing comma
+        // to distinguish `[a, ,]` (hole at index 1) from `[a,]` (no hole).
+        if (node.elements.lastOrNull() is OmittedExpression) {
+            write(",")
+        }
         write("]")
     }
 
     private fun emitBindingElement(node: BindingElement) {
         if (node.dotDotDotToken) {
             write("...")
+            emitSpreadComments(node.name)
         }
         if (node.propertyName != null) {
             emitPropertyName(node.propertyName)
@@ -1718,6 +2031,17 @@ class Emitter(
             // skip `this` parameter
             !(param.name is Identifier && param.name.text == "this")
         }
+        // Handle comment-only placeholder for empty parameter lists (e.g., `/** nothing */`)
+        val placeholder = emittableParams.singleOrNull { it.isCommentPlaceholder }
+        if (placeholder != null) {
+            if (!options.removeComments) {
+                for (comment in placeholder.leadingComments ?: emptyList()) {
+                    write(" ")
+                    write(comment.text)
+                }
+            }
+            return
+        }
         val anyHasLeadingComments = !options.removeComments && emittableParams.any { it.leadingComments != null }
         if (anyHasLeadingComments) {
             // Emit each parameter on its own line with leading comment
@@ -1739,8 +2063,10 @@ class Emitter(
     private fun emitParameter(node: Parameter) {
         if (node.dotDotDotToken) {
             write("...")
+            emitTrailingComments(node.dotDotDotTrailingComments)
         }
         emitExpression(node.name)
+        emitTrailingComments(node.trailingComments)
         // skip type annotation
         if (node.initializer != null) {
             write(" = ")
@@ -1774,25 +2100,75 @@ class Emitter(
         if (options.removeComments) return
         val comments = node.leadingComments ?: return
         for (comment in comments) {
+            val commentText = reindentComment(comment)
             if (!comment.hasTrailingNewLine && comment.kind == SyntaxKind.MultiLineComment) {
                 // Inline block comment (e.g. /*comment*/ before a statement on the same line).
                 // Emit on the same line; suppress the next writeIndent() so the statement
                 // body follows immediately.
                 writeIndent()
-                write(comment.text)
+                write(commentText)
                 write(" ")
                 skipNextIndent = true
             } else {
                 writeIndent()
-                write(comment.text)
+                write(commentText)
                 writeNewLine()
+            }
+        }
+    }
+
+    /**
+     * Re-indents a multi-line comment to match the current indentation level.
+     * For single-line comments or comments without embedded newlines, returns the text as-is.
+     * For block comments like `/** ... */`, adjusts each continuation line's indentation
+     * by the delta between the original source indentation and the current emit indentation.
+     */
+    private fun reindentComment(comment: Comment): String {
+        if (comment.kind != SyntaxKind.MultiLineComment) return comment.text
+        val text = comment.text
+        if (!text.contains('\n')) return text
+
+        // Compute original indentation: spaces before `/*` on its source line
+        val origIndent = if (comment.pos >= 0 && comment.pos <= sourceText.length) {
+            var lineStart = comment.pos - 1
+            while (lineStart >= 0 && sourceText[lineStart] != '\n') lineStart--
+            lineStart++
+            var spaces = 0
+            while (lineStart + spaces < comment.pos && sourceText[lineStart + spaces] == ' ') spaces++
+            spaces
+        } else 0
+
+        val targetIndent = indentLevel * 4
+        val delta = targetIndent - origIndent
+        if (delta == 0) return text
+
+        // Re-indent each line after the first
+        val lines = text.split('\n')
+        return buildString {
+            append(lines[0])
+            for (i in 1 until lines.size) {
+                append('\n')
+                val line = lines[i]
+                if (delta > 0) {
+                    append(" ".repeat(delta))
+                    append(line)
+                } else {
+                    // Remove up to |delta| leading spaces
+                    val toRemove = minOf(-delta, line.length - line.trimStart().length)
+                    append(line.substring(toRemove))
+                }
             }
         }
     }
 
     private fun emitTrailingComments(node: Node) {
         if (options.removeComments) return
-        val comments = node.trailingComments ?: return
+        emitTrailingComments(node.trailingComments)
+    }
+
+    private fun emitTrailingComments(comments: List<Comment>?) {
+        if (options.removeComments) return
+        if (comments == null) return
         for (comment in comments) {
             write(" ")
             write(comment.text)
