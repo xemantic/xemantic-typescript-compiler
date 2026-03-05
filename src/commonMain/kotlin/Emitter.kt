@@ -1243,6 +1243,14 @@ class Emitter(
         }
     }
 
+    private fun emitInlineLeadingComments(comments: List<Comment>?) {
+        if (options.removeComments || comments.isNullOrEmpty()) return
+        for (comment in comments) {
+            write(" ")
+            write(comment.text)
+        }
+    }
+
     private fun emitExpression(node: Expression) {
         when (node) {
             is Identifier -> emitIdentifier(node)
@@ -1962,10 +1970,14 @@ class Emitter(
     private fun emitYieldExpression(node: YieldExpression) {
         write("yield")
         if (node.asteriskToken) {
+            // Emit any comments between 'yield' and '*' (e.g. `yield /*c*/* expr`)
+            emitInlineLeadingComments(node.yieldAsteriskComments)
             write("*")
         }
         if (node.expression != null) {
             write(" ")
+            // Emit any inline leading comments on the expression (e.g. `yield /*c*/ expr`)
+            emitInlineLeadingComments(leftmostExpression(node.expression))
             emitExpression(node.expression)
         }
     }
