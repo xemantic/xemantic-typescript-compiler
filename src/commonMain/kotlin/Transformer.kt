@@ -993,20 +993,35 @@ class Transformer(private val options: CompilerOptions) {
         // Post-elision: move "detached" header comments from the first require import to
         // before the Object.defineProperty preamble. TypeScript emits copyright blocks and
         // ///amd-dependency between "use strict" and the preamble — but ONLY when there is
-        // a blank line (≥2 newlines) separating the comment from the import statement.
+        // a blank line (≥2 newlines) separating the LAST comment from the import statement.
         // (NotEmittedStatement case is handled earlier, before function stubs are inserted.)
+        //
+        // The blank-line check uses the LAST comment's end relative to the statement,
+        // not each comment individually. This ensures a contiguous block of comments
+        // (like multiple /// reference directives) is not partially moved.
         if (!hasExportEquals && result.size > 1 && result[1] is VariableStatement) {
             val firstReal = result[1] as VariableStatement
             val allComments = firstReal.leadingComments
             if (!allComments.isNullOrEmpty()) {
                 val source = originalSourceFile.text
                 val stmtPos = firstReal.pos
-                val detached = allComments.filter { c ->
-                    c.pos >= 0 && stmtPos >= 0 && c.end <= stmtPos &&
-                    source.substring(c.end, stmtPos).count { it == '\n' } >= 2
+                // Find the split point: the last comment that is blank-line-separated from the
+                // next item (next comment or the statement itself). Only comments BEFORE that
+                // split point are pre-preamble; comments in the contiguous block before the
+                // statement stay attached.
+                var splitIdx = -1  // index after which all comments are attached to stmt
+                for (i in allComments.indices) {
+                    val c = allComments[i]
+                    if (c.pos < 0 || stmtPos < 0) continue
+                    val nextStart = if (i + 1 < allComments.size) allComments[i + 1].pos else stmtPos
+                    if (nextStart >= 0 && c.end >= 0 &&
+                        source.substring(c.end, nextStart).count { it == '\n' } >= 2) {
+                        splitIdx = i
+                    }
                 }
-                if (detached.isNotEmpty()) {
-                    val attached = allComments - detached.toSet()
+                if (splitIdx >= 0) {
+                    val detached = allComments.subList(0, splitIdx + 1)
+                    val attached = allComments.subList(splitIdx + 1, allComments.size)
                     prePreambleStatements.add(NotEmittedStatement(leadingComments = detached))
                     result[1] = firstReal.copy(leadingComments = attached.ifEmpty { null })
                 }
@@ -4113,48 +4128,59 @@ class Transformer(private val options: CompilerOptions) {
         ) {
             return node.copy(properties = transformedProps)
         }
-        // Build Object.assign() arguments
-        val args = mutableListOf<Expression>()
+        // Build nested Object.assign() calls using left-fold:
+        //   { a, ...x, b } → Object.assign({ a }, x, { b }) — leading props as first arg
+        //   { ...x, b }    → Object.assign(Object.assign({}, x), { b }) — nested when trailing props
+        // Collect leading non-spread props as the initial accumulator object.
+        val leadingProps = mutableListOf<Node>()
+        var i = 0
+        while (i < transformedProps.size && transformedProps[i] !is SpreadAssignment) {
+            leadingProps.add(transformedProps[i])
+            i++
+        }
+        var accumulator: Expression = ObjectLiteralExpression(
+            properties = leadingProps.toList(),
+            multiLine = false,
+        )
+        val remaining = transformedProps.drop(i)
         val pendingProps = mutableListOf<Node>()
-        var firstArgSet = false
+        var isFirst = true
 
-        for (prop in transformedProps) {
+        fun flushPending(trailingComma: Boolean = false) {
+            if (pendingProps.isEmpty()) return
+            val obj = ObjectLiteralExpression(
+                properties = pendingProps.toList(),
+                multiLine = false,
+                hasTrailingComma = trailingComma,
+            )
+            accumulator = makeObjectAssignCall(listOf(accumulator, obj))
+            pendingProps.clear()
+            isFirst = false
+        }
+
+        for (prop in remaining) {
             if (prop is SpreadAssignment) {
-                val spreadExpr = prop.expression
-                if (!firstArgSet && pendingProps.isEmpty()) {
-                    // No preceding props yet — add an empty {} as the accumulator first arg
-                    args.add(ObjectLiteralExpression(properties = emptyList()))
-                    firstArgSet = true
-                } else if (pendingProps.isNotEmpty()) {
-                    // Flush any pending non-spread properties as an object literal
-                    args.add(ObjectLiteralExpression(
-                        properties = pendingProps.toList(),
-                        multiLine = pendingProps.size > 1 && node.multiLine,
-                        hasTrailingComma = false,
-                    ))
-                    pendingProps.clear()
-                    firstArgSet = true
+                flushPending()
+                if (isFirst) {
+                    // First spread: start the chain — accumulator already holds leading props (or {})
+                    accumulator = makeObjectAssignCall(listOf(accumulator, prop.expression))
+                    isFirst = false
+                } else {
+                    accumulator = makeObjectAssignCall(listOf(accumulator, prop.expression))
                 }
-                args.add(spreadExpr)
             } else {
                 pendingProps.add(prop)
             }
         }
-        if (pendingProps.isNotEmpty()) {
-            args.add(ObjectLiteralExpression(
-                properties = pendingProps.toList(),
-                multiLine = pendingProps.size > 1 && node.multiLine,
-                hasTrailingComma = node.hasTrailingComma,
-            ))
-        }
-        return makeObjectAssignCall(args)
+        flushPending(trailingComma = node.hasTrailingComma)
+        return accumulator
     }
 
     private fun makeObjectAssignCall(args: List<Expression>): CallExpression {
         return CallExpression(
             expression = PropertyAccessExpression(
-                expression = Identifier("Object"),
-                name = Identifier("assign"),
+                expression = syntheticId("Object"),
+                name = syntheticId("assign"),
             ),
             arguments = args,
         )
