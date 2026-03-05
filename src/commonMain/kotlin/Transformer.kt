@@ -150,6 +150,13 @@ class Transformer(private val options: CompilerOptions) {
             return sourceFile.copy(statements = cjsStatements)
         }
 
+        // AMD module transform — only for module files (files with imports/exports).
+        // Non-module files in AMD format are emitted as-is (no define wrapper).
+        if (options.effectiveModule == ModuleKind.AMD && isModuleFile(sourceFile)) {
+            val amdStatements = transformToAMD(transformed, sourceFile)
+            return sourceFile.copy(statements = amdStatements)
+        }
+
         // ES module import elision: erase imports whose bindings are unused in value positions
         val elided = elideUnusedESModuleImports(transformed)
 
@@ -918,6 +925,639 @@ class Transformer(private val options: CompilerOptions) {
             result.addAll(insertIdx, prePreambleStatements)
         }
 
+        return result
+    }
+
+    // -----------------------------------------------------------------
+    // AMD module transform
+    // -----------------------------------------------------------------
+
+    /**
+     * Parses `/// <amd-dependency path='p' name='n'/>` and `/// <amd-module name='n'/>`
+     * directives from the source text. Returns triple of:
+     * - amdModuleName: last `<amd-module name=...>` value (or null)
+     * - namedAmdDeps: list of (path, name) for `<amd-dependency ... name=...>`
+     * - unnamedAmdDeps: list of path strings for `<amd-dependency ... />` without name
+     */
+    private data class AmdDirectives(
+        val moduleName: String?,
+        val namedDeps: List<Pair<String, String>>, // path to name
+        val unnamedDeps: List<String>,             // just path
+    )
+
+    private fun parseAmdDirectives(sourceText: String): AmdDirectives {
+        var moduleName: String? = null
+        val namedDeps = mutableListOf<Pair<String, String>>()
+        val unnamedDeps = mutableListOf<String>()
+
+        val lines = sourceText.lines()
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (!trimmed.startsWith("///")) break // directives only at top of file
+
+            // <amd-module name='...'/> or <amd-module name="..."/>
+            val moduleMatch = Regex("""<amd-module\s+name=['"]([^'"]+)['"]""").find(trimmed)
+            if (moduleMatch != null) {
+                moduleName = moduleMatch.groupValues[1]
+                continue
+            }
+
+            // <amd-dependency path='...' name='...'/>
+            val depPath = Regex("""<amd-dependency\s[^>]*path=['"]([^'"]+)['"]""").find(trimmed)
+                ?.groupValues?.get(1)
+            if (depPath != null) {
+                val depName = Regex("""name=['"]([^'"]+)['"]""").find(trimmed)?.groupValues?.get(1)
+                if (depName != null) {
+                    namedDeps.add(depPath to depName)
+                } else {
+                    unnamedDeps.add(depPath)
+                }
+            }
+        }
+        return AmdDirectives(moduleName, namedDeps, unnamedDeps)
+    }
+
+    /**
+     * Transforms statements to AMD format: `define([deps], function(require, exports, ...) { body })`
+     *
+     * AMD module structure:
+     * - Each import creates a separate dependency entry (not deduplicated)
+     * - `import X = require("mod")` → dep "mod", param X
+     * - `import * as ns from "mod"` → dep "mod", param ns; body: ns = __importStar(ns)
+     * - `import { a } from "mod"` → dep "mod", param mod_1; body references become mod_1.a
+     * - `import d from "mod"` → dep "mod", param mod_1; body: mod_1 = __importDefault(mod_1)
+     * - `import "mod"` → dep "mod", no param (side-effect)
+     * - `/// <amd-dependency path='p' name='n'/>` → dep p, param n
+     * - `/// <amd-dependency path='p'/>` → dep p, no param
+     * - `/// <amd-module name='n'/>` → first arg to define: "n"
+     */
+    private fun transformToAMD(
+        statements: List<Statement>,
+        originalSourceFile: SourceFile,
+    ): List<Statement> {
+        val amdDirectives = parseAmdDirectives(originalSourceFile.text)
+
+        // Check for export = X (namespace export style)
+        val earlyTypeOnlyNames = mutableSetOf<String>()
+        val earlyRuntimeNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> earlyTypeOnlyNames.add(stmt.name.text)
+                is InterfaceDeclaration -> earlyTypeOnlyNames.add(stmt.name.text)
+                is ClassDeclaration -> stmt.name?.text?.let { earlyRuntimeNames.add(it) }
+                is FunctionDeclaration -> stmt.name?.text?.let { earlyRuntimeNames.add(it) }
+                is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
+                    collectBoundNames(decl.name).forEach { n -> earlyRuntimeNames.add(n) }
+                }
+                is EnumDeclaration -> earlyRuntimeNames.add(stmt.name.text)
+                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { earlyRuntimeNames.add(it) }
+                else -> {}
+            }
+        }
+        val earlyPureTypeNames = earlyTypeOnlyNames - earlyRuntimeNames
+        val hasExportEquals = originalSourceFile.statements.any { stmt ->
+            stmt is ExportAssignment && stmt.isExportEquals &&
+                (stmt.expression as? Identifier)?.text?.let { it !in earlyPureTypeNames } != false
+        }
+
+        // Track helper needs
+        var needsImportStar = false
+        var needsImportDefault = false
+
+        // Counter for generating unique temp names
+        val moduleNameCounter = mutableMapOf<String, Int>()
+
+        // For identifier renaming (named imports like import { a } from "mod" → mod_1.a)
+        val renameMap = mutableMapOf<String, Expression>()
+
+        // Strip "use strict" from transformed statements (will go inside the function body)
+        val statementsWithoutStrict = statements.filter { stmt ->
+            !(stmt is ExpressionStatement &&
+                stmt.expression is StringLiteralNode &&
+                (stmt.expression as StringLiteralNode).text == "use strict")
+        }
+
+        // Dependency and parameter lists
+        // Named AMD deps: (path, paramName)
+        val namedAmdDeps = amdDirectives.namedDeps.toMutableList()
+        // Unnamed AMD deps: path strings
+        val unnamedAmdDeps = amdDirectives.unnamedDeps.toMutableList()
+
+        // Named module imports: list of (path, paramName) for function parameters
+        val namedModuleImports = mutableListOf<Pair<String, String>>()
+        // Unnamed module imports: path strings (side effects, no param)
+        val unnamedModuleImports = mutableListOf<String>()
+
+        // Collect exported names for hoisting (exports.x = void 0)
+        val exportedVarNames = mutableListOf<String>()
+        // Deferred export assignments (export =)
+        val deferredExportAssignments = mutableListOf<Statement>()
+        // Function export stubs
+        val functionExportStubs = mutableListOf<Statement>()
+
+        // Pre-scan for function/class names
+        val functionAndClassNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is FunctionDeclaration -> stmt.name?.text?.let { functionAndClassNames.add(it) }
+                is ClassDeclaration -> stmt.name?.text?.let { functionAndClassNames.add(it) }
+                else -> {}
+            }
+        }
+
+        // Pre-scan for type-only names
+        val runtimeDeclaredNames = mutableSetOf<String>()
+        val typeOnlyDeclaredNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> typeOnlyDeclaredNames.add(stmt.name.text)
+                is InterfaceDeclaration -> typeOnlyDeclaredNames.add(stmt.name.text)
+                is ClassDeclaration -> stmt.name?.text?.let { runtimeDeclaredNames.add(it) }
+                is FunctionDeclaration -> stmt.name?.text?.let { runtimeDeclaredNames.add(it) }
+                is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
+                    collectBoundNames(decl.name).forEach { n -> runtimeDeclaredNames.add(n) }
+                }
+                is EnumDeclaration -> runtimeDeclaredNames.add(stmt.name.text)
+                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { runtimeDeclaredNames.add(it) }
+                else -> {}
+            }
+        }
+        val pureTypeNames = typeOnlyDeclaredNames - runtimeDeclaredNames
+
+        // Pre-scan for exported namespace/enum names
+        val exportedNsEnumNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers &&
+                        !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) ->
+                    extractIdentifierName(stmt.name)?.let { exportedNsEnumNames.add(it) }
+                stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
+                        !hasDeclareModifier(stmt) &&
+                        (options.preserveConstEnums || ModifierFlag.Const !in stmt.modifiers) ->
+                    exportedNsEnumNames.add(stmt.name.text)
+            }
+        }
+        for (name in exportedNsEnumNames) {
+            if (name !in exportedVarNames) exportedVarNames.add(name)
+        }
+
+        // Body statements (non-import content)
+        val bodyStatements = mutableListOf<Statement>()
+        // Import reassignment statements (ns = __importStar(ns), mod = __importDefault(mod))
+        // These must appear at the TOP of the body (after "use strict" + preamble)
+        val importReassignments = mutableListOf<Statement>()
+
+        // Pass 1: collect imports to build deps/params, build body for non-imports
+        for (stmt in statementsWithoutStrict) {
+            when (stmt) {
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause
+                    val moduleSpecifier = stmt.moduleSpecifier
+                    val specStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
+                        ?: (moduleSpecifier as? StringLiteralNode)?.text ?: ""
+
+                    if (clause == null) {
+                        // Side-effect import: dep only, no param
+                        unnamedModuleImports.add(specStr)
+                    } else {
+                        val bindings = clause.namedBindings
+                        when {
+                            clause.name != null && bindings == null -> {
+                                // Default import: import d from "mod" → dep "mod", param mod_1
+                                // Body: mod_1 = __importDefault(mod_1)
+                                needsImportDefault = true
+                                val localName = clause.name.text
+                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                                namedModuleImports.add(specStr to tempName)
+                                // Hoisted reassignment: mod_1 = __importDefault(mod_1)
+                                importReassignments.add(
+                                    ExpressionStatement(
+                                        expression = BinaryExpression(
+                                            left = syntheticId(tempName),
+                                            operator = SyntaxKind.Equals,
+                                            right = CallExpression(
+                                                expression = syntheticId("__importDefault"),
+                                                arguments = listOf(syntheticId(tempName)),
+                                                pos = -1, end = -1,
+                                            ),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    )
+                                )
+                                // Rename: localName → tempName.default
+                                renameMap[localName] = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                            }
+                            bindings is NamespaceImport -> {
+                                // import * as ns from "mod" → dep "mod", param ns
+                                // Body: ns = __importStar(ns)
+                                needsImportStar = true
+                                val paramName = bindings.name.text
+                                namedModuleImports.add(specStr to paramName)
+                                importReassignments.add(
+                                    ExpressionStatement(
+                                        expression = BinaryExpression(
+                                            left = syntheticId(paramName),
+                                            operator = SyntaxKind.Equals,
+                                            right = CallExpression(
+                                                expression = syntheticId("__importStar"),
+                                                arguments = listOf(syntheticId(paramName)),
+                                                pos = -1, end = -1,
+                                            ),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    )
+                                )
+                            }
+                            bindings is NamedImports -> {
+                                // import { a, b as c } from "mod" → dep "mod", param mod_1
+                                val hasDefaultElement = bindings.elements.any {
+                                    (it.propertyName ?: it.name).text == "default"
+                                }
+                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                                if (hasDefaultElement) {
+                                    needsImportDefault = true
+                                }
+                                namedModuleImports.add(specStr to tempName)
+                                // Rename each binding: a → mod_1.a, c → mod_1.b
+                                for (element in bindings.elements) {
+                                    val importedName = (element.propertyName ?: element.name).text
+                                    val localAlias = element.name.text
+                                    renameMap[localAlias] = PropertyAccessExpression(
+                                        expression = syntheticId(tempName),
+                                        name = syntheticId(importedName),
+                                        pos = -1, end = -1,
+                                    )
+                                }
+                            }
+                            clause.name != null && bindings != null -> {
+                                // Combined default + named: import d, { a } from "mod"
+                                needsImportDefault = true
+                                val localName = clause.name.text
+                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                                namedModuleImports.add(specStr to tempName)
+                                importReassignments.add(
+                                    ExpressionStatement(
+                                        expression = BinaryExpression(
+                                            left = syntheticId(tempName),
+                                            operator = SyntaxKind.Equals,
+                                            right = CallExpression(
+                                                expression = syntheticId("__importDefault"),
+                                                arguments = listOf(syntheticId(tempName)),
+                                                pos = -1, end = -1,
+                                            ),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    )
+                                )
+                                renameMap[localName] = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // import X = require("mod") → already transformed to var X = require("mod")
+                // In AMD, we need to detect this and convert to a dep+param instead
+                is VariableStatement -> {
+                    // Check if this is a require import (from ImportEqualsDeclaration transform)
+                    val decl = stmt.declarationList.declarations
+                    if (decl.size == 1) {
+                        val init = decl[0].initializer
+                        val name = extractIdentifierName(decl[0].name)
+                        if (name != null && isRequireCall(init)) {
+                            val requireArg = (init as CallExpression).arguments.firstOrNull()
+                            val specStr2 = (normalizeModuleSpecifier(requireArg ?: syntheticId("")) as? StringLiteralNode)?.text
+                                ?: (requireArg as? StringLiteralNode)?.text ?: ""
+                            namedModuleImports.add(specStr2 to name)
+                            // Don't add to body — it's now a parameter
+                            continue
+                        }
+                    }
+
+                    // Regular variable statement — handle exports
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    val strippedModifiers = stmt.modifiers - ModifierFlag.Export
+
+                    if (isExported) {
+                        for (d in stmt.declarationList.declarations) {
+                            for (n in collectBoundNames(d.name)) exportedVarNames.add(n)
+                        }
+                        val hasComplexPattern = stmt.declarationList.declarations.any {
+                            extractIdentifierName(it.name) == null
+                        }
+                        val needsKeepDeclaration = hasComplexPattern ||
+                                stmt.declarationList.declarations.any { d ->
+                                    d.initializer is FunctionExpression ||
+                                            d.initializer is ArrowFunction ||
+                                            d.initializer is ClassExpression
+                                }
+                        if (needsKeepDeclaration) {
+                            bodyStatements.add(stmt.copy(modifiers = strippedModifiers))
+                            for (d in stmt.declarationList.declarations) {
+                                val names = collectBoundNames(d.name)
+                                if (names.isNotEmpty() && d.initializer != null) {
+                                    for (n in names) bodyStatements.add(makeExportAssignment(n))
+                                }
+                            }
+                        } else {
+                            for (d in stmt.declarationList.declarations) {
+                                val n = extractIdentifierName(d.name)
+                                if (n != null && d.initializer != null) {
+                                    bodyStatements.add(
+                                        ExpressionStatement(
+                                            expression = BinaryExpression(
+                                                left = PropertyAccessExpression(
+                                                    expression = syntheticId("exports"),
+                                                    name = Identifier(text = n, pos = -1, end = -1),
+                                                    pos = -1, end = -1,
+                                                ),
+                                                operator = SyntaxKind.Equals,
+                                                right = d.initializer,
+                                                pos = -1, end = -1,
+                                            ),
+                                            leadingComments = stmt.leadingComments,
+                                            pos = -1, end = -1,
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        bodyStatements.add(stmt)
+                    }
+                }
+
+                is FunctionDeclaration -> {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    val isDefault = ModifierFlag.Default in stmt.modifiers
+                    if (isExported) {
+                        val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default)
+                        val name = stmt.name?.text
+                        if (isDefault) {
+                            if (name != null && !hasExportEquals) {
+                                functionExportStubs.add(makeExportAssignment("default", syntheticId(name)))
+                            }
+                            bodyStatements.add(stripped)
+                        } else {
+                            if (name != null && !hasExportEquals) {
+                                functionExportStubs.add(makeExportsProperty(name))
+                            }
+                            bodyStatements.add(stripped)
+                        }
+                    } else {
+                        bodyStatements.add(stmt)
+                    }
+                }
+
+                is ClassDeclaration -> {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    val isDefault = ModifierFlag.Default in stmt.modifiers
+                    if (isExported) {
+                        val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default)
+                        bodyStatements.add(stripped)
+                        val name = stmt.name?.text
+                        if (name != null) {
+                            if (isDefault) {
+                                if (!hasExportEquals) bodyStatements.add(makeExportAssignment("default", syntheticId(name)))
+                            } else {
+                                exportedVarNames.add(name)
+                                if (!hasExportEquals) bodyStatements.add(makeExportAssignment(name))
+                            }
+                        }
+                    } else {
+                        bodyStatements.add(stmt)
+                    }
+                }
+
+                is ExportAssignment -> {
+                    if (stmt.isExportEquals) {
+                        val exprName = (stmt.expression as? Identifier)?.text
+                        if (exprName == null || exprName !in pureTypeNames) {
+                            // export = X → return X;
+                            deferredExportAssignments.add(
+                                ReturnStatement(expression = stmt.expression, pos = -1, end = -1)
+                            )
+                        }
+                    } else {
+                        val exprName = (stmt.expression as? Identifier)?.text
+                        if (exprName == null || exprName !in pureTypeNames) {
+                            bodyStatements.add(makeExportAssignment("default", stmt.expression))
+                        }
+                    }
+                }
+
+                is ExportDeclaration -> {
+                    if (stmt.isTypeOnly) {
+                        // Type-only: erased
+                    } else if (stmt.exportClause is NamedExports) {
+                        // export { x, y }
+                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                            if (spec.isTypeOnly) continue
+                            val exportName = spec.name.text
+                            val localName = (spec.propertyName ?: spec.name).text
+                            if (localName in functionAndClassNames) {
+                                functionExportStubs.add(makeExportAssignment(exportName, syntheticId(localName)))
+                            } else {
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                bodyStatements.add(makeExportAssignment(exportName, syntheticId(localName)))
+                            }
+                        }
+                    }
+                    // export * from "mod" in AMD: we skip complex re-exports for now
+                }
+
+                else -> {
+                    // Check if this is a namespace/enum IIFE for an exported name
+                    val iifeNameForExport = extractSimpleIifeName(stmt)
+                    if (iifeNameForExport != null && iifeNameForExport in exportedNsEnumNames) {
+                        bodyStatements.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
+                    } else {
+                        bodyStatements.add(stmt)
+                    }
+                }
+            }
+        }
+
+        // Apply import identifier renaming in body statements
+        val renamedBody = if (renameMap.isNotEmpty()) {
+            bodyStatements.map { rewriteIdInStatement(it, renameMap) }
+        } else bodyStatements.toList()
+
+        // Import elision: determine which namedModuleImports are actually used.
+        // Collect refs from body + function stubs + deferred, but NOT importReassignments
+        // (otherwise every reassigned import would count as "used" by its own reassignment).
+        val allRefs = collectValueReferences(renamedBody + functionExportStubs + deferredExportAssignments)
+
+        // Filter namedModuleImports to keep only used ones
+        val usedNamedModuleImports = namedModuleImports.filter { (_, paramName) ->
+            paramName in allRefs
+        }
+
+        // Elide importReassignments for unused imports
+        val unusedParamNames = namedModuleImports
+            .filter { (_, paramName) -> paramName !in allRefs }
+            .map { it.second }
+            .toSet()
+        val filteredReassignments = importReassignments.filter { stmt ->
+            if (stmt is ExpressionStatement && stmt.expression is BinaryExpression) {
+                val paramName = ((stmt.expression as BinaryExpression).left as? Identifier)?.text
+                if (paramName != null && paramName in unusedParamNames) return@filter false
+            }
+            true
+        }
+        // Recheck: if we elided ALL importStar reassignments, don't need the star helper
+        if (filteredReassignments.none { s ->
+            s is ExpressionStatement && s.expression is BinaryExpression &&
+                ((s.expression as BinaryExpression).right as? CallExpression)?.let {
+                    (it.expression as? Identifier)?.text == "__importStar"
+                } == true
+        }) {
+            needsImportStar = false
+        }
+        // Recheck: if we elided all importDefault reassignments, don't need the helper
+        if (filteredReassignments.none { s ->
+            s is ExpressionStatement && s.expression is BinaryExpression &&
+                ((s.expression as BinaryExpression).right as? CallExpression)?.let {
+                    (it.expression as? Identifier)?.text == "__importDefault"
+                } == true
+        }) {
+            needsImportDefault = false
+        }
+
+        // Build body: "use strict" + optional __esModule preamble + void0 hoists + function stubs +
+        //             importReassignments + body + deferred
+        val fullBody = mutableListOf<Statement>()
+        fullBody.add(ExpressionStatement(expression = StringLiteralNode(text = "use strict"), pos = -1, end = -1))
+
+        if (!hasExportEquals) {
+            fullBody.add(makeEsModulePreamble())
+        }
+
+        // Void0 hoists
+        if (exportedVarNames.isNotEmpty()) {
+            val void0 = VoidExpression(
+                expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+            val hoistExpr: Expression = exportedVarNames.fold(void0 as Expression) { acc, name ->
+                BinaryExpression(
+                    left = PropertyAccessExpression(
+                        expression = syntheticId("exports"),
+                        name = syntheticId(name),
+                        pos = -1, end = -1,
+                    ),
+                    operator = SyntaxKind.Equals,
+                    right = acc,
+                    pos = -1, end = -1,
+                )
+            }
+            fullBody.add(ExpressionStatement(expression = hoistExpr, pos = -1, end = -1))
+        }
+
+        // Function export stubs (after void0 hoists)
+        fullBody.addAll(functionExportStubs)
+
+        // Import reassignments (hoisted to top of body, after preamble)
+        fullBody.addAll(filteredReassignments)
+
+        // Main body
+        fullBody.addAll(renamedBody)
+
+        // Deferred (export =, i.e. return X)
+        fullBody.addAll(deferredExportAssignments)
+
+        // Build dependency array: ["require", "exports", namedAmdDeps..., usedNamedModuleImports..., unnamedAmdDeps..., unnamedModuleImports...]
+        val depPaths = mutableListOf<String>()
+        depPaths.add("require")
+        depPaths.add("exports")
+        namedAmdDeps.forEach { (path, _) -> depPaths.add(path) }
+        usedNamedModuleImports.forEach { (path, _) -> depPaths.add(path) }
+        unnamedAmdDeps.forEach { path -> depPaths.add(path) }
+        unnamedModuleImports.forEach { path -> depPaths.add(path) }
+
+        val depArray = ArrayLiteralExpression(
+            elements = depPaths.map { StringLiteralNode(text = it, pos = -1, end = -1) },
+            pos = -1, end = -1,
+        )
+
+        // Build parameter list: require, exports, namedAmdParams..., usedNamedModuleParams...
+        val paramNames = mutableListOf<String>()
+        paramNames.add("require")
+        paramNames.add("exports")
+        namedAmdDeps.forEach { (_, name) -> paramNames.add(name) }
+        usedNamedModuleImports.forEach { (_, name) -> paramNames.add(name) }
+
+        val parameters = paramNames.map { name ->
+            Parameter(name = syntheticId(name), pos = -1, end = -1)
+        }
+
+        // Build the function body block (multiLine = true to get proper indentation)
+        val funcBody = Block(
+            statements = fullBody,
+            multiLine = true,
+            pos = -1, end = -1,
+        )
+
+        val funcExpr = FunctionExpression(
+            parameters = parameters,
+            body = funcBody,
+            pos = -1, end = -1,
+        )
+
+        // Build the define() call args
+        val defineArgs = mutableListOf<Expression>()
+        if (amdDirectives.moduleName != null) {
+            defineArgs.add(StringLiteralNode(text = amdDirectives.moduleName, pos = -1, end = -1))
+        }
+        defineArgs.add(depArray)
+        defineArgs.add(funcExpr)
+
+        val defineCall = ExpressionStatement(
+            expression = CallExpression(
+                expression = syntheticId("define"),
+                arguments = defineArgs,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // Build result: [amdDepComments?, helpers?, defineCall]
+        val result = mutableListOf<Statement>()
+
+        // Extract ONLY <amd-dependency> comments to emit FIRST (before helpers and define).
+        // <amd-module> comments stay on their statements and appear inside the body.
+        val amdDepComments = originalSourceFile.statements.flatMap { s ->
+            s.leadingComments?.filter { c ->
+                c.text.startsWith("///") && c.text.contains("<amd-dependency")
+            } ?: emptyList()
+        }
+        if (amdDepComments.isNotEmpty()) {
+            result.add(NotEmittedStatement(leadingComments = amdDepComments, pos = -1, end = -1))
+        }
+
+        // Runtime helpers go OUTSIDE the define wrapper (after amd comments, before define)
+        if (needsImportStar || needsImportDefault) {
+            val helpers = buildString {
+                if (needsImportStar) {
+                    append(CREATE_BINDING_HELPER)
+                    append(IMPORT_STAR_ONLY_HELPERS)
+                }
+                if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
+            }
+            result.add(RawStatement(code = helpers))
+        }
+
+        result.add(defineCall)
         return result
     }
 
