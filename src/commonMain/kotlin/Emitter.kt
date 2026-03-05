@@ -1869,7 +1869,15 @@ class Emitter(
         // For `delete /*2*/ Array.toString`, the `/*2*/` is on the leftmost identifier,
         // not on the outer PropertyAccessExpression. Walk left to find inline comments.
         emitInlineLeadingComments(leftmostExpression(expression))
-        emitExpression(expression)
+        // `typeof`/`delete`/`void` have higher precedence than `?:`, so a ConditionalExpression
+        // operand must be parenthesized to preserve semantics (e.g. downleveled `?.` chains).
+        if (expression is ConditionalExpression) {
+            write("(")
+            emitExpression(expression)
+            write(")")
+        } else {
+            emitExpression(expression)
+        }
     }
 
     /** Returns the leftmost "leaf" expression (traversing .expression chains). */
@@ -1900,15 +1908,52 @@ class Emitter(
         write(operatorToString(node.operator))
     }
 
+    /**
+     * Returns true if a [ConditionalExpression] needs wrapping in `()` when used as the right
+     * operand of the given binary operator. Ternary has lower precedence than all operators
+     * except assignment (`=`, `+=`, …) and comma (`,`).
+     */
+    private fun rightConditionalNeedsParens(op: SyntaxKind): Boolean = when (op) {
+        SyntaxKind.Comma,
+        SyntaxKind.Equals, SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
+        SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+        SyntaxKind.AsteriskAsteriskEquals, SyntaxKind.AmpersandEquals,
+        SyntaxKind.BarEquals, SyntaxKind.CaretEquals, SyntaxKind.LessThanLessThanEquals,
+        SyntaxKind.GreaterThanGreaterThanEquals, SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
+        SyntaxKind.BarBarEquals, SyntaxKind.AmpersandAmpersandEquals,
+        SyntaxKind.QuestionQuestionEquals -> false
+        else -> true
+    }
+
     private fun emitBinaryExpression(node: BinaryExpression) {
-        emitExpression(node.left)
+        // A ConditionalExpression on the left of a binary operator always needs parentheses
+        // because ternary has lower precedence than all binary operators. This arises from
+        // downleveled `?.` and `??` transformations where the transformer generates synthetic
+        // ConditionalExpression nodes without source-level parentheses.
+        if (node.left is ConditionalExpression) {
+            write("(")
+            emitExpression(node.left)
+            write(")")
+        } else {
+            emitExpression(node.left)
+        }
         val op = operatorToString(node.operator)
+        // Helper to emit the right operand, adding parens if it's a synthetic ConditionalExpression.
+        fun emitRight() {
+            if (node.right is ConditionalExpression && rightConditionalNeedsParens(node.operator)) {
+                write("(")
+                emitExpression(node.right)
+                write(")")
+            } else {
+                emitExpression(node.right)
+            }
+        }
         if (node.operator == SyntaxKind.InKeyword || node.operator == SyntaxKind.InstanceOfKeyword) {
             write(" $op ")
-            emitExpression(node.right)
+            emitRight()
         } else if (node.operator == SyntaxKind.Comma) {
             write("$op ")
-            emitExpression(node.right)
+            emitRight()
         } else if (node.operatorHasPrecedingLineBreak) {
             // Operator is on a new line in the source (possibly with comments before it).
             // Emit: newline, any leading comments, operator at indented position,
@@ -1956,7 +2001,7 @@ class Emitter(
                     write(" ")
                 }
             }
-            emitExpression(node.right)
+            emitRight()
         } else {
             // Operator is on the same line as left operand (no preceding newline).
             // left.end = position after the left operand token
@@ -1974,7 +2019,7 @@ class Emitter(
             } else {
                 write(" $op ")
             }
-            emitExpression(node.right)
+            emitRight()
         }
     }
 
