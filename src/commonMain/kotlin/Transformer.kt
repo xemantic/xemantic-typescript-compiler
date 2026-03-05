@@ -3302,7 +3302,20 @@ class Transformer(private val options: CompilerOptions) {
         if (scopeVars != null) {
             hoistedVarScopes.removeLast()
             if (scopeVars.isNotEmpty()) {
-                result.addAll(0, scopeVars.map { makeHoistedVar(it) })
+                // Emit all temp vars in a single `var _a, _b, _c;` declaration (TypeScript style)
+                val combined = if (scopeVars.size == 1) {
+                    listOf(makeHoistedVar(scopeVars[0]))
+                } else {
+                    listOf(VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = scopeVars.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
+                            flags = SyntaxKind.VarKeyword,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                }
+                result.addAll(0, combined)
             }
         }
 
@@ -3613,11 +3626,31 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             // Call: strip type arguments, recurse
-            is CallExpression -> expr.copy(
-                expression = transformExpression(expr.expression),
-                typeArguments = null,
-                arguments = expr.arguments.map { transformExpression(it) },
-            )
+            is CallExpression -> {
+                val transformedExpr = transformExpression(expr.expression)
+                val transformedArgs = expr.arguments.map { transformExpression(it) }
+                // Downlevel `?.()` optional call for targets below ES2020
+                if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
+                    val objRef: Expression
+                    val nullCheck: Expression
+                    if (transformedExpr is Identifier) {
+                        objRef = transformedExpr; nullCheck = transformedExpr
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = transformedExpr, pos = -1, end = -1), pos = -1, end = -1)
+                        objRef = tempId
+                    }
+                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(left = objRef, operator = SyntaxKind.EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val call = expr.copy(expression = objRef, typeArguments = null, arguments = transformedArgs, questionDotToken = false)
+                    ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = call, pos = -1, end = -1)
+                } else {
+                    expr.copy(expression = transformedExpr, typeArguments = null, arguments = transformedArgs)
+                }
+            }
 
             // New: strip type arguments, recurse
             is NewExpression -> {
@@ -3649,6 +3682,43 @@ class Transformer(private val options: CompilerOptions) {
 
             // Property access: check for const enum inlining first
             is PropertyAccessExpression -> {
+                // Downlevel `?.` optional chaining for targets below ES2020
+                if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
+                    val obj = transformExpression(expr.expression)
+                    val memberName = expr.name
+                    // For simple identifier: `a?.b` → `a === null || a === void 0 ? void 0 : a.b`
+                    // For complex LHS: use temp var
+                    val objRef: Expression
+                    val nullCheck: Expression
+                    if (obj is Identifier) {
+                        objRef = obj
+                        nullCheck = obj
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        nullCheck = ParenthesizedExpression(
+                            expression = BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = obj, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        objRef = tempId
+                    }
+                    // Build: `obj === null || obj === void 0 ? void 0 : obj.member`
+                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(
+                        left = objRef, operator = SyntaxKind.EqualsEqualsEquals,
+                        right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val access = expr.copy(expression = objRef, questionDotToken = false)
+                    return ConditionalExpression(
+                        condition = condition,
+                        whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        whenFalse = access,
+                        pos = -1, end = -1,
+                    )
+                }
                 val baseName = (expr.expression as? Identifier)?.text
                 val memberName = expr.name.text
                 if (baseName != null) {
@@ -3677,6 +3747,27 @@ class Transformer(private val options: CompilerOptions) {
 
             // Element access: check for const enum inlining (e.g. Foo["X"], Foo[`X`])
             is ElementAccessExpression -> {
+                // Downlevel `?.` optional element access for targets below ES2020
+                if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
+                    val obj = transformExpression(expr.expression)
+                    val key = transformExpression(expr.argumentExpression)
+                    val objRef: Expression
+                    val nullCheck: Expression
+                    if (obj is Identifier) {
+                        objRef = obj; nullCheck = obj
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = obj, pos = -1, end = -1), pos = -1, end = -1)
+                        objRef = tempId
+                    }
+                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(left = objRef, operator = SyntaxKind.EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val access = expr.copy(expression = objRef, argumentExpression = key, questionDotToken = false)
+                    return ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = access, pos = -1, end = -1)
+                }
                 val baseName = (expr.expression as? Identifier)?.text
                 val keyStr = when (val k = expr.argumentExpression) {
                     is StringLiteralNode -> k.text
