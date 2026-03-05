@@ -40,6 +40,10 @@ class Emitter(
     private var skipNextIndent = false
     // Original source text, used for multi-line expression formatting decisions.
     private var sourceText: String = ""
+    // Tracks whether we are still at the start of the file (before any statement's
+    // leading comments have been emitted). Used to preserve /*!...*/ pinned comments
+    // at file start even when removeComments=true.
+    private var atFileStart = true
 
     /**
      * Emits the given [sourceFile] as JavaScript and returns the resulting source text.
@@ -146,6 +150,7 @@ class Emitter(
                 continue
             }
             emitLeadingComments(statement)
+            atFileStart = false
             emitStatement(statement)
             emitTrailingCommentsBeforeNewline(statement)
         }
@@ -268,10 +273,39 @@ class Emitter(
 
     private fun emitVariableDeclaration(node: VariableDeclaration) {
         emitExpression(node.name)
+        // Emit same-line comments between the name/type and `=`
+        // e.g. `let e/*c*/: T = v` or `let d: T /*c*/ = v`
+        if (!options.removeComments) {
+            node.nameTrailingComments?.forEach { write(" "); write(it.text) }
+        }
         // skip type annotation
         if (node.initializer != null) {
             write(" = ")
+            // Emit inline comment between `=` and initializer value, e.g. `let a = /*c*/ {}`
+            if (!options.removeComments) {
+                val inlineComment = findInlineInitializerComment(node.initializer)
+                if (inlineComment != null) {
+                    write(inlineComment.text)
+                    write(" ")
+                }
+            }
             emitExpression(node.initializer)
+        }
+    }
+
+    /**
+     * Finds an inline (same-line) comment attached to the leftmost part of an initializer
+     * expression. For a simple expression like [comment] `{}`, the comment is on the object literal
+     * itself. For [comment] `d(e)`, it's on the identifier `d` inside the call expression.
+     */
+    private fun findInlineInitializerComment(expr: Expression): Comment? {
+        val own = expr.leadingComments?.firstOrNull { !it.hasPrecedingNewLine }
+        if (own != null) return own
+        return when (expr) {
+            is CallExpression -> findInlineInitializerComment(expr.expression)
+            is PropertyAccessExpression -> findInlineInitializerComment(expr.expression)
+            is ElementAccessExpression -> findInlineInitializerComment(expr.expression)
+            else -> null
         }
     }
 
@@ -2097,8 +2131,19 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitLeadingComments(node: Node) {
-        if (options.removeComments) return
         val comments = node.leadingComments ?: return
+        if (options.removeComments) {
+            // When removeComments=true, preserve only the first /*!...*/ "pinned" comment
+            // at the very start of the file (before any statement has been emitted).
+            if (atFileStart && comments.isNotEmpty() && comments[0].text.startsWith("/*!")) {
+                val comment = comments[0]
+                val commentText = reindentComment(comment)
+                writeIndent()
+                write(commentText)
+                writeNewLine()
+            }
+            return
+        }
         for (comment in comments) {
             val commentText = reindentComment(comment)
             if (!comment.hasTrailingNewLine && comment.kind == SyntaxKind.MultiLineComment) {

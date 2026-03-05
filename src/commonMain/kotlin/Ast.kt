@@ -467,6 +467,8 @@ data class VariableDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Same-line comments between the name (or type annotation) and the `=` initializer. */
+    val nameTrailingComments: List<Comment>? = null,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.VariableDeclaration
 }
