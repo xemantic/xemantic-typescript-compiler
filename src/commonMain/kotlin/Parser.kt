@@ -360,14 +360,23 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = parseExpression()
         parseExpected(SyntaxKind.CloseParen)
         val thenStmt = parseStatement() ?: EmptyStatement()
+        // Capture trailing comments from the then-block's closing brace BEFORE checking for else.
+        // This way `if (p) { } // err` captures the comment even when `else` follows on the next line.
+        // We must read now because nextToken() in parseOptional/ElseKeyword will reset trailingComments.
+        // Only capture if thenStmt didn't already capture them (e.g., block statements don't capture trailing).
+        val thenTrailing = if (token != SyntaxKind.ElseKeyword && thenStmt.trailingComments == null) {
+            trailingComments()
+        } else null
         val elseStmt = if (parseOptional(SyntaxKind.ElseKeyword)) parseStatement() else null
+        val trailing = if (elseStmt != null) trailingComments() else thenTrailing
         return IfStatement(
             expression = expr,
             thenStatement = thenStmt,
             elseStatement = elseStmt,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailing,
         )
     }
 
@@ -604,7 +613,8 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = leadingComments()
         nextToken()
-        val expr = parseExpression()
+        // Per spec: "No LineTerminator here" — if a line break precedes the expression, parse no expression.
+        val expr = if (!scanner.hasPrecedingLineBreak()) parseExpression() else null
         parseSemicolon()
         val trailing = trailingComments()
         return ThrowStatement(expression = expr, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
@@ -875,6 +885,8 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseSetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int): SetAccessor {
         val name = parsePropertyName()
         val params = parseParameterList()
+        // Setters cannot have a return type annotation, but parse it for error recovery (preserved in emit).
+        val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
         }
@@ -882,6 +894,7 @@ class Parser(private val source: String, private val fileName: String) {
         return SetAccessor(
             name = name,
             parameters = params,
+            type = type,
             body = body,
             modifiers = modifiers,
             pos = pos,
@@ -3187,9 +3200,16 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseIdentifier(): Identifier {
         val pos = getPos()
         if (isIdentifier() || isKeyword()) {
-            val text = scanner.getTokenValue()
+            val value = scanner.getTokenValue()
+            val raw = scanner.getTokenText()
+            // Only store rawText if it differs (contains \uXXXX escapes)
+            val rawText = if (raw != value) raw else null
+            // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
+            if (scanner.hasInvalidUnicodeEscapeInToken()) {
+                reportError("Invalid character.")
+            }
             nextToken()
-            return Identifier(text = text, pos = pos, end = getEnd())
+            return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
         } else {
             reportError("Identifier expected.")
             return Identifier(text = "", pos = pos, end = getEnd())
@@ -3198,9 +3218,15 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseIdentifierName(): Identifier {
         val pos = getPos()
-        val text = scanner.getTokenValue()
+        val value = scanner.getTokenValue()
+        val raw = scanner.getTokenText()
+        val rawText = if (raw != value) raw else null
+        // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
+        if (scanner.hasInvalidUnicodeEscapeInToken()) {
+            reportError("Invalid character.")
+        }
         nextToken()
-        return Identifier(text = text, pos = pos, end = getEnd())
+        return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
     }
 
     private fun parseStringLiteral(): StringLiteralNode {

@@ -270,7 +270,7 @@ data class LabeledStatement(
 }
 
 data class ThrowStatement(
-    val expression: Expression,
+    val expression: Expression?,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -490,12 +490,16 @@ data class VariableDeclarationList(
 
 data class Identifier(
     val text: String,
+    /** Raw source text for identifiers with \uXXXX escape sequences (e.g. `\u0061`); null if same as [text]. */
+    val rawText: String? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.Identifier
+    /** The text to emit: [rawText] if set (preserves \uXXXX escapes), otherwise [text]. */
+    val emitText: String get() = rawText ?: text
 }
 
 data class StringLiteralNode(
@@ -1078,6 +1082,7 @@ data class GetAccessor(
 data class SetAccessor(
     val name: NameNode,
     val parameters: List<Parameter>,
+    val type: TypeNode? = null,
     val body: Block? = null,
     val modifiers: Set<ModifierFlag> = emptySet(),
     val decorators: List<Decorator>? = null,
