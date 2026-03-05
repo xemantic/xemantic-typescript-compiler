@@ -479,7 +479,7 @@ class Emitter(
         emitTrailingComments(node.keywordTrailingComments)
         if (node.label != null) {
             write(" ")
-            write(node.label.text)
+            write(node.label.emitText)
             emitTrailingComments(node.labelTrailingComments)
         }
         write(";")
@@ -492,7 +492,7 @@ class Emitter(
         emitTrailingComments(node.keywordTrailingComments)
         if (node.label != null) {
             write(" ")
-            write(node.label.text)
+            write(node.label.emitText)
             emitTrailingComments(node.labelTrailingComments)
         }
         write(";")
@@ -620,7 +620,7 @@ class Emitter(
         // Chain all nested labels onto the same line: "target1: target2: while …"
         var current: Statement = node
         while (current is LabeledStatement) {
-            write(current.label.text)
+            write(current.label.emitText)
             write(": ")
             current = current.statement
         }
@@ -632,7 +632,9 @@ class Emitter(
     private fun emitThrowStatement(node: ThrowStatement) {
         writeIndent()
         write("throw ")
-        emitExpression(node.expression)
+        if (node.expression != null) {
+            emitExpression(node.expression)
+        }
         write(";")
         writeNewLine()
         // trailing comments handled by emitTrailingCommentsBeforeNewline in the outer emitStatements loop
@@ -690,7 +692,7 @@ class Emitter(
         }
         if (node.name != null) {
             write(" ")
-            write(node.name.text)
+            write(node.name.emitText)
         }
         write("(")
         emitParameters(node.parameters)
@@ -711,7 +713,7 @@ class Emitter(
         write("class")
         if (node.name != null) {
             write(" ")
-            write(node.name.text)
+            write(node.name.emitText)
         }
         // type parameters erased
         emitHeritageClauses(node.heritageClauses)
@@ -849,8 +851,27 @@ class Emitter(
         write("(")
         emitParameters(node.parameters)
         write(")")
+        // Setters normally cannot have a return type, but emit it as-is for error recovery.
+        if (node.type != null) {
+            write(": ")
+            write(typeNodeToKeywordText(node.type))
+        }
         emitBlockBody(node.body)
         writeNewLine()
+    }
+
+    /**
+     * Converts a [TypeNode] to its keyword text representation.
+     * Used for error-recovery cases where type annotations are preserved in JS emit
+     * (e.g., a setter with a return type annotation).
+     */
+    private fun typeNodeToKeywordText(typeNode: TypeNode): String = when (typeNode) {
+        is KeywordTypeNode -> KEYWORDS.entries.firstOrNull { it.value == typeNode.kind }?.key ?: "any"
+        is TypeReference -> when (val name = typeNode.typeName) {
+            is Identifier -> name.emitText
+            else -> "any"
+        }
+        else -> "any"
     }
 
     private fun emitSemicolonClassElement() {
@@ -874,22 +895,22 @@ class Emitter(
             write("export ")
         }
         write("var ")
-        write(node.name.text)
+        write(node.name.emitText)
         write(";")
         writeNewLine()
-        writeLine("(function (${node.name.text}) {")
+        writeLine("(function (${node.name.emitText}) {")
         indentLevel++
         for (member in node.members) {
-            emitEnumMember(node.name.text, member)
+            emitEnumMember(node.name.emitText, member)
         }
         indentLevel--
-        writeLine("})(${node.name.text} || (${node.name.text} = {}));")
+        writeLine("})(${node.name.emitText} || (${node.name.emitText} = {}));")
     }
 
     private fun emitEnumMember(enumName: String, member: EnumMember) {
         writeIndent()
         val memberName = when (val n = member.name) {
-            is Identifier -> n.text
+            is Identifier -> n.emitText
             is StringLiteralNode -> n.text
             else -> "unknown"
         }
@@ -915,7 +936,7 @@ class Emitter(
         }
         // Emit as IIFE pattern for namespaces
         val name = when (val n = node.name) {
-            is Identifier -> n.text
+            is Identifier -> n.emitText
             is StringLiteralNode -> "\"${n.text}\""
             else -> "unknown"
         }
@@ -972,7 +993,7 @@ class Emitter(
         val hasBindings = hasNamedImports || hasNamespaceImport
 
         if (hasName) {
-            write(node.name.text)
+            write(node.name.emitText)
             if (hasBindings) {
                 write(", ")
             }
@@ -981,7 +1002,7 @@ class Emitter(
             when (val bindings = node.namedBindings) {
                 is NamespaceImport -> {
                     write("* as ")
-                    write(bindings.name.text)
+                    write(bindings.name.emitText)
                 }
 
                 is NamedImports -> {
@@ -989,10 +1010,10 @@ class Emitter(
                     for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
                         if (index > 0) write(", ")
                         if (specifier.propertyName != null) {
-                            write(specifier.propertyName.text)
+                            write(specifier.propertyName.emitText)
                             write(" as ")
                         }
-                        write(specifier.name.text)
+                        write(specifier.name.emitText)
                     }
                     write(" }")
                 }
@@ -1010,7 +1031,7 @@ class Emitter(
             write("export ")
         }
         write("var ")
-        write(node.name.text)
+        write(node.name.emitText)
         write(" = ")
         emitModuleReference(node.moduleReference)
         write(";")
@@ -1025,11 +1046,11 @@ class Emitter(
                 write(")")
             }
 
-            is Identifier -> write(node.text)
+            is Identifier -> write(node.emitText)
             is QualifiedName -> {
                 emitModuleReference(node.left)
                 write(".")
-                write(node.right.text)
+                write(node.right.emitText)
             }
 
             else -> { /* should not happen */
@@ -1060,10 +1081,10 @@ class Emitter(
                     for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
                         if (index > 0) write(", ")
                         if (specifier.propertyName != null) {
-                            write(specifier.propertyName.text)
+                            write(specifier.propertyName.emitText)
                             write(" as ")
                         }
-                        write(specifier.name.text)
+                        write(specifier.name.emitText)
                     }
                     write(" }")
                     if (node.moduleSpecifier != null) {
@@ -1075,7 +1096,7 @@ class Emitter(
 
             is NamespaceExport -> {
                 write(" * as ")
-                write(exportClause.name.text)
+                write(exportClause.name.emitText)
                 if (node.moduleSpecifier != null) {
                     write(" from ")
                     emitExpression(node.moduleSpecifier)
@@ -1177,13 +1198,13 @@ class Emitter(
 
             is BreakStatement -> {
                 write("break")
-                if (stmt.label != null) { write(" "); write(stmt.label.text) }
+                if (stmt.label != null) { write(" "); write(stmt.label.emitText) }
                 write(";")
             }
 
             is ContinueStatement -> {
                 write("continue")
-                if (stmt.label != null) { write(" "); write(stmt.label.text) }
+                if (stmt.label != null) { write(" "); write(stmt.label.emitText) }
                 write(";")
             }
 
@@ -1214,7 +1235,9 @@ class Emitter(
 
             is ThrowStatement -> {
                 write("throw ")
-                emitExpression(stmt.expression)
+                if (stmt.expression != null) {
+                    emitExpression(stmt.expression)
+                }
                 write(";")
             }
 
@@ -1361,7 +1384,7 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitIdentifier(node: Identifier) {
-        write(node.text)
+        write(node.emitText)
     }
 
     private fun emitStringLiteral(node: StringLiteralNode) {
@@ -1617,7 +1640,7 @@ class Emitter(
     }
 
     private fun emitShorthandPropertyAssignment(node: ShorthandPropertyAssignment) {
-        write(node.name.text)
+        write(node.name.emitText)
         if (node.objectAssignmentInitializer != null) {
             write(" = ")
             emitExpression(node.objectAssignmentInitializer)
@@ -1694,7 +1717,7 @@ class Emitter(
 
     private fun emitPropertyName(name: Expression) {
         when (name) {
-            is Identifier -> write(name.text)
+            is Identifier -> write(name.emitText)
             is StringLiteralNode -> emitStringLiteral(name)
             is NumericLiteralNode -> write(name.text)
             is ComputedPropertyName -> emitComputedPropertyName(name)
@@ -1740,7 +1763,7 @@ class Emitter(
             writeIndent()
             indentLevel--
         }
-        write(node.name.text)
+        write(node.name.emitText)
     }
 
     /** True if a numeric literal text needs an extra '.' before property access
@@ -1854,7 +1877,7 @@ class Emitter(
                 && node.parameters[0].name is Identifier
                 && !node.hasParenthesizedParameters
         if (singleSimpleParam) {
-            write((node.parameters[0].name as Identifier).text)
+            write((node.parameters[0].name as Identifier).emitText)
         } else {
             write("(")
             emitParameters(node.parameters)
@@ -2157,7 +2180,7 @@ class Emitter(
         write("class")
         if (node.name != null) {
             write(" ")
-            write(node.name.text)
+            write(node.name.emitText)
         }
         // type parameters erased
         emitHeritageClauses(node.heritageClauses)
@@ -2177,7 +2200,7 @@ class Emitter(
             else -> write("unknown")
         }
         write(".")
-        write(node.name.text)
+        write(node.name.emitText)
     }
 
     // ---------------------------------------------------------------------------

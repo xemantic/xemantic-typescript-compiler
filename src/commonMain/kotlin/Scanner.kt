@@ -62,6 +62,12 @@ class Scanner(private val text: String) {
     /** Whether any token has been scanned yet (to handle leading comments at start of file). */
     private var hasScannedToken: Boolean = false
 
+    /** Whether the last scanned token had an invalid unicode escape sequence. */
+    private var hasInvalidUnicodeEscape: Boolean = false
+
+    /** Returns true if the last scanned identifier had an invalid unicode escape. */
+    fun hasInvalidUnicodeEscapeInToken(): Boolean = hasInvalidUnicodeEscape
+
     // -- Public getters -------------------------------------------------------
 
     /** Returns the [SyntaxKind] of the current token. */
@@ -172,6 +178,7 @@ class Scanner(private val text: String) {
 
         tokenPos = pos
         tokenValue = ""
+        hasInvalidUnicodeEscape = false
 
         if (pos >= end) {
             token = SyntaxKind.EndOfFile
@@ -181,8 +188,9 @@ class Scanner(private val text: String) {
         val ch = text[pos]
 
         token = when {
-            // Identifiers and keywords
-            isIdentifierStart(ch) -> scanIdentifierOrKeyword()
+            // Identifiers and keywords (including \uXXXX escape sequences at start)
+            isIdentifierStart(ch) || (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' &&
+                    pos + 2 < end && (text[pos + 2] == '{' || isHexDigit(text[pos + 2]))) -> scanIdentifierOrKeyword()
 
             // Numeric literals
             isDigit(ch) -> scanNumericLiteral()
@@ -438,16 +446,99 @@ class Scanner(private val text: String) {
         }
     }
 
+    /** Returns true if `\uXXXX` or `\u{XXXX}` escape appears to be valid (has hex digits or `{`) at current pos. */
+    private fun looksLikeUnicodeEscape(): Boolean {
+        // pos is at the char after 'u' (i.e., the third char of \uX...)
+        return pos < end && (text[pos] == '{' || isHexDigit(text[pos]))
+    }
+
     private fun scanIdentifierOrKeyword(): SyntaxKind {
         val start = pos
+        // Check if this identifier starts with a \uXXXX escape sequence
+        if (pos < end && text[pos] == '\\') {
+            return scanIdentifierWithEscapes(start)
+        }
         pos++ // consume the first character (already verified as identifier start)
-        while (pos < end && isIdentifierPart(text[pos])) {
+        while (pos < end) {
+            val ch = text[pos]
+            // Only treat \u as mid-identifier escape if followed by hex digit or '{'
+            if (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u') {
+                val savedPos = pos
+                pos += 2 // skip '\u' to check what follows
+                val hasValidEscapeStart = looksLikeUnicodeEscape()
+                pos = savedPos // restore
+                if (hasValidEscapeStart) {
+                    return scanIdentifierWithEscapes(start)
+                } else {
+                    break // stop identifier at \u that has no valid hex following
+                }
+            }
+            if (!isIdentifierPart(ch)) break
             pos++
         }
         val word = text.substring(start, pos)
         tokenValue = word
 
         val keywordKind = KEYWORDS[word]
+        return keywordKind ?: SyntaxKind.Identifier
+    }
+
+    /**
+     * Scans an identifier that contains at least one \uXXXX escape sequence.
+     * The tokenValue is set to the decoded string (for keyword matching),
+     * but the raw text (text.substring(start, pos)) is preserved for emit.
+     */
+    private fun scanIdentifierWithEscapes(start: Int): SyntaxKind {
+        val sb = StringBuilder()
+        // Include any already-scanned non-escape characters before the first escape
+        val prefixLen = pos - start
+        sb.append(text.substring(start, pos))
+        var firstDecodedChar: Char? = null
+        while (pos < end) {
+            val ch = text[pos]
+            when {
+                ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' -> {
+                    pos += 2 // skip '\u'
+                    val decoded = if (pos < end && text[pos] == '{') {
+                        // \u{HHHH}
+                        pos++ // skip '{'
+                        val hexStart = pos
+                        while (pos < end && isHexDigit(text[pos])) pos++
+                        val hexStr = text.substring(hexStart, pos)
+                        val hasClosingBrace = pos < end && text[pos] == '}'
+                        if (hasClosingBrace) pos++ // skip '}'
+                        if (hexStr.isEmpty() || !hasClosingBrace) {
+                            hasInvalidUnicodeEscape = true
+                            if (hexStr.isEmpty()) "" else codePointToString(hexStr.toInt(16))
+                        } else codePointToString(hexStr.toInt(16))
+                    } else {
+                        // \uHHHH - must have exactly 4 hex digits
+                        val hexStart = pos
+                        repeat(4) { if (pos < end && isHexDigit(text[pos])) pos++ }
+                        val hexStr = text.substring(hexStart, pos)
+                        if (hexStr.length != 4) {
+                            hasInvalidUnicodeEscape = true
+                            if (hexStr.isEmpty()) "" else hexStr.toInt(16).toChar().toString()
+                        } else hexStr.toInt(16).toChar().toString()
+                    }
+                    if (firstDecodedChar == null && prefixLen == 0 && sb.isEmpty() && decoded.isNotEmpty()) {
+                        firstDecodedChar = decoded[0]
+                    }
+                    sb.append(decoded)
+                }
+                isIdentifierPart(ch) -> {
+                    sb.append(ch)
+                    pos++
+                }
+                else -> break
+            }
+        }
+        // If the identifier starts with an escape and the decoded first char is not a valid identifier start, flag it
+        if (prefixLen == 0 && firstDecodedChar != null && !isIdentifierStart(firstDecodedChar)) {
+            hasInvalidUnicodeEscape = true
+        }
+        tokenValue = sb.toString()
+        val keywordKind = KEYWORDS[tokenValue]
         return keywordKind ?: SyntaxKind.Identifier
     }
 
@@ -1056,7 +1147,7 @@ class Scanner(private val text: String) {
 
         /** Returns `true` if [ch] is a whitespace character (excluding line breaks). */
         fun isWhitespace(ch: Char): Boolean = when (ch) {
-            ' ', '\t', '\u000B', '\u000C', '\u00A0',
+            ' ', '\t', '\u000B', '\u000C', '\u0085', '\u00A0',
             '\u1680', '\u2000', '\u2001', '\u2002', '\u2003',
             '\u2004', '\u2005', '\u2006', '\u2007', '\u2008',
             '\u2009', '\u200A', '\u202F', '\u205F', '\u3000',

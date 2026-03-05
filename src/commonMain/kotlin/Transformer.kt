@@ -95,6 +95,14 @@ class Transformer(private val options: CompilerOptions) {
     // Counter for generating unique temp variable names (_a, _b, _c, ...).
     private var tempVarCounter = 0
 
+    // Whether we are currently transforming inside an async function body being rewritten to
+    // __awaiter form. When true, AwaitExpression nodes are converted to YieldExpression.
+    private var inAsyncBody = false
+
+    // Set to true when any async function/arrow is transformed to __awaiter form.
+    // Causes the __awaiter helper to be prepended to the output statements.
+    private var needsAwaiterHelper = false
+
     // Top-level names that are declared ONLY as interfaces or type aliases (no runtime value).
     // Used to filter export specifiers that refer to type-only names, e.g. `export { A, B }`
     // where A and B are interfaces — TypeScript erases these and emits `export {}` instead.
@@ -110,6 +118,8 @@ class Transformer(private val options: CompilerOptions) {
         sourceText = sourceFile.text
         hasSeenRuntimeStatement = false
         hasSeenAnyTopLevelStatement = false
+        inAsyncBody = false
+        needsAwaiterHelper = false
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
         // are interfaces — TypeScript erases them and may produce `export {}` to preserve module semantics.
@@ -145,27 +155,32 @@ class Transformer(private val options: CompilerOptions) {
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
+        // Inject __awaiter helper if any async function was downleveled
+        val withAwaiter = if (needsAwaiterHelper) {
+            listOf(RawStatement(code = AWAITER_HELPER)) + transformed
+        } else transformed
+
         // CommonJS module transform
         if (options.effectiveModule == ModuleKind.CommonJS && isModuleFile(sourceFile)) {
-            val cjsStatements = transformToCommonJS(transformed, sourceFile)
+            val cjsStatements = transformToCommonJS(withAwaiter, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
         }
 
         // AMD module transform — only for module files (files with imports/exports).
         // Non-module files in AMD format are emitted as-is (no define wrapper).
         if (options.effectiveModule == ModuleKind.AMD && isModuleFile(sourceFile)) {
-            val amdStatements = transformToAMD(transformed, sourceFile)
+            val amdStatements = transformToAMD(withAwaiter, sourceFile)
             return sourceFile.copy(statements = amdStatements)
         }
 
         // System module transform — only for module files.
         if (options.effectiveModule == ModuleKind.System && isModuleFile(sourceFile)) {
-            val sysStatements = transformToSystem(transformed, sourceFile)
+            val sysStatements = transformToSystem(withAwaiter, sourceFile)
             return sourceFile.copy(statements = sysStatements)
         }
 
         // ES module import elision: erase imports whose bindings are unused in value positions
-        val elided = elideUnusedESModuleImports(transformed)
+        val elided = elideUnusedESModuleImports(withAwaiter)
 
         // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
         // only when x is unused AND the aliased module reference roots into a namespace
@@ -3396,7 +3411,7 @@ class Transformer(private val options: CompilerOptions) {
             )
 
             is ThrowStatement -> listOf(
-                statement.copy(expression = transformExpression(statement.expression))
+                statement.copy(expression = statement.expression?.let { transformExpression(it) })
             )
 
             is TryStatement -> listOf(transformTryStatement(statement))
@@ -3464,14 +3479,51 @@ class Transformer(private val options: CompilerOptions) {
         if (decl.body == null) return emptyList()
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers)
+        val isAsync = ModifierFlag.Async in decl.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+        val prevInAsyncBody = inAsyncBody
+        inAsyncBody = isAsync
+        val transformedBody = transformBlock(decl.body, isFunctionScope = true)
+        inAsyncBody = prevInAsyncBody
+
+        if (isAsync) {
+            needsAwaiterHelper = true
+            val awaiterBody = Block(
+                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), transformedBody))),
+                multiLine = true,
+            )
+            return listOf(decl.copy(
+                typeParameters = null,
+                parameters = transformParameters(decl.parameters),
+                type = null,
+                body = awaiterBody,
+                modifiers = strippedModifiers - ModifierFlag.Async,
+                asteriskToken = false,
+            ))
+        }
         return listOf(
             decl.copy(
                 typeParameters = null,
                 parameters = transformParameters(decl.parameters),
                 type = null,
-                body = transformBlock(decl.body, isFunctionScope = true),
+                body = transformedBody,
                 modifiers = strippedModifiers,
             )
+        )
+    }
+
+    /** Builds `__awaiter(thisArg, void 0, void 0, function* () { body })`. */
+    private fun makeAwaiterCall(thisArg: Expression, body: Block): CallExpression {
+        val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+        val generatorFn = FunctionExpression(
+            parameters = emptyList(),
+            body = body,
+            asteriskToken = true,
+            pos = -1, end = -1,
+        )
+        return CallExpression(
+            expression = syntheticId("__awaiter"),
+            arguments = listOf(thisArg, void0, void0, generatorFn),
+            pos = -1, end = -1,
         )
     }
 
@@ -3795,23 +3847,77 @@ class Transformer(private val options: CompilerOptions) {
                 }
             }
 
-            // Arrow function: strip types
-            is ArrowFunction -> expr.copy(
-                typeParameters = null,
-                parameters = transformParameters(expr.parameters),
-                type = null,
-                body = transformArrowBody(expr.body),
-                modifiers = stripTypeScriptModifiers(expr.modifiers),
-            )
+            // Arrow function: strip types (and downlevel async if target < ES2017)
+            is ArrowFunction -> {
+                val strippedModifiers = stripTypeScriptModifiers(expr.modifiers)
+                val isAsync = ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+                val prevInAsyncBody = inAsyncBody
+                inAsyncBody = isAsync
+                val transformedBody: Node = when (val b = expr.body) {
+                    is Block -> transformBlock(b, isFunctionScope = true)
+                    is Expression -> transformExpression(b)
+                    else -> b
+                }
+                inAsyncBody = prevInAsyncBody
+                if (isAsync) {
+                    needsAwaiterHelper = true
+                    val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+                    val generatorBody: Block = when (transformedBody) {
+                        is Block -> transformedBody
+                        is Expression -> Block(statements = listOf(ReturnStatement(expression = transformedBody)), multiLine = false)
+                        else -> Block(statements = emptyList(), multiLine = false)
+                    }
+                    expr.copy(
+                        typeParameters = null,
+                        parameters = transformParameters(expr.parameters),
+                        type = null,
+                        body = makeAwaiterCall(void0, generatorBody),
+                        modifiers = strippedModifiers - ModifierFlag.Async,
+                        hasParenthesizedParameters = true,
+                    )
+                } else {
+                    expr.copy(
+                        typeParameters = null,
+                        parameters = transformParameters(expr.parameters),
+                        type = null,
+                        body = transformedBody,
+                        modifiers = strippedModifiers,
+                    )
+                }
+            }
 
-            // Function expression: strip types
-            is FunctionExpression -> expr.copy(
-                typeParameters = null,
-                parameters = transformParameters(expr.parameters),
-                type = null,
-                body = transformBlock(expr.body, isFunctionScope = true),
-                modifiers = stripTypeScriptModifiers(expr.modifiers),
-            )
+            // Function expression: strip types (and downlevel async if target < ES2017)
+            is FunctionExpression -> {
+                val strippedModifiers = stripTypeScriptModifiers(expr.modifiers)
+                val isAsync = ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+                val prevInAsyncBody = inAsyncBody
+                inAsyncBody = isAsync
+                val transformedBody = transformBlock(expr.body, isFunctionScope = true)
+                inAsyncBody = prevInAsyncBody
+                if (isAsync) {
+                    needsAwaiterHelper = true
+                    val awaiterBody = Block(
+                        statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), transformedBody))),
+                        multiLine = true,
+                    )
+                    expr.copy(
+                        typeParameters = null,
+                        parameters = transformParameters(expr.parameters),
+                        type = null,
+                        body = awaiterBody,
+                        modifiers = strippedModifiers - ModifierFlag.Async,
+                        asteriskToken = false,
+                    )
+                } else {
+                    expr.copy(
+                        typeParameters = null,
+                        parameters = transformParameters(expr.parameters),
+                        type = null,
+                        body = transformedBody,
+                        modifiers = strippedModifiers,
+                    )
+                }
+            }
 
             // Class expression: apply class transforms
             is ClassExpression -> transformClassExpression(expr)
@@ -3870,10 +3976,20 @@ class Transformer(private val options: CompilerOptions) {
                 expression = transformExpression(expr.expression),
             )
 
-            // Await
-            is AwaitExpression -> expr.copy(
-                expression = transformExpression(expr.expression),
-            )
+            // Await: convert to yield when inside a downleveled async body
+            is AwaitExpression -> {
+                val transformedInner = transformExpression(expr.expression)
+                if (inAsyncBody) {
+                    YieldExpression(
+                        expression = transformedInner,
+                        leadingComments = expr.leadingComments,
+                        trailingComments = expr.trailingComments,
+                        pos = -1, end = -1,
+                    )
+                } else {
+                    expr.copy(expression = transformedInner)
+                }
+            }
 
             // Array literal
             is ArrayLiteralExpression -> expr.copy(
@@ -3998,12 +4114,33 @@ class Transformer(private val options: CompilerOptions) {
     }
 
     private fun transformMethodDeclarationElement(method: MethodDeclaration): MethodDeclaration {
+        val strippedModifiers = stripMemberModifiers(method.modifiers)
+        val isAsync = ModifierFlag.Async in method.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+        val prevInAsyncBody = inAsyncBody
+        inAsyncBody = isAsync
+        val transformedBody = method.body?.let { transformBlock(it, isFunctionScope = true) }
+        inAsyncBody = prevInAsyncBody
+        if (isAsync && transformedBody != null) {
+            needsAwaiterHelper = true
+            val awaiterBody = Block(
+                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), transformedBody))),
+                multiLine = true,
+            )
+            return method.copy(
+                typeParameters = null,
+                parameters = transformParameters(method.parameters),
+                type = null,
+                body = awaiterBody,
+                modifiers = strippedModifiers - ModifierFlag.Async,
+                asteriskToken = false,
+            )
+        }
         return method.copy(
             typeParameters = null,
             parameters = transformParameters(method.parameters),
             type = null,
-            body = method.body?.let { transformBlock(it, isFunctionScope = true) },
-            modifiers = stripMemberModifiers(method.modifiers),
+            body = transformedBody,
+            modifiers = strippedModifiers,
         )
     }
 
@@ -4527,17 +4664,18 @@ class Transformer(private val options: CompilerOptions) {
 
         // Parameter properties: this.x = x
         for (param in paramProperties) {
-            val paramName = extractIdentifierName(param.name) ?: continue
+            val paramId = param.name as? Identifier ?: continue
+            val syntheticParamId = paramId.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
             propInitStatements.add(
                 ExpressionStatement(
                     expression = BinaryExpression(
                         left = PropertyAccessExpression(
                             expression = syntheticId("this"),
-                            name = Identifier(text = paramName, pos = -1, end = -1),
+                            name = syntheticParamId,
                             pos = -1, end = -1,
                         ),
                         operator = SyntaxKind.Equals,
-                        right = Identifier(text = paramName, pos = -1, end = -1),
+                        right = syntheticParamId,
                         pos = -1, end = -1,
                     ),
                     pos = -1, end = -1,
@@ -4549,11 +4687,11 @@ class Transformer(private val options: CompilerOptions) {
         if (!useDefineForClassFields) {
             for (prop in instanceProperties) {
                 if (prop.initializer != null) {
-                    val propName = extractIdentifierName(prop.name)
+                    val propId = prop.name as? Identifier
                     val lhs: Expression? = when {
-                        propName != null -> PropertyAccessExpression(
+                        propId != null -> PropertyAccessExpression(
                             expression = syntheticId("this"),
-                            name = Identifier(text = propName, pos = -1, end = -1),
+                            name = propId.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
                             pos = -1, end = -1,
                         )
                         prop.name is NumericLiteralNode -> ElementAccessExpression(
@@ -6185,7 +6323,7 @@ class Transformer(private val options: CompilerOptions) {
             is ForInStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
             is ForOfStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
             is ReturnStatement -> collectRefsFromNode(node.expression, refs)
-            is ThrowStatement -> collectRefsFromNode(node.expression, refs)
+            is ThrowStatement -> { if (node.expression != null) collectRefsFromNode(node.expression, refs) }
             is LabeledStatement -> collectRefsFromNode(node.statement, refs)
             is WithStatement -> { collectRefsFromNode(node.expression, refs); collectRefsFromNode(node.statement, refs) }
             is TryStatement -> {
@@ -6318,7 +6456,7 @@ class Transformer(private val options: CompilerOptions) {
             )
         )
         is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
-        is ThrowStatement -> stmt.copy(expression = rewriteId(stmt.expression, map, wrapCallsWithZero))
+        is ThrowStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
         is IfStatement -> stmt.copy(
             expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
             thenStatement = rewriteIdInStatement(stmt.thenStatement, map, wrapCallsWithZero),
@@ -6547,6 +6685,18 @@ class Transformer(private val options: CompilerOptions) {
     }
 
     companion object {
+        /** TypeScript `__awaiter` helper — emitted at the top of files with downleveled async functions. */
+        val AWAITER_HELPER = """var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+"""
+
         /** TypeScript CJS `__createBinding` helper — needed by both `__importStar` and `__exportStar`. */
         val CREATE_BINDING_HELPER = """var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
