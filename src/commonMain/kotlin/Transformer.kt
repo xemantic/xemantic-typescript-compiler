@@ -103,6 +103,7 @@ class Transformer(private val options: CompilerOptions) {
     // Causes the __awaiter helper to be prepended to the output statements.
     private var needsAwaiterHelper = false
 
+
     // Top-level names that are declared ONLY as interfaces or type aliases (no runtime value).
     // Used to filter export specifiers that refer to type-only names, e.g. `export { A, B }`
     // where A and B are interfaces — TypeScript erases these and emits `export {}` instead.
@@ -156,12 +157,16 @@ class Transformer(private val options: CompilerOptions) {
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
         // Inject __awaiter helper if any async function was downleveled.
-        // If the first statement has leading comments, lift them to a NotEmittedStatement
-        // placed before the helper, so they appear in the correct order in the output.
+        // When the FIRST original statement itself contains async code, TypeScript emits
+        // its leading comments BEFORE the helper (comment → __awaiter → stmt). When async
+        // code appears in a later statement, __awaiter goes first and comments stay with
+        // their statements.
         val withAwaiter = if (needsAwaiterHelper) {
+            val firstOrigStmt = sourceFile.statements.firstOrNull()
+            val firstOrigIsAsync = firstOrigStmt != null && statementContainsAsync(firstOrigStmt)
             val firstStmt = transformed.firstOrNull()
             val firstComments = firstStmt?.leadingComments
-            if (!firstComments.isNullOrEmpty()) {
+            if (firstOrigIsAsync && !firstComments.isNullOrEmpty()) {
                 val commentHolder = NotEmittedStatement(leadingComments = firstComments)
                 val firstStripped: Statement? = when (firstStmt) {
                     is VariableStatement -> firstStmt.copy(leadingComments = null)
@@ -348,6 +353,9 @@ class Transformer(private val options: CompilerOptions) {
         var needsImportStar = false
         var needsImportDefault = false
         var needsExportStar = false
+
+        // Counter for anonymous export default functions (default_1, default_2, ...)
+        var anonDefaultCounter = 0
 
         // Counter for generating unique temp names per module base name (e.g. b_1, b_2)
         val moduleNameCounter = mutableMapOf<String, Int>()
@@ -552,16 +560,25 @@ class Transformer(private val options: CompilerOptions) {
 
                     if (isExported) {
                         val strippedModifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default
-                        val emitted = stmt.copy(modifiers = strippedModifiers)
                         val name = stmt.name?.text
                         if (isDefault) {
-                            if (name != null && !hasExportEquals) {
-                                // exports.default = foo goes in stubs (before function declaration),
-                                // since function declarations are JS-hoisted and available early.
-                                functionExportStubs.add(makeExportAssignment("default", syntheticId(name)))
+                            if (name != null) {
+                                if (!hasExportEquals) {
+                                    // exports.default = foo goes in stubs (before function declaration),
+                                    // since function declarations are JS-hoisted and available early.
+                                    functionExportStubs.add(makeExportAssignment("default", syntheticId(name)))
+                                }
+                                result.add(stmt.copy(modifiers = strippedModifiers))
+                            } else {
+                                // Anonymous export default function: assign synthetic name "default_N"
+                                val anonName = "default_${++anonDefaultCounter}"
+                                if (!hasExportEquals) {
+                                    functionExportStubs.add(makeExportAssignment("default", syntheticId(anonName)))
+                                }
+                                result.add(stmt.copy(modifiers = strippedModifiers, name = syntheticId(anonName)))
                             }
-                            result.add(emitted)
                         } else {
+                            val emitted = stmt.copy(modifiers = strippedModifiers)
                             if (name != null && !hasExportEquals) {
                                 // Collect stub to insert after void0 hoists (before var initializers),
                                 // since function declarations are hoisted and can be referenced early.
@@ -580,18 +597,25 @@ class Transformer(private val options: CompilerOptions) {
 
                     if (isExported) {
                         val strippedModifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default
-                        val emitted = stmt.copy(modifiers = strippedModifiers)
-                        result.add(emitted)
                         val name = stmt.name?.text
-                        if (name != null) {
-                            if (isDefault) {
-                                if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(name)))
-                            } else {
-                                // Hoist exports.ClassName = void 0.
-                                // When hasExportEquals, skip the exports.C = C; assignment
-                                // (module.exports = X replaces all named exports).
-                                if (name !in exportedVarNames) exportedVarNames.add(name)
-                                if (!hasExportEquals) result.add(makeExportAssignment(name))
+                        if (isDefault && name == null) {
+                            // Anonymous export default class: assign synthetic name "default_N"
+                            val anonName = "default_${++anonDefaultCounter}"
+                            result.add(stmt.copy(modifiers = strippedModifiers, name = syntheticId(anonName)))
+                            if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(anonName)))
+                        } else {
+                            val emitted = stmt.copy(modifiers = strippedModifiers)
+                            result.add(emitted)
+                            if (name != null) {
+                                if (isDefault) {
+                                    if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(name)))
+                                } else {
+                                    // Hoist exports.ClassName = void 0.
+                                    // When hasExportEquals, skip the exports.C = C; assignment
+                                    // (module.exports = X replaces all named exports).
+                                    if (name !in exportedVarNames) exportedVarNames.add(name)
+                                    if (!hasExportEquals) result.add(makeExportAssignment(name))
+                                }
                             }
                         }
                     } else {
@@ -6732,6 +6756,32 @@ class Transformer(private val options: CompilerOptions) {
         is PrefixUnaryExpression -> true
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
         is AwaitExpression, is YieldExpression -> true
+        else -> false
+    }
+
+    /**
+     * Returns true if [stmt] is a variable statement (or expression statement) whose
+     * initializer is an async arrow/function expression. Used to decide whether to
+     * lift leading comments before the injected `__awaiter` helper.
+     *
+     * TypeScript emits the first statement's comments BEFORE `__awaiter` only when
+     * that statement is a variable declaration with an async initializer expression
+     * (e.g. `let foo = (async bar => bar)`). Top-level `async function` declarations
+     * keep their comments AFTER `__awaiter`.
+     */
+    private fun statementContainsAsync(stmt: Statement): Boolean = when (stmt) {
+        is VariableStatement -> stmt.declarationList.declarations.any { decl ->
+            exprContainsTopLevelAsync(decl.initializer)
+        }
+        is ExpressionStatement -> exprContainsTopLevelAsync(stmt.expression)
+        else -> false
+    }
+
+    private fun exprContainsTopLevelAsync(expr: Expression?): Boolean = when (expr) {
+        null -> false
+        is ArrowFunction -> ModifierFlag.Async in expr.modifiers
+        is FunctionExpression -> ModifierFlag.Async in expr.modifiers
+        is ParenthesizedExpression -> exprContainsTopLevelAsync(expr.expression)
         else -> false
     }
 
