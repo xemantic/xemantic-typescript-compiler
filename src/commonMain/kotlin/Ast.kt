@@ -87,6 +87,8 @@ data class SourceFile(
 data class Block(
     val statements: List<Statement>,
     val multiLine: Boolean = true,
+    /** Comments on the same line as the opening `{` (e.g., `{ // error`). */
+    val openBraceTrailingComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -121,6 +123,8 @@ data class ExpressionStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Inline comments between the expression and `;` (e.g. `/*3*/` in `Array /*3*/;`). */
+    val preSemicolonComments: List<Comment>? = null,
 ) : Statement {
     override val kind: SyntaxKind = SyntaxKind.ExpressionStatement
 }
@@ -199,6 +203,8 @@ data class ForOfStatement(
 
 data class ContinueStatement(
     val label: Identifier? = null,
+    val keywordTrailingComments: List<Comment>? = null,
+    val labelTrailingComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -209,6 +215,8 @@ data class ContinueStatement(
 
 data class BreakStatement(
     val label: Identifier? = null,
+    val keywordTrailingComments: List<Comment>? = null,
+    val labelTrailingComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -245,6 +253,7 @@ data class SwitchStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    val closingComments: List<Comment>? = null,
 ) : Statement {
     override val kind: SyntaxKind = SyntaxKind.SwitchStatement
 }
@@ -490,6 +499,8 @@ data class Identifier(
 data class StringLiteralNode(
     val text: String,
     val singleQuote: Boolean = false,
+    /** Raw source content between the quotes, preserving escape sequences (e.g. `\u2730`). */
+    val rawText: String? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -568,6 +579,8 @@ data class ArrayLiteralExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Inline comments that appear right after `[` without a preceding newline. */
+    val openBracketComments: List<Comment>? = null,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayLiteralExpression
 }
@@ -590,6 +603,8 @@ data class PropertyAccessExpression(
     val questionDotToken: Boolean = false,
     /** True when the `.` appears on a new line relative to the preceding expression (chained calls). */
     val newLineBefore: Boolean = false,
+    /** True when the property name appears on a new line after the `.` (dot at end of previous line). */
+    val newLineAfterDot: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -875,6 +890,23 @@ data class OmittedExpression(
 }
 
 /**
+ * A synthesized comma-list expression wrapped in parentheses, emitted with each
+ * element on its own line. Used for class expressions with static properties:
+ *   `var v = (_a = class C { }, _a.x = 1, _a)`
+ * but formatted as:
+ *   `var v = (_a = class C {\n    },\n    _a.x = 1,\n    _a);`
+ */
+data class CommaListExpression(
+    val elements: List<Expression>,
+    override val pos: Int = -1,
+    override val end: Int = -1,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Expression {
+    override val kind: SyntaxKind = SyntaxKind.Unknown
+}
+
+/**
  * Returns a copy of this expression with [comments] as its leading comments.
  * Used to propagate leading trivia comments (e.g., inside array literals).
  * Falls back to `this` for uncommon expression types.
@@ -916,9 +948,54 @@ fun Expression.withLeadingComments(comments: List<Comment>?): Expression {
         is SatisfiesExpression -> copy(leadingComments = comments)
         is MetaProperty -> copy(leadingComments = comments)
         is OmittedExpression -> copy(leadingComments = comments)
+        is CommaListExpression -> copy(leadingComments = comments)
         is ComputedPropertyName -> copy(leadingComments = comments)
         is ObjectBindingPattern -> copy(leadingComments = comments)
         is ArrayBindingPattern -> copy(leadingComments = comments)
+    }
+}
+
+fun Expression.withTrailingComments(comments: List<Comment>?): Expression {
+    if (comments.isNullOrEmpty()) return this
+    return when (this) {
+        is Identifier -> copy(trailingComments = comments)
+        is StringLiteralNode -> copy(trailingComments = comments)
+        is NumericLiteralNode -> copy(trailingComments = comments)
+        is BigIntLiteralNode -> copy(trailingComments = comments)
+        is RegularExpressionLiteralNode -> copy(trailingComments = comments)
+        is NoSubstitutionTemplateLiteralNode -> copy(trailingComments = comments)
+        is TemplateExpression -> copy(trailingComments = comments)
+        is ArrayLiteralExpression -> copy(trailingComments = comments)
+        is ObjectLiteralExpression -> copy(trailingComments = comments)
+        is PropertyAccessExpression -> copy(trailingComments = comments)
+        is ElementAccessExpression -> copy(trailingComments = comments)
+        is CallExpression -> copy(trailingComments = comments)
+        is NewExpression -> copy(trailingComments = comments)
+        is TaggedTemplateExpression -> copy(trailingComments = comments)
+        is TypeAssertionExpression -> copy(trailingComments = comments)
+        is ParenthesizedExpression -> copy(trailingComments = comments)
+        is FunctionExpression -> copy(trailingComments = comments)
+        is ArrowFunction -> copy(trailingComments = comments)
+        is DeleteExpression -> copy(trailingComments = comments)
+        is TypeOfExpression -> copy(trailingComments = comments)
+        is VoidExpression -> copy(trailingComments = comments)
+        is AwaitExpression -> copy(trailingComments = comments)
+        is PrefixUnaryExpression -> copy(trailingComments = comments)
+        is PostfixUnaryExpression -> copy(trailingComments = comments)
+        is BinaryExpression -> copy(trailingComments = comments)
+        is ConditionalExpression -> copy(trailingComments = comments)
+        is YieldExpression -> copy(trailingComments = comments)
+        is SpreadElement -> copy(trailingComments = comments)
+        is ClassExpression -> copy(trailingComments = comments)
+        is AsExpression -> copy(trailingComments = comments)
+        is NonNullExpression -> copy(trailingComments = comments)
+        is SatisfiesExpression -> copy(trailingComments = comments)
+        is MetaProperty -> copy(trailingComments = comments)
+        is OmittedExpression -> copy(trailingComments = comments)
+        is CommaListExpression -> copy(trailingComments = comments)
+        is ComputedPropertyName -> copy(trailingComments = comments)
+        is ObjectBindingPattern -> copy(trailingComments = comments)
+        is ArrayBindingPattern -> copy(trailingComments = comments)
     }
 }
 
@@ -1322,6 +1399,9 @@ data class Parameter(
     val questionToken: Boolean = false,
     val modifiers: Set<ModifierFlag> = emptySet(),
     val decorators: List<Decorator>? = null,
+    /** When true, this parameter is a comment-only placeholder for an empty parameter list. */
+    val isCommentPlaceholder: Boolean = false,
+    val dotDotDotTrailingComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -1441,6 +1521,7 @@ data class ComputedPropertyName(
 
 data class ObjectBindingPattern(
     val elements: List<BindingElement>,
+    val hasTrailingComma: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -1480,6 +1561,7 @@ data class CaseClause(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    val labelTrailingComments: List<Comment>? = null,
 ) : Node {
     override val kind: SyntaxKind = SyntaxKind.CaseClause
 }
@@ -1491,6 +1573,7 @@ data class DefaultClause(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    val labelTrailingComments: List<Comment>? = null,
 ) : Node {
     override val kind: SyntaxKind = SyntaxKind.DefaultClause
 }

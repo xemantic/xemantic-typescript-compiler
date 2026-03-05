@@ -122,7 +122,12 @@ class TypeScriptCompiler {
         } else {
             // Multi-file compilation
             val sourceEchoes = mutableListOf<Pair<String, String>>() // fileName -> content
-            val jsOutputs = mutableListOf<Pair<String, String>>() // jsName -> javascript
+            // Map from tsFileName -> (jsName, javascript)
+            val jsOutputMap = mutableMapOf<String, Pair<String, String>>()
+            // Map from tsFileName -> list of tsFileNames it imports (for dependency sort)
+            val importDeps = mutableMapOf<String, List<String>>()
+            // Ordered list of compilable TS file names
+            val tsFileNames = mutableListOf<String>()
 
             for (file in parsed.files) {
                 // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
@@ -140,9 +145,14 @@ class TypeScriptCompiler {
                     continue
                 }
 
+                tsFileNames.add(file.fileName)
+
                 val parser = Parser(file.content, file.fileName)
                 val sourceFile = parser.parse()
                 diagnostics.addAll(parser.getDiagnostics())
+
+                // Extract relative imports for dependency ordering
+                importDeps[file.fileName] = extractRelativeImports(sourceFile, file.fileName, parsed.files)
 
                 val transformer = Transformer(options)
                 val transformed = transformer.transform(sourceFile)
@@ -155,8 +165,12 @@ class TypeScriptCompiler {
                 val jsName = file.fileName
                     .replace(".tsx", tsxExtension)
                     .replace(".ts", ".js")
-                jsOutputs.add(jsName to javascript)
+                jsOutputMap[file.fileName] = jsName to javascript
             }
+
+            // Sort JS outputs by dependency order (dependencies first)
+            val sortedTsFiles = topologicalSort(tsFileNames, importDeps)
+            val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
             val baseline = formatMultiFileBaseline(fileName, sourceEchoes, jsOutputs, options.sourceMap)
 
@@ -167,4 +181,105 @@ class TypeScriptCompiler {
         }
     }
 
+}
+
+/**
+ * Extracts relative import paths from a source file and resolves them to actual file names
+ * from the list of known files in the compilation.
+ */
+private fun extractRelativeImports(
+    sourceFile: SourceFile,
+    currentFileName: String,
+    allFiles: List<SourceFileEntry>,
+): List<String> {
+    val allTsFileNames = allFiles.map { it.fileName }.toSet()
+    val deps = mutableListOf<String>()
+    val lastSlash = currentFileName.lastIndexOf('/')
+    val dir = when {
+        lastSlash > 0 -> currentFileName.substring(0, lastSlash)
+        lastSlash == 0 -> "/" // absolute root path like /index.ts
+        else -> ""
+    }
+
+    for (stmt in sourceFile.statements) {
+        val specifier = when (stmt) {
+            is ImportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
+            is ExportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
+            else -> null
+        } ?: continue
+
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue
+
+        // Resolve the relative path
+        val resolved = resolveRelativePath(dir, specifier)
+
+        // Try with .ts and .tsx extensions, and also /index.ts for directory imports (e.g. "./")
+        val sep = if (resolved.isEmpty() || resolved.endsWith("/")) "" else "/"
+        for (candidate in listOf(
+            "$resolved.ts", "$resolved.tsx", resolved,
+            "${resolved}${sep}index.ts", "${resolved}${sep}index.tsx"
+        )) {
+            if (candidate in allTsFileNames) {
+                deps.add(candidate)
+                break
+            }
+        }
+    }
+    return deps
+}
+
+/**
+ * Resolves a relative import path against a base directory.
+ * Preserves whether the path is absolute (starts with /) or relative.
+ */
+private fun resolveRelativePath(dir: String, specifier: String): String {
+    val base = when {
+        dir.isEmpty() -> specifier
+        dir == "/" -> "/$specifier"
+        else -> "$dir/$specifier"
+    }
+    val isAbsolute = base.startsWith("/")
+    val parts = base.split('/')
+    val resolved = mutableListOf<String>()
+    for (part in parts) {
+        when (part) {
+            ".", "" -> {} // skip
+            ".." -> if (resolved.isNotEmpty()) resolved.removeLast()
+            else -> resolved.add(part)
+        }
+    }
+    return if (isAbsolute) "/" + resolved.joinToString("/") else resolved.joinToString("/")
+}
+
+/**
+ * Topologically sorts a list of TS file names based on their import dependencies.
+ * Uses DFS (post-order) to match TypeScript's file ordering: for each file in original
+ * order, recursively emit its unvisited dependencies first, then the file itself.
+ * This keeps dependents close to their dependencies in the original source order.
+ */
+private fun topologicalSort(
+    fileNames: List<String>,
+    deps: Map<String, List<String>>,
+): List<String> {
+    if (fileNames.size <= 1) return fileNames
+
+    val fileSet = fileNames.toSet()
+    val visited = mutableSetOf<String>()
+    val result = mutableListOf<String>()
+
+    fun visit(file: String) {
+        if (file in visited) return
+        visited.add(file)
+        // Visit dependencies first (post-order DFS)
+        for (dep in (deps[file] ?: emptyList())) {
+            if (dep in fileSet) visit(dep)
+        }
+        result.add(file)
+    }
+
+    for (file in fileNames) {
+        visit(file)
+    }
+
+    return result
 }

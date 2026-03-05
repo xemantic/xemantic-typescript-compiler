@@ -89,6 +89,13 @@ class Scanner(private val text: String) {
     /** Returns comments that appeared after the previous token on the same line, or `null`. */
     fun getTrailingComments(): List<Comment>? = trailingComments
 
+    /**
+     * Returns and clears the trailing comments. Used to "consume" trailing comments so
+     * that a subsequent caller (e.g. [parsePrimaryExpression]'s inlineCmts) does not
+     * capture the same comments a second time.
+     */
+    fun consumeTrailingComments(): List<Comment>? = trailingComments.also { trailingComments = null }
+
     /** Returns `true` if a line break was found between the previous and current token. */
     fun hasPrecedingLineBreak(): Boolean = precedingLineBreak
 
@@ -373,7 +380,60 @@ class Scanner(private val text: String) {
                     }
                 }
 
+                // Conflict marker trivia: lines starting with <<<<<<<, =======, >>>>>>>
+                // Skip <<<<<<<...HEAD line, then skip everything from ======= to >>>>>>> (inclusive).
+                seenLineBreak && isConflictMarkerStart(ch) -> {
+                    skipConflictMarkerTrivia()
+                    seenLineBreak = true
+                    precedingLineBreak = true
+                }
+
                 else -> return
+            }
+        }
+    }
+
+    /** Returns true if [ch] starts a conflict marker (`<`, `=`, `>`, `|`) */
+    private fun isConflictMarkerStart(ch: Char): Boolean {
+        if (ch != '<' && ch != '=' && ch != '>' && ch != '|') return false
+        if (pos + 7 > end) return false
+        // All 7 chars must be the same marker character (or '=')
+        val c7 = text.substring(pos, pos + 7)
+        return c7 == "<<<<<<<" || c7 == "=======" || c7 == ">>>>>>>" || c7 == "|||||||"
+    }
+
+    /**
+     * Skips conflict marker trivia. When called at `<<<<<<<` or `>>>>>>>`, skips just that line.
+     * When called at `=======` or `|||||||`, skips that line AND everything until (and including)
+     * the next boundary marker (`>>>>>>>` for `=======`, `=======` for `|||||||`).
+     */
+    private fun skipConflictMarkerTrivia() {
+        val markerChar = text[pos]
+        // Skip the current marker line
+        while (pos < end && !isLineBreak(text[pos])) pos++
+        if (pos < end) {
+            if (text[pos] == '\r' && pos + 1 < end && text[pos + 1] == '\n') pos += 2 else pos++
+        }
+
+        val endMarker = when (markerChar) {
+            '=' -> ">>>>>>>"   // skip content between ======= and >>>>>>>
+            '|' -> ">>>>>>>"   // skip content between ||||||| and >>>>>>> (includes ======= section)
+            else -> return     // <<<<<<<, >>>>>>> — just skip the one line
+        }
+
+        // Skip lines until we find the end marker, then skip that marker line too
+        while (pos < end) {
+            if (pos + 7 <= end && text.substring(pos, pos + 7) == endMarker) {
+                // Skip the end marker line
+                while (pos < end && !isLineBreak(text[pos])) pos++
+                if (pos < end) {
+                    if (text[pos] == '\r' && pos + 1 < end && text[pos + 1] == '\n') pos += 2 else pos++
+                }
+                break
+            }
+            while (pos < end && !isLineBreak(text[pos])) pos++
+            if (pos < end) {
+                if (text[pos] == '\r' && pos + 1 < end && text[pos + 1] == '\n') pos += 2 else pos++
             }
         }
     }

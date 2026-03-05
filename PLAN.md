@@ -1,10 +1,10 @@
 # TypeScript-to-JavaScript Transpiler Implementation Plan
 
-## Current Status (2026-03-04)
+## Current Status (2026-03-05)
 
-**Test results**: 3,664 / 8,627 passing (42.5%)
+**Test results**: 4,010 / 8,627 passing (46.5%)
 
-Previous: 3,221 / 8,627 passing (37.3%)
+Previous: 3,664 / 8,627 passing (42.5%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -62,6 +62,13 @@ For error tests:
 ## Known Regressions to Investigate
 
 1. **`reScanGreaterToken`** — was disabled because it caused 4-test net regression. The scanner function exists but the parser doesn't call it.
+
+## Fixes Applied (2026-03-05, session 4)
+
+- **Enum string quoting**: `memberNameToString` in Transformer forces double quotes for enum member string names; `emitStringLiteral` uses `rawText` when available.
+- **`parsePrimaryExpression` inline comments**: Captures same-line trailing comments (`inlineCmts`) between a keyword/operator and the next expression (e.g. `new /*2*/ Array`). Uses `consumeTrailingComments()` in parent parsers (`parseArrayLiteral`, `parseObjectLiteralElement`, `parseBlock`, `parseCaseOrDefaultClause`) to prevent double-capture.
+- **`ExpressionStatement.preSemicolonComments`**: New field stores inline comments between expression and `;` (e.g. `Array /*3*/;`), emitted by `emitExpressionStatement`.
+- **Scanner `consumeTrailingComments()`**: Returns and clears trailing comments atomically, preventing double-capture when parent parsers explicitly need trailing comment values.
 
 ## Fixes Applied (2026-03-04, session 3)
 

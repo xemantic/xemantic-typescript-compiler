@@ -119,10 +119,13 @@ class Parser(private val source: String, private val fileName: String) {
         while (token != SyntaxKind.EndOfFile && token != SyntaxKind.CloseBrace) {
             val savedPos = scanner.getTokenPos()
             val stmt = parseStatement()
-            if (stmt != null) stmts.add(stmt)
-            // Safety: if no progress was made, skip the current token to avoid infinite loop
+            // Safety: if no progress was made, skip the current token to avoid infinite loop.
+            // Also discard any "statement" produced by error recovery (matches TypeScript's
+            // behavior of not emitting missing/error nodes).
             if (scanner.getTokenPos() == savedPos && token != SyntaxKind.EndOfFile) {
                 nextToken()
+            } else if (stmt != null) {
+                stmts.add(stmt)
             }
         }
         return stmts
@@ -178,6 +181,7 @@ class Parser(private val source: String, private val fileName: String) {
         val comments = leadingComments()
         val openBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenBrace)
+        val openBraceTrailingComments = scanner.consumeTrailingComments()
         val stmts = parseStatements()
         // Capture any comments that appear before the closing `}` (e.g., trailing comments
         // inside an otherwise-empty or comment-terminated block).
@@ -192,7 +196,7 @@ class Parser(private val source: String, private val fileName: String) {
         } else {
             stmts
         }
-        return Block(statements = allStmts, multiLine = multiLine, pos = pos, end = getEnd(), leadingComments = comments)
+        return Block(statements = allStmts, multiLine = multiLine, openBraceTrailingComments = openBraceTrailingComments, pos = pos, end = getEnd(), leadingComments = comments)
     }
 
     private fun parseEmptyStatement(): EmptyStatement {
@@ -225,9 +229,15 @@ class Parser(private val source: String, private val fileName: String) {
         val flags = token
         nextToken() // consume var/let/const
         val decls = mutableListOf<VariableDeclaration>()
-        decls.add(parseVariableDeclaration())
-        while (parseOptional(SyntaxKind.Comma)) {
+        // Only parse declarations if the current token can start one (identifier or binding pattern)
+        if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
             decls.add(parseVariableDeclaration())
+            while (parseOptional(SyntaxKind.Comma)) {
+                decls.add(parseVariableDeclaration())
+            }
+        } else {
+            // Report error but produce empty declarations list (e.g. bare `let;`)
+            reportError("Identifier expected.")
         }
         return VariableDeclarationList(declarations = decls, flags = flags, pos = pos, end = getEnd())
     }
@@ -260,12 +270,18 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBrace)
         val elements = mutableListOf<BindingElement>()
+        var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             elements.add(parseBindingElement())
-            if (!parseOptional(SyntaxKind.Comma)) break
+            if (parseOptional(SyntaxKind.Comma)) {
+                hasTrailingComma = (token == SyntaxKind.CloseBrace)
+            } else {
+                hasTrailingComma = false
+                break
+            }
         }
         parseExpected(SyntaxKind.CloseBrace)
-        return ObjectBindingPattern(elements = elements, pos = pos, end = getEnd())
+        return ObjectBindingPattern(elements = elements, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd())
     }
 
     private fun parseArrayBindingPattern(): ArrayBindingPattern {
@@ -288,7 +304,9 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseBindingElement(): BindingElement {
         val pos = getPos()
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
-        val nameOrProp = parseBindingNameOrPattern()
+        val postDotComments = if (dotDotDot) leadingComments() ?: scanner.getTrailingComments() else null
+        var nameOrProp = parseBindingNameOrPattern()
+        if (postDotComments != null) nameOrProp = nameOrProp.withLeadingComments(postDotComments)
         return if (token == SyntaxKind.Colon && nameOrProp is Identifier) {
             nextToken()
             val name = parseBindingNameOrPattern()
@@ -311,6 +329,9 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = leadingComments()
         val expr = parseExpression()
+        // Capture same-line trailing comments between expression and `;`
+        // (e.g. the `/*3*/` in `new Array /*3*/;`) before parseSemicolon advances past them.
+        val semiInline = if (!scanner.hasPrecedingLineBreak()) trailingComments() else null
         parseSemicolon()
         val trailing = trailingComments()
         return ExpressionStatement(
@@ -318,7 +339,8 @@ class Parser(private val source: String, private val fileName: String) {
             pos = pos,
             end = getEnd(),
             leadingComments = comments,
-            trailingComments = trailing
+            trailingComments = trailing,
+            preSemicolonComments = semiInline
         )
     }
 
@@ -351,7 +373,8 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = parseExpression()
         parseExpected(SyntaxKind.CloseParen)
         parseSemicolon()
-        return DoStatement(statement = stmt, expression = expr, pos = pos, end = getEnd(), leadingComments = comments)
+        val trailing = trailingComments()
+        return DoStatement(statement = stmt, expression = expr, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
     }
 
     private fun parseWhileStatement(): WhileStatement {
@@ -442,18 +465,32 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseContinueStatement(): ContinueStatement {
         val pos = getPos()
+        val comments = leadingComments()
         nextToken()
+        val kwTrailing = trailingComments()
         val label = if (!canParseSemicolon() && isIdentifier()) parseIdentifier() else null
+        val labelTrailing = if (label != null) trailingComments() else null
         parseSemicolon()
-        return ContinueStatement(label = label, pos = pos, end = getEnd())
+        val trailing = trailingComments()
+        return ContinueStatement(
+            label = label, keywordTrailingComments = kwTrailing, labelTrailingComments = labelTrailing,
+            pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing,
+        )
     }
 
     private fun parseBreakStatement(): BreakStatement {
         val pos = getPos()
+        val comments = leadingComments()
         nextToken()
+        val kwTrailing = trailingComments()
         val label = if (!canParseSemicolon() && isIdentifier()) parseIdentifier() else null
+        val labelTrailing = if (label != null) trailingComments() else null
         parseSemicolon()
-        return BreakStatement(label = label, pos = pos, end = getEnd())
+        val trailing = trailingComments()
+        return BreakStatement(
+            label = label, keywordTrailingComments = kwTrailing, labelTrailingComments = labelTrailing,
+            pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing,
+        )
     }
 
     private fun parseReturnStatement(): ReturnStatement {
@@ -474,12 +511,13 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseWithStatement(): WithStatement {
         val pos = getPos()
-        nextToken()
+        val comments = leadingComments()
+        parseExpected(SyntaxKind.WithKeyword)
         parseExpected(SyntaxKind.OpenParen)
         val expr = parseExpression()
         parseExpected(SyntaxKind.CloseParen)
         val stmt = parseStatement() ?: EmptyStatement()
-        return WithStatement(expression = expr, statement = stmt, pos = pos, end = getEnd())
+        return WithStatement(expression = expr, statement = stmt, pos = pos, end = getEnd(), leadingComments = comments)
     }
 
     private fun parseSwitchStatement(): SwitchStatement {
@@ -494,13 +532,18 @@ class Parser(private val source: String, private val fileName: String) {
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             clauses.add(parseCaseOrDefaultClause())
         }
+        // Capture any comments before the closing `}` (e.g. `// Comment After` after last clause)
+        val closingComments = scanner.getLeadingComments()
         parseExpected(SyntaxKind.CloseBrace)
+        val trailingComments = scanner.getTrailingComments()
         return SwitchStatement(
             expression = expr,
             caseBlock = clauses,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailingComments,
+            closingComments = closingComments,
         )
     }
 
@@ -510,20 +553,27 @@ class Parser(private val source: String, private val fileName: String) {
             nextToken()
             val expr = parseExpression()
             parseExpected(SyntaxKind.Colon)
+            val labelTrailingComments = scanner.consumeTrailingComments()
             val firstStmtStart = getPos() // scanner.getTokenPos() = start of first statement token
             val stmts = parseCaseClauseStatements()
-            // Single-line if no newline between case clause start and first statement
-            val singleLine = stmts.isNotEmpty() && firstStmtStart > pos &&
-                    firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n')
-            CaseClause(expression = expr, statements = stmts, singleLine = singleLine, pos = pos, end = getEnd())
+            // Single-line if no newline between case clause start and first statement,
+            // and no statement is a multiLine block (which must be emitted multi-line)
+            val singleLine = stmts.size == 1 && firstStmtStart > pos &&
+                    firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n') &&
+                    stmts.none { it is Block && it.multiLine }
+            CaseClause(expression = expr, statements = stmts, singleLine = singleLine, pos = pos, end = getEnd(),
+                labelTrailingComments = labelTrailingComments)
         } else {
             parseExpected(SyntaxKind.DefaultKeyword)
             parseExpected(SyntaxKind.Colon)
+            val labelTrailingComments = scanner.consumeTrailingComments()
             val firstStmtStart = getPos()
             val stmts = parseCaseClauseStatements()
-            val singleLine = stmts.isNotEmpty() && firstStmtStart > pos &&
-                    firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n')
-            DefaultClause(statements = stmts, singleLine = singleLine, pos = pos, end = getEnd())
+            val singleLine = stmts.size == 1 && firstStmtStart > pos &&
+                    firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n') &&
+                    stmts.none { it is Block && it.multiLine }
+            DefaultClause(statements = stmts, singleLine = singleLine, pos = pos, end = getEnd(),
+                labelTrailingComments = labelTrailingComments)
         }
     }
 
@@ -532,8 +582,12 @@ class Parser(private val source: String, private val fileName: String) {
         while (token != SyntaxKind.CaseKeyword && token != SyntaxKind.DefaultKeyword &&
             token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile
         ) {
+            val savedPos = scanner.getTokenPos()
             val stmt = parseStatement()
             if (stmt != null) stmts.add(stmt)
+            if (scanner.getTokenPos() == savedPos && token != SyntaxKind.EndOfFile) {
+                nextToken()
+            }
         }
         return stmts
     }
@@ -544,7 +598,8 @@ class Parser(private val source: String, private val fileName: String) {
         nextToken()
         val expr = parseExpression()
         parseSemicolon()
-        return ThrowStatement(expression = expr, pos = pos, end = getEnd(), leadingComments = comments)
+        val trailing = trailingComments()
+        return ThrowStatement(expression = expr, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
     }
 
     private fun parseTryStatement(): TryStatement {
@@ -579,17 +634,20 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseDebuggerStatement(): DebuggerStatement {
         val pos = getPos()
+        val comments = leadingComments()
         nextToken()
         parseSemicolon()
-        return DebuggerStatement(pos = pos, end = getEnd())
+        val trailing = trailingComments()
+        return DebuggerStatement(pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
     }
 
     private fun parseLabeledStatement(): LabeledStatement {
         val pos = getPos()
+        val comments = leadingComments()
         val label = parseIdentifier()
         parseExpected(SyntaxKind.Colon)
         val stmt = parseStatement() ?: EmptyStatement()
-        return LabeledStatement(label = label, statement = stmt, pos = pos, end = getEnd())
+        return LabeledStatement(label = label, statement = stmt, pos = pos, end = getEnd(), leadingComments = comments)
     }
 
     // ── Declarations ────────────────────────────────────────────────────────
@@ -746,10 +804,12 @@ class Parser(private val source: String, private val fileName: String) {
                 parseSemicolon(); null
             }
             inAsyncContext = savedAsync
+            val methodTrailing = trailingComments()
             MethodDeclaration(
                 name = name, typeParameters = typeParams, parameters = params,
                 type = returnType, body = body, modifiers = modifiers, asteriskToken = asterisk,
-                questionToken = question, decorators = decorators, pos = pos, end = getEnd(), leadingComments = comments
+                questionToken = question, decorators = decorators, pos = pos, end = getEnd(),
+                leadingComments = comments, trailingComments = methodTrailing,
             )
         } else {
             // Property
@@ -771,13 +831,15 @@ class Parser(private val source: String, private val fileName: String) {
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
         }
+        val trailing = trailingComments()
         return Constructor(
             parameters = params,
             body = body,
             modifiers = modifiers,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailing,
         )
     }
 
@@ -788,6 +850,7 @@ class Parser(private val source: String, private val fileName: String) {
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
         }
+        val trailing = trailingComments()
         return GetAccessor(
             name = name,
             parameters = params,
@@ -796,7 +859,8 @@ class Parser(private val source: String, private val fileName: String) {
             modifiers = modifiers,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailing,
         )
     }
 
@@ -806,6 +870,7 @@ class Parser(private val source: String, private val fileName: String) {
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
         }
+        val trailing = trailingComments()
         return SetAccessor(
             name = name,
             parameters = params,
@@ -813,7 +878,8 @@ class Parser(private val source: String, private val fileName: String) {
             modifiers = modifiers,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            trailingComments = trailing,
         )
     }
 
@@ -1096,8 +1162,14 @@ class Parser(private val source: String, private val fileName: String) {
             val bPos = getPos()
             parseExpected(SyntaxKind.OpenBrace)
             val stmts = parseStatements()
+            // Capture comments before closing `}` (e.g., trailing comments in namespace body)
+            val closingComments = leadingComments()
+            val closeBracePos = scanner.getTokenPos()
             parseExpected(SyntaxKind.CloseBrace)
-            ModuleBlock(statements = stmts, pos = bPos, end = getEnd())
+            val allStmts = if (closingComments != null) {
+                stmts + NotEmittedStatement(leadingComments = closingComments, pos = closeBracePos, end = closeBracePos)
+            } else stmts
+            ModuleBlock(statements = allStmts, pos = bPos, end = getEnd())
         } else if (token == SyntaxKind.Dot) {
             // nested: namespace A.B { }
             nextToken()
@@ -1301,7 +1373,7 @@ class Parser(private val source: String, private val fileName: String) {
 
         val isTypeOnly = token == SyntaxKind.TypeKeyword && scanner.lookAhead {
             scanner.scan()
-            scanner.getToken() == SyntaxKind.OpenBrace || scanner.getToken() == SyntaxKind.Asterisk || isIdentifier()
+            scanner.getToken() == SyntaxKind.OpenBrace || scanner.getToken() == SyntaxKind.Asterisk
         }
         if (isTypeOnly) nextToken()
 
@@ -1460,6 +1532,7 @@ class Parser(private val source: String, private val fileName: String) {
             }
 
             GlobalKeyword -> parseModuleDeclaration(modifiers, comments)
+            ImportKeyword -> parseImportDeclaration(modifiers, comments)
             else -> parseVariableStatement(modifiers, comments)
         }
     }
@@ -1846,10 +1919,11 @@ class Parser(private val source: String, private val fileName: String) {
         while (true) {
             result = when (token) {
                 Dot -> {
-                    val newLine = scanner.hasPrecedingLineBreak()
+                    val newLineBefore = scanner.hasPrecedingLineBreak()
                     nextToken()
+                    val newLineAfterDot = scanner.hasPrecedingLineBreak()
                     val name = parseIdentifierName()
-                    PropertyAccessExpression(expression = result, name = name, newLineBefore = newLine, pos = result.pos, end = getEnd())
+                    PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
 
                 OpenBracket -> {
@@ -1981,15 +2055,49 @@ class Parser(private val source: String, private val fileName: String) {
             val name = parseIdentifier()
             return MetaProperty(keywordToken = NewKeyword, name = name, pos = pos, end = getEnd())
         }
-        val expr = parseCallAndAccess(parsePrimaryExpression())
+        // For `new`, the constructor expression only allows member access (. and []),
+        // NOT function calls. parseCallAndAccess would greedily consume `()` and turn
+        // `new Foo()` into `new (Foo())` — use parseMemberAccessOnly instead.
+        val expr = parseMemberAccessOnly(parsePrimaryExpression())
         val typeArgs = tryParseTypeArguments()
         val args = if (token == OpenParen) parseArgumentList() else null
         return NewExpression(expression = expr, typeArguments = typeArgs, arguments = args, pos = pos, end = getEnd())
     }
 
+    /** Like [parseCallAndAccess] but only handles `.` and `[` member access, not function calls. */
+    private fun parseMemberAccessOnly(expr: Expression): Expression {
+        var result = expr
+        while (true) {
+            result = when (token) {
+                Dot -> {
+                    val newLineBefore = scanner.hasPrecedingLineBreak()
+                    nextToken()
+                    val newLineAfterDot = scanner.hasPrecedingLineBreak()
+                    val name = parseIdentifierName()
+                    PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
+                }
+                OpenBracket -> {
+                    nextToken()
+                    val arg = if (token == SyntaxKind.CloseBracket) {
+                        OmittedExpression(pos = getPos(), end = getPos())
+                    } else {
+                        parseExpression()
+                    }
+                    parseExpected(SyntaxKind.CloseBracket)
+                    ElementAccessExpression(expression = result, argumentExpression = arg, pos = result.pos, end = getEnd())
+                }
+                else -> return result
+            }
+        }
+    }
+
     private fun parsePrimaryExpression(): Expression {
         val pos = getPos()
-        val comments = leadingComments()
+        // Capture leading comments (own-line) OR same-line trailing comments between
+        // a preceding keyword/operator and this expression (e.g. `new /*2*/ Array`).
+        val leadingCmts = leadingComments()
+        val inlineCmts = if (leadingCmts == null && !scanner.hasPrecedingLineBreak()) scanner.getTrailingComments() else null
+        val comments = leadingCmts ?: inlineCmts
         val result = when (token) {
             NumericLiteral -> parseNumericLiteral()
             BigIntLiteral -> {
@@ -2140,6 +2248,11 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val openBracketPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenBracket)
+        // Capture inline comments right after `[` (no preceding newline, so they went to
+        // scanner.trailingComments rather than leadingComments of the first element).
+        // Use consumeTrailingComments() to clear them so parsePrimaryExpression doesn't
+        // also capture them as inlineCmts (which would cause double-emission).
+        val openBracketComments = scanner.consumeTrailingComments()
         val elements = mutableListOf<Expression>()
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
@@ -2153,10 +2266,22 @@ class Parser(private val source: String, private val fileName: String) {
             if (token == SyntaxKind.DotDotDot) {
                 val sPos = getPos()
                 nextToken()
-                val spread = SpreadElement(expression = parseAssignmentExpression(), pos = sPos, end = getEnd())
-                elements.add(spread.withLeadingComments(elemComments))
+                // Capture comments between `...` and the expression (e.g. `/*#__PURE__*/`)
+                val postDotComments = leadingComments() ?: scanner.getTrailingComments()
+                var spreadExpr = parseAssignmentExpression()
+                if (postDotComments != null) spreadExpr = spreadExpr.withLeadingComments(postDotComments)
+                val spread = SpreadElement(expression = spreadExpr, pos = sPos, end = getEnd())
+                // Pre-comma own-line comments (in leading trivia of the comma token)
+                val preCommaComments = if (token == SyntaxKind.Comma) leadingComments() else null
+                elements.add(spread.withLeadingComments(elemComments).withTrailingComments(preCommaComments?.takeIf { it.isNotEmpty() }))
             } else {
-                elements.add(parseAssignmentExpression().withLeadingComments(elemComments))
+                val elem = parseAssignmentExpression()
+                // Same-line trailing comments between element and comma
+                val elemTrailing = scanner.getTrailingComments()
+                // Pre-comma own-line comments (in leading trivia of the comma token)
+                val preCommaComments = if (token == SyntaxKind.Comma) leadingComments() else null
+                val allTrailing = listOfNotNull(elemTrailing, preCommaComments).flatten().takeIf { it.isNotEmpty() }
+                elements.add(elem.withLeadingComments(elemComments).withTrailingComments(allTrailing))
             }
             if (parseOptional(SyntaxKind.Comma)) {
                 hasTrailingComma = (token == SyntaxKind.CloseBracket)
@@ -2165,16 +2290,29 @@ class Parser(private val source: String, private val fileName: String) {
                 break
             }
         }
-        // Capture any comments before the closing `]` (e.g., trailing comments inside
-        // a multi-line array after the last element).
-        val closingComments = leadingComments()
+        // Capture any comments before the closing `]`:
+        // - Own-line comments: from leadingComments() on the `]` token (hasPrecedingNewLine=true)
+        // - Same-line after last comma: from getTrailingComments() (hasPrecedingNewLine=false)
+        // For empty arrays, avoid recapturing openBracketComments: the `nextToken()` in
+        // parseExpected(OpenBracket) is the only one that ran, so trailingComments still holds
+        // the same value as openBracketComments. For non-empty arrays, the last nextToken()
+        // (inside the loop) has reset trailingComments to reflect post-loop trivia.
+        val closingComments = leadingComments() ?: if (hasTrailingComma || (elements.isEmpty() && openBracketComments == null)) scanner.getTrailingComments() else null
         val closeBracketPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBracket)
         val multiLine =
             if (openBracketPos in 0..<closeBracketPos && closeBracketPos <= source.length) {
                 source.substring(openBracketPos, closeBracketPos).contains('\n')
             } else false
-        return ArrayLiteralExpression(elements = elements, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd(), trailingComments = closingComments)
+        return ArrayLiteralExpression(
+            elements = elements,
+            multiLine = multiLine,
+            hasTrailingComma = hasTrailingComma,
+            pos = pos,
+            end = getEnd(),
+            trailingComments = closingComments,
+            openBracketComments = openBracketComments,
+        )
     }
 
     private fun parseObjectLiteral(): ObjectLiteralExpression {
@@ -2185,14 +2323,18 @@ class Parser(private val source: String, private val fileName: String) {
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             properties.add(parseObjectLiteralElement())
-            if (parseOptional(SyntaxKind.Comma)) {
+            // TypeScript allows semicolons as property separators in object literals
+            val hadComma = parseOptional(SyntaxKind.Comma)
+            val hadSemi = !hadComma && parseOptional(SyntaxKind.Semicolon)
+            if (hadComma || hadSemi) {
                 // Capture any same-line trailing comments that appeared after the comma
                 val postCommaTrailing = scanner.getTrailingComments()
                 if (postCommaTrailing != null && properties.isNotEmpty()) {
                     val last = properties.last()
                     properties[properties.size - 1] = withTrailingComments(last, postCommaTrailing)
                 }
-                hasTrailingComma = (token == SyntaxKind.CloseBrace)
+                // Semicolons are not treated as trailing commas (TypeScript emits no trailing comma)
+                hasTrailingComma = hadComma && (token == SyntaxKind.CloseBrace)
             } else {
                 hasTrailingComma = false
                 break
@@ -2215,7 +2357,11 @@ class Parser(private val source: String, private val fileName: String) {
 
         if (token == SyntaxKind.DotDotDot) {
             nextToken()
-            return SpreadAssignment(expression = parseAssignmentExpression(), pos = pos, end = getEnd(), leadingComments = comments)
+            // Capture comments between `...` and the expression (e.g. `/*#__PURE__*/`)
+            val postDotComments = leadingComments() ?: scanner.getTrailingComments()
+            var spreadExpr = parseAssignmentExpression()
+            if (postDotComments != null) spreadExpr = spreadExpr.withLeadingComments(postDotComments)
+            return SpreadAssignment(expression = spreadExpr, pos = pos, end = getEnd(), leadingComments = comments)
         }
 
         val modifiers = parseModifiers()
@@ -2254,6 +2400,9 @@ class Parser(private val source: String, private val fileName: String) {
 
         val name = parsePropertyName()
 
+        // Skip optional '?' (TypeScript optional property marker; erased in JS output)
+        parseOptional(SyntaxKind.Question)
+
         // Method shorthand: foo() { ... }  or *foo() { ... } or async foo() { ... }
         if (asterisk || token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan) {
             val typeParams = parseTypeParametersOpt()
@@ -2279,7 +2428,9 @@ class Parser(private val source: String, private val fileName: String) {
             // Capture any inline comments that appeared between ':' and the value expression
             // (e.g., `id: /*! @ngInject */ value`). These go into the scanner's trailingComments
             // rather than the next token's leadingComments.
-            val inlineComments = scanner.getTrailingComments()
+            // Use consumeTrailingComments() to clear them so parsePrimaryExpression doesn't
+            // also capture them as inlineCmts (which would cause double-emission).
+            val inlineComments = scanner.consumeTrailingComments()
             val value = parseAssignmentExpression()
             val valueWithComments = if (!inlineComments.isNullOrEmpty()) {
                 val merged = inlineComments + (value.leadingComments ?: emptyList())
@@ -2473,12 +2624,21 @@ class Parser(private val source: String, private val fileName: String) {
                 nextToken()
                 continue
             }
+            // Capture inline comments before each argument (e.g. /*label*/ before string arg).
+            // Comments on the same line as `(` or `,` are classified as trailingComments by the
+            // scanner (no preceding line break), while comments on new lines are leadingComments.
+            val argComments = leadingComments() ?: scanner.getTrailingComments()
             if (token == SyntaxKind.DotDotDot) {
                 val pos = getPos()
                 nextToken()
-                args.add(SpreadElement(expression = parseAssignmentExpression(), pos = pos, end = getEnd()))
+                // Capture comments between `...` and the expression (e.g. `/*#__PURE__*/`)
+                val postDotComments = leadingComments() ?: scanner.getTrailingComments()
+                var spreadExpr = parseAssignmentExpression()
+                if (postDotComments != null) spreadExpr = spreadExpr.withLeadingComments(postDotComments)
+                args.add(SpreadElement(expression = spreadExpr, pos = pos, end = getEnd()))
             } else {
-                args.add(parseAssignmentExpression())
+                val expr = parseAssignmentExpression()
+                args.add(if (argComments != null) expr.withLeadingComments(argComments) else expr)
             }
             if (!parseOptional(SyntaxKind.Comma)) break
         }
@@ -2490,12 +2650,22 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseParameterList(): List<Parameter> {
         parseExpected(SyntaxKind.OpenParen)
+        // Capture same-line comments between `(` and first token (e.g., `/** nothing */` in empty lists).
+        val openParenComments = scanner.getTrailingComments()
         val params = mutableListOf<Parameter>()
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
             params.add(parseParameter())
             if (!parseOptional(SyntaxKind.Comma)) break
         }
         parseExpected(SyntaxKind.CloseParen)
+        // If no parameters but there are inline comments between ( and ), create a placeholder.
+        if (params.isEmpty() && !openParenComments.isNullOrEmpty()) {
+            return listOf(Parameter(
+                name = Identifier(""),
+                isCommentPlaceholder = true,
+                leadingComments = openParenComments,
+            ))
+        }
         return params
     }
 
@@ -2505,14 +2675,17 @@ class Parser(private val source: String, private val fileName: String) {
         val decorators = parseDecorators()
         val modifiers = parseModifiers()
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
+        val dotTrailing = if (dotDotDot) trailingComments() else null
         val name = parseBindingNameOrPattern()
         val question = parseOptional(SyntaxKind.Question)
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+        val trailing = trailingComments()
         return Parameter(
             name = name, type = type, initializer = init, dotDotDotToken = dotDotDot,
             questionToken = question, modifiers = modifiers, decorators = decorators, pos = pos, end = getEnd(),
-            leadingComments = comments,
+            leadingComments = comments, trailingComments = trailing,
+            dotDotDotTrailingComments = dotTrailing,
         )
     }
 
@@ -2591,6 +2764,11 @@ class Parser(private val source: String, private val fileName: String) {
             }
             return KeywordTypeNode(kind = SyntaxKind.VoidKeyword, pos = pos, end = getEnd())
         }
+        // TypeScript allows leading `|` or `&` before the first union/intersection member:
+        //   type A = | string | number;  →  union type
+        //   type B = & { x: number };    →  intersection type
+        parseOptional(SyntaxKind.Bar)
+        parseOptional(SyntaxKind.Ampersand)
         var type = parseNonUnionType()
         // Type predicate: X is T (valid as function return type annotations)
         // After parsing X as a type reference, if the next token is `is`, consume it
@@ -2896,13 +3074,14 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseIdentifier(): Identifier {
         val pos = getPos()
-        val text = scanner.getTokenValue()
         if (isIdentifier() || isKeyword()) {
+            val text = scanner.getTokenValue()
             nextToken()
+            return Identifier(text = text, pos = pos, end = getEnd())
         } else {
             reportError("Identifier expected.")
+            return Identifier(text = "", pos = pos, end = getEnd())
         }
-        return Identifier(text = text, pos = pos, end = getEnd())
     }
 
     private fun parseIdentifierName(): Identifier {
@@ -2917,8 +3096,10 @@ class Parser(private val source: String, private val fileName: String) {
         val raw = scanner.getTokenText()
         val value = scanner.getTokenValue()
         val singleQuote = raw.startsWith("'")
+        // Store raw content between quotes to preserve escape sequences (e.g. \u2730, \n)
+        val rawContent = if (raw.length >= 2) raw.substring(1, raw.length - 1) else raw
         nextToken()
-        return StringLiteralNode(text = value, singleQuote = singleQuote, pos = pos, end = getEnd())
+        return StringLiteralNode(text = value, singleQuote = singleQuote, rawText = rawContent, pos = pos, end = getEnd())
     }
 
     private fun parseNumericLiteral(): NumericLiteralNode {
