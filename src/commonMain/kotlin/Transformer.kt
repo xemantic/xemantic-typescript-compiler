@@ -240,11 +240,12 @@ class Transformer(private val options: CompilerOptions) {
             // If nothing is used, drop this import entirely
             if (!defaultUsed && !nsUsed && !hasUsedNamedImports) continue
 
-            // If all named imports are used (or there are no named imports), keep as-is
-            if (namedImports == null || usedNamedElements == namedImports.elements) {
+            // If all named imports are used (and there are some), keep as-is.
+            // If namedImports is null, or all elements are used and non-empty, keep as-is.
+            if (namedImports == null || (usedNamedElements == namedImports.elements && namedImports.elements.isNotEmpty())) {
                 result.add(stmt)
             } else {
-                // Keep only the used named imports
+                // Keep only the used named imports; if none used (or originally empty), drop bindings.
                 val newBindings = if (usedNamedElements!!.isEmpty()) null
                 else namedImports.copy(elements = usedNamedElements)
                 result.add(stmt.copy(importClause = clause.copy(namedBindings = newBindings)))
@@ -5702,15 +5703,12 @@ class Transformer(private val options: CompilerOptions) {
                 }
 
                 is ClassDeclaration -> {
-                    // Qualify heritage clause references to exported members
-                    val qualifiedHeritage = stmt.heritageClauses?.map { clause ->
-                        clause.copy(types = clause.types.map { type ->
-                            type.copy(expression = qualifyNamespaceRefs(nsName, exportedNames, type.expression))
-                        })
-                    }
+                    // Do NOT qualify heritage clause references — inside the namespace IIFE,
+                    // sibling class names are in scope as local variables. Qualifying them
+                    // (e.g. `extends Ns.Foo` instead of `extends Foo`) is incorrect and
+                    // doesn't match what the real TypeScript compiler emits.
                     val strippedStmt = stmt.copy(
                         modifiers = stmt.modifiers - ModifierFlag.Export,
-                        heritageClauses = qualifiedHeritage,
                     )
                     val transformed = transformClassDeclaration(strippedStmt)
                     result.addAll(transformed)

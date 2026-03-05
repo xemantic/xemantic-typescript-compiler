@@ -964,7 +964,12 @@ class Emitter(
 
     private fun emitImportClause(node: ImportClause) {
         val hasName = node.name != null
-        val hasBindings = node.namedBindings != null
+        // Named imports are only emitted if there are non-type-only specifiers.
+        val namedImports = node.namedBindings as? NamedImports
+        val nonTypeSpecifiers = namedImports?.elements?.filter { !it.isTypeOnly } ?: emptyList()
+        val hasNamedImports = namedImports != null && nonTypeSpecifiers.isNotEmpty()
+        val hasNamespaceImport = node.namedBindings is NamespaceImport
+        val hasBindings = hasNamedImports || hasNamespaceImport
 
         if (hasName) {
             write(node.name.text)
@@ -981,7 +986,6 @@ class Emitter(
 
                 is NamedImports -> {
                     write("{ ")
-                    val nonTypeSpecifiers = bindings.elements.filter { !it.isTypeOnly }
                     for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
                         if (index > 0) write(", ")
                         if (specifier.propertyName != null) {
