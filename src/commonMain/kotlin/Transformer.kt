@@ -4876,7 +4876,6 @@ class Transformer(private val options: CompilerOptions) {
                         // String enum member: E["B"] = "hello" (no reverse mapping)
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
-                        memberValues[memberName] = null  // mark as non-numeric
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
