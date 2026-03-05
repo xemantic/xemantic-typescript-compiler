@@ -4915,7 +4915,12 @@ class Transformer(private val options: CompilerOptions) {
                         val numericValue = tryEvaluateEnumInitializer(resolvedExpr)
                         memberValues[memberName] = numericValue
                         nextAutoValue = if (numericValue != null) numericValue + 1 else nextAutoValue
-                        makeReverseMapStatement(enumName, memberNameExpr, resolvedExpr)
+                        // If we can evaluate the initializer to a constant, emit the constant
+                        // directly (e.g. `1 << 1` → `2`), matching TypeScript compiler output.
+                        val emittedExpr = if (numericValue != null) {
+                            NumericLiteralNode(text = numericValue.toString(), pos = -1, end = -1)
+                        } else resolvedExpr
+                        makeReverseMapStatement(enumName, memberNameExpr, emittedExpr)
                     }
                 }
 
@@ -5272,12 +5277,47 @@ class Transformer(private val options: CompilerOptions) {
 
     private fun tryEvaluateNumericLiteral(expr: Expression): Int? {
         return when (expr) {
-            is NumericLiteralNode -> expr.text.toIntOrNull()
+            is NumericLiteralNode -> expr.text.toIntOrNull() ?: run {
+                // Handle hex/binary/octal literals
+                val text = expr.text
+                when {
+                    text.startsWith("0x") || text.startsWith("0X") -> text.substring(2).toLongOrNull(16)?.toInt()
+                    text.startsWith("0b") || text.startsWith("0B") -> text.substring(2).toLongOrNull(2)?.toInt()
+                    text.startsWith("0o") || text.startsWith("0O") -> text.substring(2).toLongOrNull(8)?.toInt()
+                    else -> null
+                }
+            }
             is PrefixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.Minus) {
-                    val inner = tryEvaluateNumericLiteral(expr.operand)
-                    inner?.let { -it }
-                } else null
+                val inner = tryEvaluateNumericLiteral(expr.operand)
+                when (expr.operator) {
+                    SyntaxKind.Minus -> inner?.let { -it }
+                    SyntaxKind.Plus -> inner
+                    SyntaxKind.Tilde -> inner?.let { it.inv() }
+                    else -> null
+                }
+            }
+            is ParenthesizedExpression -> tryEvaluateNumericLiteral(expr.expression)
+            is BinaryExpression -> {
+                val left = tryEvaluateNumericLiteral(expr.left)
+                val right = tryEvaluateNumericLiteral(expr.right)
+                if (left == null || right == null) null
+                else when (expr.operator) {
+                    SyntaxKind.Plus -> left + right
+                    SyntaxKind.Minus -> left - right
+                    SyntaxKind.Asterisk -> left * right
+                    SyntaxKind.Slash -> if (right != 0) left / right else null
+                    SyntaxKind.Percent -> if (right != 0) left % right else null
+                    SyntaxKind.AsteriskAsterisk -> {
+                        if (right >= 0) Math.pow(left.toDouble(), right.toDouble()).toInt() else null
+                    }
+                    SyntaxKind.LessThanLessThan -> left shl right
+                    SyntaxKind.GreaterThanGreaterThan -> left shr right
+                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> left ushr right
+                    SyntaxKind.Ampersand -> left and right
+                    SyntaxKind.Bar -> left or right
+                    SyntaxKind.Caret -> left xor right
+                    else -> null
+                }
             }
 
             else -> null
