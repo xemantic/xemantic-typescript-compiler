@@ -1607,6 +1607,13 @@ class Emitter(
             }
         }
         emitExpression(node.initializer)
+        // Emit same-line trailing comments after the value expression, before the comma
+        // (e.g. `f: a => 0 /*t1*/,` or `g: (a => 0) /*t2*/,`)
+        if (!options.removeComments) {
+            node.initializer.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                write(" "); write(it.text)
+            }
+        }
     }
 
     private fun emitShorthandPropertyAssignment(node: ShorthandPropertyAssignment) {
@@ -1806,6 +1813,12 @@ class Emitter(
     private fun emitParenthesizedExpression(node: ParenthesizedExpression) {
         write("(")
         emitExpression(node.expression)
+        // Emit same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`)
+        if (!options.removeComments) {
+            node.expression.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                write(" "); write(it.text)
+            }
+        }
         write(")")
     }
 
