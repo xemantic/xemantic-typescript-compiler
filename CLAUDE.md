@@ -78,6 +78,19 @@ Example wave grouping for this codebase:
 - **Wave 2 (parallel):** `export {}` (Transformer), binary-op comments (Emitter), yield comments (Parser)
 - **Wave 3 (sequential):** CommonJS improvements (deep Transformer rewrite)
 
+### Merge workflow (between waves)
+
+After all subagents in a wave complete, merge their worktree branches sequentially into `main`:
+
+```bash
+git fetch
+git merge <worktree-branch> --no-ff -m "merge: task <X> fix"
+# Conflicts are typically in different functions of the same file — resolve manually
+git push
+```
+
+Then update PLAN.md (current test count, mark completed tasks ✅) and commit before dispatching the next wave.
+
 ### Context discipline
 
 - Keep this file and `PLAN.md` up to date after each session so the next agent/developer starts with accurate state
