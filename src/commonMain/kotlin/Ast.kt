@@ -807,6 +807,8 @@ data class ConditionalExpression(
 data class YieldExpression(
     val expression: Expression? = null,
     val asteriskToken: Boolean = false,
+    /** Comments between `yield` and `*` (e.g. `yield /*c*/* expr`). */
+    val yieldAsteriskComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
