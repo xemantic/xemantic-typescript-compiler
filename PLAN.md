@@ -2,9 +2,9 @@
 
 ## Current Status (2026-03-05)
 
-**Test results**: 4,010 / 8,627 passing (46.5%)
+**Test results**: 4,018 / 8,627 passing (46.6%)
 
-Previous: 3,664 / 8,627 passing (42.5%)
+Previous: 4,012 / 8,627 passing (46.5%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -120,8 +120,8 @@ Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "w
 
 | Wave | Tasks | Primary files touched |
 |------|-------|----------------------|
-| 1 | A, G | TypeScriptCompiler.kt, Emitter.kt |
-| 2 | B, E, F | Transformer.kt, Emitter.kt, Parser.kt |
+| 1 ✅ | A (already fixed), G (+2) | Emitter.kt |
+| 2 ✅ | B (+3), E (+2), F (+1) | Transformer.kt, Emitter.kt, Parser.kt |
 | 3 | D | Transformer.kt (new AMD fn) |
 | 4 | C1, C2 | Transformer.kt (CommonJS) |
 | 5 | C3, C4, H, I, J | Various (complex / dependent) |
@@ -137,17 +137,15 @@ git push
 
 ---
 
-### A. `"use strict"` over-emission (~219 tests) ★ HIGH IMPACT, SELF-CONTAINED
+### ✅ A. `"use strict"` over-emission — ALREADY FIXED
 
-**Test pattern**: `./gradlew jvmTest 2>&1 | grep -a 'FAILED' | grep -v 'errors_txt'` — look for JS tests whose actual output starts with `"use strict";` but expected doesn't.
-
-**Symptom**: We unconditionally emit `"use strict";` for target ≥ ES2015. TypeScript only emits it for CommonJS modules or when `alwaysStrict` is set. ES module files (`import`/`export`) are inherently strict — no `"use strict"` needed.
-
-**Fix area**: `TypeScriptCompiler.kt` or `Transformer.kt` — the logic that decides whether to prepend `"use strict"`. Guard it behind `options.module == CommonJS || options.alwaysStrict`.
-
-**Verify**: `./gradlew jvmTest 2>&1 | grep -a 'tests completed'` — expect ~219 fewer failures.
+ESM check (`hasModuleStatements && isESModuleFormat`) was implemented in a prior session. AMD/System case (no top-level `"use strict"`) requires Task D (AMD/System module wrappers) to be useful. Zero net test gain from further work here.
 
 ---
+
+### ✅ B. `export {}` correctness — PARTIALLY FIXED (+3 tests)
+
+Type-only export specifier erasure, computed property key tracking, non-instantiated namespace default export. ~13 remaining cases require cross-file type resolution or unsupported features.
 
 ### B. `export {}` correctness (~68 + ~15 tests) ★ HIGH IMPACT
 
@@ -180,6 +178,10 @@ The CommonJS transform is implemented but incomplete. These sub-fixes are separa
 
 ---
 
+### ✅ E. Comment preservation — binary operator positions — FIXED (+2 tests)
+
+`BinaryExpression` now captures `operatorLeadingComments`, `operatorTrailingComments`, and `operatorHasPrecedingLineBreak` in Parser; Emitter handles the indented-operator-on-new-line case.
+
 ### E. Comment preservation — binary operator positions (~10 tests)
 
 **Test**: `./gradlew jvmTest --tests '*.commentOnBinaryOperator1*'`
@@ -195,6 +197,10 @@ Actual:   var a = 'some' + 'text';
 **Fix area**: `emitBinaryExpression` in `Emitter.kt`. When the right operand has `leadingComments` with `hasPrecedingNewLine=true`, emit a newline + indent before the operator and operand.
 
 ---
+
+### ✅ F. Comment preservation — yield/await inner comments — FIXED (+1 test)
+
+`parseYieldExpression` now calls `consumeTrailingComments()` after `yield`/`*` to capture inline comments and attach as `leadingComments` on the inner expression.
 
 ### F. Comment preservation — yield/await inner comments (~5 tests)
 
