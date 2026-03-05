@@ -2,9 +2,9 @@
 
 ## Current Status (2026-03-05)
 
-**Test results**: 4,263 / 8,627 passing (49.4%)
+**Test results**: 4,401 / 8,627 passing (51.0%)
 
-Previous: 4,259 / 8,627 passing (49.4%)
+Previous: 4,263 / 8,627 passing (49.4%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -124,7 +124,7 @@ Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "w
 | 2 ✅ | B (+3), E (+2), F (+1) | Transformer.kt, Emitter.kt, Parser.kt |
 | 3 ✅ | D (+241) | Transformer.kt (new AMD fn) |
 | 4 ✅ | C1 (already fixed), C2 (+4) | Transformer.kt (CommonJS) |
-| 5 | H, J | Transformer.kt (System module, enum folding) |
+| 5 ✅ | H (+129: System+opts chain+nullish+ternary), J (+9: enum folding) | Transformer.kt |
 | 6 | I, C3, C4 | Transformer.kt (async/await, import helpers) |
 
 **Merge workflow per wave:**
@@ -225,6 +225,10 @@ Actual:   var a = 'some' + 'text';
 
 ---
 
+### ✅ H. System module format + optional chain + nullish coalescing + ternary — FIXED (+129 tests)
+
+`transformToSystem()` implemented. Also: `?.` optional chaining downlevel for ES2015, `??` nullish coalescing downlevel for <ES2020, ternary precedence parens, namespace heritage clause fixes, prefix unary spacing.
+
 ### H. System module format (~36 tests)
 
 **Symptom**: `@module: system` tests expect `System.register([], function(exports_1, context_1) { ... })`.
@@ -240,6 +244,10 @@ Actual:   var a = 'some' + 'text';
 **Fix area**: `Transformer.kt` — detect `async function` + target < ES2017, rewrite body using `__awaiter/__generator` pattern.
 
 ---
+
+### ✅ J. Enum constant folding — FIXED (+9 tests)
+
+`evaluateConstantExpression()` handles all arithmetic/bitwise ops, cross-member references. `transformEnum()` tracks `memberValues: Map<String, Long>`.
 
 ### J. Enum constant folding (~5 tests)
 
