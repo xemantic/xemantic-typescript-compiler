@@ -3862,6 +3862,9 @@ class Transformer(private val options: CompilerOptions) {
                 if (isAsync) {
                     needsAwaiterHelper = true
                     val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+                    // Arrow functions inside a regular function scope capture `this` from the enclosing function;
+                    // at the top level (functionScopeDepth == 0) there's no meaningful `this`, so use void 0.
+                    val thisArg: Expression = if (functionScopeDepth > 0) syntheticId("this") else void0
                     val generatorBody: Block = when (transformedBody) {
                         is Block -> transformedBody
                         is Expression -> Block(statements = listOf(ReturnStatement(expression = transformedBody)), multiLine = false)
@@ -3871,7 +3874,7 @@ class Transformer(private val options: CompilerOptions) {
                         typeParameters = null,
                         parameters = transformParameters(expr.parameters),
                         type = null,
-                        body = makeAwaiterCall(void0, generatorBody),
+                        body = makeAwaiterCall(thisArg, generatorBody),
                         modifiers = strippedModifiers - ModifierFlag.Async,
                         hasParenthesizedParameters = true,
                     )

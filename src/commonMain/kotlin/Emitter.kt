@@ -1356,7 +1356,7 @@ class Emitter(
             is DeleteExpression -> emitPrefixKeywordExpression("delete", node.expression)
             is TypeOfExpression -> emitPrefixKeywordExpression("typeof", node.expression)
             is VoidExpression -> emitPrefixKeywordExpression("void", node.expression)
-            is AwaitExpression -> emitPrefixKeywordExpression(if (node.inAsyncContext) "await" else "yield", node.expression)
+            is AwaitExpression -> emitPrefixKeywordExpression("await", node.expression)
             is PrefixUnaryExpression -> emitPrefixUnaryExpression(node)
             is PostfixUnaryExpression -> emitPostfixUnaryExpression(node)
             is BinaryExpression -> emitBinaryExpression(node)
