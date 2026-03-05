@@ -2740,7 +2740,8 @@ class Parser(private val source: String, private val fileName: String) {
         val openParenComments = scanner.getTrailingComments()
         val params = mutableListOf<Parameter>()
         // Comments to prepend to the next parameter's leadingComments (captured from before a comma).
-        var pendingLeadingComments: List<Comment>? = null
+        // Initialize with openParenComments so inline comments after '(' attach to the first param.
+        var pendingLeadingComments: List<Comment>? = openParenComments?.takeIf { it.isNotEmpty() }
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
             var param = parseParameter()
             // Prepend any comments collected from before the previous comma into this param's leadingComments.
