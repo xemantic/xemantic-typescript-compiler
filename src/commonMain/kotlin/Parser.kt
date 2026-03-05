@@ -1561,6 +1561,37 @@ class Parser(private val source: String, private val fileName: String) {
 
             GlobalKeyword -> parseModuleDeclaration(modifiers, comments)
             ImportKeyword -> parseImportDeclaration(modifiers, comments)
+
+            // `declare export function/class/...` — add Export modifier and recurse
+            ExportKeyword -> {
+                nextToken() // skip 'export'
+                val mods = modifiers + ModifierFlag.Export
+                when (token) {
+                    DefaultKeyword -> {
+                        nextToken() // skip 'default'
+                        val mods2 = mods + ModifierFlag.Default
+                        when (token) {
+                            FunctionKeyword -> parseFunctionDeclarationOrExpression(mods2, comments)
+                            ClassKeyword -> parseClassDeclaration(mods2, comments)
+                            AsyncKeyword -> {
+                                nextToken()
+                                parseFunctionDeclarationOrExpression(mods2 + ModifierFlag.Async, comments)
+                            }
+                            else -> parseVariableStatement(mods2, comments)
+                        }
+                    }
+                    FunctionKeyword -> parseFunctionDeclarationOrExpression(mods, comments)
+                    ClassKeyword -> parseClassDeclaration(mods, comments)
+                    InterfaceKeyword -> parseInterfaceDeclaration(mods, comments)
+                    TypeKeyword -> parseTypeAliasDeclaration(mods, comments)
+                    EnumKeyword -> parseEnumDeclaration(mods, comments)
+                    NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration(mods, comments)
+                    AbstractKeyword -> { nextToken(); parseClassDeclaration(mods + ModifierFlag.Abstract, comments) }
+                    AsyncKeyword -> { nextToken(); parseFunctionDeclarationOrExpression(mods + ModifierFlag.Async, comments) }
+                    else -> parseVariableStatement(mods, comments)
+                }
+            }
+
             else -> parseVariableStatement(modifiers, comments)
         }
     }
