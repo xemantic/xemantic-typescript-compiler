@@ -2,7 +2,7 @@
 
 ## Current Status (2026-03-05)
 
-**Test results**: 4,405 / 8,627 passing (51.1%)
+**Test results**: 4,409 / 8,627 passing (51.1%)
 
 Previous: 4,401 / 8,627 passing (51.0%)
 
@@ -125,7 +125,7 @@ Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "w
 | 3 ✅ | D (+241) | Transformer.kt (new AMD fn) |
 | 4 ✅ | C1 (already fixed), C2 (+4) | Transformer.kt (CommonJS) |
 | 5 ✅ | H (+129: System+opts chain+nullish+ternary), J (+9: enum folding) | Transformer.kt |
-| 6 | comment fixes (+4 net: JSDoc-in-args, block-param-comments) | Emitter.kt, Parser.kt |
+| 6 ✅ | comment fixes (+8 net) | Emitter.kt, Parser.kt |
 | 7 | I, C3, C4 | Transformer.kt (async/await, import helpers) |
 
 **Merge workflow per wave:**
