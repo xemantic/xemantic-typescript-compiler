@@ -2240,16 +2240,43 @@ class Emitter(
             }
             return
         }
+        // Use multiline comma-first format when any parameter has block-comment leading comments
+        // (i.e., comments on their own line preceding the parameter). Inline trailing comments
+        // alone do not trigger the multiline format.
         val anyHasLeadingComments = !options.removeComments && emittableParams.any { it.leadingComments != null }
-        if (anyHasLeadingComments) {
-            // Emit each parameter on its own line with leading comment
+        // Also use multiline format when any parameter has newline-separated trailing comments.
+        val anyHasNewlineTrailingComments = !options.removeComments && emittableParams.any { param ->
+            param.trailingComments?.any { it.hasPrecedingNewLine } == true
+        }
+        val anyHasLeadingOrTrailingComments = anyHasLeadingComments || anyHasNewlineTrailingComments
+        if (anyHasLeadingOrTrailingComments) {
+            // Emit parameters with comments using comma-first style:
+            // leading comments go on their own lines, then [, ]paramName, then trailing comments.
+            // After all params, emit a newline so the closing `)` appears on its own line.
             for ((index, param) in emittableParams.withIndex()) {
                 writeNewLine()
                 emitLeadingComments(param)
                 writeIndent()
-                emitParameter(param)
-                if (index < emittableParams.size - 1) write(", ")
+                if (index > 0) write(", ")
+                emitParameter(param, emitInlineTrailingOnly = false)
+                // Emit trailing comments: inline ones stay on same line, newline-separated on their own lines
+                val trailing = param.trailingComments
+                if (!trailing.isNullOrEmpty()) {
+                    for (comment in trailing) {
+                        if (comment.hasPrecedingNewLine) {
+                            writeNewLine()
+                            writeIndent()
+                            write(comment.text)
+                        } else {
+                            write(" ")
+                            write(comment.text)
+                        }
+                    }
+                }
             }
+            // Newline before the closing `)` so it appears on its own line
+            writeNewLine()
+            writeIndent()
         } else {
             for ((index, param) in emittableParams.withIndex()) {
                 if (index > 0) write(", ")
@@ -2258,13 +2285,17 @@ class Emitter(
         }
     }
 
-    private fun emitParameter(node: Parameter) {
+    private fun emitParameter(node: Parameter, emitInlineTrailingOnly: Boolean = true) {
         if (node.dotDotDotToken) {
             write("...")
             emitTrailingComments(node.dotDotDotTrailingComments)
         }
         emitExpression(node.name)
-        emitTrailingComments(node.trailingComments)
+        // When emitInlineTrailingOnly=true (default), emit trailing comments inline.
+        // When false (comma-first / multi-line mode), trailing comments are handled by the caller.
+        if (emitInlineTrailingOnly) {
+            emitTrailingComments(node.trailingComments)
+        }
         // skip type annotation
         if (node.initializer != null) {
             write(" = ")
