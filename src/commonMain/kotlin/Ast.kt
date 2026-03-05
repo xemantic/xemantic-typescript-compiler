@@ -788,6 +788,12 @@ data class BinaryExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Comments that appear before the operator (between left operand and operator). */
+    val operatorLeadingComments: List<Comment>? = null,
+    /** Comments that appear after the operator but before the right operand (inline, no preceding newline). */
+    val operatorTrailingComments: List<Comment>? = null,
+    /** True if the operator token was preceded by a line break in the source (even if no comments). */
+    val operatorHasPrecedingLineBreak: Boolean = false,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.BinaryExpression
 }
