@@ -2261,8 +2261,11 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenParen)
         val expr = parseExpression()
+        // Capture same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`).
+        val innerTrailing = scanner.getTrailingComments()
         parseExpected(SyntaxKind.CloseParen)
-        return ParenthesizedExpression(expression = expr, pos = pos, end = getEnd())
+        val exprWithComments = if (!innerTrailing.isNullOrEmpty()) expr.withTrailingComments(innerTrailing) else expr
+        return ParenthesizedExpression(expression = exprWithComments, pos = pos, end = getEnd())
     }
 
     private fun parseArrowFunction(modifiers: Set<ModifierFlag>): ArrowFunction {
@@ -2481,12 +2484,15 @@ class Parser(private val source: String, private val fileName: String) {
             // also capture them as inlineCmts (which would cause double-emission).
             val inlineComments = scanner.consumeTrailingComments()
             val value = parseAssignmentExpression()
+            // Capture same-line trailing comments after the value expression (e.g. `f: a => 0 /*t1*/,`).
+            // These appear in the scanner's trailingComments between the expression end and the comma.
+            val valueTrailing = scanner.getTrailingComments()
             val valueWithComments = if (!inlineComments.isNullOrEmpty()) {
                 val merged = inlineComments + (value.leadingComments ?: emptyList())
                 value.withLeadingComments(merged)
             } else {
                 value
-            }
+            }.let { v -> if (!valueTrailing.isNullOrEmpty()) v.withTrailingComments(valueTrailing) else v }
             return PropertyAssignment(name = name, initializer = valueWithComments, pos = pos, end = getEnd(), leadingComments = comments)
         }
 
