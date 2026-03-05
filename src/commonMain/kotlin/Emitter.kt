@@ -2254,9 +2254,11 @@ class Emitter(
             return
         }
         // Use multiline comma-first format when any parameter has block-comment leading comments
-        // (i.e., comments on their own line preceding the parameter). Inline trailing comments
-        // alone do not trigger the multiline format.
-        val anyHasLeadingComments = !options.removeComments && emittableParams.any { it.leadingComments != null }
+        // on their own line (hasPrecedingNewLine=true). Inline comments like /*c1*/ before a param
+        // do NOT trigger multiline format — they are emitted inline in the single-line path.
+        val anyHasLeadingComments = !options.removeComments && emittableParams.any { param ->
+            param.leadingComments?.any { it.hasPrecedingNewLine } == true
+        }
         // Also use multiline format when any parameter has newline-separated trailing comments.
         val anyHasNewlineTrailingComments = !options.removeComments && emittableParams.any { param ->
             param.trailingComments?.any { it.hasPrecedingNewLine } == true
@@ -2293,6 +2295,12 @@ class Emitter(
         } else {
             for ((index, param) in emittableParams.withIndex()) {
                 if (index > 0) write(", ")
+                // Emit inline leading comments (e.g. `/*c1*/` before parameter name)
+                if (!options.removeComments) {
+                    param.leadingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                        write(it.text); write(" ")
+                    }
+                }
                 emitParameter(param)
             }
         }
