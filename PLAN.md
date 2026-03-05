@@ -17,7 +17,7 @@ The 8,627 tests split into two fundamentally different categories:
 
 **Realistic ceiling without a type checker: ~5,413 / 8,627 (62.7%)**
 
-We currently pass 2,957 tests — meaning roughly **~2,456 emit tests still fail** and represent
+We currently pass 4,010 tests — meaning roughly **~1,403 emit tests still fail** and represent
 the entire addressable work surface without implementing a type checker.
 
 ### Why error tests need a real type checker
@@ -113,6 +113,27 @@ For error tests:
 ## Priority Fixes (by impact)
 
 Each entry below is a self-contained subagent task. Start with the test command, read the diff, find the fix area, implement, then run the full suite to confirm net improvement. See the "AI agent workflow" section in CLAUDE.md for the brief template.
+
+### Orchestrator wave dispatch order
+
+Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "worktree"`. Between waves, merge all worktree branches to `main` (resolve conflicts, then `git push`) before starting the next wave.
+
+| Wave | Tasks | Primary files touched |
+|------|-------|----------------------|
+| 1 | A, G | TypeScriptCompiler.kt, Emitter.kt |
+| 2 | B, E, F | Transformer.kt, Emitter.kt, Parser.kt |
+| 3 | D | Transformer.kt (new AMD fn) |
+| 4 | C1, C2 | Transformer.kt (CommonJS) |
+| 5 | C3, C4, H, I, J | Various (complex / dependent) |
+
+**Merge workflow per wave:**
+```bash
+git fetch
+# For each subagent branch (worktree result):
+git merge <branch> --no-ff -m "merge: <task-letter> fix"
+# Resolve conflicts (typically just different functions in same file)
+git push
+```
 
 ---
 
