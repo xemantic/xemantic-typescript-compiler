@@ -1709,11 +1709,23 @@ class Parser(private val source: String, private val fileName: String) {
             }
 
             val op = token
+            val opLeadingComments = leadingComments()
+            val opHasPrecedingLineBreak = scanner.hasPrecedingLineBreak()
             nextToken()
+            val opTrailingComments = scanner.consumeTrailingComments()
             // Right-to-left for ** operator
             val nextMinPrec = if (op == SyntaxKind.AsteriskAsterisk) prec - 1 else prec
             val right = parseBinaryExpression(nextMinPrec)
-            left = BinaryExpression(left = left, operator = op, right = right, pos = left.pos, end = getEnd())
+            left = BinaryExpression(
+                left = left,
+                operator = op,
+                right = right,
+                pos = left.pos,
+                end = getEnd(),
+                operatorLeadingComments = opLeadingComments,
+                operatorTrailingComments = opTrailingComments,
+                operatorHasPrecedingLineBreak = opHasPrecedingLineBreak,
+            )
         }
         return left
     }
@@ -2614,10 +2626,22 @@ class Parser(private val source: String, private val fileName: String) {
                 continue
             }
             val op = token
+            val opLeadingComments = leadingComments()
+            val opHasPrecedingLineBreak = scanner.hasPrecedingLineBreak()
             nextToken()
+            val opTrailingComments = scanner.consumeTrailingComments()
             val nextMinPrec = if (op == SyntaxKind.AsteriskAsterisk) prec - 1 else prec
             val right = parseBinaryExpression(nextMinPrec)
-            result = BinaryExpression(left = result, operator = op, right = right, pos = result.pos, end = getEnd())
+            result = BinaryExpression(
+                left = result,
+                operator = op,
+                right = right,
+                pos = result.pos,
+                end = getEnd(),
+                operatorLeadingComments = opLeadingComments,
+                operatorTrailingComments = opTrailingComments,
+                operatorHasPrecedingLineBreak = opHasPrecedingLineBreak,
+            )
         }
         return result
     }

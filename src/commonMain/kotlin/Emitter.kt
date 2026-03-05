@@ -1861,8 +1861,57 @@ class Emitter(
         } else if (node.operator == SyntaxKind.Comma) {
             write("$op ")
             emitExpression(node.right)
+        } else if (node.operatorHasPrecedingLineBreak) {
+            // Operator is on a new line in the source (possibly with comments before it).
+            // Emit: newline, any leading comments, operator at indented position,
+            // any inline comments after operator, then right operand.
+            val opLeading = if (!options.removeComments) node.operatorLeadingComments else null
+            val opTrailing = if (!options.removeComments) node.operatorTrailingComments else null
+            val indentStr = "    ".repeat(indentLevel + 1)
+            writeNewLine()
+            if (opLeading != null && opLeading.isNotEmpty()) {
+                for (comment in opLeading) {
+                    sb.append(indentStr)
+                    write(comment.text)
+                    writeNewLine()
+                }
+            }
+            sb.append(indentStr)
+            isStartOfLine = false
+            write(op)
+            // Emit inline comments after the operator (on the same line as operator)
+            if (opTrailing != null && opTrailing.isNotEmpty()) {
+                for (comment in opTrailing) {
+                    write(" ")
+                    write(comment.text)
+                }
+                // If there's a newline between last trailing comment and right operand,
+                // emit right on a new extra-indented line
+                val lastTrailing = opTrailing.last()
+                if (hasNewLineInSource(lastTrailing.end, node.right.pos)) {
+                    writeNewLine()
+                    repeat(indentLevel + 2) { sb.append("    ") }
+                    isStartOfLine = false
+                } else {
+                    write(" ")
+                }
+            } else {
+                // No trailing comments after operator; check source to see if right is on new line.
+                // node.left.end is the position after the operator token (not after left expression),
+                // so the range [left.end, right.pos] is the trivia between operator and right operand.
+                val rightOnNewLineAfterOp = hasNewLineInSource(node.left.end, node.right.pos)
+                if (rightOnNewLineAfterOp) {
+                    writeNewLine()
+                    repeat(indentLevel + 2) { sb.append("    ") }
+                    isStartOfLine = false
+                } else {
+                    write(" ")
+                }
+            }
+            emitExpression(node.right)
         } else {
-            // left.end = position after the operator token (scanner scans operator as lookahead)
+            // Operator is on the same line as left operand (no preceding newline).
+            // left.end = position after the left operand token
             // right.pos = start of right operand token (after trivia)
             // If there's a newline between the operator and right operand, the operator stays
             // at end of the current line and the right operand goes to the next indented line.
