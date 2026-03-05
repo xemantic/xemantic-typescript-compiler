@@ -2733,9 +2733,34 @@ class Parser(private val source: String, private val fileName: String) {
         // Capture same-line comments between `(` and first token (e.g., `/** nothing */` in empty lists).
         val openParenComments = scanner.getTrailingComments()
         val params = mutableListOf<Parameter>()
+        // Comments to prepend to the next parameter's leadingComments (captured from before a comma).
+        var pendingLeadingComments: List<Comment>? = null
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
-            params.add(parseParameter())
-            if (!parseOptional(SyntaxKind.Comma)) break
+            var param = parseParameter()
+            // Prepend any comments collected from before the previous comma into this param's leadingComments.
+            if (pendingLeadingComments != null) {
+                val merged = pendingLeadingComments!! + (param.leadingComments ?: emptyList())
+                param = param.copy(leadingComments = merged.ifEmpty { null })
+                pendingLeadingComments = null
+            }
+            // Before consuming the comma, capture its leading comments (comments between param and comma).
+            // These will become the leading comments of the NEXT parameter (comma-first style).
+            val preCommaComments = leadingComments()
+            if (!parseOptional(SyntaxKind.Comma)) {
+                // No comma — we're done. Capture leading comments of `)` as trailing of this last param.
+                val preCloseParenComments = leadingComments()
+                if (!preCloseParenComments.isNullOrEmpty()) {
+                    val merged = (param.trailingComments ?: emptyList()) + preCloseParenComments
+                    param = param.copy(trailingComments = merged)
+                }
+                params.add(param)
+                break
+            }
+            params.add(param)
+            // Save pre-comma comments to attach to next parameter.
+            if (!preCommaComments.isNullOrEmpty()) {
+                pendingLeadingComments = preCommaComments
+            }
         }
         parseExpected(SyntaxKind.CloseParen)
         // If no parameters but there are inline comments between ( and ), create a placeholder.
