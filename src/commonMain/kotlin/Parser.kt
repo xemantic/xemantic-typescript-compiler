@@ -2507,9 +2507,28 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseYieldExpression(): YieldExpression {
         val pos = getPos()
         nextToken()
+        // Inline comments between 'yield' and the next token appear as trailing trivia of the scan
+        // (e.g., `yield /*c*/ expr` or `yield /*c*/* expr` — `/*c*/` is trailingComments, not leading).
+        val trailingAfterYield = scanner.consumeTrailingComments()
         val asterisk = parseOptional(SyntaxKind.Asterisk)
+        // Comments after '*' (e.g., `yield */*c*/ expr`)
+        val trailingAfterAsterisk = if (asterisk) scanner.consumeTrailingComments() else null
         val expr = if (!canParseSemicolon()) parseAssignmentExpression() else null
-        return YieldExpression(expression = expr, asteriskToken = asterisk, pos = pos, end = getEnd())
+        val exprWithComments = if (expr != null) {
+            // For `yield /*c*/ expr` (no asterisk): comments before expression
+            // For `yield */*c*/ expr`: comments after '*', before expression
+            val innerComments = trailingAfterAsterisk ?: if (!asterisk) trailingAfterYield else null
+            if (innerComments != null && expr.leadingComments == null)
+                expr.withLeadingComments(innerComments)
+            else expr
+        } else expr
+        return YieldExpression(
+            expression = exprWithComments,
+            asteriskToken = asterisk,
+            yieldAsteriskComments = if (asterisk) trailingAfterYield else null,
+            pos = pos,
+            end = getEnd()
+        )
     }
 
     private fun parseTemplateLiteral(): Expression {
