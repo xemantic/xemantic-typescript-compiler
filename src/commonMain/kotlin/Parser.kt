@@ -2213,7 +2213,7 @@ class Parser(private val source: String, private val fileName: String) {
         }
         if (isArrow) return parseArrowFunction(emptySet())
 
-        // Try complex arrow detection
+        // Try complex arrow detection: (params) => body  or  (params): RetType => body
         val maybeArrow = scanner.lookAhead {
             scanner.scan() // skip (
             var depth = 1
@@ -2223,8 +2223,37 @@ class Parser(private val source: String, private val fileName: String) {
                 if (depth > 0) scanner.scan()
             }
             if (depth == 0) {
-                scanner.scan()
-                scanner.getToken() == SyntaxKind.EqualsGreaterThan || scanner.getToken() == SyntaxKind.Colon
+                scanner.scan() // skip )
+                when (scanner.getToken()) {
+                    SyntaxKind.EqualsGreaterThan -> true
+                    SyntaxKind.Colon -> {
+                        // Could be a return-type annotation: (params): Type => body
+                        // Skip past the type expression to see if => follows.
+                        // We must NOT match the ternary `:` — after a ternary `:`, the
+                        // next expression is never followed by `=>`.
+                        // Simple heuristic: skip tokens (respecting bracket depth) until
+                        // we hit `=>`, `;`, `{`, or end — if we hit `=>`, it's an arrow.
+                        scanner.scan() // skip :
+                        var typeDepth = 0
+                        var foundArrow = false
+                        loop@ while (scanner.getToken() != SyntaxKind.EndOfFile) {
+                            when (scanner.getToken()) {
+                                SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.LessThan -> typeDepth++
+                                SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> {
+                                    if (typeDepth == 0) break@loop else typeDepth--
+                                }
+                                SyntaxKind.GreaterThan -> if (typeDepth > 0) typeDepth--
+                                SyntaxKind.EqualsGreaterThan -> if (typeDepth == 0) { foundArrow = true; break@loop }
+                                SyntaxKind.Semicolon, SyntaxKind.OpenBrace,
+                                SyntaxKind.CloseBrace, SyntaxKind.Colon -> if (typeDepth == 0) break@loop
+                                else -> {}
+                            }
+                            scanner.scan()
+                        }
+                        foundArrow
+                    }
+                    else -> false
+                }
             } else false
         }
         if (maybeArrow) return parseArrowFunction(emptySet())

@@ -138,8 +138,9 @@ class Transformer(private val options: CompilerOptions) {
         }
         // Remove any type-only names that also have a runtime declaration
         topLevelTypeOnlyNames -= topLevelRuntimeNames
-        // Pre-pass: collect const enum values for inlining at use sites
-        if (!options.preserveConstEnums) {
+        // Pre-pass: collect const enum values for inlining at use sites.
+        // With isolatedModules, const enums can't be inlined (no cross-file info available).
+        if (!options.preserveConstEnums && !options.isolatedModules) {
             collectConstEnumValues(sourceFile.statements)
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
@@ -155,6 +156,12 @@ class Transformer(private val options: CompilerOptions) {
         if (options.effectiveModule == ModuleKind.AMD && isModuleFile(sourceFile)) {
             val amdStatements = transformToAMD(transformed, sourceFile)
             return sourceFile.copy(statements = amdStatements)
+        }
+
+        // System module transform — only for module files.
+        if (options.effectiveModule == ModuleKind.System && isModuleFile(sourceFile)) {
+            val sysStatements = transformToSystem(transformed, sourceFile)
+            return sourceFile.copy(statements = sysStatements)
         }
 
         // ES module import elision: erase imports whose bindings are unused in value positions
@@ -233,11 +240,12 @@ class Transformer(private val options: CompilerOptions) {
             // If nothing is used, drop this import entirely
             if (!defaultUsed && !nsUsed && !hasUsedNamedImports) continue
 
-            // If all named imports are used (or there are no named imports), keep as-is
-            if (namedImports == null || usedNamedElements == namedImports.elements) {
+            // If all named imports are used (and there are some), keep as-is.
+            // If namedImports is null, or all elements are used and non-empty, keep as-is.
+            if (namedImports == null || (usedNamedElements == namedImports.elements && namedImports.elements.isNotEmpty())) {
                 result.add(stmt)
             } else {
-                // Keep only the used named imports
+                // Keep only the used named imports; if none used (or originally empty), drop bindings.
                 val newBindings = if (usedNamedElements!!.isEmpty()) null
                 else namedImports.copy(elements = usedNamedElements)
                 result.add(stmt.copy(importClause = clause.copy(namedBindings = newBindings)))
@@ -373,7 +381,7 @@ class Transformer(private val options: CompilerOptions) {
                     extractIdentifierName(stmt.name)?.let { exportedNsEnumNames.add(it) }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) &&
-                        (options.preserveConstEnums || ModifierFlag.Const !in stmt.modifiers) ->
+                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
@@ -1142,7 +1150,7 @@ class Transformer(private val options: CompilerOptions) {
                     extractIdentifierName(stmt.name)?.let { exportedNsEnumNames.add(it) }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) &&
-                        (options.preserveConstEnums || ModifierFlag.Const !in stmt.modifiers) ->
+                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
@@ -1652,6 +1660,1325 @@ class Transformer(private val options: CompilerOptions) {
         return result
     }
 
+    // System module transform
+    /**
+     * Transforms statements to System module format:
+     * `System.register([deps], function(exports_1, context_1) { ... })`
+     *
+     * System module structure:
+     * - Dependencies array contains paths from ImportDeclarations
+     * - Function body: "use strict"; var decls; var __moduleName; function hoists; return { setters, execute }
+     * - Setters: one per unique dep path, assigns module binding vars
+     * - Execute: contains all non-import statements with export calls
+     * - exports_1("name", value) instead of exports.name = value
+     */
+    private fun transformToSystem(
+        statements: List<Statement>,
+        originalSourceFile: SourceFile,
+    ): List<Statement> {
+        // Parse /// <amd-module name='X'/> directives (also applies to System format)
+        val amdDirectives = parseAmdDirectives(originalSourceFile.text)
+
+        // Strip "use strict" from transformed statements (goes inside the function body)
+        val statementsWithoutStrict = statements.filter { stmt ->
+            !(stmt is ExpressionStatement &&
+                stmt.expression is StringLiteralNode &&
+                (stmt.expression as StringLiteralNode).text == "use strict")
+        }
+
+        // Counter for generating unique temp names
+        val moduleNameCounter = mutableMapOf<String, Int>()
+        // Counter for side-effect import setter param names (_1, _2, ...)
+        var sideEffectCounter = 0
+
+        // Ordered list of (moduleSpecifierPath, tempVarName) pairs for each ImportDeclaration binding.
+        // Multiple imports from the same path share a setter; each binding gets its own temp var.
+        data class ImportBinding(
+            val path: String,          // module path string
+            val tempVarName: String,   // the temp var (e.g. "file1_1", "ns")
+            val renameTarget: Expression, // what to rewrite usages to (e.g. file2_1.A)
+            val localName: String,     // local name in source (for renaming)
+        )
+
+        // Ordered list for processing (preserves source order)
+        val importBindings = mutableListOf<ImportBinding>()
+        // Unique module paths in order of first appearance (for deduplication)
+        val uniqueModulePaths = mutableListOf<String>()
+        // Map from path → setter param name (the param inside setter function)
+        val pathToSetterParam = mutableMapOf<String, String>()
+        // Map from path → list of (tempVar) that get assigned in this setter
+        val pathToTempVars = mutableMapOf<String, MutableList<String>>()
+        // Map from path → module-level temp var name (for named/default imports, one per path)
+        val pathToModuleTempVar = mutableMapOf<String, String>()
+        // Map from path → namespace import var names (assigned FIRST in setter, before exportStar)
+        val pathToNamespaceVars = mutableMapOf<String, MutableList<String>>()
+        // Side-effect imports (no bindings) — just added as deps with empty setter
+        val sideEffectPaths = mutableListOf<String>()
+        // Side-effect import setter param names (in path order)
+        val sideEffectSetterParam = mutableMapOf<String, String>()
+        // Export star paths — each needs a setter that calls exportStar_N
+        val exportStarPaths = mutableListOf<String>()  // list of (path) in order
+        // Named re-exports from a module: export {a2, b2, c2 as d2} from "bar"
+        // path → list of (exportName, importedOriginalName) pairs
+        val pathToNamedReExports = mutableMapOf<String, MutableList<Pair<String, String>>>()
+        // Names that are namespace imports (import * as X) — for execute ordering
+        val namespaceImportNames = mutableSetOf<String>()
+
+        // Pre-scan for type-only names (to avoid exporting them)
+        val runtimeDeclaredNames = mutableSetOf<String>()
+        val typeOnlyDeclaredNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> typeOnlyDeclaredNames.add(stmt.name.text)
+                is InterfaceDeclaration -> typeOnlyDeclaredNames.add(stmt.name.text)
+                is ClassDeclaration -> stmt.name?.text?.let { runtimeDeclaredNames.add(it) }
+                is FunctionDeclaration -> stmt.name?.text?.let { runtimeDeclaredNames.add(it) }
+                is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
+                    collectBoundNames(decl.name).forEach { n -> runtimeDeclaredNames.add(n) }
+                }
+                is EnumDeclaration -> runtimeDeclaredNames.add(stmt.name.text)
+                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { runtimeDeclaredNames.add(it) }
+                else -> {}
+            }
+        }
+        val pureTypeNames = typeOnlyDeclaredNames - runtimeDeclaredNames
+
+        // Pre-scan: find ALL local namespace/enum names (regardless of whether they have `export` modifier).
+        // They are considered "IIFE names" if they produce an IIFE (namespace/enum declaration).
+        val localNsEnumNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ModuleDeclaration && !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
+                    val n = extractIdentifierName(stmt.name)
+                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                    n?.let { localNsEnumNames.add(it) }
+                }
+                stmt is EnumDeclaration && !hasDeclareModifier(stmt) &&
+                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
+                    localNsEnumNames.add(stmt.name.text)
+            }
+        }
+        // Pre-scan: collect all export aliases for namespace/enum local names from ExportDeclarations.
+        // e.g. `export { ns, AnEnum, ns as FooBar }` → iifeExportAliases["ns"] = ["ns", "FooBar"]
+        // These aliases get chained into the IIFE arg, not emitted as separate statements.
+        val iifeExportAliases = mutableMapOf<String, MutableList<String>>() // localName → [exportNames]
+        for (stmt in originalSourceFile.statements) {
+            if (stmt is ExportDeclaration && stmt.exportClause is NamedExports && stmt.moduleSpecifier == null) {
+                for (spec in (stmt.exportClause as NamedExports).elements) {
+                    if (spec.isTypeOnly) continue
+                    val localName = (spec.propertyName ?: spec.name).text
+                    val exportName = spec.name.text
+                    // Collect aliases for namespace/enum IIFEs (both explicitly exported and re-exported)
+                    if (localName in localNsEnumNames) {
+                        iifeExportAliases.getOrPut(localName) { mutableListOf() }.add(exportName)
+                    }
+                }
+            }
+        }
+        // The set of IIFE names that need System export rewriting:
+        // = directly exported ns/enums + locally-declared ns/enums that are re-exported via export {}
+        val exportedNsEnumNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers &&
+                        !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
+                    val n = extractIdentifierName(stmt.name)
+                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                    n?.let { exportedNsEnumNames.add(it) }
+                }
+                stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
+                        !hasDeclareModifier(stmt) &&
+                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
+                    exportedNsEnumNames.add(stmt.name.text)
+            }
+        }
+        // Also include locally-declared ns/enums that are re-exported via `export { localName }`
+        exportedNsEnumNames.addAll(iifeExportAliases.keys)
+
+        // Pre-scan: collect all explicitly-named exports (for exportedNames_1 when combined with export *)
+        // These are the EXPORT names (not local names) from all ExportDeclarations and exported vars.
+        // Use LinkedHashSet to preserve source declaration order.
+        val localExportNames = linkedSetOf<String>()
+        // Also collect which local var names have initializers (for local re-export emit decisions).
+        val varsWithInitializers = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ExportDeclaration && !stmt.isTypeOnly && stmt.exportClause is NamedExports -> {
+                    for (spec in (stmt.exportClause as NamedExports).elements) {
+                        // Skip "default" — already excluded by n !== "default" check in exportStar
+                        if (!spec.isTypeOnly && spec.name.text != "default") localExportNames.add(spec.name.text)
+                    }
+                }
+                stmt is ExportDeclaration && !stmt.isTypeOnly && stmt.exportClause == null &&
+                        stmt.moduleSpecifier != null -> {
+                    // export * from "mod" — skip (not a named export)
+                }
+                stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers -> {
+                    for (d in stmt.declarationList.declarations) {
+                        val n = extractIdentifierName(d.name)
+                        if (n != null) {
+                            localExportNames.add(n)
+                            if (d.initializer != null) varsWithInitializers.add(n)
+                        }
+                    }
+                }
+                stmt is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        val n = extractIdentifierName(d.name)
+                        if (n != null && d.initializer != null) varsWithInitializers.add(n)
+                    }
+                }
+                stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers && !hasDeclareModifier(stmt)
+                        && ModifierFlag.Default !in stmt.modifiers -> {
+                    // export function foo() {} — the function name is a named export (not default)
+                    // "default" is already excluded by the n !== "default" check in exportStar, so skip it.
+                    stmt.name?.text?.let { localExportNames.add(it) }
+                }
+                else -> {}
+            }
+        }
+
+        // For renaming local names in body (import bindings)
+        val renameMap = mutableMapOf<String, Expression>()
+        // Set of var names that are require-call imports (to skip in Pass 2)
+        val requireImportVarNames = mutableSetOf<String>()
+        // Set of require-import var names that are also exported (export import X = require("mod"))
+        // These need exports_1("X", param) in their setter body
+        val exportedRequireImportNames = mutableSetOf<String>()
+
+        // Import elision: collect all value references from non-import statements.
+        // Used to elide unused named imports (e.g. `import {value2} from "./file4"` where value2 is never used).
+        val nonImportStmts = statementsWithoutStrict.filter { it !is ImportDeclaration }
+        val referencedNames = collectValueReferences(nonImportStmts)
+
+        // Pass 1: collect imports, build binding/rename info
+        for (stmt in statementsWithoutStrict) {
+            when (stmt) {
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause
+                    val moduleSpecifier = stmt.moduleSpecifier
+                    val specStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
+                        ?: (moduleSpecifier as? StringLiteralNode)?.text ?: ""
+
+                    if (clause == null) {
+                        // Side-effect import: import 'mod' — empty setter with param _N
+                        if (specStr !in uniqueModulePaths) {
+                            uniqueModulePaths.add(specStr)
+                            sideEffectPaths.add(specStr)
+                            sideEffectCounter++
+                            sideEffectSetterParam[specStr] = "_$sideEffectCounter"
+                        }
+                    } else {
+                        val bindings = clause.namedBindings
+
+                        // Import elision: if none of the imported names are referenced in the module body,
+                        // elide the entire import (omit from deps and bindings).
+                        val defaultName = clause.name?.text
+                        val nsName = (bindings as? NamespaceImport)?.name?.text
+                        val namedImports = bindings as? NamedImports
+                        val defaultUsed = defaultName != null && defaultName in referencedNames
+                        val nsUsed = nsName != null && nsName in referencedNames
+                        val namedUsed = namedImports?.elements?.any { el ->
+                            !el.isTypeOnly && el.name.text in referencedNames
+                        } ?: false
+                        if (!defaultUsed && !nsUsed && !namedUsed) continue  // skip this import entirely
+
+                        if (specStr !in uniqueModulePaths) {
+                            uniqueModulePaths.add(specStr)
+                            pathToTempVars[specStr] = mutableListOf()
+                        }
+
+                        // Helper: create a new module-level temp var for this import declaration.
+                        // Each import declaration (even from the same path) gets its own temp var.
+                        // All vars from the same path share ONE setter (assigned to the same param).
+                        fun createModuleTempVar(): String {
+                            val tv = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                            if (specStr !in pathToSetterParam) {
+                                pathToSetterParam[specStr] = "${tv}_1"
+                            }
+                            pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(tv)
+                            return tv
+                        }
+
+                        when {
+                            clause.name != null && bindings is NamespaceImport -> {
+                                // Combined: import e, * as ns2 from "mod"
+                                // Use module-based temp var for default access; do NOT rename namespace import.
+                                val defaultLocalName = clause.name.text
+                                val tempName = createModuleTempVar()
+                                val defaultAccess = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                                renameMap[defaultLocalName] = defaultAccess
+                                importBindings.add(ImportBinding(specStr, tempName, defaultAccess, defaultLocalName))
+                                // ns2 is NOT renamed (TypeScript leaves it unrewritten in this combined form)
+                            }
+                            bindings is NamespaceImport -> {
+                                // import * as ns from "mod" → ns becomes the module object directly
+                                val nsName = bindings.name.text
+                                // Setter param: nsName_1 (based on alias, not module path)
+                                if (specStr !in pathToSetterParam) {
+                                    pathToSetterParam[specStr] = "${nsName}_1"
+                                }
+                                // Track as namespace var (assigned first in setter)
+                                pathToNamespaceVars.getOrPut(specStr) { mutableListOf() }.add(nsName)
+                                // Temp var: nsName (same as alias) — add to hoisted vars
+                                if (!pathToTempVars.getOrPut(specStr) { mutableListOf() }.contains(nsName)) {
+                                    pathToTempVars[specStr]!!.add(nsName)
+                                }
+                                // ns → ns (identity; kept in renameMap for re-export lookup)
+                                renameMap[nsName] = syntheticId(nsName)
+                                namespaceImportNames.add(nsName)
+                                importBindings.add(ImportBinding(specStr, nsName, syntheticId(nsName), nsName))
+                            }
+                            clause.name != null && bindings is NamedImports -> {
+                                // Combined default + named: import d, { a } from "mod"
+                                val defaultLocalName = clause.name.text
+                                val tempName = createModuleTempVar()
+                                val defaultAccess = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                                renameMap[defaultLocalName] = defaultAccess
+                                importBindings.add(ImportBinding(specStr, tempName, defaultAccess, defaultLocalName))
+                                for (element in bindings.elements) {
+                                    if (element.isTypeOnly) continue
+                                    val importedName = (element.propertyName ?: element.name).text
+                                    val localAlias = element.name.text
+                                    val access = PropertyAccessExpression(
+                                        expression = syntheticId(tempName),
+                                        name = syntheticId(importedName),
+                                        pos = -1, end = -1,
+                                    )
+                                    renameMap[localAlias] = access
+                                    importBindings.add(ImportBinding(specStr, tempName, access, localAlias))
+                                }
+                            }
+                            clause.name != null && bindings == null -> {
+                                // Default import only: import d from "mod" → d = tempName.default
+                                val localName = clause.name.text
+                                val tempName = createModuleTempVar()
+                                val defaultAccess = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                                renameMap[localName] = defaultAccess
+                                importBindings.add(ImportBinding(specStr, tempName, defaultAccess, localName))
+                            }
+                            bindings is NamedImports -> {
+                                // Named imports only: import { A, B as b } from "mod"
+                                // All elements share ONE module temp var (e.g. file2_1)
+                                val tempName = createModuleTempVar()
+                                for (element in bindings.elements) {
+                                    if (element.isTypeOnly) continue
+                                    val importedName = (element.propertyName ?: element.name).text
+                                    val localAlias = element.name.text
+                                    val access = PropertyAccessExpression(
+                                        expression = syntheticId(tempName),
+                                        name = syntheticId(importedName),
+                                        pos = -1, end = -1,
+                                    )
+                                    renameMap[localAlias] = access
+                                    importBindings.add(ImportBinding(specStr, tempName, access, localAlias))
+                                }
+                            }
+                        }
+                    }
+                }
+                is ExportDeclaration -> {
+                    if (!stmt.isTypeOnly && stmt.moduleSpecifier != null && stmt.exportClause == null) {
+                        // export * from "mod"
+                        val specStr = (normalizeModuleSpecifier(stmt.moduleSpecifier) as? StringLiteralNode)?.text
+                            ?: (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                        if (specStr !in uniqueModulePaths) {
+                            uniqueModulePaths.add(specStr)
+                        }
+                        exportStarPaths.add(specStr)
+                    } else if (!stmt.isTypeOnly && stmt.moduleSpecifier != null && stmt.exportClause is NamedExports) {
+                        // export {a2, b2, c2 as d2} from "mod" — named re-exports from a module
+                        val specStr = (normalizeModuleSpecifier(stmt.moduleSpecifier) as? StringLiteralNode)?.text
+                            ?: (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                        if (specStr !in uniqueModulePaths) {
+                            uniqueModulePaths.add(specStr)
+                            // Ensure there's a setter param for this path
+                            val pathBaseName = specStr.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
+                            pathToSetterParam[specStr] = "${pathBaseName}_1_1"
+                            pathToTempVars[specStr] = mutableListOf()
+                        }
+                        // Collect named re-exports for this path's setter
+                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                            if (spec.isTypeOnly) continue
+                            val exportName = spec.name.text
+                            val importedName = (spec.propertyName ?: spec.name).text
+                            pathToNamedReExports.getOrPut(specStr) { mutableListOf() }.add(exportName to importedName)
+                        }
+                    }
+                }
+                is VariableStatement -> {
+                    // import alias = require("foo") — transformed to var alias = require("foo")
+                    // Detect this and treat it as a dep with a setter (like AMD does)
+                    val decls = stmt.declarationList.declarations
+                    if (decls.size == 1) {
+                        val init = decls[0].initializer
+                        val name = extractIdentifierName(decls[0].name)
+                        if (name != null && isRequireCall(init)) {
+                            val requireArg = (init as CallExpression).arguments.firstOrNull()
+                            val specStr = (normalizeModuleSpecifier(requireArg ?: syntheticId("")) as? StringLiteralNode)?.text
+                                ?: (requireArg as? StringLiteralNode)?.text ?: ""
+                            if (specStr !in uniqueModulePaths) {
+                                uniqueModulePaths.add(specStr)
+                                val setterParam = "${name}_1"
+                                pathToSetterParam[specStr] = setterParam
+                                pathToTempVars[specStr] = mutableListOf(name)
+                            } else {
+                                // Same path already seen — add this name as another binding
+                                pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(name)
+                            }
+                            // Mark as require import (to skip in Pass 2)
+                            requireImportVarNames.add(name)
+                            importBindings.add(ImportBinding(specStr, name, syntheticId(name), name))
+                            // Add to renameMap so export { n2 } resolves to exports_1("n2", n2)
+                            renameMap[name] = syntheticId(name)
+                            // Track if this require-import is exported (export import X = require("mod"))
+                            if (ModifierFlag.Export in stmt.modifiers) {
+                                exportedRequireImportNames.add(name)
+                            }
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+
+        // Collect all top-level var names for hoisting
+        // In System format, all top-level vars are hoisted as `var x, y, z;`
+        val hoistedVarNames = mutableListOf<String>()
+        val hoistedVarNamesSet = mutableSetOf<String>()
+        // Function declarations are hoisted as function declarations (not var), so their names
+        // must NOT appear in the var list even when a namespace merges with the same name.
+        val functionDeclNames = originalSourceFile.statements
+            .filterIsInstance<FunctionDeclaration>()
+            .mapNotNullTo(mutableSetOf()) { it.name?.text }
+
+        // Import temp vars — in source order (one per import binding, deduped)
+        for (binding in importBindings) {
+            if (hoistedVarNamesSet.add(binding.tempVarName)) {
+                hoistedVarNames.add(binding.tempVarName)
+            }
+        }
+
+        // Top-level var declarations from non-import statements
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        for (d in stmt.declarationList.declarations) {
+                            for (n in collectBoundNames(d.name)) {
+                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                            }
+                        }
+                    }
+                }
+                is ClassDeclaration -> {
+                    if (!hasDeclareModifier(stmt)) {
+                        stmt.name?.text?.let { n ->
+                            if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    if (!hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt)) {
+                        // For simple namespaces, extractIdentifierName gets the name.
+                        // For dotted namespaces (A.B.C stored as PropertyAccessExpression), get the root.
+                        val n = extractIdentifierName(stmt.name)
+                            ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                        // Skip if a function declaration with the same name is hoisted as a function
+                        n?.let { if (it !in functionDeclNames && hoistedVarNamesSet.add(it)) hoistedVarNames.add(it) }
+                    }
+                }
+                is EnumDeclaration -> {
+                    if (!hasDeclareModifier(stmt) &&
+                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers)) {
+                        val n = stmt.name.text
+                        if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                    }
+                }
+                is ImportEqualsDeclaration -> {
+                    // import cls = alias.Class or export import cls2 = alias.Class
+                    // (non-external module references — internal aliases)
+                    // The name gets hoisted as a var
+                    if (!stmt.isTypeOnly && stmt.moduleReference !is ExternalModuleReference) {
+                        val n = stmt.name.text
+                        if (n.isNotEmpty() && hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                    }
+                }
+                is ForInStatement -> {
+                    // `for (var key in obj)` — hoist `key` to top-level var list
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (d in init.declarations) {
+                            for (n in collectBoundNames(d.name)) {
+                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                            }
+                        }
+                    }
+                }
+                is ForOfStatement -> {
+                    // `for (var x of arr)` — hoist `x`
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (d in init.declarations) {
+                            for (n in collectBoundNames(d.name)) {
+                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                            }
+                        }
+                    }
+                }
+                is ForStatement -> {
+                    // `for (var i = 0; ...)` — hoist `i`
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (d in init.declarations) {
+                            for (n in collectBoundNames(d.name)) {
+                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                            }
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+
+        // Pass 2: build the execute body and function-level hoists
+        // Function declarations are hoisted OUTSIDE execute with exports_1("name", fn)
+        val functionHoists = mutableListOf<Statement>()      // before the return statement
+        val executeStatements = mutableListOf<Statement>()   // inside execute: function()
+        // Names of hoisted functions (for detecting re-exports via export {fnName} that should also be hoisted)
+        val hoistedFnNames = mutableSetOf<String>()
+        // Leading comments from a hoisted var (no-initializer varDecl) that should be
+        // prepended to the next statement added to executeStatements (typically the IIFE).
+        val pendingLeadingComments = mutableListOf<Comment>()
+
+        // TypeScript uses ONE exportStar helper function (exportStar_1) for ALL export* paths.
+        // The function is only generated if there are any export* paths.
+        val exportStarFnName = if (exportStarPaths.isNotEmpty()) "exportStar_1" else null
+
+        // Build import binding order map for sorting export re-exports.
+        // TypeScript emits re-export calls in import binding order, not ExportDeclaration order.
+        val importBindingOrder = mutableMapOf<String, Int>()
+        for ((i, binding) in importBindings.withIndex()) {
+            importBindingOrder.putIfAbsent(binding.localName, i)
+        }
+        // Collect re-export statements (from ExportDeclaration) with their binding order for sorting.
+        // These are emitted AFTER all non-ExportDeclaration execute statements.
+        val pendingReExports = mutableListOf<Pair<Int, Statement>>() // (bindingOrder, stmt)
+        // Namespace import re-exports go BEFORE body statements in execute (re-exports of import * as X)
+        val preBodyExports = mutableListOf<Statement>()
+
+        for (stmt in statementsWithoutStrict) {
+            when (stmt) {
+                is ImportDeclaration -> {
+                    // Handled via setters, not in body
+                }
+
+                is FunctionDeclaration -> {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    val isDefault = ModifierFlag.Default in stmt.modifiers
+                    val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default)
+                    if (isExported) {
+                        val exportName = if (isDefault) "default" else (stmt.name?.text ?: "default")
+                        val fnName = stmt.name?.text
+                        if (fnName != null) {
+                            // Named function: hoist outside execute, export with exports_1
+                            functionHoists.add(stripped)
+                            functionHoists.add(makeSystemExportCall(exportName, syntheticId(fnName)))
+                            hoistedFnNames.add(fnName)
+                        } else {
+                            // Anonymous default function: create default_1 name, hoist
+                            val anonName = "default_1"
+                            val namedFn = stripped.copy(name = syntheticId(anonName))
+                            functionHoists.add(namedFn)
+                            functionHoists.add(makeSystemExportCall("default", syntheticId(anonName)))
+                        }
+                    } else {
+                        val fnName = stmt.name?.text
+                        if (fnName != null) hoistedFnNames.add(fnName)
+                        functionHoists.add(stripped)
+                    }
+                }
+
+                is ClassDeclaration -> {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    val isDefault = ModifierFlag.Default in stmt.modifiers
+                    val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default)
+                    if (isExported) {
+                        val className = stmt.name?.text
+                        if (isDefault && className == null) {
+                            // export default class {} → default_1 = class {}; exports_1("default", default_1)
+                            val anonName = "default_1"
+                            if (hoistedVarNamesSet.add(anonName)) hoistedVarNames.add(anonName)
+                            executeStatements.add(
+                                ExpressionStatement(
+                                    expression = BinaryExpression(
+                                        left = syntheticId(anonName),
+                                        operator = SyntaxKind.Equals,
+                                        right = ClassExpression(
+                                            name = null,
+                                            typeParameters = null,
+                                            heritageClauses = stripped.heritageClauses,
+                                            members = stripped.members,
+                                            modifiers = emptySet(),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    ),
+                                    pos = -1, end = -1,
+                                )
+                            )
+                            executeStatements.add(makeSystemExportCall("default", syntheticId(anonName)))
+                        } else if (className != null) {
+                            // Named class: ClassName = class ClassName { ... }; exports_1(...)
+                            val classExpr = ClassExpression(
+                                name = syntheticId(className),
+                                typeParameters = null,
+                                heritageClauses = stripped.heritageClauses,
+                                members = stripped.members,
+                                modifiers = emptySet(),
+                                pos = -1, end = -1,
+                            )
+                            executeStatements.add(
+                                ExpressionStatement(
+                                    expression = BinaryExpression(
+                                        left = syntheticId(className),
+                                        operator = SyntaxKind.Equals,
+                                        right = classExpr,
+                                        pos = -1, end = -1,
+                                    ),
+                                    leadingComments = stmt.leadingComments,
+                                    pos = -1, end = -1,
+                                )
+                            )
+                            val exportName = if (isDefault) "default" else className
+                            executeStatements.add(makeSystemExportCall(exportName, syntheticId(className)))
+                        }
+                    } else {
+                        // Non-exported class: ClassName = class ClassName { ... }
+                        val className = stmt.name?.text
+                        if (className != null) {
+                            val classExpr = ClassExpression(
+                                name = syntheticId(className),
+                                typeParameters = null,
+                                heritageClauses = stripped.heritageClauses,
+                                members = stripped.members,
+                                modifiers = emptySet(),
+                                pos = -1, end = -1,
+                            )
+                            executeStatements.add(
+                                ExpressionStatement(
+                                    expression = BinaryExpression(
+                                        left = syntheticId(className),
+                                        operator = SyntaxKind.Equals,
+                                        right = classExpr,
+                                        pos = -1, end = -1,
+                                    ),
+                                    leadingComments = stmt.leadingComments,
+                                    pos = -1, end = -1,
+                                )
+                            )
+                        } else {
+                            executeStatements.add(stripped)
+                        }
+                    }
+                }
+
+                is VariableStatement -> {
+                    // Skip require import vars — they're handled via setters
+                    val firstDecl = stmt.declarationList.declarations.firstOrNull()
+                    val firstDeclName = if (firstDecl != null) extractIdentifierName(firstDecl.name) else null
+                    if (stmt.declarationList.declarations.size == 1 && firstDeclName != null &&
+                        firstDeclName in requireImportVarNames) {
+                        // Skip — this var is a require import, handled as a setter
+                    } else {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export)
+                    if (isExported) {
+                        // Convert: export const/let/var x = val → exports_1("x", x = val)
+                        for (d in stripped.declarationList.declarations) {
+                            val name = extractIdentifierName(d.name)
+                            if (name != null && d.initializer != null) {
+                                // exports_1("name", name = val)
+                                executeStatements.add(
+                                    ExpressionStatement(
+                                        expression = makeSystemExportInlineAssign(name, d.initializer),
+                                        leadingComments = stmt.leadingComments,
+                                        pos = -1, end = -1,
+                                    )
+                                )
+                            } else if (name != null) {
+                                // No initializer — just a var declaration (already hoisted)
+                                // Transfer leading comments to the next executeStatement (the IIFE follows).
+                                if (!stmt.leadingComments.isNullOrEmpty()) {
+                                    pendingLeadingComments.addAll(stmt.leadingComments)
+                                }
+                            } else {
+                                // Destructuring — keep the statement but strip export
+                                executeStatements.add(stripped)
+                            }
+                        }
+                    } else {
+                        // Non-exported: x = val (var already hoisted, just assign)
+                        for (d in stripped.declarationList.declarations) {
+                            val name = extractIdentifierName(d.name)
+                            if (name != null && d.initializer != null) {
+                                executeStatements.add(
+                                    ExpressionStatement(
+                                        expression = BinaryExpression(
+                                            left = syntheticId(name),
+                                            operator = SyntaxKind.Equals,
+                                            right = d.initializer,
+                                            pos = -1, end = -1,
+                                        ),
+                                        leadingComments = stmt.leadingComments,
+                                        pos = -1, end = -1,
+                                    )
+                                )
+                            } else if (name == null) {
+                                // Complex binding — keep as-is (with `let` since it's block-scoped)
+                                executeStatements.add(stripped)
+                            }
+                            // If name != null and no initializer: already hoisted, nothing to emit.
+                            // Transfer leading comments to the next statement (typically the IIFE).
+                            else if (name != null && !stmt.leadingComments.isNullOrEmpty()) {
+                                pendingLeadingComments.addAll(stmt.leadingComments)
+                            }
+                        }
+                    }
+                    } // end else (not a require import var)
+                }
+
+                is ExportAssignment -> {
+                    val exprName = (stmt.expression as? Identifier)?.text
+                    if (exprName == null || exprName !in pureTypeNames) {
+                        if (!stmt.isExportEquals) {
+                            // export default expr — use simple call (not inline-assign; no live binding)
+                            executeStatements.add(makeSystemExportCall("default", stmt.expression))
+                        }
+                        // export = X is not normally used in system modules
+                    }
+                }
+
+                is ExportDeclaration -> {
+                    if (stmt.isTypeOnly) {
+                        // Type-only: erased
+                    } else if (stmt.exportClause is NamedExports && stmt.moduleSpecifier == null) {
+                        // export { x, y as z } (local re-exports — no module specifier)
+                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                            if (spec.isTypeOnly) continue
+                            val exportName = spec.name.text
+                            val localName = (spec.propertyName ?: spec.name).text
+                            if (localName !in pureTypeNames) {
+                                val importBinding = renameMap[localName]
+                                if (localName in exportedNsEnumNames || localName in iifeExportAliases) {
+                                    // Namespace/enum local — handled by IIFE arg rewriting, skip
+                                } else if (localName in namespaceImportNames) {
+                                    // Re-exporting a namespace import (import * as X): goes BEFORE body
+                                    preBodyExports.add(makeSystemExportCall(exportName, syntheticId(localName)))
+                                } else if (importBinding != null) {
+                                    // Re-exporting a named/default import binding: exports_1("name", moduleObj.prop)
+                                    // Use simple call, not inline-assign form. Collect with binding order
+                                    // so we can sort re-exports by import binding order later.
+                                    val order = importBindingOrder[localName] ?: Int.MAX_VALUE
+                                    pendingReExports.add(order to makeSystemExportCall(exportName, importBinding))
+                                } else if (localName in hoistedFnNames) {
+                                    // Re-exporting a hoisted function: hoist the export call too
+                                    functionHoists.add(makeSystemExportCall(exportName, syntheticId(localName)))
+                                } else if (localName in varsWithInitializers) {
+                                    // Re-exporting a local var that has an initializer:
+                                    // exports_1("exportName", localName)  (simple call, not inline-assign)
+                                    executeStatements.add(makeSystemExportCall(exportName, syntheticId(localName)))
+                                }
+                                // If localName has no initializer (var x with no value), skip — nothing to export
+                            }
+                        }
+                    } else if (stmt.exportClause is NamedExports && stmt.moduleSpecifier != null) {
+                        // export { a2, b2, c2 as d2 } from "mod" — handled in setter, nothing in execute
+                    } else if (stmt.moduleSpecifier != null && stmt.exportClause == null) {
+                        // export * from "mod" — handled via setter + exportStar function
+                        // Nothing to emit in execute directly
+                    }
+                }
+
+                is ForInStatement -> {
+                    // `for (var key in obj)` → hoist `key`, emit `for (key in obj)` (no var)
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword &&
+                        init.declarations.size == 1) {
+                        val name = extractIdentifierName(init.declarations[0].name)
+                        if (name != null) {
+                            // Replace var decl with just the identifier
+                            executeStatements.add(stmt.copy(initializer = syntheticId(name)))
+                        } else {
+                            executeStatements.add(stmt)
+                        }
+                    } else {
+                        executeStatements.add(stmt)
+                    }
+                }
+
+                else -> {
+                    // EOF NotEmittedStatements (trailing file comments) are dropped in System format.
+                    if (stmt is NotEmittedStatement) {
+                        pendingLeadingComments.clear()
+                    } else {
+                        // Prepend any pending leading comments (from a preceding hoisted varDecl)
+                        val stmtToAdd: Statement = if (pendingLeadingComments.isNotEmpty() && stmt is ExpressionStatement) {
+                            val combined = pendingLeadingComments.toList() + (stmt.leadingComments ?: emptyList())
+                            pendingLeadingComments.clear()
+                            stmt.copy(leadingComments = combined)
+                        } else {
+                            pendingLeadingComments.clear()
+                            stmt
+                        }
+                        // Check for namespace/enum IIFE for exported name
+                        val iifeName = extractSimpleIifeName(stmtToAdd)
+                        if (iifeName != null && iifeName in exportedNsEnumNames) {
+                            // Collect all export names for this IIFE (primary + aliases)
+                            val allExportNames = iifeExportAliases[iifeName] ?: listOf(iifeName)
+                            executeStatements.add(rewriteIifeArgForSystemExport(stmtToAdd as ExpressionStatement, iifeName, allExportNames))
+                        } else {
+                            executeStatements.add(stmtToAdd)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Emit pending re-exports sorted by import binding order (to match TypeScript's output order).
+        if (pendingReExports.isNotEmpty()) {
+            val sorted = pendingReExports.sortedBy { it.first }
+            executeStatements.addAll(sorted.map { it.second })
+        }
+
+        // Apply import identifier renaming in execute statements and function hoists.
+        // For System format, do NOT wrap bare-identifier calls as (0, expr)() — that's CJS-only.
+        // preBodyExports (namespace re-exports) come FIRST, then body, then pending re-exports.
+        val allExecuteStatements = preBodyExports + executeStatements
+        val renamedExecute = if (renameMap.isNotEmpty()) {
+            allExecuteStatements.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
+        } else allExecuteStatements.toList()
+        // Rewrite identifiers inside hoisted function bodies (e.g. references to import bindings)
+        if (renameMap.isNotEmpty() && functionHoists.isNotEmpty()) {
+            val rewritten = functionHoists.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
+            functionHoists.clear()
+            functionHoists.addAll(rewritten)
+        }
+
+        // Build setters array — one setter per unique module path (in order of first appearance)
+        val setterFunctions = mutableListOf<Expression>()
+        for (path in uniqueModulePaths) {
+            if (path in sideEffectPaths && path !in pathToSetterParam && path !in pathToNamedReExports) {
+                // Pure side-effect import: empty setter with param _N
+                val seParam = sideEffectSetterParam[path] ?: "_1"
+                setterFunctions.add(
+                    FunctionExpression(
+                        parameters = listOf(Parameter(name = syntheticId(seParam), pos = -1, end = -1)),
+                        body = Block(statements = emptyList(), multiLine = true, pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                )
+            } else if (path in exportStarPaths && path !in pathToSetterParam && path !in pathToNamespaceVars && path !in pathToNamedReExports) {
+                // export * from "path" only (no other imports from this path)
+                // Setter param uses module path basename: file7_1_1
+                val pathBaseName = path.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
+                val setterParam = "${pathBaseName}_1_1"
+                val setterBody = listOf(
+                    ExpressionStatement(
+                        expression = CallExpression(
+                            expression = syntheticId(exportStarFnName ?: "exportStar_1"),
+                            arguments = listOf(syntheticId(setterParam)),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                )
+                setterFunctions.add(
+                    FunctionExpression(
+                        parameters = listOf(Parameter(name = syntheticId(setterParam), pos = -1, end = -1)),
+                        body = Block(statements = setterBody, multiLine = true, pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                )
+            } else {
+                val setterParam = pathToSetterParam[path] ?: continue
+                val nsVars = pathToNamespaceVars[path] ?: emptyList<String>()
+                val moduleTempVar = pathToModuleTempVar[path]
+                val setterBodyStmts = mutableListOf<Statement>()
+
+                // 1. Assign namespace import vars FIRST: nsVar = setterParam
+                for (nv in nsVars) {
+                    setterBodyStmts.add(
+                        ExpressionStatement(
+                            expression = BinaryExpression(
+                                left = syntheticId(nv),
+                                operator = SyntaxKind.Equals,
+                                right = syntheticId(setterParam),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    )
+                }
+
+                // 2. If this path is an export*, call exportStar function AFTER namespace vars
+                if (path in exportStarPaths && exportStarFnName != null) {
+                    setterBodyStmts.add(
+                        ExpressionStatement(
+                            expression = CallExpression(
+                                expression = syntheticId(exportStarFnName),
+                                arguments = listOf(syntheticId(setterParam)),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    )
+                }
+
+                // 3. Assign all remaining temp vars AFTER exportStar
+                // This includes: module-level temp var (for named/default imports) and require import vars.
+                // Skip any that were already assigned as namespace vars.
+                val allTempVars = pathToTempVars[path] ?: emptyList<String>()
+                for (tv in allTempVars) {
+                    if (tv !in nsVars) {
+                        setterBodyStmts.add(
+                            ExpressionStatement(
+                                expression = BinaryExpression(
+                                    left = syntheticId(tv),
+                                    operator = SyntaxKind.Equals,
+                                    right = syntheticId(setterParam),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )
+                        )
+                    }
+                    // Also export require-imports
+                    if (tv in exportedRequireImportNames) {
+                        setterBodyStmts.add(makeSystemExportCall(tv, syntheticId(setterParam)))
+                    }
+                }
+
+                // 5. Named re-exports from this module: export { a2, b2, c2 as d2 } from "mod"
+                // Emit as: exports_1({ "a2": param["a2"], "b2": param["b2"], "d2": param["c2"] })
+                val namedReExports = pathToNamedReExports[path]
+                if (!namedReExports.isNullOrEmpty()) {
+                    val objProps = namedReExports.map { (exportName, importedName) ->
+                        PropertyAssignment(
+                            name = StringLiteralNode(text = exportName, pos = -1, end = -1),
+                            initializer = ElementAccessExpression(
+                                expression = syntheticId(setterParam),
+                                argumentExpression = StringLiteralNode(text = importedName, pos = -1, end = -1),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    }
+                    setterBodyStmts.add(
+                        ExpressionStatement(
+                            expression = CallExpression(
+                                expression = syntheticId("exports_1"),
+                                arguments = listOf(
+                                    ObjectLiteralExpression(
+                                        properties = objProps,
+                                        multiLine = true,
+                                        pos = -1, end = -1,
+                                    )
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    )
+                }
+
+                setterFunctions.add(
+                    FunctionExpression(
+                        parameters = listOf(Parameter(name = syntheticId(setterParam), pos = -1, end = -1)),
+                        body = Block(statements = setterBodyStmts, multiLine = true, pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                )
+            }
+        }
+
+        // Build the outer function body
+        val outerBody = mutableListOf<Statement>()
+
+        // "use strict"
+        outerBody.add(ExpressionStatement(expression = StringLiteralNode(text = "use strict"), pos = -1, end = -1))
+
+        // var declarations for all hoisted names (temp vars + top-level vars)
+        if (hoistedVarNames.isNotEmpty()) {
+            outerBody.add(
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = hoistedVarNames.map { name ->
+                            VariableDeclaration(name = syntheticId(name), pos = -1, end = -1)
+                        },
+                        flags = SyntaxKind.VarKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+            )
+        }
+
+        // var __moduleName = context_1 && context_1.id;
+        outerBody.add(
+            VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = listOf(
+                        VariableDeclaration(
+                            name = syntheticId("__moduleName"),
+                            initializer = BinaryExpression(
+                                left = syntheticId("context_1"),
+                                operator = SyntaxKind.AmpersandAmpersand,
+                                right = PropertyAccessExpression(
+                                    expression = syntheticId("context_1"),
+                                    name = syntheticId("id"),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    ),
+                    flags = SyntaxKind.VarKeyword,
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+        )
+
+        // Function hoists (function declarations + their exports_1 calls) come BEFORE exportedNames_1 and exportStar.
+        outerBody.addAll(functionHoists)
+
+        // exportedNames_1 var — needed when there's both export* and local named exports.
+        // It maps each explicitly-named export to `true` so exportStar can skip them.
+        val needsExportedNames = exportStarPaths.isNotEmpty() && localExportNames.isNotEmpty()
+        if (needsExportedNames) {
+            outerBody.add(
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(
+                            VariableDeclaration(
+                                name = syntheticId("exportedNames_1"),
+                                initializer = ObjectLiteralExpression(
+                                    properties = localExportNames.map { exportName ->
+                                        PropertyAssignment(
+                                            name = StringLiteralNode(text = exportName, pos = -1, end = -1),
+                                            initializer = syntheticId("true"),
+                                            pos = -1, end = -1,
+                                        )
+                                    },
+                                    multiLine = true,
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )
+                        ),
+                        flags = SyntaxKind.VarKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+            )
+        }
+
+        // exportStar helper function (ONE shared function for all export* paths, if any)
+        if (exportStarFnName != null) {
+            // function exportStar_1(m) { var exports = {}; for (var n in m) {
+            //   if (n !== "default" [&& !exportedNames_1.hasOwnProperty(n)]) exports[n] = m[n];
+            // } exports_1(exports); }
+            outerBody.add(buildExportStarHelper(exportStarFnName, if (needsExportedNames) "exportedNames_1" else null))
+        }
+
+        // Return object with setters and execute
+        val settersArray = ArrayLiteralExpression(
+            elements = setterFunctions,
+            multiLine = setterFunctions.isNotEmpty(),
+            pos = -1, end = -1,
+        )
+
+        val executeFn = FunctionExpression(
+            parameters = emptyList(),
+            body = Block(
+                statements = renamedExecute,
+                multiLine = true,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        val returnObj = ReturnStatement(
+            expression = ObjectLiteralExpression(
+                properties = listOf(
+                    PropertyAssignment(
+                        name = syntheticId("setters"),
+                        initializer = settersArray,
+                        pos = -1, end = -1,
+                    ),
+                    PropertyAssignment(
+                        name = syntheticId("execute"),
+                        initializer = executeFn,
+                        pos = -1, end = -1,
+                    ),
+                ),
+                multiLine = true,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        outerBody.add(returnObj)
+
+        // Build dep array
+        val depArray = ArrayLiteralExpression(
+            elements = uniqueModulePaths.map { StringLiteralNode(text = it, pos = -1, end = -1) },
+            pos = -1, end = -1,
+        )
+
+        // Build outer function: function(exports_1, context_1) { ... }
+        val outerFn = FunctionExpression(
+            parameters = listOf(
+                Parameter(name = syntheticId("exports_1"), pos = -1, end = -1),
+                Parameter(name = syntheticId("context_1"), pos = -1, end = -1),
+            ),
+            body = Block(
+                statements = outerBody,
+                multiLine = true,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // System.register([deps], function(exports_1, context_1) { ... });
+        val systemRegisterCall = ExpressionStatement(
+            expression = CallExpression(
+                expression = PropertyAccessExpression(
+                    expression = syntheticId("System"),
+                    name = syntheticId("register"),
+                    pos = -1, end = -1,
+                ),
+                arguments = buildList {
+                    // If /// <amd-module name='X'/> directive present, add module name as first arg
+                    if (amdDirectives.moduleName != null) {
+                        add(StringLiteralNode(text = amdDirectives.moduleName, pos = -1, end = -1))
+                    }
+                    add(depArray)
+                    add(outerFn)
+                },
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        return listOf(systemRegisterCall)
+    }
+
+    /**
+     * Builds: `exports_1("name", value)` call expression
+     */
+    private fun makeSystemExportCall(name: String, value: Expression): Statement =
+        ExpressionStatement(
+            expression = CallExpression(
+                expression = syntheticId("exports_1"),
+                arguments = listOf(StringLiteralNode(text = name, pos = -1, end = -1), value),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+    /**
+     * Builds: `exports_1("name", name = value)` expression (for inline export+assign)
+     */
+    private fun makeSystemExportInlineAssign(name: String, value: Expression): Expression =
+        CallExpression(
+            expression = syntheticId("exports_1"),
+            arguments = listOf(
+                StringLiteralNode(text = name, pos = -1, end = -1),
+                BinaryExpression(
+                    left = syntheticId(name),
+                    operator = SyntaxKind.Equals,
+                    right = value,
+                    pos = -1, end = -1,
+                ),
+            ),
+            pos = -1, end = -1,
+        )
+
+    /**
+     * Rewrites `N || (N = {})` IIFE arg to `N || (exports_1("N", N = {}))` for System export.
+     * When [allExportNames] has multiple entries (e.g. ["ns", "FooBar"]), the exports are chained:
+     *   N || (exports_1("FooBar", exports_1("ns", N = {})))
+     * The PRIMARY name (with the assignment) is innermost; aliases wrap around it.
+     */
+    private fun rewriteIifeArgForSystemExport(
+        stmt: ExpressionStatement,
+        name: String,
+        allExportNames: List<String> = listOf(name),
+    ): ExpressionStatement {
+        val call = stmt.expression as CallExpression
+        // Build the innermost assign: name = {}
+        val assign = BinaryExpression(
+            left = syntheticId(name),
+            operator = SyntaxKind.Equals,
+            right = ObjectLiteralExpression(properties = emptyList(), pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // The primary export name is the first in allExportNames that equals `name` (or just use `name`).
+        // Build chained exports_1 calls: innermost has `name = {}`, outer ones pass through the value.
+        // Order: inner = primary name (with assignment), outer = aliases
+        // e.g. allExportNames = ["ns", "FooBar"] → exports_1("FooBar", exports_1("ns", ns = {}))
+        val primaryName = name
+        val aliasNames = allExportNames.filter { it != primaryName }
+        // Build from inside out: start with the primary exports_1 call
+        var innerCall: Expression = CallExpression(
+            expression = syntheticId("exports_1"),
+            arguments = listOf(StringLiteralNode(text = primaryName, pos = -1, end = -1), assign),
+            pos = -1, end = -1,
+        )
+        // Wrap each alias around it
+        for (alias in aliasNames) {
+            innerCall = CallExpression(
+                expression = syntheticId("exports_1"),
+                arguments = listOf(StringLiteralNode(text = alias, pos = -1, end = -1), innerCall),
+                pos = -1, end = -1,
+            )
+        }
+        val newArg = BinaryExpression(
+            left = syntheticId(name),
+            operator = SyntaxKind.BarBar,
+            right = ParenthesizedExpression(expression = innerCall, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        return stmt.copy(expression = call.copy(arguments = listOf(newArg)))
+    }
+
+    /**
+     * Builds the exportStar helper function:
+     * function exportStar_N(m) { var exports = {}; for (var n in m) {
+     *   if (n !== "default" [&& !exportedNames_1.hasOwnProperty(n)]) exports[n] = m[n];
+     * } exports_1(exports); }
+     * @param exportedNamesVar if non-null, the helper excludes names that are in this exclusion object
+     */
+    private fun buildExportStarHelper(fnName: String, exportedNamesVar: String? = null): Statement {
+        // var exports = {}
+        val exportsDecl = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(
+                    VariableDeclaration(
+                        name = syntheticId("exports"),
+                        initializer = ObjectLiteralExpression(properties = emptyList(), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                ),
+                flags = SyntaxKind.VarKeyword,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+        // if (n !== "default") exports[n] = m[n];
+        val ifBody = ExpressionStatement(
+            expression = BinaryExpression(
+                left = ElementAccessExpression(
+                    expression = syntheticId("exports"),
+                    argumentExpression = syntheticId("n"),
+                    pos = -1, end = -1,
+                ),
+                operator = SyntaxKind.Equals,
+                right = ElementAccessExpression(
+                    expression = syntheticId("m"),
+                    argumentExpression = syntheticId("n"),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+        // Base condition: n !== "default"
+        val defaultCheck: Expression = BinaryExpression(
+            left = syntheticId("n"),
+            operator = SyntaxKind.ExclamationEqualsEquals,
+            right = StringLiteralNode(text = "default", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // If exportedNamesVar is set, also add: !exportedNames_1.hasOwnProperty(n)
+        val ifCondition: Expression = if (exportedNamesVar != null) {
+            BinaryExpression(
+                left = defaultCheck,
+                operator = SyntaxKind.AmpersandAmpersand,
+                right = PrefixUnaryExpression(
+                    operator = SyntaxKind.Exclamation,
+                    operand = CallExpression(
+                        expression = PropertyAccessExpression(
+                            expression = syntheticId(exportedNamesVar),
+                            name = syntheticId("hasOwnProperty"),
+                            pos = -1, end = -1,
+                        ),
+                        arguments = listOf(syntheticId("n")),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+        } else {
+            defaultCheck
+        }
+        val ifStmt = IfStatement(
+            expression = ifCondition,
+            thenStatement = ifBody,
+            pos = -1, end = -1,
+        )
+        // for (var n in m) { ... }
+        val forIn = ForInStatement(
+            initializer = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(name = syntheticId("n"), pos = -1, end = -1)),
+                flags = SyntaxKind.VarKeyword,
+                pos = -1, end = -1,
+            ),
+            expression = syntheticId("m"),
+            statement = Block(statements = listOf(ifStmt), multiLine = true, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // exports_1(exports);
+        val callExports1 = ExpressionStatement(
+            expression = CallExpression(
+                expression = syntheticId("exports_1"),
+                arguments = listOf(syntheticId("exports")),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+        return FunctionDeclaration(
+            name = syntheticId(fnName),
+            parameters = listOf(Parameter(name = syntheticId("m"), pos = -1, end = -1)),
+            body = Block(
+                statements = listOf(exportsDecl, forIn, callExports1),
+                multiLine = true,
+                pos = -1, end = -1,
+            ),
+            modifiers = emptySet(),
+            typeParameters = null,
+            type = null,
+            pos = -1, end = -1,
+        )
+    }
+
     /**
      * If [stmt] is a namespace/enum IIFE with arg `N || (N = {})`, returns `N`. Otherwise null.
      * Used to detect top-level namespace/enum IIFEs that need CJS export rewriting.
@@ -1976,7 +3303,20 @@ class Transformer(private val options: CompilerOptions) {
         if (scopeVars != null) {
             hoistedVarScopes.removeLast()
             if (scopeVars.isNotEmpty()) {
-                result.addAll(0, scopeVars.map { makeHoistedVar(it) })
+                // Emit all temp vars in a single `var _a, _b, _c;` declaration (TypeScript style)
+                val combined = if (scopeVars.size == 1) {
+                    listOf(makeHoistedVar(scopeVars[0]))
+                } else {
+                    listOf(VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = scopeVars.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
+                            flags = SyntaxKind.VarKeyword,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                }
+                result.addAll(0, combined)
             }
         }
 
@@ -2232,17 +3572,86 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             // Binary: recurse
-            is BinaryExpression -> expr.copy(
-                left = transformExpression(expr.left),
-                right = transformExpression(expr.right),
-            )
+            is BinaryExpression -> {
+                val left = transformExpression(expr.left)
+                val right = transformExpression(expr.right)
+                // Downlevel `??` to `!== null && !== void 0 ? :` for targets below ES2020
+                if (expr.operator == SyntaxKind.QuestionQuestion &&
+                    options.effectiveTarget < ScriptTarget.ES2020) {
+                    // If left is a simple identifier, use it directly; otherwise use a temp var
+                    val leftRef: Expression
+                    val nullCheck: Expression
+                    if (left is Identifier) {
+                        leftRef = left
+                        nullCheck = left
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        // (_a = left)
+                        val assign = ParenthesizedExpression(
+                            expression = BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = left, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        nullCheck = assign
+                        leftRef = tempId
+                    }
+                    // nullCheck !== null && leftRef !== void 0 ? leftRef : right
+                    val notNull = BinaryExpression(
+                        left = nullCheck,
+                        operator = SyntaxKind.ExclamationEqualsEquals,
+                        right = syntheticId("null"),
+                        pos = -1, end = -1,
+                    )
+                    val notUndefined = BinaryExpression(
+                        left = leftRef,
+                        operator = SyntaxKind.ExclamationEqualsEquals,
+                        right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                    val condition = BinaryExpression(
+                        left = notNull,
+                        operator = SyntaxKind.AmpersandAmpersand,
+                        right = notUndefined,
+                        pos = -1, end = -1,
+                    )
+                    ConditionalExpression(
+                        condition = condition,
+                        whenTrue = leftRef,
+                        whenFalse = right,
+                        pos = -1, end = -1,
+                    )
+                } else {
+                    expr.copy(left = left, right = right)
+                }
+            }
 
             // Call: strip type arguments, recurse
-            is CallExpression -> expr.copy(
-                expression = transformExpression(expr.expression),
-                typeArguments = null,
-                arguments = expr.arguments.map { transformExpression(it) },
-            )
+            is CallExpression -> {
+                val transformedExpr = transformExpression(expr.expression)
+                val transformedArgs = expr.arguments.map { transformExpression(it) }
+                // Downlevel `?.()` optional call for targets below ES2020
+                if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
+                    val objRef: Expression
+                    val nullCheck: Expression
+                    if (transformedExpr is Identifier) {
+                        objRef = transformedExpr; nullCheck = transformedExpr
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = transformedExpr, pos = -1, end = -1), pos = -1, end = -1)
+                        objRef = tempId
+                    }
+                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(left = objRef, operator = SyntaxKind.EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val call = expr.copy(expression = objRef, typeArguments = null, arguments = transformedArgs, questionDotToken = false)
+                    ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = call, pos = -1, end = -1)
+                } else {
+                    expr.copy(expression = transformedExpr, typeArguments = null, arguments = transformedArgs)
+                }
+            }
 
             // New: strip type arguments, recurse
             is NewExpression -> {
@@ -2274,18 +3683,92 @@ class Transformer(private val options: CompilerOptions) {
 
             // Property access: check for const enum inlining first
             is PropertyAccessExpression -> {
+                // Downlevel `?.` optional chaining for targets below ES2020
+                if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
+                    val obj = transformExpression(expr.expression)
+                    val memberName = expr.name
+                    // For simple identifier: `a?.b` → `a === null || a === void 0 ? void 0 : a.b`
+                    // For complex LHS: use temp var
+                    val objRef: Expression
+                    val nullCheck: Expression
+                    if (obj is Identifier) {
+                        objRef = obj
+                        nullCheck = obj
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        nullCheck = ParenthesizedExpression(
+                            expression = BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = obj, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        objRef = tempId
+                    }
+                    // Build: `obj === null || obj === void 0 ? void 0 : obj.member`
+                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(
+                        left = objRef, operator = SyntaxKind.EqualsEqualsEquals,
+                        right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val access = expr.copy(expression = objRef, questionDotToken = false)
+                    return ConditionalExpression(
+                        condition = condition,
+                        whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        whenFalse = access,
+                        pos = -1, end = -1,
+                    )
+                }
                 val baseName = (expr.expression as? Identifier)?.text
                 val memberName = expr.name.text
                 if (baseName != null) {
                     val inlined = tryInlineConstEnumMember(baseName, memberName, "$baseName.$memberName")
                     inlined ?: expr.copy(expression = transformExpression(expr.expression))
                 } else {
-                    expr.copy(expression = transformExpression(expr.expression))
+                    // Check for namespaced const enum: M.SomeConstEnum.X
+                    // Try the last component of the LHS as the enum name
+                    val nestedEnum = expr.expression as? PropertyAccessExpression
+                    val nestedEnumName = nestedEnum?.name?.text
+                    if (nestedEnumName != null && nestedEnumName in constEnumValues) {
+                        // Build comment label by reconstructing the full access chain text
+                        fun accessChainText(e: Expression): String = when (e) {
+                            is Identifier -> e.text
+                            is PropertyAccessExpression -> "${accessChainText(e.expression)}.${e.name.text}"
+                            else -> ""
+                        }
+                        val commentLabel = "${accessChainText(expr.expression)}.$memberName"
+                        val inlined = tryInlineConstEnumMember(nestedEnumName, memberName, commentLabel)
+                        inlined ?: expr.copy(expression = transformExpression(expr.expression))
+                    } else {
+                        expr.copy(expression = transformExpression(expr.expression))
+                    }
                 }
             }
 
             // Element access: check for const enum inlining (e.g. Foo["X"], Foo[`X`])
             is ElementAccessExpression -> {
+                // Downlevel `?.` optional element access for targets below ES2020
+                if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
+                    val obj = transformExpression(expr.expression)
+                    val key = transformExpression(expr.argumentExpression)
+                    val objRef: Expression
+                    val nullCheck: Expression
+                    if (obj is Identifier) {
+                        objRef = obj; nullCheck = obj
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = obj, pos = -1, end = -1), pos = -1, end = -1)
+                        objRef = tempId
+                    }
+                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(left = objRef, operator = SyntaxKind.EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val access = expr.copy(expression = objRef, argumentExpression = key, questionDotToken = false)
+                    return ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = access, pos = -1, end = -1)
+                }
                 val baseName = (expr.expression as? Identifier)?.text
                 val keyStr = when (val k = expr.argumentExpression) {
                     is StringLiteralNode -> k.text
@@ -3367,8 +4850,9 @@ class Transformer(private val options: CompilerOptions) {
         nested: Boolean = false,
         parentNsName: String? = null,
     ): List<Statement> {
-        // const enum without preserveConstEnums → remove
-        if (ModifierFlag.Const in decl.modifiers && !options.preserveConstEnums) {
+        // const enum without preserveConstEnums (and not isolatedModules) → remove (it's inlined)
+        // With isolatedModules, const enums can't be inlined, so keep them as runtime objects.
+        if (ModifierFlag.Const in decl.modifiers && !options.preserveConstEnums && !options.isolatedModules) {
             return emptyList()
         }
 
@@ -3392,6 +4876,7 @@ class Transformer(private val options: CompilerOptions) {
                         // String enum member: E["B"] = "hello" (no reverse mapping)
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
+                        memberValues[memberName] = null  // mark as non-numeric
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
@@ -3776,12 +5261,47 @@ class Transformer(private val options: CompilerOptions) {
 
     private fun tryEvaluateNumericLiteral(expr: Expression): Int? {
         return when (expr) {
-            is NumericLiteralNode -> expr.text.toIntOrNull()
+            is NumericLiteralNode -> expr.text.toIntOrNull() ?: run {
+                // Handle hex/binary/octal literals
+                val text = expr.text
+                when {
+                    text.startsWith("0x") || text.startsWith("0X") -> text.substring(2).toLongOrNull(16)?.toInt()
+                    text.startsWith("0b") || text.startsWith("0B") -> text.substring(2).toLongOrNull(2)?.toInt()
+                    text.startsWith("0o") || text.startsWith("0O") -> text.substring(2).toLongOrNull(8)?.toInt()
+                    else -> null
+                }
+            }
             is PrefixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.Minus) {
-                    val inner = tryEvaluateNumericLiteral(expr.operand)
-                    inner?.let { -it }
-                } else null
+                val inner = tryEvaluateNumericLiteral(expr.operand)
+                when (expr.operator) {
+                    SyntaxKind.Minus -> inner?.let { -it }
+                    SyntaxKind.Plus -> inner
+                    SyntaxKind.Tilde -> inner?.let { it.inv() }
+                    else -> null
+                }
+            }
+            is ParenthesizedExpression -> tryEvaluateNumericLiteral(expr.expression)
+            is BinaryExpression -> {
+                val left = tryEvaluateNumericLiteral(expr.left)
+                val right = tryEvaluateNumericLiteral(expr.right)
+                if (left == null || right == null) null
+                else when (expr.operator) {
+                    SyntaxKind.Plus -> left + right
+                    SyntaxKind.Minus -> left - right
+                    SyntaxKind.Asterisk -> left * right
+                    SyntaxKind.Slash -> if (right != 0) left / right else null
+                    SyntaxKind.Percent -> if (right != 0) left % right else null
+                    SyntaxKind.AsteriskAsterisk -> {
+                        if (right >= 0) Math.pow(left.toDouble(), right.toDouble()).toInt() else null
+                    }
+                    SyntaxKind.LessThanLessThan -> left shl right
+                    SyntaxKind.GreaterThanGreaterThan -> left shr right
+                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> left ushr right
+                    SyntaxKind.Ampersand -> left and right
+                    SyntaxKind.Bar -> left or right
+                    SyntaxKind.Caret -> left xor right
+                    else -> null
+                }
             }
 
             else -> null
@@ -4108,7 +5628,11 @@ class Transformer(private val options: CompilerOptions) {
         nsName: String,
         statements: List<Statement>,
     ): List<Statement> {
-        // First pass: collect exported variable names
+        // First pass: collect exported variable names and locally declared names.
+        // `exportedNames` is used for body-statement qualification (qualifyNamespaceRefs).
+        // `locallyDeclaredNames` is used to exclude names declared IN THIS BLOCK from
+        // heritage-clause qualification (since they are local variables in the IIFE).
+        val locallyDeclaredNames = mutableSetOf<String>()
         val exportedNames = mutableSetOf<String>()
         for (stmt in statements) {
             val isExported = when (stmt) {
@@ -4119,6 +5643,18 @@ class Transformer(private val options: CompilerOptions) {
                 is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
                 is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
                 else -> false
+            }
+            // Collect all locally declared names (whether exported or not).
+            // These are class/function/enum/var names in scope as local variables in this IIFE.
+            when (stmt) {
+                is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                    extractIdentifierName(decl.name)?.let { locallyDeclaredNames.add(it) }
+                }
+                is FunctionDeclaration -> stmt.name?.text?.let { locallyDeclaredNames.add(it) }
+                is ClassDeclaration -> stmt.name?.text?.let { locallyDeclaredNames.add(it) }
+                is EnumDeclaration -> locallyDeclaredNames.add(stmt.name.text)
+                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { locallyDeclaredNames.add(it) }
+                else -> {}
             }
             if (isExported) {
                 when (stmt) {
@@ -4260,10 +5796,16 @@ class Transformer(private val options: CompilerOptions) {
                 }
 
                 is ClassDeclaration -> {
-                    // Qualify heritage clause references to exported members
+                    // Heritage clause qualification: names declared in THIS block are local
+                    // variables inside the IIFE and should NOT be qualified. Names from OTHER
+                    // (merged) namespace blocks are only accessible via the namespace object
+                    // and must be qualified (e.g. `extends M.B` not `extends B` when B was
+                    // exported from a previous `namespace M { }` block).
+                    // Use exportedNames minus locallyDeclaredNames for heritage qualification.
+                    val heritageQualifyNames = exportedNames - locallyDeclaredNames
                     val qualifiedHeritage = stmt.heritageClauses?.map { clause ->
                         clause.copy(types = clause.types.map { type ->
-                            type.copy(expression = qualifyNamespaceRefs(nsName, exportedNames, type.expression))
+                            type.copy(expression = qualifyNamespaceRefs(nsName, heritageQualifyNames, type.expression))
                         })
                     }
                     val strippedStmt = stmt.copy(
@@ -4427,6 +5969,9 @@ class Transformer(private val options: CompilerOptions) {
             is ImportDeclaration -> stmt.importClause?.isTypeOnly == true
             is ExportDeclaration -> stmt.isTypeOnly
             is ModuleDeclaration -> isTypeOnlyNamespace(stmt)
+            // A const enum is inlined and erased — it's type-only at runtime
+            // (unless preserveConstEnums or isolatedModules is set, in which case it produces a real object)
+            is EnumDeclaration -> ModifierFlag.Const in stmt.modifiers && !options.preserveConstEnums && !options.isolatedModules
             else -> false
         }
     }
@@ -4761,114 +6306,116 @@ class Transformer(private val options: CompilerOptions) {
      * Rewrites identifier references in a statement using [renameMap].
      * Only value-position identifiers are rewritten; declaration names, property keys,
      * and member names are left unchanged.
+     * @param wrapCallsWithZero If true (default), bare-identifier calls rewritten to property-access
+     *   calls are wrapped as (0, expr)() to avoid `this` binding — needed for CJS but not System.
      */
-    private fun rewriteIdInStatement(stmt: Statement, map: Map<String, Expression>): Statement = when (stmt) {
-        is ExpressionStatement -> stmt.copy(expression = rewriteId(stmt.expression, map))
+    private fun rewriteIdInStatement(stmt: Statement, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): Statement = when (stmt) {
+        is ExpressionStatement -> stmt.copy(expression = rewriteId(stmt.expression, map, wrapCallsWithZero))
         is VariableStatement -> stmt.copy(
             declarationList = stmt.declarationList.copy(
                 declarations = stmt.declarationList.declarations.map { decl ->
-                    decl.copy(initializer = decl.initializer?.let { rewriteId(it, map) })
+                    decl.copy(initializer = decl.initializer?.let { rewriteId(it, map, wrapCallsWithZero) })
                 }
             )
         )
-        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map) })
-        is ThrowStatement -> stmt.copy(expression = rewriteId(stmt.expression, map))
+        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
+        is ThrowStatement -> stmt.copy(expression = rewriteId(stmt.expression, map, wrapCallsWithZero))
         is IfStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map),
-            thenStatement = rewriteIdInStatement(stmt.thenStatement, map),
-            elseStatement = stmt.elseStatement?.let { rewriteIdInStatement(it, map) },
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            thenStatement = rewriteIdInStatement(stmt.thenStatement, map, wrapCallsWithZero),
+            elseStatement = stmt.elseStatement?.let { rewriteIdInStatement(it, map, wrapCallsWithZero) },
         )
-        is Block -> stmt.copy(statements = stmt.statements.map { rewriteIdInStatement(it, map) })
+        is Block -> stmt.copy(statements = stmt.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
         is DoStatement -> stmt.copy(
-            statement = rewriteIdInStatement(stmt.statement, map),
-            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
         )
         is WhileStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map),
-            statement = rewriteIdInStatement(stmt.statement, map),
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
         )
         is ForStatement -> stmt.copy(
             initializer = stmt.initializer?.let { init ->
                 when (init) {
                     is VariableDeclarationList -> init.copy(
-                        declarations = init.declarations.map { d -> d.copy(initializer = d.initializer?.let { rewriteId(it, map) }) }
+                        declarations = init.declarations.map { d -> d.copy(initializer = d.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) }
                     )
-                    is Expression -> rewriteId(init, map)
+                    is Expression -> rewriteId(init, map, wrapCallsWithZero)
                     else -> init
                 }
             },
-            condition = stmt.condition?.let { rewriteId(it, map) },
-            incrementor = stmt.incrementor?.let { rewriteId(it, map) },
-            statement = rewriteIdInStatement(stmt.statement, map),
+            condition = stmt.condition?.let { rewriteId(it, map, wrapCallsWithZero) },
+            incrementor = stmt.incrementor?.let { rewriteId(it, map, wrapCallsWithZero) },
+            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
         )
         is ForInStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map),
-            statement = rewriteIdInStatement(stmt.statement, map),
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
         )
         is ForOfStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map),
-            statement = rewriteIdInStatement(stmt.statement, map),
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
         )
         is SwitchStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map),
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
             caseBlock = stmt.caseBlock.map { clause ->
                 when (clause) {
                     is CaseClause -> clause.copy(
-                        expression = rewriteId(clause.expression, map),
-                        statements = clause.statements.map { rewriteIdInStatement(it, map) },
+                        expression = rewriteId(clause.expression, map, wrapCallsWithZero),
+                        statements = clause.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) },
                     )
                     is DefaultClause -> clause.copy(
-                        statements = clause.statements.map { rewriteIdInStatement(it, map) },
+                        statements = clause.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) },
                     )
                     else -> clause
                 }
             }
         )
-        is LabeledStatement -> stmt.copy(statement = rewriteIdInStatement(stmt.statement, map))
+        is LabeledStatement -> stmt.copy(statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero))
         is WithStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map),
-            statement = rewriteIdInStatement(stmt.statement, map),
+            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
         )
         is TryStatement -> stmt.copy(
-            tryBlock = stmt.tryBlock.copy(statements = stmt.tryBlock.statements.map { rewriteIdInStatement(it, map) }),
+            tryBlock = stmt.tryBlock.copy(statements = stmt.tryBlock.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
             catchClause = stmt.catchClause?.let { cc ->
-                cc.copy(block = cc.block.copy(statements = cc.block.statements.map { rewriteIdInStatement(it, map) }))
+                cc.copy(block = cc.block.copy(statements = cc.block.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }))
             },
             finallyBlock = stmt.finallyBlock?.let { fb ->
-                fb.copy(statements = fb.statements.map { rewriteIdInStatement(it, map) })
+                fb.copy(statements = fb.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
             },
         )
         is ClassDeclaration -> stmt.copy(
             heritageClauses = stmt.heritageClauses?.map { hc ->
-                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map)) })
+                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map, wrapCallsWithZero)) })
             },
-            members = stmt.members.map { rewriteIdInClassElement(it, map) },
+            members = stmt.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
         )
         is FunctionDeclaration -> stmt.copy(
-            parameters = stmt.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map) }) },
-            body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, map) }),
+            parameters = stmt.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) },
+            body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         else -> stmt
     }
 
-    private fun rewriteIdInClassElement(member: ClassElement, map: Map<String, Expression>): ClassElement = when (member) {
+    private fun rewriteIdInClassElement(member: ClassElement, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): ClassElement = when (member) {
         is Constructor -> member.copy(
-            parameters = member.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map) }) },
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
+            parameters = member.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) },
+            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is MethodDeclaration -> member.copy(
-            parameters = member.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map) }) },
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
+            parameters = member.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) },
+            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
-        is PropertyDeclaration -> member.copy(initializer = member.initializer?.let { rewriteId(it, map) })
+        is PropertyDeclaration -> member.copy(initializer = member.initializer?.let { rewriteId(it, map, wrapCallsWithZero) })
         is GetAccessor -> member.copy(
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
+            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is SetAccessor -> member.copy(
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
+            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is ClassStaticBlockDeclaration -> member.copy(
-            body = member.body.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
+            body = member.body.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         else -> member
     }
@@ -4876,20 +6423,23 @@ class Transformer(private val options: CompilerOptions) {
     /**
      * Rewrites identifier references in an expression using [map].
      * Only rewrites identifiers in value position; property names, computed keys, etc. are left alone.
+     * @param wrapCallsWithZero If true (default), bare-identifier calls rewritten to property-access
+     *   calls are wrapped as (0, expr)() to avoid `this` binding — needed for CJS but not System.
      */
-    private fun rewriteId(expr: Expression, map: Map<String, Expression>): Expression = when (expr) {
+    private fun rewriteId(expr: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): Expression = when (expr) {
         is Identifier -> map[expr.text] ?: expr
-        is PropertyAccessExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is PropertyAccessExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
         is ElementAccessExpression -> expr.copy(
-            expression = rewriteId(expr.expression, map),
-            argumentExpression = rewriteId(expr.argumentExpression, map),
+            expression = rewriteId(expr.expression, map, wrapCallsWithZero),
+            argumentExpression = rewriteId(expr.argumentExpression, map, wrapCallsWithZero),
         )
         is CallExpression -> {
             val origCallee = expr.expression
-            val newCallee = rewriteId(origCallee, map)
+            val newCallee = rewriteId(origCallee, map, wrapCallsWithZero)
             // When a bare identifier call is rewritten to a property access (named import),
             // wrap as (0, expr)() to avoid implicit `this` binding — matches TypeScript CJS emit.
-            val wrappedCallee = if (origCallee is Identifier && origCallee.text in map && newCallee is PropertyAccessExpression) {
+            // For System format, this wrapping is not needed (wrapCallsWithZero = false).
+            val wrappedCallee = if (wrapCallsWithZero && origCallee is Identifier && origCallee.text in map && newCallee is PropertyAccessExpression) {
                 ParenthesizedExpression(
                     expression = BinaryExpression(
                         left = NumericLiteralNode("0", pos = -1, end = -1),
@@ -4902,36 +6452,36 @@ class Transformer(private val options: CompilerOptions) {
             } else newCallee
             expr.copy(
                 expression = wrappedCallee,
-                arguments = expr.arguments.map { rewriteId(it, map) },
+                arguments = expr.arguments.map { rewriteId(it, map, wrapCallsWithZero) },
             )
         }
         is NewExpression -> expr.copy(
-            expression = rewriteId(expr.expression, map),
-            arguments = expr.arguments?.map { rewriteId(it, map) },
+            expression = rewriteId(expr.expression, map, wrapCallsWithZero),
+            arguments = expr.arguments?.map { rewriteId(it, map, wrapCallsWithZero) },
         )
         is BinaryExpression -> expr.copy(
-            left = rewriteId(expr.left, map),
-            right = rewriteId(expr.right, map),
+            left = rewriteId(expr.left, map, wrapCallsWithZero),
+            right = rewriteId(expr.right, map, wrapCallsWithZero),
         )
         is ConditionalExpression -> expr.copy(
-            condition = rewriteId(expr.condition, map),
-            whenTrue = rewriteId(expr.whenTrue, map),
-            whenFalse = rewriteId(expr.whenFalse, map),
+            condition = rewriteId(expr.condition, map, wrapCallsWithZero),
+            whenTrue = rewriteId(expr.whenTrue, map, wrapCallsWithZero),
+            whenFalse = rewriteId(expr.whenFalse, map, wrapCallsWithZero),
         )
-        is ParenthesizedExpression -> expr.copy(expression = rewriteId(expr.expression, map))
-        is PrefixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map))
-        is PostfixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map))
-        is DeleteExpression -> expr.copy(expression = rewriteId(expr.expression, map))
-        is TypeOfExpression -> expr.copy(expression = rewriteId(expr.expression, map))
-        is VoidExpression -> expr.copy(expression = rewriteId(expr.expression, map))
-        is AwaitExpression -> expr.copy(expression = rewriteId(expr.expression, map))
-        is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteId(it, map) })
-        is SpreadElement -> expr.copy(expression = rewriteId(expr.expression, map))
-        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteId(it, map) })
+        is ParenthesizedExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is PrefixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map, wrapCallsWithZero))
+        is PostfixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map, wrapCallsWithZero))
+        is DeleteExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is TypeOfExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is VoidExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is AwaitExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
+        is SpreadElement -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteId(it, map, wrapCallsWithZero) })
         is ObjectLiteralExpression -> expr.copy(
             properties = expr.properties.map { prop ->
                 when (prop) {
-                    is PropertyAssignment -> prop.copy(initializer = rewriteId(prop.initializer, map))
+                    is PropertyAssignment -> prop.copy(initializer = rewriteId(prop.initializer, map, wrapCallsWithZero))
                     is ShorthandPropertyAssignment -> {
                         val replacement = map[prop.name.text]
                         if (replacement != null) {
@@ -4943,26 +6493,32 @@ class Transformer(private val options: CompilerOptions) {
                             )
                         } else prop
                     }
-                    is SpreadAssignment -> prop.copy(expression = rewriteId(prop.expression, map))
+                    is SpreadAssignment -> prop.copy(expression = rewriteId(prop.expression, map, wrapCallsWithZero))
                     else -> prop
                 }
             }
         )
-        is TaggedTemplateExpression -> expr.copy(tag = rewriteId(expr.tag, map))
+        is TaggedTemplateExpression -> expr.copy(tag = rewriteId(expr.tag, map, wrapCallsWithZero))
         is TemplateExpression -> expr.copy(
             templateSpans = expr.templateSpans.map { span ->
-                span.copy(expression = rewriteId(span.expression, map))
+                span.copy(expression = rewriteId(span.expression, map, wrapCallsWithZero))
             }
         )
         is ArrowFunction -> expr.copy(body = when (val b = expr.body) {
-            is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, map) })
-            is Expression -> rewriteId(b, map)
+            is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
+            is Expression -> rewriteId(b, map, wrapCallsWithZero)
             else -> b
         })
         is FunctionExpression -> expr.copy(
-            body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, map) })
+            body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
         )
-        is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is ClassExpression -> expr.copy(
+            heritageClauses = expr.heritageClauses?.map { hc ->
+                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map, wrapCallsWithZero)) })
+            },
+            members = expr.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
+        )
         else -> expr
     }
 
