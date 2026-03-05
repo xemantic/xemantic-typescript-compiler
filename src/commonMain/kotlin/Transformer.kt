@@ -315,6 +315,9 @@ class Transformer(private val options: CompilerOptions) {
 
         // Collect exported names for hoisting (exports.x = void 0)
         val exportedVarNames = mutableListOf<String>()
+        // Track names emitted via "Direct" path (exports.x = value, no local var kept).
+        // References to these names in export-related expressions must become exports.name.
+        val directExportedVarNames = mutableSetOf<String>()
         // Collect export assignments to emit at the end
         val deferredExportAssignments = mutableListOf<Statement>()
         // Collect function export stubs (exports.fn = fn) to insert after void0 hoists.
@@ -374,8 +377,32 @@ class Transformer(private val options: CompilerOptions) {
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
-        for (name in exportedNsEnumNames) {
-            if (name !in exportedVarNames) exportedVarNames.add(name)
+        // Note: exportedNsEnumNames are NOT pre-added to exportedVarNames here.
+        // Instead, they are added lazily in the IIFE detection branch below, so that
+        // their void0 hoists appear in source declaration order (matching TypeScript output).
+
+        // Pre-scan: determine which exported var names will go through the "Direct" path,
+        // i.e. exported variables whose initializer is NOT a FunctionExpression/ArrowFunction/ClassExpression.
+        // These names lose their local binding (no `var x` is emitted), so any reference
+        // to them in export clauses must be rewritten to `exports.x`.
+        for (stmt in originalSourceFile.statements) {
+            if (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) {
+                val hasComplexPattern = stmt.declarationList.declarations.any {
+                    extractIdentifierName(it.name) == null
+                }
+                val needsKeepDeclaration = hasComplexPattern ||
+                        stmt.declarationList.declarations.any { decl ->
+                            decl.initializer is FunctionExpression ||
+                                    decl.initializer is ArrowFunction ||
+                                    decl.initializer is ClassExpression
+                        }
+                if (!needsKeepDeclaration) {
+                    for (decl in stmt.declarationList.declarations) {
+                        val n = extractIdentifierName(decl.name)
+                        if (n != null && decl.initializer != null) directExportedVarNames.add(n)
+                    }
+                }
+            }
         }
 
         // Detect and strip "use strict" prologue directives so they can be re-inserted at the
@@ -419,7 +446,7 @@ class Transformer(private val options: CompilerOptions) {
                             //   Other initializers → emit exports.x = value; directly
                             //   No initializer → just the void0 hoist, no declaration emitted
                             for (decl in stmt.declarationList.declarations) {
-                                for (name in collectBoundNames(decl.name)) exportedVarNames.add(name)
+                                for (name in collectBoundNames(decl.name)) if (name !in exportedVarNames) exportedVarNames.add(name)
                             }
                             val hasComplexPattern = stmt.declarationList.declarations.any {
                                 extractIdentifierName(it.name) == null
@@ -441,11 +468,13 @@ class Transformer(private val options: CompilerOptions) {
                                     }
                                 }
                             } else {
-                                // Direct: emit exports.x = value; for each declarator
+                                // Direct: emit exports.x = value; for each declarator (no local var kept).
+                                // Record the name so later export-expression references can be rewritten.
                                 var isFirst = true
                                 for (decl in stmt.declarationList.declarations) {
                                     val name = extractIdentifierName(decl.name)
                                     if (name != null && decl.initializer != null) {
+                                        directExportedVarNames.add(name)
                                         val leadingComments = if (isFirst) stmt.leadingComments else null
                                         result.add(
                                             ExpressionStatement(
@@ -518,7 +547,7 @@ class Transformer(private val options: CompilerOptions) {
                                 // Hoist exports.ClassName = void 0.
                                 // When hasExportEquals, skip the exports.C = C; assignment
                                 // (module.exports = X replaces all named exports).
-                                exportedVarNames.add(name)
+                                if (name !in exportedVarNames) exportedVarNames.add(name)
                                 if (!hasExportEquals) result.add(makeExportAssignment(name))
                             }
                         }
@@ -554,7 +583,16 @@ class Transformer(private val options: CompilerOptions) {
                         // But erase if the expression refers to a type-only declaration.
                         val exprName = (stmt.expression as? Identifier)?.text
                         if (exprName == null || exprName !in pureTypeNames) {
-                            result.add(makeExportAssignment("default", stmt.expression))
+                            // If the expression is an identifier that lost its local binding
+                            // (went through "Direct" path), rewrite it to exports.name.
+                            val rewrittenExpr = if (exprName != null && exprName in directExportedVarNames) {
+                                PropertyAccessExpression(
+                                    expression = syntheticId("exports"),
+                                    name = syntheticId(exprName),
+                                    pos = -1, end = -1,
+                                )
+                            } else stmt.expression
+                            result.add(makeExportAssignment("default", rewrittenExpr))
                         }
                     }
                 }
@@ -705,9 +743,17 @@ class Transformer(private val options: CompilerOptions) {
                                 // Function/class: use stub (no void0 hoist needed)
                                 functionExportStubs.add(makeExportAssignment(exportName, syntheticId(localName)))
                             } else {
-                                // Variable: void0 hoist + assignment
+                                // Variable: void0 hoist + assignment.
+                                // If the local var lost its binding (Direct path), reference via exports.
+                                val localExpr: Expression = if (localName in directExportedVarNames) {
+                                    PropertyAccessExpression(
+                                        expression = syntheticId("exports"),
+                                        name = syntheticId(localName),
+                                        pos = -1, end = -1,
+                                    )
+                                } else syntheticId(localName)
                                 if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
-                                result.add(makeExportAssignment(exportName, syntheticId(localName)))
+                                result.add(makeExportAssignment(exportName, localExpr))
                             }
                         }
                     }
@@ -718,6 +764,9 @@ class Transformer(private val options: CompilerOptions) {
                     // If so, rewrite the IIFE arg from N || (N = {}) to N || (exports.N = N = {}).
                     val iifeNameForExport = extractSimpleIifeName(stmt)
                     if (iifeNameForExport != null && iifeNameForExport in exportedNsEnumNames) {
+                        // Add the name to exportedVarNames here (in source declaration order)
+                        // so the void0 hoist ordering matches the source order.
+                        if (iifeNameForExport !in exportedVarNames) exportedVarNames.add(iifeNameForExport)
                         result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
                     } else {
                         result.add(stmt)
@@ -1097,8 +1146,31 @@ class Transformer(private val options: CompilerOptions) {
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
-        for (name in exportedNsEnumNames) {
-            if (name !in exportedVarNames) exportedVarNames.add(name)
+        // Note: exportedNsEnumNames are NOT pre-added to exportedVarNames here.
+        // Instead, they are added lazily in the IIFE detection branch below, so that
+        // their void0 hoists appear in source declaration order (matching TypeScript output).
+
+        // Pre-scan: determine which exported var names will go through the "Direct" path.
+        // References to these names anywhere in the module body must become exports.name.
+        val directExportedVarNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            if (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) {
+                val hasComplexPattern = stmt.declarationList.declarations.any {
+                    extractIdentifierName(it.name) == null
+                }
+                val needsKeepDeclaration = hasComplexPattern ||
+                        stmt.declarationList.declarations.any { decl ->
+                            decl.initializer is FunctionExpression ||
+                                    decl.initializer is ArrowFunction ||
+                                    decl.initializer is ClassExpression
+                        }
+                if (!needsKeepDeclaration) {
+                    for (decl in stmt.declarationList.declarations) {
+                        val n = extractIdentifierName(decl.name)
+                        if (n != null && decl.initializer != null) directExportedVarNames.add(n)
+                    }
+                }
+            }
         }
 
         // Body statements (non-import content)
@@ -1380,6 +1452,9 @@ class Transformer(private val options: CompilerOptions) {
                     // Check if this is a namespace/enum IIFE for an exported name
                     val iifeNameForExport = extractSimpleIifeName(stmt)
                     if (iifeNameForExport != null && iifeNameForExport in exportedNsEnumNames) {
+                        // Add the name to exportedVarNames here (in source declaration order)
+                        // so the void0 hoist ordering matches the source order.
+                        if (iifeNameForExport !in exportedVarNames) exportedVarNames.add(iifeNameForExport)
                         bodyStatements.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
                     } else {
                         bodyStatements.add(stmt)
@@ -1389,9 +1464,25 @@ class Transformer(private val options: CompilerOptions) {
         }
 
         // Apply import identifier renaming in body statements
-        val renamedBody = if (renameMap.isNotEmpty()) {
+        val renamedBody0 = if (renameMap.isNotEmpty()) {
             bodyStatements.map { rewriteIdInStatement(it, renameMap) }
         } else bodyStatements.toList()
+
+        // Rewrite references to "direct" exported vars in the body.
+        // Export var names emitted via "Direct" path (no local var kept) must be
+        // referenced as exports.name instead of the bare name throughout the body.
+        val exportedVarRewriteMap: Map<String, Expression> = if (directExportedVarNames.isNotEmpty()) {
+            directExportedVarNames.associateWith { name ->
+                PropertyAccessExpression(
+                    expression = syntheticId("exports"),
+                    name = syntheticId(name),
+                    pos = -1, end = -1,
+                ) as Expression
+            }
+        } else emptyMap()
+        val renamedBody = if (exportedVarRewriteMap.isNotEmpty()) {
+            renamedBody0.map { rewriteIdInStatement(it, exportedVarRewriteMap) }
+        } else renamedBody0
 
         // Import elision: determine which namedModuleImports are actually used.
         // Collect refs from body + function stubs + deferred, but NOT importReassignments
