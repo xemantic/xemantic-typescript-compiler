@@ -100,10 +100,17 @@ class TypeScriptCompiler {
         val options = parsed.options
         val diagnostics = mutableListOf<Diagnostic>()
 
-        // TS5107: AMD module format is deprecated
+        // TS5107: AMD and System module formats are deprecated
         if (options.module == ModuleKind.AMD) {
             diagnostics.add(Diagnostic(
                 message = "Option 'module=AMD' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
+                category = DiagnosticCategory.Error,
+                code = 5107,
+            ))
+        }
+        if (options.module == ModuleKind.System) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'module=System' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5107,
             ))
