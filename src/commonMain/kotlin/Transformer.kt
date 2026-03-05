@@ -95,6 +95,12 @@ class Transformer(private val options: CompilerOptions) {
     // Counter for generating unique temp variable names (_a, _b, _c, ...).
     private var tempVarCounter = 0
 
+    // Top-level names that are declared ONLY as interfaces or type aliases (no runtime value).
+    // Used to filter export specifiers that refer to type-only names, e.g. `export { A, B }`
+    // where A and B are interfaces — TypeScript erases these and emits `export {}` instead.
+    // Populated at the start of transform() from the original source file statements.
+    private val topLevelTypeOnlyNames = mutableSetOf<String>()
+
     private fun nextTempVarName(): String {
         val n = tempVarCounter++
         return if (n < 26) "_" + ('a' + n) else "_${('a' + n / 26)}${('a' + n % 26)}"
@@ -104,6 +110,34 @@ class Transformer(private val options: CompilerOptions) {
         sourceText = sourceFile.text
         hasSeenRuntimeStatement = false
         hasSeenAnyTopLevelStatement = false
+        // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
+        // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
+        // are interfaces — TypeScript erases them and may produce `export {}` to preserve module semantics.
+        topLevelTypeOnlyNames.clear()
+        val topLevelRuntimeNames = mutableSetOf<String>()
+        for (stmt in sourceFile.statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> topLevelTypeOnlyNames.add(stmt.name.text)
+                is TypeAliasDeclaration -> topLevelTypeOnlyNames.add(stmt.name.text)
+                is ClassDeclaration -> stmt.name?.text?.let { topLevelRuntimeNames.add(it) }
+                is FunctionDeclaration -> stmt.name?.text?.let { topLevelRuntimeNames.add(it) }
+                is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
+                    collectBoundNames(decl.name).forEach { n -> topLevelRuntimeNames.add(n) }
+                }
+                is EnumDeclaration -> topLevelRuntimeNames.add(stmt.name.text)
+                is ModuleDeclaration -> {
+                    if (isTypeOnlyNamespace(stmt)) {
+                        // Namespaces with only type members (interfaces, type aliases) produce no runtime value
+                        extractIdentifierName(stmt.name)?.let { topLevelTypeOnlyNames.add(it) }
+                    } else {
+                        extractIdentifierName(stmt.name)?.let { topLevelRuntimeNames.add(it) }
+                    }
+                }
+                else -> {}
+            }
+        }
+        // Remove any type-only names that also have a runtime declaration
+        topLevelTypeOnlyNames -= topLevelRuntimeNames
         // Pre-pass: collect const enum values for inlining at use sites
         if (!options.preserveConstEnums) {
             collectConstEnumValues(sourceFile.statements)
@@ -1259,9 +1293,7 @@ class Transformer(private val options: CompilerOptions) {
             is ImportDeclaration -> transformImportDeclaration(statement)
             is ImportEqualsDeclaration -> transformImportEqualsDeclaration(statement)
             is ExportDeclaration -> transformExportDeclaration(statement)
-            is ExportAssignment -> listOf(
-                statement.copy(expression = transformExpression(statement.expression))
-            )
+            is ExportAssignment -> transformExportAssignment(statement)
 
             // --- Control flow: recurse into children ---
             is Block -> listOf(statement.copy(statements = transformStatements(statement.statements)))
@@ -1984,10 +2016,21 @@ class Transformer(private val options: CompilerOptions) {
     private fun transformExportDeclaration(decl: ExportDeclaration): List<Statement> {
         if (decl.isTypeOnly) return orphanedComments(decl)
 
-        // Strip type-only export specifiers
+        // Strip type-only export specifiers. This includes both:
+        // 1. Specifiers explicitly marked as type-only: `export { type A }`
+        // 2. Specifiers (without moduleSpecifier) whose local name refers only to a top-level
+        //    interface or type alias — e.g. `export { A, B }` where A and B are interfaces.
+        //    TypeScript erases these since interfaces produce no runtime value.
         val clause = decl.exportClause
         if (clause is NamedExports) {
-            val filtered = clause.elements.filter { !it.isTypeOnly }
+            val filtered = clause.elements.filter { spec ->
+                if (spec.isTypeOnly) return@filter false
+                // For re-exports (with moduleSpecifier), we don't know the target file's types
+                if (decl.moduleSpecifier != null) return@filter true
+                // For local exports, filter out names that are declared only as types in this file
+                val localName = (spec.propertyName ?: spec.name).text
+                localName !in topLevelTypeOnlyNames
+            }
             if (filtered.isEmpty()) return orphanedComments(decl)
             if (filtered.size != clause.elements.size) {
                 return listOf(
@@ -1997,6 +2040,23 @@ class Transformer(private val options: CompilerOptions) {
         }
 
         return listOf(decl)
+    }
+
+    /**
+     * Transforms an `export default X` or `export = X` statement.
+     * When the expression is a simple identifier that refers only to a top-level type declaration
+     * (interface or type-only namespace), the entire export is erased — TypeScript produces no
+     * runtime output for such "non-instantiated" exports.
+     */
+    private fun transformExportAssignment(stmt: ExportAssignment): List<Statement> {
+        // Erase `export default X` when X is declared only as a type (no runtime value)
+        if (!stmt.isExportEquals) {
+            val expr = stmt.expression
+            if (expr is Identifier && expr.text in topLevelTypeOnlyNames) {
+                return orphanedComments(stmt)
+            }
+        }
+        return listOf(stmt.copy(expression = transformExpression(stmt.expression)))
     }
 
     // -----------------------------------------------------------------
@@ -3842,12 +3902,25 @@ class Transformer(private val options: CompilerOptions) {
             is ArrayLiteralExpression -> node.elements.forEach { collectRefsFromNode(it, refs) }
             is ObjectLiteralExpression -> node.properties.forEach { prop ->
                 when (prop) {
-                    is PropertyAssignment -> collectRefsFromNode(prop.initializer, refs)
+                    is PropertyAssignment -> {
+                        // Traverse computed property names (e.g. [keys.n]: value)
+                        if (prop.name is ComputedPropertyName) collectRefsFromNode(prop.name, refs)
+                        collectRefsFromNode(prop.initializer, refs)
+                    }
                     is ShorthandPropertyAssignment -> { refs.add(prop.name.text); collectRefsFromNode(prop.objectAssignmentInitializer, refs) }
                     is SpreadAssignment -> collectRefsFromNode(prop.expression, refs)
-                    is MethodDeclaration -> prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
-                    is GetAccessor -> prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
-                    is SetAccessor -> prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    is MethodDeclaration -> {
+                        if (prop.name is ComputedPropertyName) collectRefsFromNode(prop.name, refs)
+                        prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    }
+                    is GetAccessor -> {
+                        if (prop.name is ComputedPropertyName) collectRefsFromNode(prop.name, refs)
+                        prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    }
+                    is SetAccessor -> {
+                        if (prop.name is ComputedPropertyName) collectRefsFromNode(prop.name, refs)
+                        prop.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+                    }
                     else -> {}
                 }
             }
