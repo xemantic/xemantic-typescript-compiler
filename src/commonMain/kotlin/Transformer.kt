@@ -4721,6 +4721,21 @@ class Transformer(private val options: CompilerOptions) {
         // Build IIFE body statements
         val iifeBody = mutableListOf<Statement>()
         var nextAutoValue = 0
+        // Track member name → resolved numeric value for same-enum reference resolution.
+        val memberValues = mutableMapOf<String, Int?>()
+
+        // Try to evaluate an expression with knowledge of previously computed enum member values.
+        // This allows `b = a` to resolve to the value of `a` when `a` is a numeric enum member.
+        fun tryEvaluateEnumInitializer(expr: Expression): Int? {
+            // First try plain numeric evaluation
+            val numericValue = tryEvaluateNumericLiteral(expr)
+            if (numericValue != null) return numericValue
+            // Check if expr is an identifier that refers to a member in this enum
+            if (expr is Identifier && expr.text in memberValues) {
+                return memberValues[expr.text]  // may be null if non-constant
+            }
+            return null
+        }
 
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
@@ -4733,6 +4748,7 @@ class Transformer(private val options: CompilerOptions) {
                         // String enum member: E["B"] = "hello" (no reverse mapping)
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
+                        memberValues[memberName] = null  // mark as non-numeric
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
@@ -4748,9 +4764,17 @@ class Transformer(private val options: CompilerOptions) {
                         )
                     } else {
                         // Numeric / expression initializer: E[E["X"] = expr] = "X"
-                        val numericValue = tryEvaluateNumericLiteral(initExpr)
+                        // Try to resolve enum member references in the initializer.
+                        val resolvedExpr = when {
+                            initExpr is Identifier && initExpr.text in memberValues && memberValues[initExpr.text] != null -> {
+                                NumericLiteralNode(text = memberValues[initExpr.text].toString(), pos = -1, end = -1)
+                            }
+                            else -> initExpr
+                        }
+                        val numericValue = tryEvaluateEnumInitializer(resolvedExpr)
+                        memberValues[memberName] = numericValue
                         nextAutoValue = if (numericValue != null) numericValue + 1 else nextAutoValue
-                        makeReverseMapStatement(enumName, memberNameExpr, initExpr)
+                        makeReverseMapStatement(enumName, memberNameExpr, resolvedExpr)
                     }
                 }
 
@@ -4760,6 +4784,7 @@ class Transformer(private val options: CompilerOptions) {
                         text = nextAutoValue.toString(),
                         pos = -1, end = -1,
                     )
+                    memberValues[memberName] = nextAutoValue
                     nextAutoValue++
                     makeReverseMapStatement(enumName, memberNameExpr, valueExpr)
                 }

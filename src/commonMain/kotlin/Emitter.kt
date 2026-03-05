@@ -1883,7 +1883,15 @@ class Emitter(
     }
 
     private fun emitPrefixUnaryExpression(node: PrefixUnaryExpression) {
-        write(operatorToString(node.operator))
+        val opStr = operatorToString(node.operator)
+        write(opStr)
+        // Avoid `++` or `--` ambiguity: if operator is `+` or `-` and operand is also a
+        // prefix unary with the same operator (e.g. `+ +y`), emit a space between them.
+        val operand = node.operand
+        if ((node.operator == SyntaxKind.Plus || node.operator == SyntaxKind.Minus) &&
+            operand is PrefixUnaryExpression && operand.operator == node.operator) {
+            write(" ")
+        }
         emitExpression(node.operand)
     }
 
