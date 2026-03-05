@@ -2,9 +2,9 @@
 
 ## Current Status (2026-03-05)
 
-**Test results**: 4,259 / 8,627 passing (49.4%)
+**Test results**: 4,263 / 8,627 passing (49.4%)
 
-Previous: 4,018 / 8,627 passing (46.6%)
+Previous: 4,259 / 8,627 passing (49.4%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -123,8 +123,9 @@ Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "w
 | 1 ✅ | A (already fixed), G (+2) | Emitter.kt |
 | 2 ✅ | B (+3), E (+2), F (+1) | Transformer.kt, Emitter.kt, Parser.kt |
 | 3 ✅ | D (+241) | Transformer.kt (new AMD fn) |
-| 4 | C1, C2 | Transformer.kt (CommonJS) |
-| 5 | C3, C4, H, I, J | Various (complex / dependent) |
+| 4 ✅ | C1 (already fixed), C2 (+4) | Transformer.kt (CommonJS) |
+| 5 | H, J | Transformer.kt (System module, enum folding) |
+| 6 | I, C3, C4 | Transformer.kt (async/await, import helpers) |
 
 **Merge workflow per wave:**
 ```bash
