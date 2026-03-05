@@ -3558,10 +3558,59 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             // Binary: recurse
-            is BinaryExpression -> expr.copy(
-                left = transformExpression(expr.left),
-                right = transformExpression(expr.right),
-            )
+            is BinaryExpression -> {
+                val left = transformExpression(expr.left)
+                val right = transformExpression(expr.right)
+                // Downlevel `??` to `!== null && !== void 0 ? :` for targets below ES2020
+                if (expr.operator == SyntaxKind.QuestionQuestion &&
+                    options.effectiveTarget < ScriptTarget.ES2020) {
+                    // If left is a simple identifier, use it directly; otherwise use a temp var
+                    val leftRef: Expression
+                    val nullCheck: Expression
+                    if (left is Identifier) {
+                        leftRef = left
+                        nullCheck = left
+                    } else {
+                        val tempName = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(tempName)
+                        val tempId = syntheticId(tempName)
+                        // (_a = left)
+                        val assign = ParenthesizedExpression(
+                            expression = BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = left, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        nullCheck = assign
+                        leftRef = tempId
+                    }
+                    // nullCheck !== null && leftRef !== void 0 ? leftRef : right
+                    val notNull = BinaryExpression(
+                        left = nullCheck,
+                        operator = SyntaxKind.ExclamationEqualsEquals,
+                        right = syntheticId("null"),
+                        pos = -1, end = -1,
+                    )
+                    val notUndefined = BinaryExpression(
+                        left = leftRef,
+                        operator = SyntaxKind.ExclamationEqualsEquals,
+                        right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                    val condition = BinaryExpression(
+                        left = notNull,
+                        operator = SyntaxKind.AmpersandAmpersand,
+                        right = notUndefined,
+                        pos = -1, end = -1,
+                    )
+                    ConditionalExpression(
+                        condition = condition,
+                        whenTrue = leftRef,
+                        whenFalse = right,
+                        pos = -1, end = -1,
+                    )
+                } else {
+                    expr.copy(left = left, right = right)
+                }
+            }
 
             // Call: strip type arguments, recurse
             is CallExpression -> expr.copy(
