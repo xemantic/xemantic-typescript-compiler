@@ -3377,7 +3377,9 @@ class Transformer(private val options: CompilerOptions) {
 
         // Build IIFE body statements
         val iifeBody = mutableListOf<Statement>()
-        var nextAutoValue = 0
+        var nextAutoValue = 0L
+        // Track folded values for cross-member references (e.g. B = A + 1)
+        val memberValues = mutableMapOf<String, Long>()
 
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
@@ -3405,9 +3407,19 @@ class Transformer(private val options: CompilerOptions) {
                         )
                     } else {
                         // Numeric / expression initializer: E[E["X"] = expr] = "X"
-                        val numericValue = tryEvaluateNumericLiteral(initExpr)
-                        nextAutoValue = if (numericValue != null) numericValue + 1 else nextAutoValue
-                        makeReverseMapStatement(enumName, memberNameExpr, initExpr)
+                        // Try to fold constant expressions (e.g. 1 << 1 → 2)
+                        val foldedValue = evaluateConstantExpression(initExpr, memberValues)
+                        val emitExpr = if (foldedValue != null) {
+                            NumericLiteralNode(text = foldedValue.toString(), pos = -1, end = -1)
+                        } else {
+                            initExpr
+                        }
+                        val numericValue = foldedValue ?: tryEvaluateNumericLiteral(initExpr)?.toLong()
+                        if (numericValue != null) {
+                            nextAutoValue = numericValue + 1L
+                            memberValues[memberName] = numericValue
+                        }
+                        makeReverseMapStatement(enumName, memberNameExpr, emitExpr)
                     }
                 }
 
@@ -3417,6 +3429,7 @@ class Transformer(private val options: CompilerOptions) {
                         text = nextAutoValue.toString(),
                         pos = -1, end = -1,
                     )
+                    memberValues[memberName] = nextAutoValue
                     nextAutoValue++
                     makeReverseMapStatement(enumName, memberNameExpr, valueExpr)
                 }
@@ -3771,6 +3784,59 @@ class Transformer(private val options: CompilerOptions) {
                 } else null
             }
 
+            else -> null
+        }
+    }
+
+    /**
+     * Evaluates a constant expression in an enum member initializer.
+     * Handles numeric literals, prefix unary (-/+/~), binary arithmetic and bitwise ops,
+     * parenthesized expressions, and references to previously-defined enum members.
+     * Returns null if the expression cannot be statically evaluated.
+     */
+    private fun evaluateConstantExpression(expr: Expression, memberValues: Map<String, Long>): Long? {
+        return when (expr) {
+            is NumericLiteralNode -> {
+                val text = expr.text.trim()
+                when {
+                    text.startsWith("0x") || text.startsWith("0X") ->
+                        text.substring(2).toLongOrNull(16)
+                    text.startsWith("0b") || text.startsWith("0B") ->
+                        text.substring(2).toLongOrNull(2)
+                    text.startsWith("0o") || text.startsWith("0O") ->
+                        text.substring(2).toLongOrNull(8)
+                    else -> text.toLongOrNull()
+                }
+            }
+            is PrefixUnaryExpression -> {
+                val operand = evaluateConstantExpression(expr.operand, memberValues) ?: return null
+                when (expr.operator) {
+                    SyntaxKind.Minus -> -operand
+                    SyntaxKind.Plus -> operand
+                    SyntaxKind.Tilde -> operand.inv()
+                    else -> null
+                }
+            }
+            is BinaryExpression -> {
+                val left = evaluateConstantExpression(expr.left, memberValues) ?: return null
+                val right = evaluateConstantExpression(expr.right, memberValues) ?: return null
+                when (expr.operator) {
+                    SyntaxKind.Plus -> left + right
+                    SyntaxKind.Minus -> left - right
+                    SyntaxKind.Asterisk -> left * right
+                    SyntaxKind.Slash -> if (right == 0L) null else left / right
+                    SyntaxKind.Percent -> if (right == 0L) null else left % right
+                    SyntaxKind.LessThanLessThan -> left shl right.toInt()
+                    SyntaxKind.GreaterThanGreaterThan -> left shr right.toInt()
+                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> left ushr right.toInt()
+                    SyntaxKind.Bar -> left or right
+                    SyntaxKind.Ampersand -> left and right
+                    SyntaxKind.Caret -> left xor right
+                    else -> null
+                }
+            }
+            is Identifier -> memberValues[expr.text]
+            is ParenthesizedExpression -> evaluateConstantExpression(expr.expression, memberValues)
             else -> null
         }
     }
