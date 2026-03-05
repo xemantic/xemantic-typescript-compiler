@@ -245,8 +245,15 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseVariableDeclaration(): VariableDeclaration {
         val pos = getPos()
         val name = parseBindingNameOrPattern()
+        // Capture same-line comments between the name and `:` or `=`
+        // e.g. `let e/*c*/: T = v` or `let d: T /*c*/ = v`
+        val nameTrailingFromName = scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
         val excl = parseOptional(SyntaxKind.Exclamation)
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+        val nameTrailingFromType = if (type != null) {
+            scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
+        } else null
+        val nameTrailing = (nameTrailingFromName?.ifEmpty { null } ?: nameTrailingFromType?.ifEmpty { null })
         val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
         return VariableDeclaration(
             name = name,
@@ -254,7 +261,8 @@ class Parser(private val source: String, private val fileName: String) {
             initializer = init,
             exclamationToken = excl,
             pos = pos,
-            end = getEnd()
+            end = getEnd(),
+            nameTrailingComments = nameTrailing,
         )
     }
 
