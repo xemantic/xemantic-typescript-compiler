@@ -1675,6 +1675,9 @@ class Transformer(private val options: CompilerOptions) {
         statements: List<Statement>,
         originalSourceFile: SourceFile,
     ): List<Statement> {
+        // Parse /// <amd-module name='X'/> directives (also applies to System format)
+        val amdDirectives = parseAmdDirectives(originalSourceFile.text)
+
         // Strip "use strict" from transformed statements (goes inside the function body)
         val statementsWithoutStrict = statements.filter { stmt ->
             !(stmt is ExpressionStatement &&
@@ -1684,13 +1687,15 @@ class Transformer(private val options: CompilerOptions) {
 
         // Counter for generating unique temp names
         val moduleNameCounter = mutableMapOf<String, Int>()
+        // Counter for side-effect import setter param names (_1, _2, ...)
+        var sideEffectCounter = 0
 
         // Ordered list of (moduleSpecifierPath, tempVarName) pairs for each ImportDeclaration binding.
         // Multiple imports from the same path share a setter; each binding gets its own temp var.
         data class ImportBinding(
             val path: String,          // module path string
-            val tempVarName: String,   // the temp var (e.g. "f1_1", "f1_2")
-            val renameTarget: Expression, // what to rewrite usages to (e.g. f1_1.A)
+            val tempVarName: String,   // the temp var (e.g. "file1_1", "ns")
+            val renameTarget: Expression, // what to rewrite usages to (e.g. file2_1.A)
             val localName: String,     // local name in source (for renaming)
         )
 
@@ -1698,14 +1703,25 @@ class Transformer(private val options: CompilerOptions) {
         val importBindings = mutableListOf<ImportBinding>()
         // Unique module paths in order of first appearance (for deduplication)
         val uniqueModulePaths = mutableListOf<String>()
-        // Map from path → setter temp var name (the param inside setter function)
+        // Map from path → setter param name (the param inside setter function)
         val pathToSetterParam = mutableMapOf<String, String>()
         // Map from path → list of (tempVar) that get assigned in this setter
         val pathToTempVars = mutableMapOf<String, MutableList<String>>()
+        // Map from path → module-level temp var name (for named/default imports, one per path)
+        val pathToModuleTempVar = mutableMapOf<String, String>()
+        // Map from path → namespace import var names (assigned FIRST in setter, before exportStar)
+        val pathToNamespaceVars = mutableMapOf<String, MutableList<String>>()
         // Side-effect imports (no bindings) — just added as deps with empty setter
         val sideEffectPaths = mutableListOf<String>()
+        // Side-effect import setter param names (in path order)
+        val sideEffectSetterParam = mutableMapOf<String, String>()
         // Export star paths — each needs a setter that calls exportStar_N
         val exportStarPaths = mutableListOf<String>()  // list of (path) in order
+        // Named re-exports from a module: export {a2, b2, c2 as d2} from "bar"
+        // path → list of (exportName, importedOriginalName) pairs
+        val pathToNamedReExports = mutableMapOf<String, MutableList<Pair<String, String>>>()
+        // Names that are namespace imports (import * as X) — for execute ordering
+        val namespaceImportNames = mutableSetOf<String>()
 
         // Pre-scan for type-only names (to avoid exporting them)
         val runtimeDeclaredNames = mutableSetOf<String>()
@@ -1778,6 +1794,49 @@ class Transformer(private val options: CompilerOptions) {
         // Also include locally-declared ns/enums that are re-exported via `export { localName }`
         exportedNsEnumNames.addAll(iifeExportAliases.keys)
 
+        // Pre-scan: collect all explicitly-named exports (for exportedNames_1 when combined with export *)
+        // These are the EXPORT names (not local names) from all ExportDeclarations and exported vars.
+        // Use LinkedHashSet to preserve source declaration order.
+        val localExportNames = linkedSetOf<String>()
+        // Also collect which local var names have initializers (for local re-export emit decisions).
+        val varsWithInitializers = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ExportDeclaration && !stmt.isTypeOnly && stmt.exportClause is NamedExports -> {
+                    for (spec in (stmt.exportClause as NamedExports).elements) {
+                        // Skip "default" — already excluded by n !== "default" check in exportStar
+                        if (!spec.isTypeOnly && spec.name.text != "default") localExportNames.add(spec.name.text)
+                    }
+                }
+                stmt is ExportDeclaration && !stmt.isTypeOnly && stmt.exportClause == null &&
+                        stmt.moduleSpecifier != null -> {
+                    // export * from "mod" — skip (not a named export)
+                }
+                stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers -> {
+                    for (d in stmt.declarationList.declarations) {
+                        val n = extractIdentifierName(d.name)
+                        if (n != null) {
+                            localExportNames.add(n)
+                            if (d.initializer != null) varsWithInitializers.add(n)
+                        }
+                    }
+                }
+                stmt is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        val n = extractIdentifierName(d.name)
+                        if (n != null && d.initializer != null) varsWithInitializers.add(n)
+                    }
+                }
+                stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers && !hasDeclareModifier(stmt)
+                        && ModifierFlag.Default !in stmt.modifiers -> {
+                    // export function foo() {} — the function name is a named export (not default)
+                    // "default" is already excluded by the n !== "default" check in exportStar, so skip it.
+                    stmt.name?.text?.let { localExportNames.add(it) }
+                }
+                else -> {}
+            }
+        }
+
         // For renaming local names in body (import bindings)
         val renameMap = mutableMapOf<String, Expression>()
         // Set of var names that are require-call imports (to skip in Pass 2)
@@ -1785,6 +1844,11 @@ class Transformer(private val options: CompilerOptions) {
         // Set of require-import var names that are also exported (export import X = require("mod"))
         // These need exports_1("X", param) in their setter body
         val exportedRequireImportNames = mutableSetOf<String>()
+
+        // Import elision: collect all value references from non-import statements.
+        // Used to elide unused named imports (e.g. `import {value2} from "./file4"` where value2 is never used).
+        val nonImportStmts = statementsWithoutStrict.filter { it !is ImportDeclaration }
+        val referencedNames = collectValueReferences(nonImportStmts)
 
         // Pass 1: collect imports, build binding/rename info
         for (stmt in statementsWithoutStrict) {
@@ -1796,47 +1860,89 @@ class Transformer(private val options: CompilerOptions) {
                         ?: (moduleSpecifier as? StringLiteralNode)?.text ?: ""
 
                     if (clause == null) {
-                        // Side-effect import
+                        // Side-effect import: import 'mod' — empty setter with param _N
                         if (specStr !in uniqueModulePaths) {
                             uniqueModulePaths.add(specStr)
                             sideEffectPaths.add(specStr)
-                            // no setter var
+                            sideEffectCounter++
+                            sideEffectSetterParam[specStr] = "_$sideEffectCounter"
                         }
                     } else {
                         val bindings = clause.namedBindings
-                        // Ensure this path has a setter param
+
+                        // Import elision: if none of the imported names are referenced in the module body,
+                        // elide the entire import (omit from deps and bindings).
+                        val defaultName = clause.name?.text
+                        val nsName = (bindings as? NamespaceImport)?.name?.text
+                        val namedImports = bindings as? NamedImports
+                        val defaultUsed = defaultName != null && defaultName in referencedNames
+                        val nsUsed = nsName != null && nsName in referencedNames
+                        val namedUsed = namedImports?.elements?.any { el ->
+                            !el.isTypeOnly && el.name.text in referencedNames
+                        } ?: false
+                        if (!defaultUsed && !nsUsed && !namedUsed) continue  // skip this import entirely
+
                         if (specStr !in uniqueModulePaths) {
                             uniqueModulePaths.add(specStr)
-                            // Setter param name: generate from module path
-                            val setterParamBase = generateModuleTempName(moduleSpecifier, mutableMapOf())
-                            val setterParam = "${setterParamBase}_1"
-                            pathToSetterParam[specStr] = setterParam
                             pathToTempVars[specStr] = mutableListOf()
                         }
 
-                        when {
-                            bindings is NamespaceImport -> {
-                                // import * as ns from "mod" → ns gets assigned the module itself
-                                val nsName = bindings.name.text
-                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                                pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(tempName)
-                                // ns → tempName (the module object directly)
-                                renameMap[nsName] = syntheticId(tempName)
-                                importBindings.add(ImportBinding(specStr, tempName, syntheticId(tempName), nsName))
+                        // Helper: create a new module-level temp var for this import declaration.
+                        // Each import declaration (even from the same path) gets its own temp var.
+                        // All vars from the same path share ONE setter (assigned to the same param).
+                        fun createModuleTempVar(): String {
+                            val tv = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                            if (specStr !in pathToSetterParam) {
+                                pathToSetterParam[specStr] = "${tv}_1"
                             }
-                            clause.name != null && bindings is NamedImports -> {
-                                // Combined default + named: import d, { a } from "mod"
-                                // MUST come before the plain `bindings is NamedImports` case.
-                                val localName = clause.name.text
-                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                                pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(tempName)
+                            pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(tv)
+                            return tv
+                        }
+
+                        when {
+                            clause.name != null && bindings is NamespaceImport -> {
+                                // Combined: import e, * as ns2 from "mod"
+                                // Use module-based temp var for default access; do NOT rename namespace import.
+                                val defaultLocalName = clause.name.text
+                                val tempName = createModuleTempVar()
                                 val defaultAccess = PropertyAccessExpression(
                                     expression = syntheticId(tempName),
                                     name = syntheticId("default"),
                                     pos = -1, end = -1,
                                 )
-                                renameMap[localName] = defaultAccess
-                                importBindings.add(ImportBinding(specStr, tempName, defaultAccess, localName))
+                                renameMap[defaultLocalName] = defaultAccess
+                                importBindings.add(ImportBinding(specStr, tempName, defaultAccess, defaultLocalName))
+                                // ns2 is NOT renamed (TypeScript leaves it unrewritten in this combined form)
+                            }
+                            bindings is NamespaceImport -> {
+                                // import * as ns from "mod" → ns becomes the module object directly
+                                val nsName = bindings.name.text
+                                // Setter param: nsName_1 (based on alias, not module path)
+                                if (specStr !in pathToSetterParam) {
+                                    pathToSetterParam[specStr] = "${nsName}_1"
+                                }
+                                // Track as namespace var (assigned first in setter)
+                                pathToNamespaceVars.getOrPut(specStr) { mutableListOf() }.add(nsName)
+                                // Temp var: nsName (same as alias) — add to hoisted vars
+                                if (!pathToTempVars.getOrPut(specStr) { mutableListOf() }.contains(nsName)) {
+                                    pathToTempVars[specStr]!!.add(nsName)
+                                }
+                                // ns → ns (identity; kept in renameMap for re-export lookup)
+                                renameMap[nsName] = syntheticId(nsName)
+                                namespaceImportNames.add(nsName)
+                                importBindings.add(ImportBinding(specStr, nsName, syntheticId(nsName), nsName))
+                            }
+                            clause.name != null && bindings is NamedImports -> {
+                                // Combined default + named: import d, { a } from "mod"
+                                val defaultLocalName = clause.name.text
+                                val tempName = createModuleTempVar()
+                                val defaultAccess = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                                renameMap[defaultLocalName] = defaultAccess
+                                importBindings.add(ImportBinding(specStr, tempName, defaultAccess, defaultLocalName))
                                 for (element in bindings.elements) {
                                     if (element.isTypeOnly) continue
                                     val importedName = (element.propertyName ?: element.name).text
@@ -1853,8 +1959,7 @@ class Transformer(private val options: CompilerOptions) {
                             clause.name != null && bindings == null -> {
                                 // Default import only: import d from "mod" → d = tempName.default
                                 val localName = clause.name.text
-                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                                pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(tempName)
+                                val tempName = createModuleTempVar()
                                 val defaultAccess = PropertyAccessExpression(
                                     expression = syntheticId(tempName),
                                     name = syntheticId("default"),
@@ -1865,12 +1970,12 @@ class Transformer(private val options: CompilerOptions) {
                             }
                             bindings is NamedImports -> {
                                 // Named imports only: import { A, B as b } from "mod"
+                                // All elements share ONE module temp var (e.g. file2_1)
+                                val tempName = createModuleTempVar()
                                 for (element in bindings.elements) {
                                     if (element.isTypeOnly) continue
                                     val importedName = (element.propertyName ?: element.name).text
                                     val localAlias = element.name.text
-                                    val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                                    pathToTempVars.getOrPut(specStr) { mutableListOf() }.add(tempName)
                                     val access = PropertyAccessExpression(
                                         expression = syntheticId(tempName),
                                         name = syntheticId(importedName),
@@ -1892,6 +1997,24 @@ class Transformer(private val options: CompilerOptions) {
                             uniqueModulePaths.add(specStr)
                         }
                         exportStarPaths.add(specStr)
+                    } else if (!stmt.isTypeOnly && stmt.moduleSpecifier != null && stmt.exportClause is NamedExports) {
+                        // export {a2, b2, c2 as d2} from "mod" — named re-exports from a module
+                        val specStr = (normalizeModuleSpecifier(stmt.moduleSpecifier) as? StringLiteralNode)?.text
+                            ?: (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                        if (specStr !in uniqueModulePaths) {
+                            uniqueModulePaths.add(specStr)
+                            // Ensure there's a setter param for this path
+                            val pathBaseName = specStr.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
+                            pathToSetterParam[specStr] = "${pathBaseName}_1_1"
+                            pathToTempVars[specStr] = mutableListOf()
+                        }
+                        // Collect named re-exports for this path's setter
+                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                            if (spec.isTypeOnly) continue
+                            val exportName = spec.name.text
+                            val importedName = (spec.propertyName ?: spec.name).text
+                            pathToNamedReExports.getOrPut(specStr) { mutableListOf() }.add(exportName to importedName)
+                        }
                     }
                 }
                 is VariableStatement -> {
@@ -2039,14 +2162,9 @@ class Transformer(private val options: CompilerOptions) {
         // prepended to the next statement added to executeStatements (typically the IIFE).
         val pendingLeadingComments = mutableListOf<Comment>()
 
-        // Track export-star helper counter
-        var exportStarCounter = 0
-        // Map path → exportStar fn name
-        val pathToExportStarFn = mutableMapOf<String, String>()
-        for (path in exportStarPaths) {
-            exportStarCounter++
-            pathToExportStarFn[path] = "exportStar_$exportStarCounter"
-        }
+        // TypeScript uses ONE exportStar helper function (exportStar_1) for ALL export* paths.
+        // The function is only generated if there are any export* paths.
+        val exportStarFnName = if (exportStarPaths.isNotEmpty()) "exportStar_1" else null
 
         // Build import binding order map for sorting export re-exports.
         // TypeScript emits re-export calls in import binding order, not ExportDeclaration order.
@@ -2057,6 +2175,8 @@ class Transformer(private val options: CompilerOptions) {
         // Collect re-export statements (from ExportDeclaration) with their binding order for sorting.
         // These are emitted AFTER all non-ExportDeclaration execute statements.
         val pendingReExports = mutableListOf<Pair<Int, Statement>>() // (bindingOrder, stmt)
+        // Namespace import re-exports go BEFORE body statements in execute (re-exports of import * as X)
+        val preBodyExports = mutableListOf<Statement>()
 
         for (stmt in statementsWithoutStrict) {
             when (stmt) {
@@ -2254,7 +2374,7 @@ class Transformer(private val options: CompilerOptions) {
                     if (stmt.isTypeOnly) {
                         // Type-only: erased
                     } else if (stmt.exportClause is NamedExports && stmt.moduleSpecifier == null) {
-                        // export { x, y as z }
+                        // export { x, y as z } (local re-exports — no module specifier)
                         for (spec in (stmt.exportClause as NamedExports).elements) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
@@ -2263,8 +2383,11 @@ class Transformer(private val options: CompilerOptions) {
                                 val importBinding = renameMap[localName]
                                 if (localName in exportedNsEnumNames || localName in iifeExportAliases) {
                                     // Namespace/enum local — handled by IIFE arg rewriting, skip
+                                } else if (localName in namespaceImportNames) {
+                                    // Re-exporting a namespace import (import * as X): goes BEFORE body
+                                    preBodyExports.add(makeSystemExportCall(exportName, syntheticId(localName)))
                                 } else if (importBinding != null) {
-                                    // Re-exporting an import binding: exports_1("name", moduleObj.prop)
+                                    // Re-exporting a named/default import binding: exports_1("name", moduleObj.prop)
                                     // Use simple call, not inline-assign form. Collect with binding order
                                     // so we can sort re-exports by import binding order later.
                                     val order = importBindingOrder[localName] ?: Int.MAX_VALUE
@@ -2272,22 +2395,18 @@ class Transformer(private val options: CompilerOptions) {
                                 } else if (localName in hoistedFnNames) {
                                     // Re-exporting a hoisted function: hoist the export call too
                                     functionHoists.add(makeSystemExportCall(exportName, syntheticId(localName)))
-                                } else {
-                                    // Re-exporting a local: exports_1("name", localName = localName)
-                                    executeStatements.add(
-                                        ExpressionStatement(
-                                            expression = makeSystemExportInlineAssign(exportName, syntheticId(localName)),
-                                            pos = -1, end = -1,
-                                        )
-                                    )
+                                } else if (localName in varsWithInitializers) {
+                                    // Re-exporting a local var that has an initializer:
+                                    // exports_1("exportName", localName)  (simple call, not inline-assign)
+                                    executeStatements.add(makeSystemExportCall(exportName, syntheticId(localName)))
                                 }
+                                // If localName has no initializer (var x with no value), skip — nothing to export
                             }
                         }
                     } else if (stmt.exportClause is NamedExports && stmt.moduleSpecifier != null) {
-                        // export { x } from "mod" — re-export from another module
-                        // These are handled at load time via setters if needed; for now skip
+                        // export { a2, b2, c2 as d2 } from "mod" — handled in setter, nothing in execute
                     } else if (stmt.moduleSpecifier != null && stmt.exportClause == null) {
-                        // export * from "mod" — handled via setter + exportStar_N function
+                        // export * from "mod" — handled via setter + exportStar function
                         // Nothing to emit in execute directly
                     }
                 }
@@ -2345,9 +2464,11 @@ class Transformer(private val options: CompilerOptions) {
 
         // Apply import identifier renaming in execute statements and function hoists.
         // For System format, do NOT wrap bare-identifier calls as (0, expr)() — that's CJS-only.
+        // preBodyExports (namespace re-exports) come FIRST, then body, then pending re-exports.
+        val allExecuteStatements = preBodyExports + executeStatements
         val renamedExecute = if (renameMap.isNotEmpty()) {
-            executeStatements.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
-        } else executeStatements.toList()
+            allExecuteStatements.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
+        } else allExecuteStatements.toList()
         // Rewrite identifiers inside hoisted function bodies (e.g. references to import bindings)
         if (renameMap.isNotEmpty() && functionHoists.isNotEmpty()) {
             val rewritten = functionHoists.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
@@ -2358,25 +2479,25 @@ class Transformer(private val options: CompilerOptions) {
         // Build setters array — one setter per unique module path (in order of first appearance)
         val setterFunctions = mutableListOf<Expression>()
         for (path in uniqueModulePaths) {
-            if (path in sideEffectPaths && path !in pathToSetterParam) {
-                // Pure side-effect import: empty setter
+            if (path in sideEffectPaths && path !in pathToSetterParam && path !in pathToNamedReExports) {
+                // Pure side-effect import: empty setter with param _N
+                val seParam = sideEffectSetterParam[path] ?: "_1"
                 setterFunctions.add(
                     FunctionExpression(
-                        parameters = listOf(Parameter(name = syntheticId("_"), pos = -1, end = -1)),
+                        parameters = listOf(Parameter(name = syntheticId(seParam), pos = -1, end = -1)),
                         body = Block(statements = emptyList(), multiLine = true, pos = -1, end = -1),
                         pos = -1, end = -1,
                     )
                 )
-            } else if (path in exportStarPaths && path !in pathToSetterParam) {
-                // export * from "path" only — setter calls exportStar_N
-                val exportStarFnName = pathToExportStarFn[path] ?: "exportStar_1"
-                // Setter param uses module path basename (like other imports): file1_1_1
+            } else if (path in exportStarPaths && path !in pathToSetterParam && path !in pathToNamespaceVars && path !in pathToNamedReExports) {
+                // export * from "path" only (no other imports from this path)
+                // Setter param uses module path basename: file7_1_1
                 val pathBaseName = path.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
                 val setterParam = "${pathBaseName}_1_1"
                 val setterBody = listOf(
                     ExpressionStatement(
                         expression = CallExpression(
-                            expression = syntheticId(exportStarFnName),
+                            expression = syntheticId(exportStarFnName ?: "exportStar_1"),
                             arguments = listOf(syntheticId(setterParam)),
                             pos = -1, end = -1,
                         ),
@@ -2392,16 +2513,16 @@ class Transformer(private val options: CompilerOptions) {
                 )
             } else {
                 val setterParam = pathToSetterParam[path] ?: continue
-                val tempVars = pathToTempVars[path] ?: emptyList<String>()
+                val nsVars = pathToNamespaceVars[path] ?: emptyList<String>()
+                val moduleTempVar = pathToModuleTempVar[path]
                 val setterBodyStmts = mutableListOf<Statement>()
 
-                // Assign each temp var: tempVar = setterParam
-                // Also export if this is an exported require-import
-                for (tv in tempVars) {
+                // 1. Assign namespace import vars FIRST: nsVar = setterParam
+                for (nv in nsVars) {
                     setterBodyStmts.add(
                         ExpressionStatement(
                             expression = BinaryExpression(
-                                left = syntheticId(tv),
+                                left = syntheticId(nv),
                                 operator = SyntaxKind.Equals,
                                 right = syntheticId(setterParam),
                                 pos = -1, end = -1,
@@ -2409,20 +2530,72 @@ class Transformer(private val options: CompilerOptions) {
                             pos = -1, end = -1,
                         )
                     )
-                    if (tv in exportedRequireImportNames) {
-                        // export import X = require("mod") → also call exports_1("X", setterParam)
-                        setterBodyStmts.add(makeSystemExportCall(tv, syntheticId(setterParam)))
-                    }
                 }
 
-                // If this path is also an export*, also call exportStar_N
-                if (path in exportStarPaths) {
-                    val exportStarFnName = pathToExportStarFn[path] ?: "exportStar_1"
+                // 2. If this path is an export*, call exportStar function AFTER namespace vars
+                if (path in exportStarPaths && exportStarFnName != null) {
                     setterBodyStmts.add(
                         ExpressionStatement(
                             expression = CallExpression(
                                 expression = syntheticId(exportStarFnName),
                                 arguments = listOf(syntheticId(setterParam)),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    )
+                }
+
+                // 3. Assign all remaining temp vars AFTER exportStar
+                // This includes: module-level temp var (for named/default imports) and require import vars.
+                // Skip any that were already assigned as namespace vars.
+                val allTempVars = pathToTempVars[path] ?: emptyList<String>()
+                for (tv in allTempVars) {
+                    if (tv !in nsVars) {
+                        setterBodyStmts.add(
+                            ExpressionStatement(
+                                expression = BinaryExpression(
+                                    left = syntheticId(tv),
+                                    operator = SyntaxKind.Equals,
+                                    right = syntheticId(setterParam),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )
+                        )
+                    }
+                    // Also export require-imports
+                    if (tv in exportedRequireImportNames) {
+                        setterBodyStmts.add(makeSystemExportCall(tv, syntheticId(setterParam)))
+                    }
+                }
+
+                // 5. Named re-exports from this module: export { a2, b2, c2 as d2 } from "mod"
+                // Emit as: exports_1({ "a2": param["a2"], "b2": param["b2"], "d2": param["c2"] })
+                val namedReExports = pathToNamedReExports[path]
+                if (!namedReExports.isNullOrEmpty()) {
+                    val objProps = namedReExports.map { (exportName, importedName) ->
+                        PropertyAssignment(
+                            name = StringLiteralNode(text = exportName, pos = -1, end = -1),
+                            initializer = ElementAccessExpression(
+                                expression = syntheticId(setterParam),
+                                argumentExpression = StringLiteralNode(text = importedName, pos = -1, end = -1),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    }
+                    setterBodyStmts.add(
+                        ExpressionStatement(
+                            expression = CallExpression(
+                                expression = syntheticId("exports_1"),
+                                arguments = listOf(
+                                    ObjectLiteralExpression(
+                                        properties = objProps,
+                                        multiLine = true,
+                                        pos = -1, end = -1,
+                                    )
+                                ),
                                 pos = -1, end = -1,
                             ),
                             pos = -1, end = -1,
@@ -2489,14 +2662,48 @@ class Transformer(private val options: CompilerOptions) {
             )
         )
 
-        // exportStar helper functions (if any export * from "mod")
-        for ((path, fnName) in pathToExportStarFn) {
-            // function exportStar_N(m) { var exports = {}; for (var n in m) { if (n !== "default") exports[n] = m[n]; } exports_1(exports); }
-            outerBody.add(buildExportStarHelper(fnName))
+        // Function hoists (function declarations + their exports_1 calls) come BEFORE exportedNames_1 and exportStar.
+        outerBody.addAll(functionHoists)
+
+        // exportedNames_1 var — needed when there's both export* and local named exports.
+        // It maps each explicitly-named export to `true` so exportStar can skip them.
+        val needsExportedNames = exportStarPaths.isNotEmpty() && localExportNames.isNotEmpty()
+        if (needsExportedNames) {
+            outerBody.add(
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(
+                            VariableDeclaration(
+                                name = syntheticId("exportedNames_1"),
+                                initializer = ObjectLiteralExpression(
+                                    properties = localExportNames.map { exportName ->
+                                        PropertyAssignment(
+                                            name = StringLiteralNode(text = exportName, pos = -1, end = -1),
+                                            initializer = syntheticId("true"),
+                                            pos = -1, end = -1,
+                                        )
+                                    },
+                                    multiLine = true,
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )
+                        ),
+                        flags = SyntaxKind.VarKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+            )
         }
 
-        // Function hoists (function declarations + their exports_1 calls)
-        outerBody.addAll(functionHoists)
+        // exportStar helper function (ONE shared function for all export* paths, if any)
+        if (exportStarFnName != null) {
+            // function exportStar_1(m) { var exports = {}; for (var n in m) {
+            //   if (n !== "default" [&& !exportedNames_1.hasOwnProperty(n)]) exports[n] = m[n];
+            // } exports_1(exports); }
+            outerBody.add(buildExportStarHelper(exportStarFnName, if (needsExportedNames) "exportedNames_1" else null))
+        }
 
         // Return object with setters and execute
         val settersArray = ArrayLiteralExpression(
@@ -2565,7 +2772,14 @@ class Transformer(private val options: CompilerOptions) {
                     name = syntheticId("register"),
                     pos = -1, end = -1,
                 ),
-                arguments = listOf(depArray, outerFn),
+                arguments = buildList {
+                    // If /// <amd-module name='X'/> directive present, add module name as first arg
+                    if (amdDirectives.moduleName != null) {
+                        add(StringLiteralNode(text = amdDirectives.moduleName, pos = -1, end = -1))
+                    }
+                    add(depArray)
+                    add(outerFn)
+                },
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -2655,9 +2869,12 @@ class Transformer(private val options: CompilerOptions) {
 
     /**
      * Builds the exportStar helper function:
-     * function exportStar_N(m) { var exports = {}; for (var n in m) { if (n !== "default") exports[n] = m[n]; } exports_1(exports); }
+     * function exportStar_N(m) { var exports = {}; for (var n in m) {
+     *   if (n !== "default" [&& !exportedNames_1.hasOwnProperty(n)]) exports[n] = m[n];
+     * } exports_1(exports); }
+     * @param exportedNamesVar if non-null, the helper excludes names that are in this exclusion object
      */
-    private fun buildExportStarHelper(fnName: String): Statement {
+    private fun buildExportStarHelper(fnName: String, exportedNamesVar: String? = null): Statement {
         // var exports = {}
         val exportsDecl = VariableStatement(
             declarationList = VariableDeclarationList(
@@ -2691,13 +2908,38 @@ class Transformer(private val options: CompilerOptions) {
             ),
             pos = -1, end = -1,
         )
-        val ifStmt = IfStatement(
-            expression = BinaryExpression(
-                left = syntheticId("n"),
-                operator = SyntaxKind.ExclamationEqualsEquals,
-                right = StringLiteralNode(text = "default", pos = -1, end = -1),
+        // Base condition: n !== "default"
+        val defaultCheck: Expression = BinaryExpression(
+            left = syntheticId("n"),
+            operator = SyntaxKind.ExclamationEqualsEquals,
+            right = StringLiteralNode(text = "default", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // If exportedNamesVar is set, also add: !exportedNames_1.hasOwnProperty(n)
+        val ifCondition: Expression = if (exportedNamesVar != null) {
+            BinaryExpression(
+                left = defaultCheck,
+                operator = SyntaxKind.AmpersandAmpersand,
+                right = PrefixUnaryExpression(
+                    operator = SyntaxKind.Exclamation,
+                    operand = CallExpression(
+                        expression = PropertyAccessExpression(
+                            expression = syntheticId(exportedNamesVar),
+                            name = syntheticId("hasOwnProperty"),
+                            pos = -1, end = -1,
+                        ),
+                        arguments = listOf(syntheticId("n")),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ),
                 pos = -1, end = -1,
-            ),
+            )
+        } else {
+            defaultCheck
+        }
+        val ifStmt = IfStatement(
+            expression = ifCondition,
             thenStatement = ifBody,
             pos = -1, end = -1,
         )
