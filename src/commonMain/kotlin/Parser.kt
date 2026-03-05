@@ -1364,6 +1364,13 @@ class Parser(private val source: String, private val fileName: String) {
                     }
                 }
 
+                AsyncKeyword -> {
+                    // `export default async function foo()` — parse as FunctionDeclaration with Async modifier
+                    // `export default async function*` — same
+                    nextToken()
+                    parseFunctionDeclarationOrExpression(modifiers + ModifierFlag.Async, comments)
+                }
+
                 else -> {
                     val expr = parseAssignmentExpression()
                     parseSemicolon()
