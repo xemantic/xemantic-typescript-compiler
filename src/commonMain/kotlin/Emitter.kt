@@ -1270,11 +1270,25 @@ class Emitter(
         if (options.removeComments) return
         val comments = node.leadingComments ?: return
         for (comment in comments) {
-            write(comment.text)
-            if (comment.hasTrailingNewLine) {
+            if (comment.hasPrecedingNewLine) {
+                // Comment is on its own line (e.g. JSDoc before first call argument).
+                // End the current line, emit the properly re-indented comment, then
+                // position the cursor at the start of the next line so the expression
+                // that follows is written at the correct indentation.
+                // Always follow with newline+indent (the comment itself is a full line,
+                // so the next expression must also start on its own line).
                 writeNewLine()
+                writeIndent()
+                write(reindentComment(comment))
+                writeNewLine()
+                writeIndent()
             } else {
-                write(" ")
+                write(comment.text)
+                if (comment.hasTrailingNewLine) {
+                    writeNewLine()
+                } else {
+                    write(" ")
+                }
             }
         }
     }
@@ -2335,23 +2349,24 @@ class Emitter(
 
         val targetIndent = indentLevel * 4
         val delta = targetIndent - origIndent
-        if (delta == 0) return text
 
-        // Re-indent each line after the first
+        // Re-indent each line after the first and strip trailing whitespace from all lines.
         val lines = text.split('\n')
         return buildString {
-            append(lines[0])
+            append(lines[0].trimEnd())
             for (i in 1 until lines.size) {
                 append('\n')
                 val line = lines[i]
-                if (delta > 0) {
-                    append(" ".repeat(delta))
-                    append(line)
-                } else {
+                val adjusted = if (delta > 0) {
+                    " ".repeat(delta) + line
+                } else if (delta < 0) {
                     // Remove up to |delta| leading spaces
                     val toRemove = minOf(-delta, line.length - line.trimStart().length)
-                    append(line.substring(toRemove))
+                    line.substring(toRemove)
+                } else {
+                    line
                 }
+                append(adjusted.trimEnd())
             }
         }
     }
