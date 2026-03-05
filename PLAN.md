@@ -112,57 +112,116 @@ For error tests:
 
 ## Priority Fixes (by impact)
 
-### 1. Multi-file CommonJS improvements (~100+ tests)
-The multi-file support and CommonJS transform are implemented but incomplete:
-- **Import helpers** (`__importDefault`, `__importStar`, `__createBinding`, `__exportStar`) — needed for CommonJS with default/namespace imports
-- **Identifier rewriting** — imported names need to be rewritten (e.g., `import A from './a'` → references to `A` become `a_1.default`)
-- **`const` vs `var`** for `import = require` — TypeScript uses `const`, our transform uses `var`
-- **Export hoisting** — `exports.x = void 0` should appear right after `__esModule` preamble
-- **Re-exports** — `export { X } from "y"` needs CommonJS form
+Each entry below is a self-contained subagent task. Start with the test command, read the diff, find the fix area, implement, then run the full suite to confirm net improvement. See the "AI agent workflow" section in CLAUDE.md for the brief template.
 
-### 2. Comment preservation (~50+ tests)
-- Trailing comments after IIFE closings (enum/namespace): `})(E || (E = {})); // comment`
-- End-of-file comments not attached to any statement
-- Comments inside array/object literals
-- Leading comments on exported declarations
-- `@removeComments: true` support (strip all comments)
+---
 
-### 3. Type assertion parenthesization ✅ FIXED
-### 4. `for` loop `<` parsing ambiguity ✅ FIXED
+### A. `"use strict"` over-emission (~219 tests) ★ HIGH IMPACT, SELF-CONTAINED
 
-### 5. AMD module format (~115 tests)
-- `define(["require", "exports", ...], function(require, exports, ...) { ... })`
-- Needs `@module: amd` support
-- `/// <amd-dependency>` and `/// <amd-module>` directives
+**Test pattern**: `./gradlew jvmTest 2>&1 | grep -a 'FAILED' | grep -v 'errors_txt'` — look for JS tests whose actual output starts with `"use strict";` but expected doesn't.
 
-### 6. System module format (~36 tests)
-- `System.register([], function(exports_1, context_1) { ... })`
-- Needs `@module: system` support
+**Symptom**: We unconditionally emit `"use strict";` for target ≥ ES2015. TypeScript only emits it for CommonJS modules or when `alwaysStrict` is set. ES module files (`import`/`export`) are inherently strict — no `"use strict"` needed.
 
-### 7. `__awaiter` async/generator transform (~32 tests)
-- Async functions targeting ES5/ES3 need `__awaiter` + generator rewrite
+**Fix area**: `TypeScriptCompiler.kt` or `Transformer.kt` — the logic that decides whether to prepend `"use strict"`. Guard it behind `options.module == CommonJS || options.alwaysStrict`.
 
-### 8. `export {}` for empty module files (~68 tests)
-- When a file has only type-only imports/exports (all erased), emit `export {};` to preserve module semantics
-- Also: we currently emit `export {}` in some cases where we shouldn't (~15 false positives)
+**Verify**: `./gradlew jvmTest 2>&1 | grep -a 'tests completed'` — expect ~219 fewer failures.
 
-### 9. `"use strict"` over-emission (~219 tests)
-- We add `"use strict"` at target >= ES2015, but many tests don't expect it
-- TypeScript only adds it for CommonJS module files or when `alwaysStrict` is set
-- ES module files (with `import`/`export`) are inherently strict — no explicit `"use strict"` needed
+---
 
-### 7. Enum constant folding (~5+ tests)
-- `1 << 1` → `2`, `1 << 2` → `4`, etc. in enum member initializers
-- Need basic constant expression evaluation for numeric binary operations
+### B. `export {}` correctness (~68 + ~15 tests) ★ HIGH IMPACT
 
-### 8. Formatting fidelity
-- **Indentation of chained calls**: `.map(...)` on next line should be indented
-- **`function ()` with space** before parens in some contexts
-- **Semicolons**: some edge cases with semicolons after blocks, empty statements
-- **Blank lines**: preserve blank lines between declarations
+**Symptom A** (~68 tests): Files with only type-only imports/exports (all erased by transformer) must emit `export {};` to preserve ES module semantics. Currently we emit nothing.
 
-### 9. Error diagnostics — accepted ceiling
-- 3,214 tests require semantic type errors detected by a full type checker
+**Symptom B** (~15 tests): We emit `export {}` in some cases where we shouldn't (e.g., non-module files).
+
+**Fix area**: `Transformer.kt` — after erasing all declarations, if the original file was a module (had `import`/`export`) and the result is empty or only has `"use strict"`, emit `export {};`.
+
+---
+
+### C. Multi-file CommonJS improvements (~100+ tests) ★ COMPLEX
+
+The CommonJS transform is implemented but incomplete. These sub-fixes are separable:
+
+- **C1. `const` vs `var` for `import = require`** (~10 tests): TypeScript emits `const a_1 = require("./a")`, we emit `var`. Fix in `Transformer.kt` `transformToCommonJS`.
+- **C2. Export hoisting** (~20 tests): `exports.x = void 0;` lines should appear immediately after the `__esModule` preamble, before any other code. Fix ordering in `transformToCommonJS`.
+- **C3. Import helpers** (`__importDefault`, `__importStar`, `__createBinding`, `__exportStar`) (~30 tests): needed for default/namespace imports. These are emitted as helper functions at the top of the file. See TypeScript's `tslib` helpers.
+- **C4. Identifier rewriting** (~40 tests): `import A from './a'` → all references to `A` in the file become `a_1.default`. Requires a symbol table pass in the transformer.
+
+---
+
+### D. AMD module format (~57 tests) ★ LARGE, ISOLATED
+
+**Symptom**: `@module: amd` tests expect `define(["require", "exports", ...], function(...) { ... })` wrapper. We don't emit this format at all.
+
+**Fix area**: New `transformToAMD` function in `Transformer.kt` (similar to `transformToCommonJS`). Also handle `/// <amd-dependency path="..." />` and `/// <amd-module name="..." />` directives in `CompilerOptions.kt`.
+
+**Subtest to start with**: `./gradlew jvmTest --tests '*.amdImportNotUsedInTypePosition1*'`
+
+---
+
+### E. Comment preservation — binary operator positions (~10 tests)
+
+**Test**: `./gradlew jvmTest --tests '*.commentOnBinaryOperator1*'`
+
+**Symptom**:
+```
+Expected: var a = 'some'
+              // comment
+              + 'text';
+Actual:   var a = 'some' + 'text';
+```
+
+**Fix area**: `emitBinaryExpression` in `Emitter.kt`. When the right operand has `leadingComments` with `hasPrecedingNewLine=true`, emit a newline + indent before the operator and operand.
+
+---
+
+### F. Comment preservation — yield/await inner comments (~5 tests)
+
+**Test**: `./gradlew jvmTest --tests '*.yieldExpressionInnerCommentEmit*'`
+
+**Symptom**: `yield /*comment2*/ 2` → emits as `yield 2` (comment dropped).
+
+**Fix area**: `parseYieldExpression` / `parseAwaitExpression` in `Parser.kt` — capture `scanner.getTrailingComments()` after the `yield`/`await` keyword and attach to the inner expression. Look at the existing `AwaitExpression` handling around line 1830.
+
+---
+
+### G. `@removeComments: true` support (~20 tests)
+
+**Symptom**: Tests with `// @removeComments: true` expect all comments stripped from output. We currently emit comments regardless.
+
+**Fix area**: `Emitter.kt` — `options.removeComments` flag already exists in `CompilerOptions`. Add guards around every comment-emit site. Also `BaselineFormatter.kt` — source echo section must strip comments from the echoed source.
+
+---
+
+### H. System module format (~36 tests)
+
+**Symptom**: `@module: system` tests expect `System.register([], function(exports_1, context_1) { ... })`.
+
+**Fix area**: New `transformToSystem` function in `Transformer.kt`.
+
+---
+
+### I. `__awaiter` async/generator transform (~32 tests)
+
+**Symptom**: Async functions targeting ES5/ES3 need `__awaiter` + `__generator` rewrite. Currently emitted as-is.
+
+**Fix area**: `Transformer.kt` — detect `async function` + target < ES2017, rewrite body using `__awaiter/__generator` pattern.
+
+---
+
+### J. Enum constant folding (~5 tests)
+
+**Symptom**: `1 << 1` in enum initializers should emit `2`, not `1 << 1`.
+
+**Fix area**: `Transformer.kt` `transformEnumMember` — evaluate constant binary expressions (only `+`, `-`, `*`, `/`, `<<`, `>>`, `|`, `&`, `^`) when both operands are numeric literals.
+
+---
+
+### ✅ Fixed
+
+- Type assertion parenthesization ✅
+- `for` loop `<` parsing ambiguity ✅
+- Error diagnostics (~2809 tests) — requires full type checker, **accepted ceiling, do not invest time**
 - TypeScript's `checker.ts` is ~50,000 lines — implementing it is out of scope
 - **Do not invest time on heuristic type error detection** — it won't scale
 - Only free wins: tests where our parser already produces a syntax diagnostic
