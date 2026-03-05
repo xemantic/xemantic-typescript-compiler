@@ -5591,7 +5591,11 @@ class Transformer(private val options: CompilerOptions) {
         nsName: String,
         statements: List<Statement>,
     ): List<Statement> {
-        // First pass: collect exported variable names
+        // First pass: collect exported variable names and locally declared names.
+        // `exportedNames` is used for body-statement qualification (qualifyNamespaceRefs).
+        // `locallyDeclaredNames` is used to exclude names declared IN THIS BLOCK from
+        // heritage-clause qualification (since they are local variables in the IIFE).
+        val locallyDeclaredNames = mutableSetOf<String>()
         val exportedNames = mutableSetOf<String>()
         for (stmt in statements) {
             val isExported = when (stmt) {
@@ -5602,6 +5606,18 @@ class Transformer(private val options: CompilerOptions) {
                 is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
                 is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
                 else -> false
+            }
+            // Collect all locally declared names (whether exported or not).
+            // These are class/function/enum/var names in scope as local variables in this IIFE.
+            when (stmt) {
+                is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                    extractIdentifierName(decl.name)?.let { locallyDeclaredNames.add(it) }
+                }
+                is FunctionDeclaration -> stmt.name?.text?.let { locallyDeclaredNames.add(it) }
+                is ClassDeclaration -> stmt.name?.text?.let { locallyDeclaredNames.add(it) }
+                is EnumDeclaration -> locallyDeclaredNames.add(stmt.name.text)
+                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { locallyDeclaredNames.add(it) }
+                else -> {}
             }
             if (isExported) {
                 when (stmt) {
@@ -5743,12 +5759,21 @@ class Transformer(private val options: CompilerOptions) {
                 }
 
                 is ClassDeclaration -> {
-                    // Do NOT qualify heritage clause references — inside the namespace IIFE,
-                    // sibling class names are in scope as local variables. Qualifying them
-                    // (e.g. `extends Ns.Foo` instead of `extends Foo`) is incorrect and
-                    // doesn't match what the real TypeScript compiler emits.
+                    // Heritage clause qualification: names declared in THIS block are local
+                    // variables inside the IIFE and should NOT be qualified. Names from OTHER
+                    // (merged) namespace blocks are only accessible via the namespace object
+                    // and must be qualified (e.g. `extends M.B` not `extends B` when B was
+                    // exported from a previous `namespace M { }` block).
+                    // Use exportedNames minus locallyDeclaredNames for heritage qualification.
+                    val heritageQualifyNames = exportedNames - locallyDeclaredNames
+                    val qualifiedHeritage = stmt.heritageClauses?.map { clause ->
+                        clause.copy(types = clause.types.map { type ->
+                            type.copy(expression = qualifyNamespaceRefs(nsName, heritageQualifyNames, type.expression))
+                        })
+                    }
                     val strippedStmt = stmt.copy(
                         modifiers = stmt.modifiers - ModifierFlag.Export,
+                        heritageClauses = qualifiedHeritage,
                     )
                     val transformed = transformClassDeclaration(strippedStmt)
                     result.addAll(transformed)
