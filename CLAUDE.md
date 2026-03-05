@@ -49,6 +49,30 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Enum context resolution in `when`** (Kotlin 2.1+): When a `when` subject is an enum type, use unqualified entry names in branch conditions — write `NewKeyword`, not `SyntaxKind.NewKeyword`. Caveat: if a data class has the same name as an enum entry (e.g. `LabeledStatement`), keep the `SyntaxKind.` prefix to avoid ambiguity. This only applies to branch conditions, not expressions inside branch bodies.
 - **`in 0..<x` range checks**: Prefer `pos in 0..<end` over `pos >= 0 && end > pos` for range validation — uses Kotlin's `rangeUntil` (`..<`) operator for exclusive upper bound.
 
+## AI agent workflow
+
+Long multi-session conversations accumulate dead-end investigations and compacted summaries that dilute signal. Prefer **focused subagent tasks** over extending the main context indefinitely.
+
+### Subagent brief template
+
+A well-formed subagent brief for a fix in this codebase includes:
+
+1. **The failing test(s)**: exact test name(s) to run, e.g. `./gradlew jvmTest --tests '*.commentOnBinaryOperator1*'`
+2. **Expected vs actual diff**: paste the `--- expected / +++ actual` output so the agent sees the target immediately
+3. **The source file**: path in `typescript-repo/tests/cases/compiler/` so the agent can read the TypeScript input
+4. **The likely fix area**: name the file and function (e.g. "look at `emitBinaryExpression` in `Emitter.kt`")
+5. **Relevant CLAUDE.md gotchas**: copy any gotcha entries that apply to the area being changed
+6. **Regression guard**: "run the full suite (`./gradlew jvmTest 2>&1 | grep -a 'tests completed'`) before finishing and report the before/after count"
+
+### Parallelism
+
+Independent fixes (e.g. binary-operator comments vs `use strict` over-emission) can be dispatched as parallel subagents. Each should commit its own change on completion so the main session can pull and rebase.
+
+### Context discipline
+
+- Keep this file and `PLAN.md` up to date after each session so the next agent/developer starts with accurate state
+- Do not let CLAUDE.md exceed ~200 lines — trim resolved gotchas and move resolved fixes out of "priority" sections in PLAN.md
+
 ## Anti-patterns to avoid
 
 - Do not add content to this file that is already discoverable by reading the source or build scripts — that inflates context without adding signal, reducing AI agent task success rates (see [arxiv 2602.11988](https://arxiv.org/abs/2602.11988)).
