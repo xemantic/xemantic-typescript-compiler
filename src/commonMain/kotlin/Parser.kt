@@ -2980,7 +2980,15 @@ class Parser(private val source: String, private val fileName: String) {
             nextToken()
             val name = parseQualifiedName()
             val typeArgs = parseTypeArgumentsOpt()
-            return TypeQuery(exprName = name, typeArguments = typeArgs, pos = pos, end = getEnd())
+            var type: TypeNode = TypeQuery(exprName = name, typeArguments = typeArgs, pos = pos, end = getEnd())
+            // Handle array suffix: `typeof X[]` → ArrayType(TypeQuery(X))
+            while (token == SyntaxKind.OpenBracket) {
+                if (scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.CloseBracket }) {
+                    nextToken(); nextToken()
+                    type = ArrayType(elementType = type, pos = pos, end = getEnd())
+                } else break
+            }
+            return type
         }
 
         var type = parsePrimaryType()
