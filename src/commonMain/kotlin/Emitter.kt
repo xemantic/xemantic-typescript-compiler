@@ -1928,7 +1928,9 @@ class Emitter(
         emitInlineLeadingComments(leftmostExpression(expression))
         // `typeof`/`delete`/`void` have higher precedence than `?:`, so a ConditionalExpression
         // operand must be parenthesized to preserve semantics (e.g. downleveled `?.` chains).
-        if (expression is ConditionalExpression) {
+        // `yield` has very low precedence (assignment-level) so it must also be parenthesized
+        // when used as the operand of a unary keyword operator: `typeof (yield 0)`.
+        if (expression is ConditionalExpression || expression is YieldExpression) {
             write("(")
             emitExpression(expression)
             write(")")
