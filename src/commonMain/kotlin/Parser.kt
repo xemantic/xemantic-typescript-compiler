@@ -1651,6 +1651,28 @@ class Parser(private val source: String, private val fileName: String) {
         return mods
     }
 
+    private fun parseParameterModifiers(): Set<ModifierFlag> {
+        // Only public/private/protected/readonly/override are valid parameter modifiers
+        // (for constructor parameter properties). Other keywords like static/abstract/declare
+        // should be treated as parameter names.
+        val mods = mutableSetOf<ModifierFlag>()
+        loop@ while (true) {
+            val mod = when {
+                token == SyntaxKind.PublicKeyword -> ModifierFlag.Public
+                token == SyntaxKind.PrivateKeyword -> ModifierFlag.Private
+                token == SyntaxKind.ProtectedKeyword -> ModifierFlag.Protected
+                token == SyntaxKind.ReadonlyKeyword -> ModifierFlag.Readonly
+                token == SyntaxKind.OverrideKeyword -> ModifierFlag.Override
+                isIdentifier() && scanner.getTokenValue() == "readonly" -> ModifierFlag.Readonly
+                isIdentifier() && scanner.getTokenValue() == "override" -> ModifierFlag.Override
+                else -> break@loop
+            }
+            mods.add(mod)
+            nextToken()
+        }
+        return mods
+    }
+
     private fun parseDecorators(): List<Decorator>? {
         if (token != SyntaxKind.At) return null
         val decorators = mutableListOf<Decorator>()
@@ -2913,7 +2935,7 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = leadingComments()
         val decorators = parseDecorators()
-        val modifiers = parseModifiers()
+        val modifiers = parseParameterModifiers()
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
         val dotTrailing = if (dotDotDot) trailingComments() else null
         val name = parseBindingNameOrPattern()
