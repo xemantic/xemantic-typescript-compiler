@@ -4138,6 +4138,7 @@ class Transformer(private val options: CompilerOptions) {
         // Build nested Object.assign() calls using left-fold:
         //   { a, ...x, b } → Object.assign({ a }, x, { b }) — leading props as first arg
         //   { ...x, b }    → Object.assign(Object.assign({}, x), { b }) — nested when trailing props
+        //   { ...x }       → Object.assign(x) — single spread, no other props
         // Collect leading non-spread props as the initial accumulator object.
         val leadingProps = mutableListOf<Node>()
         var i = 0
@@ -4145,11 +4146,21 @@ class Transformer(private val options: CompilerOptions) {
             leadingProps.add(transformedProps[i])
             i++
         }
+        val remaining = transformedProps.drop(i)
+
+        // Special case: single spread of an object literal with no leading/trailing props
+        // → Object.assign({ a: "a" }) (no empty {} needed since the spread is already an object)
+        if (leadingProps.isEmpty() && remaining.size == 1 && remaining[0] is SpreadAssignment) {
+            val spreadExpr = (remaining[0] as SpreadAssignment).expression
+            if (spreadExpr is ObjectLiteralExpression) {
+                return makeObjectAssignCall(listOf(spreadExpr))
+            }
+        }
+
         var accumulator: Expression = ObjectLiteralExpression(
             properties = leadingProps.toList(),
             multiLine = false,
         )
-        val remaining = transformedProps.drop(i)
         val pendingProps = mutableListOf<Node>()
         var isFirst = true
 
@@ -5173,6 +5184,10 @@ class Transformer(private val options: CompilerOptions) {
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
                         autoIncrementValid = false
+                        // Normalize to double quotes (TypeScript always emits double quotes for enum values)
+                        val normalizedExpr = if (initExpr is StringLiteralNode && initExpr.singleQuote) {
+                            initExpr.copy(singleQuote = false, rawText = null)
+                        } else initExpr
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
@@ -5181,7 +5196,7 @@ class Transformer(private val options: CompilerOptions) {
                                     pos = -1, end = -1,
                                 ),
                                 operator = SyntaxKind.Equals,
-                                right = initExpr,
+                                right = normalizedExpr,
                                 pos = -1, end = -1,
                             ),
                             pos = -1, end = -1,
