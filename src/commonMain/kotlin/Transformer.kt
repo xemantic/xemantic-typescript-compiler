@@ -5753,6 +5753,15 @@ class Transformer(private val options: CompilerOptions) {
                     allEnumMemberValues[obj.text]?.get(expr.name.text)
                 } else null
             }
+            is ElementAccessExpression -> {
+                // Handle E["member"] access (e.g. E["__foo"])
+                val obj = expr.expression
+                val arg = expr.argumentExpression
+                if (obj is Identifier && arg is StringLiteralNode) {
+                    // Check both current enum members and cross-enum references
+                    memberValues[arg.text] ?: allEnumMemberValues[obj.text]?.get(arg.text)
+                } else null
+            }
             is ParenthesizedExpression -> evaluateConstantExpression(expr.expression, memberValues)
             else -> null
         }
