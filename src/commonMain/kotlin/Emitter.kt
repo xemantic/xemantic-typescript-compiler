@@ -1327,7 +1327,11 @@ class Emitter(
             is Identifier -> emitIdentifier(node)
             is StringLiteralNode -> emitStringLiteral(node)
             is NumericLiteralNode -> {
-                write(node.text)
+                // Normalize fake-infinity literals (e.g. 1e999) to Infinity
+                val numText = node.text
+                val numVal = numText.toDoubleOrNull()
+                val emitText = if (numVal != null && numVal.isInfinite()) "Infinity" else numText
+                write(emitText)
                 // Only emit same-line trailing comments (hasPrecedingNewLine=false).
                 // Own-line trailing comments are handled by the multiline array emitter.
                 if (!options.removeComments) {
