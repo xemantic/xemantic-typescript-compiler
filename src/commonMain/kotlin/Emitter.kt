@@ -2342,15 +2342,18 @@ class Emitter(
             emitTrailingComments(node.dotDotDotTrailingComments)
         }
         emitExpression(node.name)
-        // When emitInlineTrailingOnly=true (default), emit trailing comments inline.
-        // When false (comma-first / multi-line mode), trailing comments are handled by the caller.
-        if (emitInlineTrailingOnly) {
-            emitTrailingComments(node.trailingComments)
-        }
-        // skip type annotation
-        if (node.initializer != null) {
+        // When there's an initializer, emit trailing comments AFTER the default value
+        // (e.g. `defaultParam = false /* comment */` not `defaultParam /* comment */ = false`)
+        if (node.initializer == null) {
+            if (emitInlineTrailingOnly) {
+                emitTrailingComments(node.trailingComments)
+            }
+        } else {
             write(" = ")
             emitExpression(node.initializer)
+            if (emitInlineTrailingOnly) {
+                emitTrailingComments(node.trailingComments)
+            }
         }
     }
 
