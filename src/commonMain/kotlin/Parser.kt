@@ -240,10 +240,12 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val flags = token
         nextToken() // consume var/let/const
+        // Capture inline comments between keyword and first declaration (e.g. `var /*c*/ x`)
+        val keywordTrailingComments = scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
         val decls = mutableListOf<VariableDeclaration>()
         // Only parse declarations if the current token can start one (identifier or binding pattern)
         if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
-            decls.add(parseVariableDeclaration())
+            decls.add(parseVariableDeclaration(keywordTrailingComments))
             while (parseOptional(SyntaxKind.Comma)) {
                 decls.add(parseVariableDeclaration())
             }
@@ -254,9 +256,15 @@ class Parser(private val source: String, private val fileName: String) {
         return VariableDeclarationList(declarations = decls, flags = flags, pos = pos, end = getEnd())
     }
 
-    private fun parseVariableDeclaration(): VariableDeclaration {
+    private fun parseVariableDeclaration(
+        keywordTrailingComments: List<Comment>? = null,
+    ): VariableDeclaration {
         val pos = getPos()
-        val name = parseBindingNameOrPattern()
+        val rawName = parseBindingNameOrPattern()
+        // Attach inline keyword-trailing comments (e.g. `var /*c*/ x`) to the identifier
+        val name = if (!keywordTrailingComments.isNullOrEmpty() && rawName is Identifier) {
+            rawName.copy(leadingComments = keywordTrailingComments)
+        } else rawName
         // Capture same-line comments between the name and `:` or `=`
         // e.g. `let e/*c*/: T = v` or `let d: T /*c*/ = v`
         val nameTrailingFromName = scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
