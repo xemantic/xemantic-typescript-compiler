@@ -5153,6 +5153,7 @@ class Transformer(private val options: CompilerOptions) {
         // Build IIFE body statements
         val iifeBody = mutableListOf<Statement>()
         var nextAutoValue = 0L
+        var autoIncrementValid = true // becomes false after non-constant computed member
         // Track folded values for cross-member references (e.g. B = A + 1)
         // Initialize from previous declaration of same enum (merged enums)
         val previousMembers = allEnumMemberValues[enumName]
@@ -5171,6 +5172,7 @@ class Transformer(private val options: CompilerOptions) {
                         // String enum member: E["B"] = "hello" (no reverse mapping)
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
+                        autoIncrementValid = false
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
@@ -5197,23 +5199,36 @@ class Transformer(private val options: CompilerOptions) {
                         val numericValue = foldedValue ?: tryEvaluateNumericLiteral(initExpr)?.toLong()
                         if (numericValue != null) {
                             nextAutoValue = numericValue + 1L
+                            autoIncrementValid = true
                             memberValues[memberName] = numericValue
                             allEnumMemberValues.getOrPut(enumName) { mutableMapOf() }[memberName] = numericValue
+                        } else {
+                            // Non-constant computed value: auto-increment is now invalid
+                            autoIncrementValid = false
                         }
                         makeReverseMapStatement(enumName, memberNameExpr, emitExpr)
                     }
                 }
 
                 else -> {
-                    // Auto-increment numeric member
-                    val valueExpr = NumericLiteralNode(
-                        text = nextAutoValue.toString(),
-                        pos = -1, end = -1,
-                    )
-                    memberValues[memberName] = nextAutoValue
-                    allEnumMemberValues.getOrPut(enumName) { mutableMapOf() }[memberName] = nextAutoValue
-                    nextAutoValue++
-                    makeReverseMapStatement(enumName, memberNameExpr, valueExpr)
+                    if (autoIncrementValid) {
+                        // Auto-increment numeric member
+                        val valueExpr = NumericLiteralNode(
+                            text = nextAutoValue.toString(),
+                            pos = -1, end = -1,
+                        )
+                        memberValues[memberName] = nextAutoValue
+                        allEnumMemberValues.getOrPut(enumName) { mutableMapOf() }[memberName] = nextAutoValue
+                        nextAutoValue++
+                        makeReverseMapStatement(enumName, memberNameExpr, valueExpr)
+                    } else {
+                        // Auto-increment disrupted by non-constant computed member: emit void 0
+                        val voidExpr = VoidExpression(
+                            expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        makeReverseMapStatement(enumName, memberNameExpr, voidExpr)
+                    }
                 }
             }
             // Track this member name for qualifying later members' initializers
