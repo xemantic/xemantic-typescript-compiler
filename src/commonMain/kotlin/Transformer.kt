@@ -6205,7 +6205,12 @@ class Transformer(private val options: CompilerOptions) {
                             val expr = assignments.reduce { acc, e ->
                                 BinaryExpression(left = acc, operator = SyntaxKind.Comma, right = e, pos = -1, end = -1)
                             }
-                            result.add(ExpressionStatement(expression = expr, pos = -1, end = -1))
+                            result.add(ExpressionStatement(
+                                expression = expr,
+                                leadingComments = stmt.leadingComments,
+                                trailingComments = stmt.trailingComments,
+                                pos = -1, end = -1,
+                            ))
                         }
                     } else {
                         val strippedStmt = stmt.copy(
