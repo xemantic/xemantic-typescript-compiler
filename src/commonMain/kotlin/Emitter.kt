@@ -1599,6 +1599,7 @@ class Emitter(
                 if (index > 0) write(", ")
                 emitObjectProperty(prop)
             }
+            if (node.hasTrailingComma) write(",")
             write(" }")
         }
     }
