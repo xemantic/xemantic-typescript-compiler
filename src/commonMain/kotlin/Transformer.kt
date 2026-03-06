@@ -6317,7 +6317,21 @@ class Transformer(private val options: CompilerOptions) {
                 }
 
                 else -> {
-                    result.addAll(transformStatement(stmt))
+                    val transformed = transformStatement(stmt)
+                    // Qualify exported var refs in expression statements and other non-declaration statements
+                    if (exportedVarOnlyNames.isNotEmpty()) {
+                        result.addAll(transformed.map { s ->
+                            if (s is ExpressionStatement) {
+                                s.copy(expression = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, s.expression))
+                            } else if (s is ReturnStatement && s.expression != null) {
+                                s.copy(expression = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, s.expression))
+                            } else if (s is IfStatement) {
+                                s.copy(expression = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, s.expression))
+                            } else s
+                        })
+                    } else {
+                        result.addAll(transformed)
+                    }
                 }
             }
         }
