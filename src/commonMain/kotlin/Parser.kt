@@ -1930,8 +1930,69 @@ class Parser(private val source: String, private val fileName: String) {
             }
 
             LessThan -> {
-                // Could be <Type>expr type assertion or JSX — try type assertion
-                parseTypeAssertion()
+                // Could be <TypeParams>() => body (generic arrow) or <Type>expr (type assertion)
+                val isGenericArrow = scanner.lookAhead {
+                    // Skip past <...> type parameter list
+                    scanner.scan() // skip <
+                    var depth = 1
+                    while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
+                        when (scanner.getToken()) {
+                            SyntaxKind.LessThan -> depth++
+                            SyntaxKind.GreaterThan -> depth--
+                            SyntaxKind.Semicolon, SyntaxKind.CloseBrace -> break
+                            else -> {}
+                        }
+                        if (depth > 0) scanner.scan()
+                    }
+                    if (depth == 0) {
+                        scanner.scan() // skip >
+                        if (scanner.getToken() == SyntaxKind.OpenParen) {
+                            // Skip past (...) parameter list
+                            scanner.scan() // skip (
+                            var parenDepth = 1
+                            while (parenDepth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
+                                when (scanner.getToken()) {
+                                    SyntaxKind.OpenParen -> parenDepth++
+                                    SyntaxKind.CloseParen -> parenDepth--
+                                    else -> {}
+                                }
+                                if (parenDepth > 0) scanner.scan()
+                            }
+                            if (parenDepth == 0) {
+                                scanner.scan() // skip )
+                                // Check for => or : (return type annotation then =>)
+                                when (scanner.getToken()) {
+                                    SyntaxKind.EqualsGreaterThan -> true
+                                    SyntaxKind.Colon -> {
+                                        scanner.scan() // skip :
+                                        var typeDepth = 0
+                                        var foundArrow = false
+                                        loop@ while (scanner.getToken() != SyntaxKind.EndOfFile) {
+                                            when (scanner.getToken()) {
+                                                SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.LessThan -> typeDepth++
+                                                SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> {
+                                                    if (typeDepth == 0) break@loop else typeDepth--
+                                                }
+                                                SyntaxKind.GreaterThan -> if (typeDepth > 0) typeDepth--
+                                                SyntaxKind.EqualsGreaterThan -> if (typeDepth == 0) { foundArrow = true; break@loop }
+                                                SyntaxKind.Semicolon, SyntaxKind.OpenBrace, SyntaxKind.CloseBrace -> if (typeDepth == 0) break@loop
+                                                else -> {}
+                                            }
+                                            scanner.scan()
+                                        }
+                                        foundArrow
+                                    }
+                                    else -> false
+                                }
+                            } else false
+                        } else false
+                    } else false
+                }
+                if (isGenericArrow) {
+                    parseArrowFunction(emptySet())
+                } else {
+                    parseTypeAssertion()
+                }
             }
 
             else -> parsePostfixExpression()
