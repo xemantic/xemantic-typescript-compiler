@@ -164,7 +164,19 @@ class Parser(private val source: String, private val fileName: String) {
         NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration()
         AbstractKeyword -> parseAbstractOrDeclaration()
         AsyncKeyword -> parseAsyncOrExpression()
-        DeclareKeyword -> parseDeclareDeclaration()
+        DeclareKeyword -> {
+            // Check if next token could start a declaration. If not, treat 'declare' as an identifier.
+            val isDeclare = lookAhead {
+                nextToken()
+                when (token) {
+                    VarKeyword, LetKeyword, ConstKeyword, FunctionKeyword, ClassKeyword,
+                    InterfaceKeyword, TypeKeyword, EnumKeyword, NamespaceKeyword, ModuleKeyword,
+                    AbstractKeyword, GlobalKeyword, ImportKeyword, ExportKeyword -> true
+                    else -> false
+                }
+            }
+            if (isDeclare) parseDeclareDeclaration() else parseExpressionStatement()
+        }
         At -> { parseDecorators(); parseStatement() }
         SyntaxKind.LabeledStatement -> null // won't appear as token
         else -> {
