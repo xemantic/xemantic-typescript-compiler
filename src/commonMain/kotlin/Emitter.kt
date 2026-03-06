@@ -1327,8 +1327,8 @@ class Emitter(
             is Identifier -> emitIdentifier(node)
             is StringLiteralNode -> emitStringLiteral(node)
             is NumericLiteralNode -> {
-                // Normalize fake-infinity literals (e.g. 1e999) to Infinity
-                val numText = node.text
+                // Strip numeric separators (e.g. 1_000_000 → 1000000) and normalize infinity
+                val numText = node.text.replace("_", "")
                 val numVal = numText.toDoubleOrNull()
                 val emitText = if (numVal != null && numVal.isInfinite()) "Infinity" else numText
                 write(emitText)
