@@ -313,9 +313,23 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
         val postDotComments = if (dotDotDot) leadingComments() ?: scanner.getTrailingComments() else null
-        var nameOrProp = parseBindingNameOrPattern()
+        // Detect computed property name [expr]: x or string/numeric property name "foo": x / 0: x
+        val nameOrPropIsPropertyKey = when (token) {
+            SyntaxKind.OpenBracket -> lookAhead { parseComputedPropertyName(); token == SyntaxKind.Colon }
+            SyntaxKind.StringLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
+            SyntaxKind.NumericLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
+            else -> false
+        }
+        var nameOrProp: Expression = when {
+            nameOrPropIsPropertyKey && token == SyntaxKind.OpenBracket -> parseComputedPropertyName()
+            nameOrPropIsPropertyKey && token == SyntaxKind.StringLiteral -> parseStringLiteral()
+            nameOrPropIsPropertyKey && token == SyntaxKind.NumericLiteral -> parseNumericLiteral()
+            else -> parseBindingNameOrPattern()
+        }
         if (postDotComments != null) nameOrProp = nameOrProp.withLeadingComments(postDotComments)
-        return if (token == SyntaxKind.Colon && nameOrProp is Identifier) {
+        return if (token == SyntaxKind.Colon &&
+            (nameOrProp is Identifier || nameOrProp is ComputedPropertyName
+                || nameOrProp is StringLiteralNode || nameOrProp is NumericLiteralNode)) {
             nextToken()
             val name = parseBindingNameOrPattern()
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
