@@ -6228,21 +6228,8 @@ class Transformer(private val options: CompilerOptions) {
                             modifiers = stmt.modifiers - ModifierFlag.Export,
                         )
                         val transformed = transformVariableStatement(strippedStmt)
-                        // Qualify refs to exported vars that don't have local bindings in the IIFE
-                        // (class/function/enum/module are locally declared, only exported vars need qualifying)
                         if (exportedVarOnlyNames.isNotEmpty()) {
-                            val qualified = transformed.map { s ->
-                                if (s is VariableStatement) {
-                                    s.copy(declarationList = s.declarationList.copy(
-                                        declarations = s.declarationList.declarations.map { decl ->
-                                            if (decl.initializer != null) {
-                                                decl.copy(initializer = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, decl.initializer))
-                                            } else decl
-                                        }
-                                    ))
-                                } else s
-                            }
-                            result.addAll(qualified)
+                            result.addAll(transformed.map { qualifyStatementRefs(nsName, exportedVarOnlyNames, it) })
                         } else {
                             result.addAll(transformed)
                         }
@@ -6318,17 +6305,8 @@ class Transformer(private val options: CompilerOptions) {
 
                 else -> {
                     val transformed = transformStatement(stmt)
-                    // Qualify exported var refs in expression statements and other non-declaration statements
                     if (exportedVarOnlyNames.isNotEmpty()) {
-                        result.addAll(transformed.map { s ->
-                            if (s is ExpressionStatement) {
-                                s.copy(expression = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, s.expression))
-                            } else if (s is ReturnStatement && s.expression != null) {
-                                s.copy(expression = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, s.expression))
-                            } else if (s is IfStatement) {
-                                s.copy(expression = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, s.expression))
-                            } else s
-                        })
+                        result.addAll(transformed.map { qualifyStatementRefs(nsName, exportedVarOnlyNames, it) })
                     } else {
                         result.addAll(transformed)
                     }
@@ -6337,6 +6315,63 @@ class Transformer(private val options: CompilerOptions) {
         }
 
         return result
+    }
+
+    /**
+     * Recursively qualifies exported var refs in all expression positions of a statement.
+     */
+    private fun qualifyStatementRefs(nsName: String, names: Set<String>, stmt: Statement): Statement {
+        fun q(e: Expression) = qualifyNamespaceRefs(nsName, names, e)
+        fun qStmt(s: Statement) = qualifyStatementRefs(nsName, names, s)
+        return when (stmt) {
+            is ExpressionStatement -> stmt.copy(expression = q(stmt.expression))
+            is ReturnStatement -> if (stmt.expression != null) stmt.copy(expression = q(stmt.expression)) else stmt
+            is IfStatement -> stmt.copy(
+                expression = q(stmt.expression),
+                thenStatement = qStmt(stmt.thenStatement),
+                elseStatement = stmt.elseStatement?.let { qStmt(it) },
+            )
+            is Block -> stmt.copy(statements = stmt.statements.map { qStmt(it) })
+            is ForStatement -> stmt.copy(
+                initializer = when (val i = stmt.initializer) {
+                    is Expression -> q(i)
+                    is VariableDeclarationList -> i.copy(declarations = i.declarations.map { d ->
+                        if (d.initializer != null) d.copy(initializer = q(d.initializer)) else d
+                    })
+                    else -> i
+                },
+                condition = stmt.condition?.let { q(it) },
+                incrementor = stmt.incrementor?.let { q(it) },
+                statement = qStmt(stmt.statement),
+            )
+            is ForInStatement -> stmt.copy(expression = q(stmt.expression), statement = qStmt(stmt.statement))
+            is ForOfStatement -> stmt.copy(expression = q(stmt.expression), statement = qStmt(stmt.statement))
+            is WhileStatement -> stmt.copy(expression = q(stmt.expression), statement = qStmt(stmt.statement))
+            is DoStatement -> stmt.copy(expression = q(stmt.expression), statement = qStmt(stmt.statement))
+            is SwitchStatement -> stmt.copy(
+                expression = q(stmt.expression),
+                caseBlock = stmt.caseBlock.map { clause ->
+                    when (clause) {
+                        is CaseClause -> clause.copy(expression = q(clause.expression), statements = clause.statements.map { qStmt(it) })
+                        is DefaultClause -> clause.copy(statements = clause.statements.map { qStmt(it) })
+                        else -> clause
+                    }
+                }
+            )
+            is ThrowStatement -> if (stmt.expression != null) stmt.copy(expression = q(stmt.expression)) else stmt
+            is VariableStatement -> stmt.copy(declarationList = stmt.declarationList.copy(
+                declarations = stmt.declarationList.declarations.map { d ->
+                    if (d.initializer != null) d.copy(initializer = q(d.initializer)) else d
+                }
+            ))
+            is TryStatement -> stmt.copy(
+                tryBlock = qStmt(stmt.tryBlock) as Block,
+                catchClause = stmt.catchClause?.let { it.copy(block = qStmt(it.block) as Block) },
+                finallyBlock = stmt.finallyBlock?.let { qStmt(it) as Block },
+            )
+            is LabeledStatement -> stmt.copy(statement = qStmt(stmt.statement))
+            else -> stmt
+        }
     }
 
     /**
