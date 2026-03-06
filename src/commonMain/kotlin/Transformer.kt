@@ -73,6 +73,10 @@ class Transformer(private val options: CompilerOptions) {
     // Populated in a pre-pass before transformation so all uses can be inlined.
     private val constEnumValues = mutableMapOf<String, Map<String, Any?>>()
 
+    // Maps enum name → (member name → numeric value) for all enums (const and non-const).
+    // Populated during transformation so cross-enum references like `Foo.a` can be folded.
+    private val allEnumMemberValues = mutableMapOf<String, MutableMap<String, Long>>()
+
     // True once we've seen a runtime (non-erased) statement at the top level.
     // Orphaned comments from erased declarations are only preserved before any runtime code.
     private var hasSeenRuntimeStatement = false
@@ -5121,6 +5125,8 @@ class Transformer(private val options: CompilerOptions) {
         var nextAutoValue = 0L
         // Track folded values for cross-member references (e.g. B = A + 1)
         val memberValues = mutableMapOf<String, Long>()
+        // Track known member names for qualifying bare identifiers in initializers
+        val knownMemberNames = mutableSetOf<String>()
 
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
@@ -5153,12 +5159,14 @@ class Transformer(private val options: CompilerOptions) {
                         val emitExpr = if (foldedValue != null) {
                             NumericLiteralNode(text = foldedValue.toString(), pos = -1, end = -1)
                         } else {
-                            initExpr
+                            // Qualify bare identifiers that refer to earlier enum members
+                            qualifyEnumMemberRefs(initExpr, enumName, knownMemberNames)
                         }
                         val numericValue = foldedValue ?: tryEvaluateNumericLiteral(initExpr)?.toLong()
                         if (numericValue != null) {
                             nextAutoValue = numericValue + 1L
                             memberValues[memberName] = numericValue
+                            allEnumMemberValues.getOrPut(enumName) { mutableMapOf() }[memberName] = numericValue
                         }
                         makeReverseMapStatement(enumName, memberNameExpr, emitExpr)
                     }
@@ -5171,10 +5179,13 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                     memberValues[memberName] = nextAutoValue
+                    allEnumMemberValues.getOrPut(enumName) { mutableMapOf() }[memberName] = nextAutoValue
                     nextAutoValue++
                     makeReverseMapStatement(enumName, memberNameExpr, valueExpr)
                 }
             }
+            // Track this member name for qualifying later members' initializers
+            knownMemberNames.add(memberName)
             // Copy leading/trailing comments from the enum member to the generated statement
             iifeBody.add(
                 if (member.leadingComments != null || member.trailingComments != null) {
@@ -5339,6 +5350,65 @@ class Transformer(private val options: CompilerOptions) {
             ),
             pos = -1, end = -1,
         )
+    }
+
+    /**
+     * Qualifies bare identifiers in enum initializer expressions with the enum name.
+     * e.g., inside `enum Foo { a=2, x=a.b }`, `a` → `Foo.a` producing `Foo.a.b`.
+     * Only qualifies identifiers that match known enum member names.
+     */
+    private fun qualifyEnumMemberRefs(
+        expr: Expression,
+        enumName: String,
+        knownMembers: Set<String>,
+    ): Expression {
+        return when (expr) {
+            is Identifier -> {
+                if (expr.text in knownMembers) {
+                    PropertyAccessExpression(
+                        expression = syntheticId(enumName),
+                        name = expr,
+                        pos = -1, end = -1,
+                    )
+                } else expr
+            }
+            is PropertyAccessExpression -> {
+                // Only qualify the leftmost identifier in a chain
+                expr.copy(expression = qualifyEnumMemberRefs(expr.expression, enumName, knownMembers))
+            }
+            is ElementAccessExpression -> {
+                expr.copy(
+                    expression = qualifyEnumMemberRefs(expr.expression, enumName, knownMembers),
+                    argumentExpression = qualifyEnumMemberRefs(expr.argumentExpression, enumName, knownMembers),
+                )
+            }
+            is BinaryExpression -> {
+                expr.copy(
+                    left = qualifyEnumMemberRefs(expr.left, enumName, knownMembers),
+                    right = qualifyEnumMemberRefs(expr.right, enumName, knownMembers),
+                )
+            }
+            is PrefixUnaryExpression -> {
+                expr.copy(operand = qualifyEnumMemberRefs(expr.operand, enumName, knownMembers))
+            }
+            is ParenthesizedExpression -> {
+                expr.copy(expression = qualifyEnumMemberRefs(expr.expression, enumName, knownMembers))
+            }
+            is ConditionalExpression -> {
+                expr.copy(
+                    condition = qualifyEnumMemberRefs(expr.condition, enumName, knownMembers),
+                    whenTrue = qualifyEnumMemberRefs(expr.whenTrue, enumName, knownMembers),
+                    whenFalse = qualifyEnumMemberRefs(expr.whenFalse, enumName, knownMembers),
+                )
+            }
+            is CallExpression -> {
+                expr.copy(
+                    expression = qualifyEnumMemberRefs(expr.expression, enumName, knownMembers),
+                    arguments = expr.arguments.map { qualifyEnumMemberRefs(it, enumName, knownMembers) },
+                )
+            }
+            else -> expr
+        }
     }
 
     private fun extractEnumMemberName(name: NameNode): String {
@@ -5612,6 +5682,13 @@ class Transformer(private val options: CompilerOptions) {
                 }
             }
             is Identifier -> memberValues[expr.text]
+            is PropertyAccessExpression -> {
+                // Handle cross-enum references like Foo.a where Foo is a previously-defined enum
+                val obj = expr.expression
+                if (obj is Identifier) {
+                    allEnumMemberValues[obj.text]?.get(expr.name.text)
+                } else null
+            }
             is ParenthesizedExpression -> evaluateConstantExpression(expr.expression, memberValues)
             else -> null
         }
@@ -5702,8 +5779,24 @@ class Transformer(private val options: CompilerOptions) {
         emittedVarNames.clear()
         declaredNames.clear()
 
-        // Transform body statements, rewriting exports
-        val transformedBody = transformNamespaceBody(moduleName, bodyStatements)
+        // Detect name collision: if any body declaration shares the namespace name,
+        // the IIFE parameter must be renamed (e.g. m1 → m1_1) to avoid shadowing.
+        val hasCollision = bodyStatements.any { stmt ->
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.text == moduleName
+                is FunctionDeclaration -> stmt.name?.text == moduleName
+                is EnumDeclaration -> stmt.name.text == moduleName
+                is VariableStatement -> stmt.declarationList.declarations.any {
+                    extractIdentifierName(it.name) == moduleName
+                }
+                is ModuleDeclaration -> extractIdentifierName(stmt.name) == moduleName
+                else -> false
+            }
+        }
+        val iifeParamName = if (hasCollision) "${moduleName}_1" else moduleName
+
+        // Transform body statements, rewriting exports using the IIFE parameter name
+        val transformedBody = transformNamespaceBody(iifeParamName, bodyStatements)
 
         emittedVarNames.clear()
         emittedVarNames.addAll(savedEmittedVarNames)
@@ -5725,7 +5818,7 @@ class Transformer(private val options: CompilerOptions) {
             }
         }) return orphanedComments(decl)
 
-        return wrapInNamespaceIife(moduleName, transformedBody, decl, nested = nested, parentNsName = parentNsName, useDottedVar = useDottedVar)
+        return wrapInNamespaceIife(moduleName, transformedBody, decl, nested = nested, parentNsName = parentNsName, useDottedVar = useDottedVar, iifeParamName = iifeParamName)
     }
 
     private fun wrapInNamespaceIife(
@@ -5735,6 +5828,7 @@ class Transformer(private val options: CompilerOptions) {
         nested: Boolean = false,
         parentNsName: String? = null,
         useDottedVar: Boolean = false,
+        iifeParamName: String = moduleName,
     ): List<Statement> {
         val nsId = syntheticId(moduleName)
 
@@ -5845,7 +5939,7 @@ class Transformer(private val options: CompilerOptions) {
                     expression = FunctionExpression(
                         parameters = listOf(
                             Parameter(
-                                name = Identifier(text = moduleName, pos = -1, end = -1),
+                                name = Identifier(text = iifeParamName, pos = -1, end = -1),
                                 pos = -1, end = -1,
                             )
                         ),
