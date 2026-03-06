@@ -326,14 +326,23 @@ class Emitter(
     private fun emitExpressionStatement(node: ExpressionStatement) {
         writeIndent()
         emitExpression(node.expression)
-        // Emit any inline comments between expression and `;` (e.g. `Array /*3*/;`)
+        // Emit any inline block comments between expression and `;` (e.g. `Array /*3*/;`)
+        // Line comments (//) must go after the semicolon since they extend to end of line.
+        val blockComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
+        val lineComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && it.text.startsWith("//") }
         if (!options.removeComments) {
-            node.preSemicolonComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+            blockComments?.forEach {
                 write(" ")
                 write(it.text)
             }
         }
         write(";")
+        if (!options.removeComments) {
+            lineComments?.forEach {
+                write(" ")
+                write(it.text)
+            }
+        }
         writeNewLine()
     }
 

@@ -263,7 +263,9 @@ class Parser(private val source: String, private val fileName: String) {
         val excl = parseOptional(SyntaxKind.Exclamation)
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val nameTrailingFromType = if (type != null) {
-            scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
+            // Only keep block comments (/* */) as name-trailing; line comments (//) should be
+            // handled at statement level (after the semicolon).
+            scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
         } else null
         val nameTrailing = (nameTrailingFromName?.ifEmpty { null } ?: nameTrailingFromType?.ifEmpty { null })
         val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
