@@ -6109,6 +6109,16 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
+        // Exported variable names that DON'T have local bindings in the IIFE
+        // (classes/functions/enums/modules are declared locally even when exported)
+        val exportedVarOnlyNames = exportedNames - locallyDeclaredNames +
+            // Re-add exported var names (they were added to locallyDeclaredNames but are actually
+            // turned into nsName.x = ... assignments, not local var declarations)
+            statements.filterIsInstance<VariableStatement>()
+                .filter { ModifierFlag.Export in it.modifiers }
+                .flatMap { it.declarationList.declarations.mapNotNull { d -> extractIdentifierName(d.name) } }
+                .toSet()
+
         val result = mutableListOf<Statement>()
 
         for (stmt in statements) {
@@ -6218,7 +6228,24 @@ class Transformer(private val options: CompilerOptions) {
                             modifiers = stmt.modifiers - ModifierFlag.Export,
                         )
                         val transformed = transformVariableStatement(strippedStmt)
-                        result.addAll(transformed)
+                        // Qualify refs to exported vars that don't have local bindings in the IIFE
+                        // (class/function/enum/module are locally declared, only exported vars need qualifying)
+                        if (exportedVarOnlyNames.isNotEmpty()) {
+                            val qualified = transformed.map { s ->
+                                if (s is VariableStatement) {
+                                    s.copy(declarationList = s.declarationList.copy(
+                                        declarations = s.declarationList.declarations.map { decl ->
+                                            if (decl.initializer != null) {
+                                                decl.copy(initializer = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, decl.initializer))
+                                            } else decl
+                                        }
+                                    ))
+                                } else s
+                            }
+                            result.addAll(qualified)
+                        } else {
+                            result.addAll(transformed)
+                        }
                     }
                 }
 
