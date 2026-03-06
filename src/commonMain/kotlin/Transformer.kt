@@ -6064,7 +6064,11 @@ class Transformer(private val options: CompilerOptions) {
                 is EnumDeclaration -> node.name.text == name
                 is VariableStatement -> node.declarationList.declarations.any { extractIdentifierName(it.name) == name }
                 is ModuleDeclaration -> extractIdentifierName(node.name) == name
-                is ImportEqualsDeclaration -> node.name.text == name
+                is ImportEqualsDeclaration -> {
+                    // Non-exported import-equals becomes a local `var M = ...` which shadows
+                    // the namespace param. Exported import-equals becomes `M.M = ...` (no collision).
+                    node.name.text == name && ModifierFlag.Export !in node.modifiers
+                }
                 is Block -> node.statements.any { checkNode(it) }
                 is IfStatement -> checkNode(node.thenStatement) || (node.elseStatement?.let { checkNode(it) } == true)
                 is ForStatement -> {
