@@ -4817,6 +4817,11 @@ class Transformer(private val options: CompilerOptions) {
                             name = propId.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
                             pos = -1, end = -1,
                         )
+                        prop.name is StringLiteralNode -> ElementAccessExpression(
+                            expression = syntheticId("this"),
+                            argumentExpression = prop.name,
+                            pos = -1, end = -1,
+                        )
                         prop.name is NumericLiteralNode -> ElementAccessExpression(
                             expression = syntheticId("this"),
                             argumentExpression = prop.name,
@@ -4987,16 +4992,35 @@ class Transformer(private val options: CompilerOptions) {
         if (!useDefineForClassFields && effectiveName != null) {
             for (prop in staticProperties) {
                 if (prop.initializer != null) {
-                    val propName = extractIdentifierName(prop.name)
-                    if (propName != null) {
+                    val classId = Identifier(text = effectiveName, pos = -1, end = -1)
+                    val lhs: Expression? = when (val nm = prop.name) {
+                        is Identifier -> PropertyAccessExpression(
+                            expression = classId,
+                            name = nm.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
+                            pos = -1, end = -1,
+                        )
+                        is StringLiteralNode -> ElementAccessExpression(
+                            expression = classId,
+                            argumentExpression = nm,
+                            pos = -1, end = -1,
+                        )
+                        is NumericLiteralNode -> ElementAccessExpression(
+                            expression = classId,
+                            argumentExpression = nm,
+                            pos = -1, end = -1,
+                        )
+                        is ComputedPropertyName -> ElementAccessExpression(
+                            expression = classId,
+                            argumentExpression = transformExpression(nm.expression),
+                            pos = -1, end = -1,
+                        )
+                        else -> null
+                    }
+                    if (lhs != null) {
                         trailingStatements.add(
                             ExpressionStatement(
                                 expression = BinaryExpression(
-                                    left = PropertyAccessExpression(
-                                        expression = Identifier(text = effectiveName, pos = -1, end = -1),
-                                        name = Identifier(text = propName, pos = -1, end = -1),
-                                        pos = -1, end = -1,
-                                    ),
+                                    left = lhs,
                                     operator = SyntaxKind.Equals,
                                     right = transformExpression(prop.initializer),
                                     pos = -1, end = -1,
@@ -5124,9 +5148,11 @@ class Transformer(private val options: CompilerOptions) {
         val iifeBody = mutableListOf<Statement>()
         var nextAutoValue = 0L
         // Track folded values for cross-member references (e.g. B = A + 1)
-        val memberValues = mutableMapOf<String, Long>()
+        // Initialize from previous declaration of same enum (merged enums)
+        val previousMembers = allEnumMemberValues[enumName]
+        val memberValues = previousMembers?.toMutableMap() ?: mutableMapOf()
         // Track known member names for qualifying bare identifiers in initializers
-        val knownMemberNames = mutableSetOf<String>()
+        val knownMemberNames = previousMembers?.keys?.toMutableSet() ?: mutableSetOf()
 
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
