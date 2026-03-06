@@ -157,8 +157,10 @@ class Transformer(private val options: CompilerOptions) {
         // Remove any type-only names that also have a runtime declaration
         topLevelTypeOnlyNames -= topLevelRuntimeNames
         // Pre-pass: collect const enum values for inlining at use sites.
+        // Values are inlined even when preserveConstEnums is true (the enum body is kept,
+        // but references are still replaced with literal values).
         // With isolatedModules, const enums can't be inlined (no cross-file info available).
-        if (!options.preserveConstEnums && !options.isolatedModules) {
+        if (!options.isolatedModules) {
             collectConstEnumValues(sourceFile.statements)
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
