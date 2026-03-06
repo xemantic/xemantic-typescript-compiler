@@ -794,7 +794,8 @@ class Parser(private val source: String, private val fileName: String) {
                 scanner.scan()
                 scanner.getToken() != SyntaxKind.OpenParen && scanner.getToken() != SyntaxKind.Colon &&
                         scanner.getToken() != SyntaxKind.Semicolon && scanner.getToken() != SyntaxKind.Equals &&
-                        scanner.getToken() != SyntaxKind.Comma && scanner.getToken() != SyntaxKind.CloseBrace
+                        scanner.getToken() != SyntaxKind.Comma && scanner.getToken() != SyntaxKind.CloseBrace &&
+                        scanner.getToken() != SyntaxKind.LessThan // get<T>() is a generic method, not a getter
             }
             if (result) {
                 nextToken() // skip 'get'
@@ -807,7 +808,8 @@ class Parser(private val source: String, private val fileName: String) {
                 scanner.scan()
                 scanner.getToken() != SyntaxKind.OpenParen && scanner.getToken() != SyntaxKind.Colon &&
                         scanner.getToken() != SyntaxKind.Semicolon && scanner.getToken() != SyntaxKind.Equals &&
-                        scanner.getToken() != SyntaxKind.Comma && scanner.getToken() != SyntaxKind.CloseBrace
+                        scanner.getToken() != SyntaxKind.Comma && scanner.getToken() != SyntaxKind.CloseBrace &&
+                        scanner.getToken() != SyntaxKind.LessThan // set<T>() is a generic method, not a setter
             }
             if (result) {
                 nextToken() // skip 'set'
