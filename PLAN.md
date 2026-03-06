@@ -1,10 +1,10 @@
 # TypeScript-to-JavaScript Transpiler Implementation Plan
 
-## Current Status (2026-03-05)
+## Current Status (2026-03-06)
 
-**Test results**: 4,409 / 8,627 passing (51.1%)
+**Test results**: 4,458 / 8,627 passing (51.7%)
 
-Previous: 4,401 / 8,627 passing (51.0%)
+Previous: 4,409 / 8,627 passing (51.1%)
 
 ## Test Suite Structure & Realistic Ceiling
 
@@ -62,6 +62,13 @@ For error tests:
 ## Known Regressions to Investigate
 
 1. **`reScanGreaterToken`** — was disabled because it caused 4-test net regression. The scanner function exists but the parser doesn't call it.
+
+## Fixes Applied (2026-03-06, session 5)
+
+- **Computed/string/numeric destructuring keys**: `let { [a]: a }`, `let { "foo": x }`, `let { 0: x }` — Parser now handles non-Identifier property names in `parseBindingElement`. Fixes `blockScopedBindingUsedBeforeDef` and similar.
+- **`const ;` spacing**: `emitVariableDeclarationList` always writes space after keyword, even for empty declaration list. Fixes `downlevelLetConst1`.
+- **Object.assign nested form**: `transformObjectLiteral` now uses left-fold accumulation: `{ a, ...x, b }` → `Object.assign({ a }, x, { b })`, `{ ...x, b }` → `Object.assign(Object.assign({}, x), { b })`. Object literal args always single-line. Fixes `spreadIdenticalTypesRemoved` (+4 tests).
+- **Namespace non-exported var qualification**: In namespace body, non-exported `VariableStatement` initializers now have `qualifyNamespaceRefs` applied, so references to exported namespace members are correctly qualified (e.g. `new cls()` → `new M.cls()`). Fixes `aliasesInSystemModule1`.
 
 ## Fixes Applied (2026-03-05, session 4)
 
@@ -126,7 +133,8 @@ Run subagents in waves. Within a wave, dispatch in parallel using `isolation: "w
 | 4 ✅ | C1 (already fixed), C2 (+4) | Transformer.kt (CommonJS) |
 | 5 ✅ | H (+129: System+opts chain+nullish+ternary), J (+9: enum folding) | Transformer.kt |
 | 6 ✅ | comment fixes (+8 net) | Emitter.kt, Parser.kt |
-| 7 | I, C3, C4 | Transformer.kt (async/await, import helpers) |
+| 7 ✅ | Object.assign nested form (+4), destructuring keys (+3), namespace qual, const spacing | Transformer.kt, Parser.kt, Emitter.kt |
+| 8 | I (__generator), C3 (import helpers), C4 (identifier rewriting) | Transformer.kt |
 
 **Merge workflow per wave:**
 ```bash
