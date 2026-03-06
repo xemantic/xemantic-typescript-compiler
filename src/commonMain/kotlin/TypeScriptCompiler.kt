@@ -152,9 +152,13 @@ class TypeScriptCompiler {
                     sourceEchoes.add(file.fileName to file.content)
                 }
 
-                // Skip non-TS/JS files (e.g., .json)
-                if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") &&
-                    !file.fileName.endsWith(".js") && !file.fileName.endsWith(".jsx")) {
+                // Skip non-TS files; include .js/.jsx only when outDir is set
+                // (without outDir, TypeScript skips re-emitting .js files to avoid overwriting sources)
+                val isJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".jsx")
+                if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") && !isJsFile) {
+                    continue
+                }
+                if (isJsFile && options.outDir == null) {
                     continue
                 }
                 // Skip .d.ts files (they don't produce JS output)
