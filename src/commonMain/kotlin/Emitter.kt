@@ -1965,11 +1965,12 @@ class Emitter(
     private fun emitPrefixUnaryExpression(node: PrefixUnaryExpression) {
         val opStr = operatorToString(node.operator)
         write(opStr)
-        // Avoid `++` or `--` ambiguity: if operator is `+` or `-` and operand is also a
-        // prefix unary with the same operator (e.g. `+ +y`), emit a space between them.
+        // Avoid ambiguity when `+`/`-` precedes `+`/`++` or `-`/`--`:
+        // `+ +y`, `+ ++y`, `- -y`, `- --y` all need a space to avoid `++`/`--`/`+++`/`---`.
         val operand = node.operand
-        if ((node.operator == SyntaxKind.Plus || node.operator == SyntaxKind.Minus) &&
-            operand is PrefixUnaryExpression && operand.operator == node.operator) {
+        if (operand is PrefixUnaryExpression &&
+            ((node.operator == SyntaxKind.Plus && (operand.operator == SyntaxKind.Plus || operand.operator == SyntaxKind.PlusPlus)) ||
+             (node.operator == SyntaxKind.Minus && (operand.operator == SyntaxKind.Minus || operand.operator == SyntaxKind.MinusMinus)))) {
             write(" ")
         }
         emitExpression(node.operand)
