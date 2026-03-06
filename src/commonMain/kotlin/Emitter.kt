@@ -710,6 +710,8 @@ class Emitter(
         if (node.name != null) {
             write(" ")
             write(node.name.emitText)
+        } else if (!node.asteriskToken) {
+            write(" ")
         }
         write("(")
         emitParameters(node.parameters)
