@@ -152,8 +152,9 @@ class TypeScriptCompiler {
                     sourceEchoes.add(file.fileName to file.content)
                 }
 
-                // Skip non-TS files (e.g., .json, .d.ts, .js)
-                if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx")) {
+                // Skip non-TS/JS files (e.g., .json)
+                if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") &&
+                    !file.fileName.endsWith(".js") && !file.fileName.endsWith(".jsx")) {
                     continue
                 }
                 // Skip .d.ts files (they don't produce JS output)

@@ -161,7 +161,18 @@ class Parser(private val source: String, private val fileName: String) {
         InterfaceKeyword -> parseInterfaceDeclaration()
         TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
         EnumKeyword -> parseEnumDeclaration()
-        NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration()
+        NamespaceKeyword -> parseModuleDeclaration()
+        ModuleKeyword -> {
+            // `module.exports = ...` is an expression, not a module declaration
+            val isDecl = lookAhead {
+                nextToken()
+                token != SyntaxKind.Dot && token != SyntaxKind.OpenParen &&
+                    token != SyntaxKind.Equals && token != SyntaxKind.Comma &&
+                    token != SyntaxKind.CloseParen && token != SyntaxKind.Semicolon &&
+                    token != SyntaxKind.EndOfFile
+            }
+            if (isDecl) parseModuleDeclaration() else parseExpressionStatement()
+        }
         AbstractKeyword -> parseAbstractOrDeclaration()
         AsyncKeyword -> parseAsyncOrExpression()
         DeclareKeyword -> {
