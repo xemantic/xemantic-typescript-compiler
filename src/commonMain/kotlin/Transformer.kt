@@ -6123,6 +6123,7 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             if (stmt is Declaration && hasDeclareModifier(stmt)) continue
+            if (stmt is VariableStatement && ModifierFlag.Declare in stmt.modifiers) continue
 
             val isExported = when (stmt) {
                 is VariableStatement -> ModifierFlag.Export in stmt.modifiers
