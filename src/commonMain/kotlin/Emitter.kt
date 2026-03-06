@@ -1329,7 +1329,14 @@ class Emitter(
     private fun emitExpression(node: Expression) {
         when (node) {
             is Identifier -> emitIdentifier(node)
-            is StringLiteralNode -> emitStringLiteral(node)
+            is StringLiteralNode -> {
+                emitStringLiteral(node)
+                if (!options.removeComments) {
+                    node.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                        write(" "); write(it.text)
+                    }
+                }
+            }
             is NumericLiteralNode -> {
                 // Strip numeric separators (e.g. 1_000_000 → 1000000) and normalize infinity
                 val numText = node.text.replace("_", "")
