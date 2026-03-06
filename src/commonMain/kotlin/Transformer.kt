@@ -73,6 +73,9 @@ class Transformer(private val options: CompilerOptions) {
     // Populated in a pre-pass before transformation so all uses can be inlined.
     private val constEnumValues = mutableMapOf<String, Map<String, Any?>>()
 
+    // Counter for namespace IIFE parameter renaming (e.g. M_1, M_2, M_3)
+    private val nsRenameSuffix = mutableMapOf<String, Int>()
+
     // Maps enum name → (member name → numeric value) for all enums (const and non-const).
     // Populated during transformation so cross-enum references like `Foo.a` can be folded.
     private val allEnumMemberValues = mutableMapOf<String, MutableMap<String, Long>>()
@@ -4809,6 +4812,9 @@ class Transformer(private val options: CompilerOptions) {
         // Instance property initializers (only when not using define semantics)
         if (!useDefineForClassFields) {
             for (prop in instanceProperties) {
+                // Skip private fields (#field) — they stay in the class body with their initializer
+                val nameNode = prop.name
+                if (nameNode is Identifier && nameNode.text.startsWith("#")) continue
                 if (prop.initializer != null) {
                     val propId = prop.name as? Identifier
                     val lhs: Expression? = when {
@@ -5805,21 +5811,14 @@ class Transformer(private val options: CompilerOptions) {
         emittedVarNames.clear()
         declaredNames.clear()
 
-        // Detect name collision: if any body declaration shares the namespace name,
+        // Detect name collision: if any declaration/parameter in the body shadows the namespace name,
         // the IIFE parameter must be renamed (e.g. m1 → m1_1) to avoid shadowing.
-        val hasCollision = bodyStatements.any { stmt ->
-            when (stmt) {
-                is ClassDeclaration -> stmt.name?.text == moduleName
-                is FunctionDeclaration -> stmt.name?.text == moduleName
-                is EnumDeclaration -> stmt.name.text == moduleName
-                is VariableStatement -> stmt.declarationList.declarations.any {
-                    extractIdentifierName(it.name) == moduleName
-                }
-                is ModuleDeclaration -> extractIdentifierName(stmt.name) == moduleName
-                else -> false
-            }
-        }
-        val iifeParamName = if (hasCollision) "${moduleName}_1" else moduleName
+        val hasCollision = namespaceBodyHasNameCollision(moduleName, bodyStatements)
+        val iifeParamName = if (hasCollision) {
+            val suffix = (nsRenameSuffix[moduleName] ?: 0) + 1
+            nsRenameSuffix[moduleName] = suffix
+            "${moduleName}_$suffix"
+        } else moduleName
 
         // Transform body statements, rewriting exports using the IIFE parameter name
         val transformedBody = transformNamespaceBody(iifeParamName, bodyStatements)
@@ -6000,6 +5999,38 @@ class Transformer(private val options: CompilerOptions) {
      * Exported functions get `N.f = f;` after the declaration.
      * Exported classes get `N.C = C;` after the declaration.
      */
+    /**
+     * Checks if any binding in the namespace body shadows the namespace name.
+     * This includes top-level declarations, function/method parameters, and block-scoped variables.
+     */
+    /**
+     * Checks if any binding in the namespace body shadows the namespace name.
+     */
+    private fun namespaceBodyHasNameCollision(name: String, statements: List<Statement>): Boolean {
+        fun checkNode(node: Node): Boolean {
+            return when (node) {
+                is ClassDeclaration -> node.name?.text == name ||
+                    node.members.any { m -> m is MethodDeclaration && m.parameters.any { p -> (p.name as? Identifier)?.text == name } } ||
+                    node.members.any { m -> m is Constructor && m.parameters.any { p -> (p.name as? Identifier)?.text == name } }
+                is FunctionDeclaration -> node.name?.text == name || node.parameters.any { (it.name as? Identifier)?.text == name } ||
+                    (node.body?.statements?.any { checkNode(it) } == true)
+                is EnumDeclaration -> node.name.text == name
+                is VariableStatement -> node.declarationList.declarations.any { extractIdentifierName(it.name) == name }
+                is ModuleDeclaration -> extractIdentifierName(node.name) == name
+                is Block -> node.statements.any { checkNode(it) }
+                is IfStatement -> checkNode(node.thenStatement) || (node.elseStatement?.let { checkNode(it) } == true)
+                is ForStatement -> checkNode(node.statement)
+                is ForInStatement -> checkNode(node.statement)
+                is ForOfStatement -> checkNode(node.statement)
+                is WhileStatement -> checkNode(node.statement)
+                is DoStatement -> checkNode(node.statement)
+                is ExpressionStatement -> false
+                else -> false
+            }
+        }
+        return statements.any { checkNode(it) }
+    }
+
     private fun transformNamespaceBody(
         nsName: String,
         statements: List<Statement>,
