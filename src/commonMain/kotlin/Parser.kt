@@ -2999,6 +2999,11 @@ class Parser(private val source: String, private val fileName: String) {
         return scanner.tryScan {
             if (token != SyntaxKind.LessThan) return@tryScan null
             nextToken()
+            // Empty type argument list: <>
+            if (token == SyntaxKind.GreaterThan) {
+                nextToken()
+                return@tryScan emptyList()
+            }
             val args = mutableListOf<TypeNode>()
             do {
                 args.add(parseType())
