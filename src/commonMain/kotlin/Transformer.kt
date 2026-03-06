@@ -6039,19 +6039,41 @@ class Transformer(private val options: CompilerOptions) {
      * Checks if any binding in the namespace body shadows the namespace name.
      */
     private fun namespaceBodyHasNameCollision(name: String, statements: List<Statement>): Boolean {
+        fun checkParams(params: List<Parameter>): Boolean =
+            params.any { (it.name as? Identifier)?.text == name }
+
         fun checkNode(node: Node): Boolean {
             return when (node) {
-                is ClassDeclaration -> node.name?.text == name ||
-                    node.members.any { m -> m is MethodDeclaration && m.parameters.any { p -> (p.name as? Identifier)?.text == name } } ||
-                    node.members.any { m -> m is Constructor && m.parameters.any { p -> (p.name as? Identifier)?.text == name } }
-                is FunctionDeclaration -> node.name?.text == name || node.parameters.any { (it.name as? Identifier)?.text == name } ||
+                is ClassDeclaration -> {
+                    node.name?.text == name ||
+                    node.members.any { m ->
+                        when (m) {
+                            is MethodDeclaration -> checkParams(m.parameters) ||
+                                (m.body?.statements?.any { checkNode(it) } == true)
+                            is Constructor -> checkParams(m.parameters) ||
+                                (m.body?.statements?.any { checkNode(it) } == true)
+                            is GetAccessor -> (m.body?.statements?.any { checkNode(it) } == true)
+                            is SetAccessor -> checkParams(m.parameters) ||
+                                (m.body?.statements?.any { checkNode(it) } == true)
+                            else -> false
+                        }
+                    }
+                }
+                is FunctionDeclaration -> node.name?.text == name || checkParams(node.parameters) ||
                     (node.body?.statements?.any { checkNode(it) } == true)
                 is EnumDeclaration -> node.name.text == name
                 is VariableStatement -> node.declarationList.declarations.any { extractIdentifierName(it.name) == name }
                 is ModuleDeclaration -> extractIdentifierName(node.name) == name
+                is ImportEqualsDeclaration -> node.name.text == name
                 is Block -> node.statements.any { checkNode(it) }
                 is IfStatement -> checkNode(node.thenStatement) || (node.elseStatement?.let { checkNode(it) } == true)
-                is ForStatement -> checkNode(node.statement)
+                is ForStatement -> {
+                    val initHas = when (val init = node.initializer) {
+                        is VariableDeclarationList -> init.declarations.any { extractIdentifierName(it.name) == name }
+                        else -> false
+                    }
+                    initHas || checkNode(node.statement)
+                }
                 is ForInStatement -> checkNode(node.statement)
                 is ForOfStatement -> checkNode(node.statement)
                 is WhileStatement -> checkNode(node.statement)
