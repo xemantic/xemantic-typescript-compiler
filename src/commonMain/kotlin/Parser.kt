@@ -657,8 +657,9 @@ class Parser(private val source: String, private val fileName: String) {
         val varDecl = if (parseOptional(SyntaxKind.OpenParen)) {
             val name = parseBindingNameOrPattern()
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            val initializer = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
             parseExpected(SyntaxKind.CloseParen)
-            VariableDeclaration(name = name, type = type)
+            VariableDeclaration(name = name, type = type, initializer = initializer)
         } else null
         val block = parseBlock()
         return CatchClause(variableDeclaration = varDecl, block = block, pos = pos, end = getEnd())

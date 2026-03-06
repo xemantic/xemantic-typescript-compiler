@@ -649,6 +649,10 @@ class Emitter(
             if (node.catchClause.variableDeclaration != null) {
                 write(" (")
                 emitExpression(node.catchClause.variableDeclaration.name)
+                if (node.catchClause.variableDeclaration.initializer != null) {
+                    write(" = ")
+                    emitExpression(node.catchClause.variableDeclaration.initializer)
+                }
                 write(")")
             }
             emitBlockBody(node.catchClause.block, emitOpenBraceComments = true)
