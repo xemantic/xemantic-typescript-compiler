@@ -1665,9 +1665,10 @@ class Parser(private val source: String, private val fileName: String) {
     }
 
     private fun parseParameterModifiers(): Set<ModifierFlag> {
-        // Only public/private/protected/readonly/override are valid parameter modifiers
-        // (for constructor parameter properties). Other keywords like static/abstract/declare
-        // should be treated as parameter names.
+        // Valid parameter modifiers: public/private/protected/readonly/override (for constructor
+        // parameter properties). Also consume export/async as modifiers for error recovery,
+        // since TypeScript still emits the parameter in error cases. Keywords like static/abstract/
+        // declare are treated as parameter names instead.
         val mods = mutableSetOf<ModifierFlag>()
         loop@ while (true) {
             val mod = when {
@@ -1676,8 +1677,11 @@ class Parser(private val source: String, private val fileName: String) {
                 token == SyntaxKind.ProtectedKeyword -> ModifierFlag.Protected
                 token == SyntaxKind.ReadonlyKeyword -> ModifierFlag.Readonly
                 token == SyntaxKind.OverrideKeyword -> ModifierFlag.Override
+                token == SyntaxKind.ExportKeyword -> ModifierFlag.Export
+                token == SyntaxKind.AsyncKeyword -> ModifierFlag.Async
                 isIdentifier() && scanner.getTokenValue() == "readonly" -> ModifierFlag.Readonly
                 isIdentifier() && scanner.getTokenValue() == "override" -> ModifierFlag.Override
+                isIdentifier() && scanner.getTokenValue() == "async" -> ModifierFlag.Async
                 else -> break@loop
             }
             mods.add(mod)
