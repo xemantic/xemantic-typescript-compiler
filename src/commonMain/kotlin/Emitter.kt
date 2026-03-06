@@ -278,12 +278,10 @@ class Emitter(
             else -> "var"
         }
         write(keyword)
-        if (node.declarations.isNotEmpty()) {
-            write(" ")
-            for ((index, decl) in node.declarations.withIndex()) {
-                if (index > 0) write(", ")
-                emitVariableDeclaration(decl)
-            }
+        write(" ")
+        for ((index, decl) in node.declarations.withIndex()) {
+            if (index > 0) write(", ")
+            emitVariableDeclaration(decl)
         }
     }
 
