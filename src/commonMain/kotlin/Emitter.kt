@@ -286,6 +286,12 @@ class Emitter(
     }
 
     private fun emitVariableDeclaration(node: VariableDeclaration) {
+        // Emit inline leading comments on the name (e.g. `var /*c*/ x`)
+        if (!options.removeComments) {
+            (node.name as? Identifier)?.leadingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                write(it.text); write(" ")
+            }
+        }
         emitExpression(node.name)
         // Emit same-line comments between the name/type and `=`
         // e.g. `let e/*c*/: T = v` or `let d: T /*c*/ = v`
