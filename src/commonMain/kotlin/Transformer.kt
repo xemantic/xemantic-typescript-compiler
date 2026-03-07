@@ -4102,6 +4102,128 @@ class Transformer(private val options: CompilerOptions) {
     // -----------------------------------------------------------------
 
     /**
+     * Iteratively transforms a left-recursive chain of BinaryExpressions
+     * to avoid StackOverflow on deeply nested trees (e.g. binderBinaryExpressionStress).
+     */
+    private fun transformBinaryExpression(root: BinaryExpression): Expression {
+        // Collect the left-spine: walk down .left while it's a BinaryExpression
+        // that doesn't need special downlevel handling (**, **=, ??).
+        // For special operators we stop flattening so they get proper treatment.
+        data class SpineEntry(val node: BinaryExpression, val right: Expression)
+        val spine = mutableListOf<SpineEntry>()
+        var current: Expression = root
+        while (current is BinaryExpression) {
+            val needsSpecial = when (current.operator) {
+                AsteriskAsterisk, AsteriskAsteriskEquals ->
+                    options.effectiveTarget < ScriptTarget.ES2016
+                QuestionQuestion ->
+                    options.effectiveTarget < ScriptTarget.ES2020
+                else -> false
+            }
+            if (needsSpecial) break
+            spine.add(SpineEntry(current, current.right))
+            current = current.left
+        }
+        if (spine.isEmpty()) {
+            // Root itself needs special handling — use the original recursive path
+            return transformBinaryExpressionSpecial(root)
+        }
+        // Transform the leftmost expression (may itself be a binary with special ops)
+        var result = transformExpression(current)
+        // Rebuild from bottom (leftmost) to top (root)
+        for (i in spine.indices.reversed()) {
+            val entry = spine[i]
+            val right = transformExpression(entry.right)
+            result = entry.node.copy(left = result, right = right)
+        }
+        return result
+    }
+
+    /**
+     * Handles BinaryExpression with special operators that need downleveling.
+     */
+    private fun transformBinaryExpressionSpecial(expr: BinaryExpression): Expression {
+        val left = transformExpression(expr.left)
+        val right = transformExpression(expr.right)
+        // Downlevel `**` to `Math.pow(left, right)` for targets below ES2016
+        if (expr.operator == AsteriskAsterisk &&
+            options.effectiveTarget < ScriptTarget.ES2016) {
+            return CallExpression(
+                expression = PropertyAccessExpression(
+                    expression = syntheticId("Math"),
+                    name = syntheticId("pow"),
+                    pos = -1, end = -1,
+                ),
+                arguments = listOf(left, right),
+                pos = -1, end = -1,
+            )
+        }
+        // Downlevel `**=` to `x = Math.pow(x, right)` for targets below ES2016
+        if (expr.operator == AsteriskAsteriskEquals &&
+            options.effectiveTarget < ScriptTarget.ES2016) {
+            return BinaryExpression(
+                left = left,
+                operator = Equals,
+                right = CallExpression(
+                    expression = PropertyAccessExpression(
+                        expression = syntheticId("Math"),
+                        name = syntheticId("pow"),
+                        pos = -1, end = -1,
+                    ),
+                    arguments = listOf(left, right),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+        }
+        // Downlevel `??` to `!== null && !== void 0 ? :` for targets below ES2020
+        if (expr.operator == QuestionQuestion &&
+            options.effectiveTarget < ScriptTarget.ES2020) {
+            val leftRef: Expression
+            val nullCheck: Expression
+            if (left is Identifier) {
+                leftRef = left
+                nullCheck = left
+            } else {
+                val tempName = nextTempVarName()
+                hoistedVarScopes.lastOrNull()?.add(tempName)
+                val tempId = syntheticId(tempName)
+                val assign = ParenthesizedExpression(
+                    expression = BinaryExpression(left = tempId, operator = Equals, right = left, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                )
+                nullCheck = assign
+                leftRef = tempId
+            }
+            val notNull = BinaryExpression(
+                left = nullCheck,
+                operator = ExclamationEqualsEquals,
+                right = syntheticId("null"),
+                pos = -1, end = -1,
+            )
+            val notUndefined = BinaryExpression(
+                left = leftRef,
+                operator = ExclamationEqualsEquals,
+                right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+            val condition = BinaryExpression(
+                left = notNull,
+                operator = AmpersandAmpersand,
+                right = notUndefined,
+                pos = -1, end = -1,
+            )
+            return ConditionalExpression(
+                condition = condition,
+                whenTrue = leftRef,
+                whenFalse = right,
+                pos = -1, end = -1,
+            )
+        }
+        return expr.copy(left = left, right = right)
+    }
+
+    /**
      * Transforms an expression, stripping TypeScript-only constructs.
      * Always returns exactly one expression.
      */
@@ -4132,90 +4254,9 @@ class Transformer(private val options: CompilerOptions) {
                 }
             }
 
-            // Binary: recurse
+            // Binary: flatten left-spine iteratively to avoid StackOverflow on deep chains
             is BinaryExpression -> {
-                val left = transformExpression(expr.left)
-                val right = transformExpression(expr.right)
-                // Downlevel `**` to `Math.pow(left, right)` for targets below ES2016
-                if (expr.operator == AsteriskAsterisk &&
-                    options.effectiveTarget < ScriptTarget.ES2016) {
-                    CallExpression(
-                        expression = PropertyAccessExpression(
-                            expression = syntheticId("Math"),
-                            name = syntheticId("pow"),
-                            pos = -1, end = -1,
-                        ),
-                        arguments = listOf(left, right),
-                        pos = -1, end = -1,
-                    )
-                }
-                // Downlevel `**=` to `x = Math.pow(x, right)` for targets below ES2016
-                else if (expr.operator == AsteriskAsteriskEquals &&
-                    options.effectiveTarget < ScriptTarget.ES2016) {
-                    BinaryExpression(
-                        left = left,
-                        operator = Equals,
-                        right = CallExpression(
-                            expression = PropertyAccessExpression(
-                                expression = syntheticId("Math"),
-                                name = syntheticId("pow"),
-                                pos = -1, end = -1,
-                            ),
-                            arguments = listOf(left, right),
-                            pos = -1, end = -1,
-                        ),
-                        pos = -1, end = -1,
-                    )
-                }
-                // Downlevel `??` to `!== null && !== void 0 ? :` for targets below ES2020
-                else if (expr.operator == QuestionQuestion &&
-                    options.effectiveTarget < ScriptTarget.ES2020) {
-                    // If left is a simple identifier, use it directly; otherwise use a temp var
-                    val leftRef: Expression
-                    val nullCheck: Expression
-                    if (left is Identifier) {
-                        leftRef = left
-                        nullCheck = left
-                    } else {
-                        val tempName = nextTempVarName()
-                        hoistedVarScopes.lastOrNull()?.add(tempName)
-                        val tempId = syntheticId(tempName)
-                        // (_a = left)
-                        val assign = ParenthesizedExpression(
-                            expression = BinaryExpression(left = tempId, operator = Equals, right = left, pos = -1, end = -1),
-                            pos = -1, end = -1,
-                        )
-                        nullCheck = assign
-                        leftRef = tempId
-                    }
-                    // nullCheck !== null && leftRef !== void 0 ? leftRef : right
-                    val notNull = BinaryExpression(
-                        left = nullCheck,
-                        operator = ExclamationEqualsEquals,
-                        right = syntheticId("null"),
-                        pos = -1, end = -1,
-                    )
-                    val notUndefined = BinaryExpression(
-                        left = leftRef,
-                        operator = ExclamationEqualsEquals,
-                        right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
-                        pos = -1, end = -1,
-                    )
-                    val condition = BinaryExpression(
-                        left = notNull,
-                        operator = AmpersandAmpersand,
-                        right = notUndefined,
-                        pos = -1, end = -1,
-                    )
-                    ConditionalExpression(
-                        condition = condition,
-                        whenTrue = leftRef,
-                        whenFalse = right,
-                        pos = -1, end = -1,
-                    )
-                } else {
-                    expr.copy(left = left, right = right)
-                }
+                transformBinaryExpression(expr)
             }
 
             // Call: strip type arguments, recurse
