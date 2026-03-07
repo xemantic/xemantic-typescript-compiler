@@ -2727,4 +2727,5 @@ class Emitter(
         val leftmost = getLeftmostExpression(expr, stopAtCallExpressions = false)
         return leftmost is ObjectLiteralExpression || leftmost is FunctionExpression
     }
+
 }

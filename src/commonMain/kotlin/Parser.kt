@@ -3126,7 +3126,12 @@ class Parser(private val source: String, private val fileName: String) {
             }
             val args = mutableListOf<TypeNode>()
             do {
-                args.add(parseType())
+                // Handle missing type arguments (e.g., `Foo<a,,b>`)
+                if (token == SyntaxKind.Comma || token == SyntaxKind.GreaterThan) {
+                    args.add(KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = getPos(), end = getEnd()))
+                } else {
+                    args.add(parseType())
+                }
             } while (parseOptional(SyntaxKind.Comma))
             // Handle nested generics: Array<Fn<T>> produces '>>' token — rescan to single '>'
             token = scanner.reScanGreaterToken()
@@ -3152,33 +3157,24 @@ class Parser(private val source: String, private val fileName: String) {
             }
             return KeywordTypeNode(kind = SyntaxKind.VoidKeyword, pos = pos, end = getEnd())
         }
-        // TypeScript allows leading `|` or `&` before the first union/intersection member:
+        // TypeScript allows leading `|` before the first union member:
         //   type A = | string | number;  →  union type
-        //   type B = & { x: number };    →  intersection type
         parseOptional(SyntaxKind.Bar)
-        parseOptional(SyntaxKind.Ampersand)
-        var type = parseNonUnionType()
+        var type = parseIntersectionOrHigherType()
         // Type predicate: X is T (valid as function return type annotations)
         // After parsing X as a type reference, if the next token is `is`, consume it
         // and parse the actual predicate type. Since we erase all types, the exact
         // node returned doesn't matter as long as we consume the right tokens.
         if (token == SyntaxKind.IsKeyword) {
             nextToken()  // consume 'is'
-            type = parseNonUnionType()
+            type = parseIntersectionOrHigherType()
         }
         if (token == SyntaxKind.Bar) {
             val types = mutableListOf(type)
             while (parseOptional(SyntaxKind.Bar)) {
-                types.add(parseNonUnionType())
+                types.add(parseIntersectionOrHigherType())
             }
             type = UnionType(types = types, pos = pos, end = getEnd())
-        }
-        if (token == SyntaxKind.Ampersand) {
-            val types = mutableListOf(type)
-            while (parseOptional(SyntaxKind.Ampersand)) {
-                types.add(parseNonUnionType())
-            }
-            type = IntersectionType(types = types, pos = pos, end = getEnd())
         }
         // Conditional type: T extends U ? X : Y
         if (token == SyntaxKind.ExtendsKeyword) {
@@ -3196,6 +3192,22 @@ class Parser(private val source: String, private val fileName: String) {
                 pos = pos,
                 end = getEnd()
             )
+        }
+        return type
+    }
+
+    private fun parseIntersectionOrHigherType(): TypeNode {
+        val pos = getPos()
+        // TypeScript allows leading `&` before the first intersection member:
+        //   type B = & { x: number };    →  intersection type
+        parseOptional(SyntaxKind.Ampersand)
+        var type = parseNonUnionType()
+        if (token == SyntaxKind.Ampersand) {
+            val types = mutableListOf(type)
+            while (parseOptional(SyntaxKind.Ampersand)) {
+                types.add(parseNonUnionType())
+            }
+            type = IntersectionType(types = types, pos = pos, end = getEnd())
         }
         return type
     }
