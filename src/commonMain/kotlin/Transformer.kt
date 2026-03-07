@@ -3977,8 +3977,39 @@ class Transformer(private val options: CompilerOptions) {
             is BinaryExpression -> {
                 val left = transformExpression(expr.left)
                 val right = transformExpression(expr.right)
+                // Downlevel `**` to `Math.pow(left, right)` for targets below ES2016
+                if (expr.operator == SyntaxKind.AsteriskAsterisk &&
+                    options.effectiveTarget < ScriptTarget.ES2016) {
+                    CallExpression(
+                        expression = PropertyAccessExpression(
+                            expression = syntheticId("Math"),
+                            name = syntheticId("pow"),
+                            pos = -1, end = -1,
+                        ),
+                        arguments = listOf(left, right),
+                        pos = -1, end = -1,
+                    )
+                }
+                // Downlevel `**=` to `x = Math.pow(x, right)` for targets below ES2016
+                else if (expr.operator == SyntaxKind.AsteriskAsteriskEquals &&
+                    options.effectiveTarget < ScriptTarget.ES2016) {
+                    BinaryExpression(
+                        left = left,
+                        operator = SyntaxKind.Equals,
+                        right = CallExpression(
+                            expression = PropertyAccessExpression(
+                                expression = syntheticId("Math"),
+                                name = syntheticId("pow"),
+                                pos = -1, end = -1,
+                            ),
+                            arguments = listOf(left, right),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                }
                 // Downlevel `??` to `!== null && !== void 0 ? :` for targets below ES2020
-                if (expr.operator == SyntaxKind.QuestionQuestion &&
+                else if (expr.operator == SyntaxKind.QuestionQuestion &&
                     options.effectiveTarget < ScriptTarget.ES2020) {
                     // If left is a simple identifier, use it directly; otherwise use a temp var
                     val leftRef: Expression
