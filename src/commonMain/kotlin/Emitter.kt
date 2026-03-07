@@ -1358,7 +1358,12 @@ class Emitter(
                 // Strip numeric separators and convert non-decimal bases to decimal when separators present
                 val hasSeparators = '_' in node.text
                 val numText = node.text.replace("_", "")
-                val emitText = if (hasSeparators && (numText.startsWith("0x", ignoreCase = true) ||
+                val isLegacyOctal = numText.length >= 2 && numText[0] == '0' &&
+                        numText[1] in '0'..'7' && numText.all { it in '0'..'7' }
+                val emitText = if (isLegacyOctal) {
+                    // Legacy octal (e.g. 02343) — always convert to decimal
+                    numText.substring(1).toULongOrNull(8)?.toString() ?: numText
+                } else if (hasSeparators && (numText.startsWith("0x", ignoreCase = true) ||
                             numText.startsWith("0o", ignoreCase = true) ||
                             numText.startsWith("0b", ignoreCase = true))) {
                     // Convert hex/octal/binary with separators to decimal

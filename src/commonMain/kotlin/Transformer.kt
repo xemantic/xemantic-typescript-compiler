@@ -6013,7 +6013,7 @@ class Transformer(private val options: CompilerOptions) {
     private fun evaluateConstantExpression(expr: Expression, memberValues: Map<String, Long>): Long? {
         return when (expr) {
             is NumericLiteralNode -> {
-                val text = expr.text.trim()
+                val text = expr.text.trim().replace("_", "")
                 when {
                     text.startsWith("0x") || text.startsWith("0X") ->
                         text.substring(2).toLongOrNull(16)
@@ -6029,25 +6029,26 @@ class Transformer(private val options: CompilerOptions) {
                 when (expr.operator) {
                     SyntaxKind.Minus -> -operand
                     SyntaxKind.Plus -> operand
-                    SyntaxKind.Tilde -> operand.inv()
+                    SyntaxKind.Tilde -> operand.toInt().inv().toLong()
                     else -> null
                 }
             }
             is BinaryExpression -> {
                 val left = evaluateConstantExpression(expr.left, memberValues) ?: return null
                 val right = evaluateConstantExpression(expr.right, memberValues) ?: return null
+                // JS bitwise/shift ops work on 32-bit integers
                 when (expr.operator) {
                     SyntaxKind.Plus -> left + right
                     SyntaxKind.Minus -> left - right
                     SyntaxKind.Asterisk -> left * right
                     SyntaxKind.Slash -> if (right == 0L) null else left / right
                     SyntaxKind.Percent -> if (right == 0L) null else left % right
-                    SyntaxKind.LessThanLessThan -> left shl right.toInt()
-                    SyntaxKind.GreaterThanGreaterThan -> left shr right.toInt()
-                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> left ushr right.toInt()
-                    SyntaxKind.Bar -> left or right
-                    SyntaxKind.Ampersand -> left and right
-                    SyntaxKind.Caret -> left xor right
+                    SyntaxKind.LessThanLessThan -> (left.toInt() shl (right.toInt() and 31)).toLong()
+                    SyntaxKind.GreaterThanGreaterThan -> (left.toInt() shr (right.toInt() and 31)).toLong()
+                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> (left.toInt() ushr (right.toInt() and 31)).toUInt().toLong()
+                    SyntaxKind.Bar -> (left.toInt() or right.toInt()).toLong()
+                    SyntaxKind.Ampersand -> (left.toInt() and right.toInt()).toLong()
+                    SyntaxKind.Caret -> (left.toInt() xor right.toInt()).toLong()
                     else -> null
                 }
             }
