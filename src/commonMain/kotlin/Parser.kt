@@ -1743,6 +1743,7 @@ class Parser(private val source: String, private val fileName: String) {
                 token == SyntaxKind.ReadonlyKeyword -> ModifierFlag.Readonly
                 token == SyntaxKind.OverrideKeyword -> ModifierFlag.Override
                 token == SyntaxKind.DeclareKeyword -> ModifierFlag.Declare
+                token == SyntaxKind.StaticKeyword -> ModifierFlag.Static
                 token == SyntaxKind.ExportKeyword -> ModifierFlag.Export
                 token == SyntaxKind.AsyncKeyword -> ModifierFlag.Async
                 isIdentifier() && scanner.getTokenValue() == "readonly" -> ModifierFlag.Readonly

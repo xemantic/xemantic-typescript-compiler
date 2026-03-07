@@ -5307,9 +5307,19 @@ class Transformer(private val options: CompilerOptions) {
                     )
                 }
                 member is Constructor && member.body != null -> {
-                    if (transformedConstructor != null) {
+                    if (member === existingConstructor && transformedConstructor != null) {
                         outputMembers.add(transformedConstructor)
                         constructorAdded = true
+                    } else {
+                        // Extra constructors with bodies (illegal in TS, but still emitted)
+                        outputMembers.add(Constructor(
+                            parameters = transformParameters(member.parameters),
+                            body = member.body.let { transformBlock(it, isFunctionScope = true) },
+                            modifiers = stripMemberModifiers(member.modifiers),
+                            pos = member.pos, end = member.end,
+                            leadingComments = member.leadingComments,
+                            trailingComments = member.trailingComments,
+                        ))
                     }
                 }
                 member is Constructor && member.body == null -> {
