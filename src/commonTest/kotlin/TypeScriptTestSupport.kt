@@ -74,32 +74,44 @@ private fun stripDtsSection(baseline: String): String {
     val result = mutableListOf<String>()
     var inDts = false
     var seenJsOutput = false
-    // Track .ts basenames seen so far to distinguish input .js files from output .js files
-    val tsBaseNamesSoFar = mutableSetOf<String>()
+    // Track source file basenames seen so far to distinguish input from output sections
+    val sourceBaseNamesSoFar = mutableSetOf<String>()
     for (line in lines) {
         val trimmed = line.trimEnd()
         if (trimmed.startsWith("//// [") && trimmed.endsWith("]")) {
             val fileName = trimmed.removePrefix("//// [").removeSuffix("]")
             val baseName = fileName.substringAfterLast('/')
             val isDtsFile = baseName.endsWith(".d.ts") || baseName.endsWith(".d.mts") || baseName.endsWith(".d.cts")
-            // Track .ts source files as we encounter them
+            // Track source files as we encounter them (.ts, .tsx, .mts, .cts, .js, .jsx, .mjs, .cjs)
             when {
                 baseName.endsWith(".ts") && !baseName.endsWith(".d.ts") ->
-                    tsBaseNamesSoFar.add(baseName.removeSuffix(".ts"))
-                baseName.endsWith(".tsx") -> tsBaseNamesSoFar.add(baseName.removeSuffix(".tsx"))
+                    sourceBaseNamesSoFar.add(baseName.removeSuffix(".ts"))
+                baseName.endsWith(".tsx") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".tsx"))
                 baseName.endsWith(".mts") && !baseName.endsWith(".d.mts") ->
-                    tsBaseNamesSoFar.add(baseName.removeSuffix(".mts"))
+                    sourceBaseNamesSoFar.add(baseName.removeSuffix(".mts"))
                 baseName.endsWith(".cts") && !baseName.endsWith(".d.cts") ->
-                    tsBaseNamesSoFar.add(baseName.removeSuffix(".cts"))
+                    sourceBaseNamesSoFar.add(baseName.removeSuffix(".cts"))
+                baseName.endsWith(".js") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".js"))
+                baseName.endsWith(".jsx") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".jsx"))
+                baseName.endsWith(".mjs") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".mjs"))
+                baseName.endsWith(".cjs") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".cjs"))
             }
             // A .js file is output only if we've already seen a .ts file with the same basename
             val isOutputJs = (baseName.endsWith(".js") || baseName.endsWith(".jsx") ||
                     baseName.endsWith(".mjs") || baseName.endsWith(".cjs")) &&
-                    baseName.substringBeforeLast('.') in tsBaseNamesSoFar
+                    baseName.substringBeforeLast('.') in sourceBaseNamesSoFar
             if (isOutputJs) seenJsOutput = true
-            // Only strip .d.ts sections that appear after JS output (compiler-generated declarations).
-            // .d.ts sections before JS output are source echo input files and must be kept.
-            inDts = isDtsFile && seenJsOutput
+            // Strip .d.ts sections that are compiler-generated output:
+            // either after JS output, or matching a previously seen source file basename
+            val dtsBaseName = when {
+                baseName.endsWith(".d.ts") -> baseName.removeSuffix(".d.ts")
+                baseName.endsWith(".d.mts") -> baseName.removeSuffix(".d.mts")
+                baseName.endsWith(".d.cts") -> baseName.removeSuffix(".d.cts")
+                else -> null
+            }
+            val isDtsOutput = isDtsFile && (seenJsOutput ||
+                    (dtsBaseName != null && dtsBaseName in sourceBaseNamesSoFar))
+            inDts = isDtsOutput
         }
         if (!inDts) {
             result.add(line)
