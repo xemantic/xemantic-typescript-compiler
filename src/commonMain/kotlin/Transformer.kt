@@ -1218,6 +1218,7 @@ class Transformer(private val options: CompilerOptions) {
         // Track helper needs
         var needsImportStar = false
         var needsImportDefault = false
+        var needsExportStar = false
 
         // Counter for generating unique temp names
         val moduleNameCounter = mutableMapOf<String, Int>()
@@ -1590,8 +1591,25 @@ class Transformer(private val options: CompilerOptions) {
                                 bodyStatements.add(makeExportAssignment(exportName, syntheticId(localName)))
                             }
                         }
+                    } else if (stmt.exportClause == null && stmt.moduleSpecifier != null) {
+                        // export * from "mod"
+                        needsExportStar = true
+                        val modSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
+                        val modPath = (modSpec as? StringLiteralNode)?.text ?: "unknown"
+                        val tempName = generateModuleTempName(modSpec, moduleNameCounter)
+                        namedModuleImports.add(modPath to tempName)
+                        bodyStatements.add(ExpressionStatement(
+                            expression = CallExpression(
+                                expression = syntheticId("__exportStar"),
+                                arguments = listOf(
+                                    syntheticId(tempName),
+                                    syntheticId("exports"),
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        ))
                     }
-                    // export * from "mod" in AMD: we skip complex re-exports for now
                 }
 
                 else -> {
@@ -1783,12 +1801,15 @@ class Transformer(private val options: CompilerOptions) {
         }
 
         // Runtime helpers go OUTSIDE the define wrapper (after amd comments, before define)
-        if (needsImportStar || needsImportDefault) {
+        if (needsImportStar || needsImportDefault || needsExportStar) {
             val helpers = buildString {
-                if (needsImportStar) {
+                if (needsImportStar || needsExportStar) {
                     append(CREATE_BINDING_HELPER)
+                }
+                if (needsImportStar) {
                     append(IMPORT_STAR_ONLY_HELPERS)
                 }
+                if (needsExportStar) append(EXPORT_STAR_HELPER)
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(RawStatement(code = helpers))
