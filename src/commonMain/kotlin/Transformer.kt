@@ -3999,9 +3999,11 @@ class Transformer(private val options: CompilerOptions) {
                 // non-rest elements (need to destructure), use a temp var to avoid
                 // evaluating the expression twice.
                 val sourceExpr: Expression
-                if (initExpr != null && initExpr !is Identifier && nonRestElements.isNotEmpty()) {
+                val needsTempVar = initExpr != null && nonRestElements.isNotEmpty() &&
+                    (initExpr !is Identifier || (initExpr as Identifier).text == "this")
+                if (needsTempVar) {
                     val tempName = nextTempVarName()
-                    hoistedVarScopes.lastOrNull()?.add(tempName)
+                    // Don't hoist — the temp var is declared inline in the same declaration list
                     sourceExpr = syntheticId(tempName)
                     // Emit: _a = expr, { a } = _a, rest = __rest(_a, ["a"])
                     newDecls.add(VariableDeclaration(
