@@ -634,6 +634,7 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseCaseOrDefaultClause(): Node {
         val pos = getPos()
+        val comments = leadingComments()
         return if (token == SyntaxKind.CaseKeyword) {
             nextToken()
             val expr = parseExpression()
@@ -647,7 +648,7 @@ class Parser(private val source: String, private val fileName: String) {
                     firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n') &&
                     stmts.none { it is Block && it.multiLine }
             CaseClause(expression = expr, statements = stmts, singleLine = singleLine, pos = pos, end = getEnd(),
-                labelTrailingComments = labelTrailingComments)
+                labelTrailingComments = labelTrailingComments, leadingComments = comments)
         } else {
             parseExpected(SyntaxKind.DefaultKeyword)
             parseExpected(SyntaxKind.Colon)
@@ -658,7 +659,7 @@ class Parser(private val source: String, private val fileName: String) {
                     firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n') &&
                     stmts.none { it is Block && it.multiLine }
             DefaultClause(statements = stmts, singleLine = singleLine, pos = pos, end = getEnd(),
-                labelTrailingComments = labelTrailingComments)
+                labelTrailingComments = labelTrailingComments, leadingComments = comments)
         }
     }
 

@@ -558,6 +558,7 @@ class Emitter(
 
     private fun emitCaseClause(node: CaseClause) {
         indentLevel++
+        emitLeadingComments(node)
         writeIndent()
         write("case ")
         emitExpression(node.expression)
@@ -592,6 +593,7 @@ class Emitter(
 
     private fun emitDefaultClause(node: DefaultClause) {
         indentLevel++
+        emitLeadingComments(node)
         writeIndent()
         write("default:")
         if (node.singleLine && node.statements.isNotEmpty()) {
@@ -1323,15 +1325,21 @@ class Emitter(
                 // Multi-line block comments (spanning lines) always end with a newline.
                 // Single-line block comments respect hasTrailingNewLine: if false,
                 // the expression follows on the same line (e.g. `/*c8*/ () => { }`).
+                val isLineComment = comment.text.startsWith("//")
                 val isMultiLineComment = comment.text.contains('\n')
-                if (isMultiLineComment || comment.hasTrailingNewLine) {
+                if (isLineComment || isMultiLineComment || comment.hasTrailingNewLine) {
                     writeNewLine()
                 } else {
                     write(" ")
                 }
             } else {
                 write(comment.text)
-                write(" ")
+                if (comment.text.startsWith("//")) {
+                    // Line comments extend to end of line; must emit newline
+                    writeNewLine()
+                } else {
+                    write(" ")
+                }
             }
         }
         // If the last comment ended with a newline, position cursor with indent
@@ -1796,6 +1804,11 @@ class Emitter(
 
     private fun emitPropertyAccess(node: PropertyAccessExpression) {
         emitExpression(node.expression)
+        // Emit trailing comments on the expression (e.g. `func() // comment\n.next()`)
+        // but skip if the expression already handles its own trailing comments (e.g. numeric literals).
+        if (node.expression is CallExpression || node.expression is Identifier) {
+            emitTrailingComments(node.expression)
+        }
         if (node.newLineBefore) {
             writeNewLine()
             indentLevel++
