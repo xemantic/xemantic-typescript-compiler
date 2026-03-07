@@ -80,7 +80,7 @@ fun formatBaseline(
     sb.append(baseName)
     sb.append("]\r\n")
 
-    // Echoed source with LF-only endings (strip any \r from original)
+    // Echoed source with LF-only endings (strip any \r from original), tabs → 4 spaces
     sb.append(cleanedSource.replace("\r", ""))
 
     // Separator between source and JS
@@ -147,9 +147,16 @@ fun formatMultiFileBaseline(
         sb.append("//// [")
         sb.append(jsName)
         sb.append("]\r\n")
-        sb.append(toCRLF(javascript))
-        sb.append("\r\n")
-        if (sourceMap) {
+        val converted = toCRLF(javascript)
+        sb.append(converted)
+        // Only add trailing newline if there is content (avoid blank line for empty files)
+        if (converted.isNotEmpty()) {
+            sb.append("\r\n")
+        }
+        // Source map comment only for JS files, not JSON
+        val isJsOutput = jsName.endsWith(".js") || jsName.endsWith(".jsx") ||
+                jsName.endsWith(".mjs") || jsName.endsWith(".cjs")
+        if (sourceMap && isJsOutput) {
             sb.append("//# sourceMappingURL=${jsName.substringAfterLast('/')}.map")
             // Add CRLF separator between JS sections, but not after the last one
             if (index < jsOutputs.size - 1) {
