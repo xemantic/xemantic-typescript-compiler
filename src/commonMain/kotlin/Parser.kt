@@ -1769,6 +1769,17 @@ class Parser(private val source: String, private val fileName: String) {
                 isIdentifier() && scanner.getTokenValue() == "async" -> ModifierFlag.Async
                 else -> break@loop
             }
+            // Check: is the next token a binding name/pattern? If not, this keyword is the param name.
+            val nextIsBindingName = lookAhead {
+                nextToken()
+                isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket
+                        || token == SyntaxKind.DotDotDot
+                        // Another modifier keyword followed by a binding name is also valid
+                        || token == SyntaxKind.PublicKeyword || token == SyntaxKind.PrivateKeyword
+                        || token == SyntaxKind.ProtectedKeyword || token == SyntaxKind.ReadonlyKeyword
+                        || token == SyntaxKind.OverrideKeyword || token == SyntaxKind.StaticKeyword
+            }
+            if (!nextIsBindingName) break@loop
             mods.add(mod)
             nextToken()
         }
