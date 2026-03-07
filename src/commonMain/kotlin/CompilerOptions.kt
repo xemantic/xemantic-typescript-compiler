@@ -227,7 +227,11 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                     if (currentFileName != null) {
                         // Strip leading blank lines (artifacts of whitespace after the @filename directive)
                         val fileContent = currentLines.joinToString("\n").trimStart('\n', '\r')
-                        fileEntries.add(SourceFileEntry(currentFileName, fileContent))
+                        // Skip empty file entries when the same filename immediately follows
+                        // (duplicate @filename directives, e.g. in augmentExportEquals2.ts)
+                        if (fileContent.isNotEmpty() || value != currentFileName) {
+                            fileEntries.add(SourceFileEntry(currentFileName, fileContent))
+                        }
                     }
                     // Clear any preamble lines collected before the first @Filename marker
                     currentLines.clear()
