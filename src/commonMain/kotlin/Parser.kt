@@ -1047,8 +1047,8 @@ class Parser(private val source: String, private val fileName: String) {
         val isSet = (token == SyntaxKind.SetKeyword || (isIdentifier() && scanner.getTokenValue() == "set"))
 
         if (isGet || isSet) {
-            val isAccessor = scanner.lookAhead {
-                scanner.scan()
+            val isAccessor = lookAhead {
+                nextToken()
                 isPropertyNameToken()
             }
             if (isAccessor) {
@@ -2609,7 +2609,7 @@ class Parser(private val source: String, private val fileName: String) {
         val asterisk = parseOptional(SyntaxKind.Asterisk)
 
         if (!asterisk && (isIdentifier() && scanner.getTokenValue() == "get")) {
-            val isGet = scanner.lookAhead { scanner.scan(); isPropertyNameToken() }
+            val isGet = lookAhead { nextToken(); isPropertyNameToken() }
             if (isGet) {
                 nextToken()
                 val name = parsePropertyName()
@@ -2629,7 +2629,7 @@ class Parser(private val source: String, private val fileName: String) {
         }
 
         if (!asterisk && (isIdentifier() && scanner.getTokenValue() == "set")) {
-            val isSet = scanner.lookAhead { scanner.scan(); isPropertyNameToken() }
+            val isSet = lookAhead { nextToken(); isPropertyNameToken() }
             if (isSet) {
                 nextToken()
                 val name = parsePropertyName()
