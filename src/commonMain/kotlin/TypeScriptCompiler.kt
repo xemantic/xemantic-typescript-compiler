@@ -239,7 +239,8 @@ class TypeScriptCompiler {
             }
 
             // Sort JS outputs by dependency order (dependencies first)
-            val sortedTsFiles = topologicalSort(tsFileNames, importDeps)
+            // Skip sorting when noResolve is set (TypeScript doesn't resolve imports in that mode)
+            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, importDeps)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
             // When outFile is set, concatenate all JS outputs into a single file
@@ -295,6 +296,10 @@ private fun extractRelativeImports(
         val specifier = when (stmt) {
             is ImportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
             is ExportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
+            is ImportEqualsDeclaration -> {
+                val ref = stmt.moduleReference
+                if (ref is ExternalModuleReference) (ref.expression as? StringLiteralNode)?.text else null
+            }
             else -> null
         } ?: continue
 
