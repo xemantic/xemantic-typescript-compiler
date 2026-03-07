@@ -847,16 +847,22 @@ class Transformer(private val options: CompilerOptions) {
                                 functionExportStubs.add(makeExportAssignment(exportName, syntheticId(localName)))
                             } else {
                                 // Variable: void0 hoist + assignment.
-                                // If the local var lost its binding (Direct path), reference via exports.
-                                val localExpr: Expression = if (localName in directExportedVarNames) {
-                                    PropertyAccessExpression(
-                                        expression = syntheticId("exports"),
-                                        name = syntheticId(localName),
-                                        pos = -1, end = -1,
-                                    )
-                                } else syntheticId(localName)
-                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
-                                result.add(makeExportAssignment(exportName, localExpr))
+                                // Skip assignment for `export { undefined }` — `undefined` is a global;
+                                // the void 0 hoist already provides `exports.undefined = void 0`.
+                                if (localName == "undefined") {
+                                    if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                } else {
+                                    // If the local var lost its binding (Direct path), reference via exports.
+                                    val localExpr: Expression = if (localName in directExportedVarNames) {
+                                        PropertyAccessExpression(
+                                            expression = syntheticId("exports"),
+                                            name = syntheticId(localName),
+                                            pos = -1, end = -1,
+                                        )
+                                    } else syntheticId(localName)
+                                    if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                    result.add(makeExportAssignment(exportName, localExpr))
+                                }
                             }
                         }
                     }
@@ -6268,20 +6274,13 @@ class Transformer(private val options: CompilerOptions) {
         declaredNames.clear()
         declaredNames.addAll(savedDeclaredNames)
 
-        // If the body transformed to nothing AND there are no exported declarations,
-        // don't emit the namespace at all. (Exported declarations can make the namespace
-        // itself a meaningful runtime value even if the content is type-only.)
-        if (transformedBody.isEmpty() && bodyStatements.none { stmt ->
-            when (stmt) {
-                is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
-                else -> false
-            }
-        }) return orphanedComments(decl)
+        // If the body transformed to nothing AND there are no runtime-relevant declarations,
+        // don't emit the namespace at all — but only if the original body had only types.
+        // Namespaces containing ambient function/variable declarations (no body) still get
+        // their IIFE wrapper emitted, even though those declarations produce no output.
+        if (transformedBody.isEmpty() && bodyStatements.all { isTypeOnlyStatement(it) }) {
+            return orphanedComments(decl)
+        }
 
         return wrapInNamespaceIife(moduleName, transformedBody, decl, nested = nested, parentNsName = parentNsName, useDottedVar = useDottedVar, iifeParamName = iifeParamName)
     }
@@ -7016,6 +7015,7 @@ class Transformer(private val options: CompilerOptions) {
             is TypeAliasDeclaration -> true
             is ImportDeclaration -> stmt.importClause?.isTypeOnly == true
             is ExportDeclaration -> stmt.isTypeOnly
+            is ImportEqualsDeclaration -> ModifierFlag.Export !in stmt.modifiers
             is ModuleDeclaration -> isTypeOnlyNamespace(stmt)
             // A const enum is inlined and erased — it's type-only at runtime
             // (unless preserveConstEnums or isolatedModules is set, in which case it produces a real object)
@@ -7648,10 +7648,6 @@ class Transformer(private val options: CompilerOptions) {
      * - Prefix unary / keyword-prefix ops: needs `()` for member access — `(-A).x` ≠ `-A.x`
      */
     private fun typeAssertionResultNeedsParens(expr: Expression): Boolean = when (expr) {
-        // ObjectLiteralExpression and FunctionExpression are NOT listed here —
-        // their parens are handled at the emitter level (expression statements and call callees).
-        // ClassExpression needs parens here because it can appear in contexts like `export default`
-        // where the emitter doesn't add parens.
         is ClassExpression -> true
         is ArrowFunction -> true
         is PrefixUnaryExpression -> true
