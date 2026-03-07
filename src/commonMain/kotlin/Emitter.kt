@@ -1378,7 +1378,11 @@ class Emitter(
                     }
                 }
             }
-            is BigIntLiteralNode -> write(node.text)
+            is BigIntLiteralNode -> {
+                // TypeScript lowercases hex digits in bigint literals (e.g. 0xFFFFn → 0xffffn)
+                val text = node.text.replace("_", "")
+                write(if (text.startsWith("0x") || text.startsWith("0X")) text.lowercase() else text)
+            }
             is RegularExpressionLiteralNode -> write(node.text)
             is NoSubstitutionTemplateLiteralNode -> emitNoSubstitutionTemplateLiteral(node)
             is TemplateExpression -> emitTemplateExpression(node)
