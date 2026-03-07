@@ -1355,10 +1355,27 @@ class Emitter(
                 }
             }
             is NumericLiteralNode -> {
-                // Strip numeric separators (e.g. 1_000_000 → 1000000) and normalize infinity
+                // Strip numeric separators and convert non-decimal bases to decimal when separators present
+                val hasSeparators = '_' in node.text
                 val numText = node.text.replace("_", "")
-                val numVal = numText.toDoubleOrNull()
-                val emitText = if (numVal != null && numVal.isInfinite()) "Infinity" else numText
+                val emitText = if (hasSeparators && (numText.startsWith("0x", ignoreCase = true) ||
+                            numText.startsWith("0o", ignoreCase = true) ||
+                            numText.startsWith("0b", ignoreCase = true))) {
+                    // Convert hex/octal/binary with separators to decimal
+                    val numVal = numText.removePrefix("0x").removePrefix("0X")
+                        .removePrefix("0o").removePrefix("0O")
+                        .removePrefix("0b").removePrefix("0B")
+                    val base = when {
+                        numText.startsWith("0x", ignoreCase = true) -> 16
+                        numText.startsWith("0o", ignoreCase = true) -> 8
+                        else -> 2
+                    }
+                    val longVal = numVal.toULongOrNull(base)
+                    longVal?.toString() ?: numText
+                } else {
+                    val numVal = numText.toDoubleOrNull()
+                    if (numVal != null && numVal.isInfinite()) "Infinity" else numText
+                }
                 write(emitText)
                 // Only emit same-line trailing comments (hasPrecedingNewLine=false).
                 // Own-line trailing comments are handled by the multiline array emitter.
