@@ -2318,8 +2318,9 @@ class Parser(private val source: String, private val fileName: String) {
 
             StringLiteral -> parseStringLiteral()
             NoSubstitutionTemplateLiteral -> {
-                val text = scanner.getTokenValue(); nextToken(); NoSubstitutionTemplateLiteralNode(
+                val text = scanner.getTokenValue(); val unterminated = scanner.isTokenUnterminated(); nextToken(); NoSubstitutionTemplateLiteralNode(
                     text = text,
+                    isUnterminated = unterminated,
                     pos = pos,
                     end = getEnd()
                 )
@@ -2769,9 +2770,10 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseTemplateLiteral(): Expression {
         if (token == SyntaxKind.NoSubstitutionTemplateLiteral) {
             val text = scanner.getTokenValue()
+            val unterminated = scanner.isTokenUnterminated()
             val pos = getPos()
             nextToken()
-            return NoSubstitutionTemplateLiteralNode(text = text, pos = pos, end = getEnd())
+            return NoSubstitutionTemplateLiteralNode(text = text, isUnterminated = unterminated, pos = pos, end = getEnd())
         }
         return parseTemplateExpression()
     }
