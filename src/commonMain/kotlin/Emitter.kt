@@ -1448,7 +1448,7 @@ class Emitter(
     private fun emitNoSubstitutionTemplateLiteral(node: NoSubstitutionTemplateLiteralNode) {
         write("`")
         write(node.text)
-        write("`")
+        if (!node.isUnterminated) write("`")
     }
 
     private fun emitTemplateExpression(node: TemplateExpression) {

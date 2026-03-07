@@ -547,6 +547,7 @@ data class RegularExpressionLiteralNode(
 
 data class NoSubstitutionTemplateLiteralNode(
     val text: String,
+    val isUnterminated: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

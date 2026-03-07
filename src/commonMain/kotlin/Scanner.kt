@@ -65,8 +65,14 @@ class Scanner(private val text: String) {
     /** Whether the last scanned token had an invalid unicode escape sequence. */
     private var hasInvalidUnicodeEscape: Boolean = false
 
+    /** Whether the last scanned template literal token was unterminated. */
+    private var tokenIsUnterminated: Boolean = false
+
     /** Returns true if the last scanned identifier had an invalid unicode escape. */
     fun hasInvalidUnicodeEscapeInToken(): Boolean = hasInvalidUnicodeEscape
+
+    /** Returns true if the last scanned template literal was unterminated. */
+    fun isTokenUnterminated(): Boolean = tokenIsUnterminated
 
     // -- Public getters -------------------------------------------------------
 
@@ -172,6 +178,7 @@ class Scanner(private val text: String) {
         leadingComments = null
         trailingComments = null
         precedingLineBreak = false
+        tokenIsUnterminated = false
 
         // Skip whitespace and collect leading comments/trivia
         scanLeadingTrivia()
@@ -772,6 +779,7 @@ class Scanner(private val text: String) {
             pos++
         }
         // Unterminated template
+        tokenIsUnterminated = true
         tokenValue = sb.toString()
         return SyntaxKind.NoSubstitutionTemplateLiteral
     }
