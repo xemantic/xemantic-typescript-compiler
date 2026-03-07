@@ -162,8 +162,30 @@ fun formatMultiFileBaseline(
 }
 
 private fun toCRLF(text: String): String {
-    // First normalize to LF, then convert to CRLF
-    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+    // Convert newlines to CRLF, but preserve LF inside template literals (backtick strings).
+    val normalized = text.replace("\r\n", "\n")
+    val sb = StringBuilder(normalized.length + normalized.length / 10)
+    var inTemplate = false
+    var i = 0
+    while (i < normalized.length) {
+        val ch = normalized[i]
+        when {
+            ch == '`' -> {
+                inTemplate = !inTemplate
+                sb.append(ch)
+            }
+            ch == '\\' && inTemplate && i + 1 < normalized.length -> {
+                // Skip escaped characters inside templates
+                sb.append(ch)
+                sb.append(normalized[i + 1])
+                i++
+            }
+            ch == '\n' && !inTemplate -> sb.append("\r\n")
+            else -> sb.append(ch)
+        }
+        i++
+    }
+    return sb.toString()
 }
 
 private fun toLF(text: String): String {
