@@ -2537,21 +2537,30 @@ class Emitter(
         val text = comment.text
         if (!text.contains('\n')) return text
 
-        // Compute original indentation: spaces before `/*` on its source line
+        // Compute original indentation: spaces/tabs before `/*` on its source line
         val origIndent = if (comment.pos >= 0 && comment.pos <= sourceText.length) {
             var lineStart = comment.pos - 1
             while (lineStart >= 0 && sourceText[lineStart] != '\n') lineStart--
             lineStart++
-            var spaces = 0
-            while (lineStart + spaces < comment.pos && sourceText[lineStart + spaces] == ' ') spaces++
-            spaces
+            var cols = 0
+            var idx = lineStart
+            while (idx < comment.pos) {
+                when (sourceText[idx]) {
+                    ' ' -> cols++
+                    '\t' -> cols += 4
+                    else -> break
+                }
+                idx++
+            }
+            cols
         } else 0
 
         val targetIndent = indentLevel * 4
         val delta = targetIndent - origIndent
 
         // Re-indent each line after the first and strip trailing whitespace from all lines.
-        val lines = text.split('\n')
+        // Convert tabs to 4 spaces (TypeScript emitter normalizes whitespace in block comments).
+        val lines = text.replace("\t", "    ").split('\n')
         return buildString {
             append(lines[0].trimEnd())
             for (i in 1 until lines.size) {
