@@ -69,6 +69,7 @@ class Transformer(private val options: CompilerOptions) {
     // Source text of the file being transformed (set at the start of transform()).
     // Used in orphanedComments() to detect blank-line-separated comments.
     private var sourceText = ""
+    private var currentFileName = ""
 
     // Maps const enum name → (member name → value).
     // Value is Double for numeric members, String for string members, or null if non-constant.
@@ -135,6 +136,7 @@ class Transformer(private val options: CompilerOptions) {
 
     fun transform(sourceFile: SourceFile): SourceFile {
         sourceText = sourceFile.text
+        currentFileName = sourceFile.fileName
         hasSeenRuntimeStatement = false
         hasSeenAnyTopLevelStatement = false
         inAsyncBody = false
@@ -3856,7 +3858,11 @@ class Transformer(private val options: CompilerOptions) {
 
         if (isAsync) {
             needsAwaiterHelper = true
+            // Transform parameters inside the function scope so async arrows in
+            // default parameters see the correct functionScopeDepth for `this` binding.
+            functionScopeDepth++
             val transformedParams = transformParameters(decl.parameters)
+            functionScopeDepth--
             // When any parameter has a default value, move all params to the generator
             // and pass `arguments` as the 2nd arg to __awaiter so defaults can be re-evaluated.
             // Otherwise keep params in the outer function and pass `void 0`.
@@ -3880,10 +3886,15 @@ class Transformer(private val options: CompilerOptions) {
                 asteriskToken = false,
             ))
         }
+        // Transform parameters inside the function scope so async arrows in
+        // default parameters see the correct functionScopeDepth for `this` binding.
+        functionScopeDepth++
+        val params = transformParameters(decl.parameters)
+        functionScopeDepth--
         return listOf(
             decl.copy(
                 typeParameters = null,
-                parameters = transformParameters(decl.parameters),
+                parameters = params,
                 type = null,
                 body = transformedBody,
                 modifiers = strippedModifiers,
@@ -4773,6 +4784,11 @@ class Transformer(private val options: CompilerOptions) {
         // `import x = 5` (invalid, literal RHS) → `5;` (expression statement, TypeScript's error-recovery output)
         val ref = decl.moduleReference
         val isRequire = ref is ExternalModuleReference
+
+        // In ESM mode, `import x = require("mod")` is not valid — drop it entirely
+        if (isRequire && isESModuleFormat(options.effectiveModule, currentFileName)) {
+            return emptyList()
+        }
 
         // Literal module references (numbers, strings, null keyword) are invalid and produce expression statements.
         // Since these are parsed via parseIdentifierName(), they appear as Identifier nodes:
