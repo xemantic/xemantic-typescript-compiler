@@ -267,7 +267,8 @@ class Emitter(
             else -> "var"
         }
         write(keyword)
-        if (node.declarations.isNotEmpty()) write(" ")
+        // TypeScript always writes a space after var/const, but not after let when declarations are empty
+        if (node.declarations.isNotEmpty() || keyword != "let") write(" ")
         for ((index, decl) in node.declarations.withIndex()) {
             if (index > 0) write(", ")
             emitVariableDeclaration(decl)
@@ -575,7 +576,7 @@ class Emitter(
             isStartOfLine = saved
             writeNewLine()
         } else {
-            // When the single statement is a multiLine block, emit { on the same line as case:
+            // When the single statement is a multiLine block, emit { on the same line as default:
             val singleBlock = node.statements.singleOrNull() as? Block
             if (singleBlock != null && singleBlock.multiLine) {
                 emitBlockBody(singleBlock, emitOpenBraceComments = true)
@@ -608,6 +609,7 @@ class Emitter(
             isStartOfLine = saved
             writeNewLine()
         } else {
+            // When the single statement is a multiLine block, emit { on the same line as case:
             val singleBlock = node.statements.singleOrNull() as? Block
             if (singleBlock != null && singleBlock.multiLine) {
                 emitBlockBody(singleBlock, emitOpenBraceComments = true)
