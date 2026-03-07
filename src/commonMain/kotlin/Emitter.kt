@@ -2103,10 +2103,43 @@ class Emitter(
     }
 
     private fun emitBinaryExpression(node: BinaryExpression) {
+        // Flatten left-recursive chain of simple binary expressions to avoid StackOverflow.
+        // Collect all BinaryExpression nodes along the left spine that use simple same-line
+        // formatting (no preceding line break, no ConditionalExpression needing parens).
+        // Then emit them iteratively: leftmost.left, then each node's (operator, right) in order.
+        val chain = mutableListOf<BinaryExpression>()
+        var cur: Expression = node
+        while (cur is BinaryExpression && !cur.operatorHasPrecedingLineBreak
+            && cur.left !is ConditionalExpression
+            && !(cur.right is ConditionalExpression && rightConditionalNeedsParens(cur.operator))) {
+            chain.add(cur)
+            cur = cur.left
+        }
+        if (chain.size > 1) {
+            // Iterative path: emit leftmost expression, then each (op, right) pair
+            emitExpression(cur) // cur is leftmost non-chain expression
+            for (i in chain.indices.reversed()) {
+                val binNode = chain[i]
+                val op = operatorToString(binNode.operator)
+                val rightNewLine = binNode.left.end > 0 && hasNewLineInSource(binNode.left.end, binNode.right.pos)
+                if (binNode.operator == SyntaxKind.InKeyword || binNode.operator == SyntaxKind.InstanceOfKeyword) {
+                    write(" $op ")
+                } else if (binNode.operator == SyntaxKind.Comma) {
+                    write("$op ")
+                } else if (rightNewLine) {
+                    write(" $op")
+                    writeNewLine()
+                    repeat(indentLevel + 1) { sb.append("    ") }
+                    isStartOfLine = false
+                } else {
+                    write(" $op ")
+                }
+                emitExpression(binNode.right)
+            }
+            return
+        }
+        // Standard recursive path for single node or complex formatting
         // A ConditionalExpression on the left of a binary operator always needs parentheses
-        // because ternary has lower precedence than all binary operators. This arises from
-        // downleveled `?.` and `??` transformations where the transformer generates synthetic
-        // ConditionalExpression nodes without source-level parentheses.
         if (node.left is ConditionalExpression) {
             write("(")
             emitExpression(node.left)
