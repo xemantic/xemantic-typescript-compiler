@@ -131,10 +131,10 @@ class Emitter(
                 effectiveModule == ModuleKind.NodeNext
         if (hasModuleStatements(sourceFile) && isESModuleFormat) return
 
-        // AMD format: for module files, "use strict" goes inside the define() function body.
+        // AMD/UMD format: for module files, "use strict" goes inside the define()/factory function body.
         // The AMD transformer handles this by inserting it as the first body statement.
-        // Non-module AMD files get "use strict" at the top level normally.
-        if (effectiveModule == ModuleKind.AMD && hasModuleStatements(sourceFile)) return
+        // Non-module AMD/UMD files get "use strict" at the top level normally.
+        if ((effectiveModule == ModuleKind.AMD || effectiveModule == ModuleKind.UMD) && hasModuleStatements(sourceFile)) return
 
         // System format: for module files, "use strict" goes inside the System.register() function body.
         // The System transformer inserts it as the first body statement.
