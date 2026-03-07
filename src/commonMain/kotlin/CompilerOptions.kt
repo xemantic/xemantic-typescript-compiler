@@ -98,6 +98,7 @@ data class CompilerOptions(
     val useDefineForClassFields: Boolean? = null,
     val verbatimModuleSyntax: Boolean = false,
     val noCheck: Boolean = false,
+    val emitDeclarationOnly: Boolean = false,
     val alwaysStrict: Boolean? = null,
     val newLine: String? = null,
     val fullEmitPaths: Boolean = false,
@@ -305,6 +306,7 @@ private fun applyDirective(options: CompilerOptions, key: String, value: String)
         "usedefineforclassfields" -> options.copy(useDefineForClassFields = boolValue)
         "verbatimmodulesyntax" -> options.copy(verbatimModuleSyntax = boolValue)
         "nocheck" -> options.copy(noCheck = boolValue)
+        "emitdeclarationonly" -> options.copy(emitDeclarationOnly = boolValue)
         "alwaysstrict" -> options.copy(alwaysStrict = boolValue)
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)

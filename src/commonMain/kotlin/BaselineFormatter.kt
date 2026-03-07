@@ -26,6 +26,27 @@ package com.xemantic.typescript.compiler
  * - Echoed source preserves original LF endings
  * - JavaScript output uses CRLF
  */
+/**
+ * Formats a source-only baseline (no JS output) for @emitDeclarationOnly tests.
+ */
+fun formatSourceOnlyBaseline(
+    fileName: String,
+    cleanedSource: String,
+): String {
+    val baseName = fileName.substringAfterLast('/')
+    val sb = StringBuilder()
+    sb.append("//// [tests/cases/compiler/")
+    sb.append(baseName)
+    sb.append("] ////\r\n")
+    sb.append("\r\n")
+    sb.append("//// [")
+    sb.append(baseName)
+    sb.append("]\r\n")
+    sb.append(cleanedSource.replace("\r", ""))
+    sb.append("\r\n")
+    return sb.toString()
+}
+
 fun formatBaseline(
     fileName: String,
     cleanedSource: String,

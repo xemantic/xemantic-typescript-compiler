@@ -119,6 +119,16 @@ class TypeScriptCompiler {
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation
             val file = parsed.files[0]
+
+            // emitDeclarationOnly: produce source echo only, no JS output
+            if (options.emitDeclarationOnly) {
+                val baseline = formatSourceOnlyBaseline(fileName, file.content)
+                return CompilationResult(
+                    javascript = baseline,
+                    diagnostics = diagnostics,
+                )
+            }
+
             val parser = Parser(file.content, file.fileName)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
@@ -136,7 +146,22 @@ class TypeScriptCompiler {
                 diagnostics = diagnostics,
             )
         } else {
-            // Multi-file compilation
+            // Multi-file compilation — emitDeclarationOnly: produce source echoes only
+            if (options.emitDeclarationOnly) {
+                val sourceEchoes = mutableListOf<Pair<String, String>>()
+                for (file in parsed.files) {
+                    val baseName = file.fileName.substringAfterLast('/')
+                    if (baseName != "tsconfig.json") {
+                        sourceEchoes.add(file.fileName to file.content)
+                    }
+                }
+                val baseline = formatMultiFileBaseline(fileName, sourceEchoes, emptyList())
+                return CompilationResult(
+                    javascript = baseline,
+                    diagnostics = diagnostics,
+                )
+            }
+
             val sourceEchoes = mutableListOf<Pair<String, String>>() // fileName -> content
             // Map from tsFileName -> (jsName, javascript)
             val jsOutputMap = mutableMapOf<String, Pair<String, String>>()
