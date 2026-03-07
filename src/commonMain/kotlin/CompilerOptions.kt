@@ -118,6 +118,22 @@ data class CompilerOptions(
         }
 }
 
+/**
+ * Returns true if the given module kind and file name indicate ES module format.
+ * For Node16/NodeNext, `.cts` files are CJS; all others (`.ts`, `.mts`) default to ESM.
+ * (In the real TypeScript compiler, `.ts` files check package.json "type" field,
+ * but we don't have that context, so we default to ESM.)
+ */
+fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
+    return when (module) {
+        ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022, ModuleKind.ESNext -> true
+        ModuleKind.Node16, ModuleKind.NodeNext -> {
+            !fileName.endsWith(".cts")
+        }
+        else -> false
+    }
+}
+
 data class SourceFileEntry(
     val fileName: String,
     val content: String,

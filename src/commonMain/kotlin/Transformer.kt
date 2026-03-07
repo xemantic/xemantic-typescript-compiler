@@ -209,8 +209,12 @@ class Transformer(private val options: CompilerOptions) {
             }
         } else transformed
 
-        // CommonJS module transform
-        if (options.effectiveModule == ModuleKind.CommonJS && isModuleFile(sourceFile)) {
+        // CommonJS module transform (also for Node16/NodeNext with .ts/.cts files)
+        val effectiveModule = options.effectiveModule
+        val useCJS = effectiveModule == ModuleKind.CommonJS ||
+                ((effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) &&
+                        !isESModuleFormat(effectiveModule, sourceFile.fileName))
+        if (useCJS && isModuleFile(sourceFile)) {
             val cjsStatements = transformToCommonJS(withAwaiter, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
         }
