@@ -1685,6 +1685,36 @@ class Parser(private val source: String, private val fileName: String) {
         return mods
     }
 
+    private fun parseObjectLiteralModifiers(): Set<ModifierFlag> {
+        // In object literals, modifier keywords can also be property names.
+        // Only consume a modifier if the NEXT token after it is a property name
+        // (not `:`, `,`, `}`, `?`, `(`, `!` which indicate it's a property name itself).
+        val mods = mutableSetOf<ModifierFlag>()
+        loop@ while (true) {
+            val mod = when {
+                token == SyntaxKind.AsyncKeyword || (isIdentifier() && scanner.getTokenValue() == "async") -> ModifierFlag.Async
+                token == SyntaxKind.PublicKeyword -> ModifierFlag.Public
+                token == SyntaxKind.PrivateKeyword -> ModifierFlag.Private
+                token == SyntaxKind.ProtectedKeyword -> ModifierFlag.Protected
+                token == SyntaxKind.StaticKeyword -> ModifierFlag.Static
+                token == SyntaxKind.AbstractKeyword -> ModifierFlag.Abstract
+                token == SyntaxKind.ReadonlyKeyword -> ModifierFlag.Readonly
+                token == SyntaxKind.OverrideKeyword -> ModifierFlag.Override
+                isIdentifier() && scanner.getTokenValue() == "readonly" -> ModifierFlag.Readonly
+                isIdentifier() && scanner.getTokenValue() == "abstract" -> ModifierFlag.Abstract
+                isIdentifier() && scanner.getTokenValue() == "override" -> ModifierFlag.Override
+                isIdentifier() && scanner.getTokenValue() == "accessor" -> ModifierFlag.Accessor
+                else -> break@loop
+            }
+            // Check: is the next token a property name? If not, this "modifier" is actually the property name.
+            val nextIsPropertyName = lookAhead { nextToken(); isPropertyNameToken() || token == SyntaxKind.Asterisk }
+            if (!nextIsPropertyName) break@loop
+            mods.add(mod)
+            nextToken()
+        }
+        return mods
+    }
+
     private fun parseParameterModifiers(): Set<ModifierFlag> {
         // Valid parameter modifiers: public/private/protected/readonly/override/declare (for
         // constructor parameter properties). Also consume export/async as modifiers for error
@@ -2605,7 +2635,10 @@ class Parser(private val source: String, private val fileName: String) {
             return SpreadAssignment(expression = spreadExpr, pos = pos, end = getEnd(), leadingComments = comments)
         }
 
-        val modifiers = parseModifiers()
+        // In object literals, modifier keywords (public, private, etc.) can also be property
+        // names. Use lookAhead: if the modifier keyword is followed by `:`, `,`, `}`, `?`, or `(`
+        // it's a property name, not a modifier.
+        val modifiers = parseObjectLiteralModifiers()
         val asterisk = parseOptional(SyntaxKind.Asterisk)
 
         if (!asterisk && (isIdentifier() && scanner.getTokenValue() == "get")) {
