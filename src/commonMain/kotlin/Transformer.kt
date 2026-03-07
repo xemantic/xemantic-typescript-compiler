@@ -76,6 +76,10 @@ class Transformer(private val options: CompilerOptions) {
     // Counter for namespace IIFE parameter renaming (e.g. M_1, M_2, M_3)
     private val nsRenameSuffix = mutableMapOf<String, Int>()
 
+    // Maps namespace name → set of ALL exported member names across ALL merged blocks.
+    // Pre-collected so that later blocks can qualify references to members exported from earlier blocks.
+    private val mergedNamespaceExports = mutableMapOf<String, MutableSet<String>>()
+
     // Maps enum name → (member name → numeric value) for all enums (const and non-const).
     // Populated during transformation so cross-enum references like `Foo.a` can be folded.
     private val allEnumMemberValues = mutableMapOf<String, MutableMap<String, Long>>()
@@ -156,6 +160,10 @@ class Transformer(private val options: CompilerOptions) {
         }
         // Remove any type-only names that also have a runtime declaration
         topLevelTypeOnlyNames -= topLevelRuntimeNames
+        // Pre-pass: collect all exported names for each namespace across merged blocks.
+        // This lets later blocks qualify references to members exported from earlier blocks.
+        collectMergedNamespaceExports(sourceFile.statements)
+
         // Pre-pass: collect const enum values for inlining at use sites.
         // Values are inlined even when preserveConstEnums is true (the enum body is kept,
         // but references are still replaced with literal values).
@@ -5553,6 +5561,45 @@ class Transformer(private val options: CompilerOptions) {
      * For string members, stores the string value.
      * For non-constant expressions (runtime), stores null (will not inline).
      */
+    private fun collectMergedNamespaceExports(stmts: List<Statement>) {
+        mergedNamespaceExports.clear()
+        for (stmt in stmts) {
+            if (stmt !is ModuleDeclaration) continue
+            if (hasDeclareModifier(stmt)) continue
+            if (isTypeOnlyNamespace(stmt)) continue
+            val nsName = extractIdentifierName(stmt.name) ?: continue
+            val exports = mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }
+            val body = stmt.body
+            val bodyStmts = when (body) {
+                is ModuleBlock -> body.statements
+                else -> continue
+            }
+            for (bodyStmt in bodyStmts) {
+                val isExported = when (bodyStmt) {
+                    is VariableStatement -> ModifierFlag.Export in bodyStmt.modifiers
+                    is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                    is ClassDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                    is EnumDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                    is ModuleDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                    is ImportEqualsDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                    else -> false
+                }
+                if (!isExported) continue
+                when (bodyStmt) {
+                    is VariableStatement -> for (decl in bodyStmt.declarationList.declarations) {
+                        extractIdentifierName(decl.name)?.let { exports.add(it) }
+                    }
+                    is FunctionDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
+                    is ClassDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
+                    is EnumDeclaration -> exports.add(bodyStmt.name.text)
+                    is ModuleDeclaration -> extractIdentifierName(bodyStmt.name)?.let { exports.add(it) }
+                    is ImportEqualsDeclaration -> exports.add(bodyStmt.name.text)
+                    else -> {}
+                }
+            }
+        }
+    }
+
     private fun collectConstEnumValues(stmts: List<Statement>) {
         for (stmt in stmts) {
             val decl = when {
@@ -6155,6 +6202,10 @@ class Transformer(private val options: CompilerOptions) {
                 }
             }
         }
+
+        // Include exports from merged blocks of the same namespace
+        // so that references in this block to members exported from other blocks are qualified.
+        mergedNamespaceExports[nsName]?.let { exportedNames.addAll(it) }
 
         // Exported variable names that DON'T have local bindings in the IIFE
         // (classes/functions/enums/modules are declared locally even when exported)
