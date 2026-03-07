@@ -54,6 +54,7 @@ fun formatBaseline(
     sourceMap: Boolean = false,
     newLine: String? = null,
     jsx: String? = null,
+    mapRoot: String? = null,
 ): String {
     val baseName = fileName.substringAfterLast('/')
     val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
@@ -93,7 +94,8 @@ fun formatBaseline(
     // Trailing newline
     sb.append(if (useLF) "\n" else "\r\n")
     if (sourceMap) {
-        sb.append("//# sourceMappingURL=$jsName.map")
+        val mapPrefix = if (mapRoot != null) "${mapRoot.trimEnd('/')}/" else ""
+        sb.append("//# sourceMappingURL=$mapPrefix$jsName.map")
     }
 
     return sb.toString()
