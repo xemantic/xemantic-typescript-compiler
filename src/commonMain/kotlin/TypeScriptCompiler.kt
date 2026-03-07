@@ -196,7 +196,7 @@ class TypeScriptCompiler {
                 if (!isTsFile && !isJsFile) {
                     continue
                 }
-                if (isJsFile && options.outDir == null) {
+                if (isJsFile && options.outDir == null && options.outFile == null) {
                     continue
                 }
                 // Skip .d.ts/.d.mts/.d.cts files (they don't produce JS output)
