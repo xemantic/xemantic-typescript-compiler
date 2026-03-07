@@ -48,12 +48,69 @@ infix fun Path.sameAs(expected: Path) {
 }
 
 /**
- * Asserts that this string is the same as the text content of the [expected] [Path].
+ * Asserts that this string is the same as the text content of the [expected] [Path],
+ * after stripping any `.d.ts` / `.d.mts` / `.d.cts` sections from the expected baseline.
+ * These declaration sections require a type checker to generate, which is out of scope.
  *
  * On failure, throws an [AssertionError] with a unified diff, matching the output format
  * of [com.xemantic.kotlin.test.sameAs]. Useful for comparing compiled output strings
  * directly against baseline files.
  */
 infix fun String?.sameAs(expected: Path) {
-    this sameAs expected.readText()
+    val stripped = stripDtsSection(expected.readText())
+    // Normalize trailing whitespace so dts stripping doesn't cause trailing-newline mismatches
+    val normalizedExpected = stripped.trimEnd() + "\r\n"
+    val normalizedActual = (this ?: "").trimEnd() + "\r\n"
+    normalizedActual sameAs normalizedExpected
+}
+
+/**
+ * Strips `.d.ts` / `.d.mts` / `.d.cts` sections from a baseline string.
+ * A dts section starts with a line like `//// [filename.d.ts]` or `//// [filename.d.mts]`
+ * and extends to the end of the file (or to the next non-dts `//// [...]` section).
+ */
+private fun stripDtsSection(baseline: String): String {
+    val lines = baseline.split("\n")
+    val result = mutableListOf<String>()
+    var inDts = false
+    var seenJsOutput = false
+    // Track .ts basenames seen so far to distinguish input .js files from output .js files
+    val tsBaseNamesSoFar = mutableSetOf<String>()
+    for (line in lines) {
+        val trimmed = line.trimEnd()
+        if (trimmed.startsWith("//// [") && trimmed.endsWith("]")) {
+            val fileName = trimmed.removePrefix("//// [").removeSuffix("]")
+            val baseName = fileName.substringAfterLast('/')
+            val isDtsFile = baseName.endsWith(".d.ts") || baseName.endsWith(".d.mts") || baseName.endsWith(".d.cts")
+            // Track .ts source files as we encounter them
+            when {
+                baseName.endsWith(".ts") && !baseName.endsWith(".d.ts") ->
+                    tsBaseNamesSoFar.add(baseName.removeSuffix(".ts"))
+                baseName.endsWith(".tsx") -> tsBaseNamesSoFar.add(baseName.removeSuffix(".tsx"))
+                baseName.endsWith(".mts") && !baseName.endsWith(".d.mts") ->
+                    tsBaseNamesSoFar.add(baseName.removeSuffix(".mts"))
+                baseName.endsWith(".cts") && !baseName.endsWith(".d.cts") ->
+                    tsBaseNamesSoFar.add(baseName.removeSuffix(".cts"))
+            }
+            // A .js file is output only if we've already seen a .ts file with the same basename
+            val isOutputJs = (baseName.endsWith(".js") || baseName.endsWith(".jsx") ||
+                    baseName.endsWith(".mjs") || baseName.endsWith(".cjs")) &&
+                    baseName.substringBeforeLast('.') in tsBaseNamesSoFar
+            if (isOutputJs) seenJsOutput = true
+            // Only strip .d.ts sections that appear after JS output (compiler-generated declarations).
+            // .d.ts sections before JS output are source echo input files and must be kept.
+            inDts = isDtsFile && seenJsOutput
+        }
+        if (!inDts) {
+            result.add(line)
+        }
+    }
+    // Remove trailing blank lines that were between JS output and dts section,
+    // but keep exactly the amount of trailing whitespace our emitter produces.
+    // The standard baseline format has \r\n at the end. After stripping, there
+    // may be extra blank lines. Remove all but one trailing blank line.
+    while (result.size > 1 && result.last().trimEnd().isEmpty() && result[result.size - 2].trimEnd().isEmpty()) {
+        result.removeLast()
+    }
+    return result.joinToString("\n")
 }
