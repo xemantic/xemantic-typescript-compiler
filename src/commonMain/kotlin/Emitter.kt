@@ -1843,7 +1843,14 @@ class Emitter(
     }
 
     private fun emitCallExpression(node: CallExpression) {
+        // Wrap callee in parens if its leftmost expression is a FunctionExpression,
+        // since `function(){}()` is parsed as a function declaration followed by `()`,
+        // not as an IIFE. We need `(function(){})()`.
+        val calleeLeftmost = getLeftmostExpression(node.expression, stopAtCallExpressions = false)
+        val needsWrap = calleeLeftmost is FunctionExpression
+        if (needsWrap) write("(")
         emitExpression(node.expression)
+        if (needsWrap) write(")")
         if (node.questionDotToken) {
             write("?.")
         }
@@ -2705,7 +2712,7 @@ class Emitter(
      * or `function` as declaration vs expression).
      */
     private fun expressionNeedsParensInStatementPosition(expr: Expression): Boolean {
-        val leftmost = getLeftmostExpression(expr, stopAtCallExpressions = false)
+        val leftmost = getLeftmostExpression(expr, stopAtCallExpressions = true)
         return leftmost is ObjectLiteralExpression || leftmost is FunctionExpression
     }
 }
