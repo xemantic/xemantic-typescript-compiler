@@ -1315,6 +1315,7 @@ class Parser(private val source: String, private val fileName: String) {
                     parseQualifiedName()
                 }
             parseSemicolon()
+            val trailing = trailingComments()
             return ImportEqualsDeclaration(
                 name = name,
                 moduleReference = moduleRef,
@@ -1322,7 +1323,8 @@ class Parser(private val source: String, private val fileName: String) {
                 modifiers = outerModifiers,
                 pos = pos,
                 end = getEnd(),
-                leadingComments = comments
+                leadingComments = comments,
+                trailingComments = trailing,
             )
         }
 

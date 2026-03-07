@@ -5915,7 +5915,7 @@ class Transformer(private val options: CompilerOptions) {
             for (bodyStmt in bodyStmts) {
                 val isExported = when (bodyStmt) {
                     is VariableStatement -> ModifierFlag.Export in bodyStmt.modifiers
-                    is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                    is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers && bodyStmt.body != null
                     is ClassDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
                     is EnumDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
                     is ModuleDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
@@ -5927,7 +5927,7 @@ class Transformer(private val options: CompilerOptions) {
                     is VariableStatement -> for (decl in bodyStmt.declarationList.declarations) {
                         extractIdentifierName(decl.name)?.let { exports.add(it) }
                     }
-                    is FunctionDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
+                    is FunctionDeclaration -> if (bodyStmt.body != null) bodyStmt.name?.text?.let { exports.add(it) }
                     is ClassDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
                     is EnumDeclaration -> exports.add(bodyStmt.name.text)
                     is ModuleDeclaration -> extractIdentifierName(bodyStmt.name)?.let { exports.add(it) }
@@ -6521,7 +6521,7 @@ class Transformer(private val options: CompilerOptions) {
         for (stmt in statements) {
             val isExported = when (stmt) {
                 is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers && stmt.body != null
                 is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
                 is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
                 is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
@@ -6637,6 +6637,8 @@ class Transformer(private val options: CompilerOptions) {
                                 operator = Equals,
                                 right = value,
                             ),
+                            leadingComments = stmt.leadingComments,
+                            trailingComments = stmt.trailingComments,
                         ))
                     } else {
                         // `import R = N` → `var R = N`
@@ -6653,7 +6655,7 @@ class Transformer(private val options: CompilerOptions) {
                             val varName = extractIdentifierName(decl.name)
                             if (varName != null && decl.initializer != null) {
                                 val init =
-                                    qualifyNamespaceRefs(nsName, exportedNames, transformExpression(decl.initializer))
+                                    qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
                                 assignments.add(
                                     BinaryExpression(
                                         left = PropertyAccessExpression(
@@ -6707,7 +6709,7 @@ class Transformer(private val options: CompilerOptions) {
                     // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
                     stmt.name?.text?.let { declaredNames.add(it) }
 
-                    if (isExported && stmt.name != null) {
+                    if (isExported && stmt.name != null && stmt.body != null) {
                         result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
                     }
                 }
