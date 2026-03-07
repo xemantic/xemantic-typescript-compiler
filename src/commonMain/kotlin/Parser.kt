@@ -193,6 +193,17 @@ class Parser(private val source: String, private val fileName: String) {
             }
             if (isDeclare) parseDeclareDeclaration() else parseExpressionStatement()
         }
+        DefaultKeyword -> {
+            // `default` without `export` — error recovery: skip and parse the declaration
+            nextToken()
+            val mods = setOf(ModifierFlag.Default)
+            when (token) {
+                FunctionKeyword -> parseFunctionDeclarationOrExpression(mods)
+                ClassKeyword -> parseClassDeclaration(mods)
+                AsyncKeyword -> { nextToken(); parseFunctionDeclarationOrExpression(mods + ModifierFlag.Async) }
+                else -> parseExpressionStatement()
+            }
+        }
         At -> { parseDecorators(); parseStatement() }
         SyntaxKind.LabeledStatement -> null // won't appear as token
         else -> {
@@ -1530,6 +1541,13 @@ class Parser(private val source: String, private val fileName: String) {
             }
 
             ImportKeyword -> parseImportDeclaration(modifiers, comments)
+
+            // export export ... (duplicate export keyword — error recovery)
+            ExportKeyword -> {
+                val inner = parseExportDeclaration()
+                // The inner already has Export modifier; just return it
+                inner
+            }
 
             else -> parseExpressionStatement()
         }
