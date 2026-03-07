@@ -242,7 +242,27 @@ class TypeScriptCompiler {
             val sortedTsFiles = topologicalSort(tsFileNames, importDeps)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
-            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, jsonOutputs + jsOutputs, options.sourceMap)
+            // When outFile is set, concatenate all JS outputs into a single file
+            val finalJsOutputs = if (options.outFile != null && jsOutputs.isNotEmpty()) {
+                val outFileName = options.outFile.substringAfterLast('/')
+                // Concatenate, but only keep the first "use strict"; directive
+                var seenUseStrict = false
+                val parts = jsOutputs.map { (_, js) ->
+                    if (!seenUseStrict) {
+                        seenUseStrict = js.trimStart().startsWith("\"use strict\"")
+                        js
+                    } else {
+                        // Remove leading "use strict"; from subsequent files
+                        js.replace(Regex("""^\s*"use strict";\n?"""), "")
+                    }
+                }
+                val concatenated = parts.joinToString("\n")
+                listOf(outFileName to concatenated)
+            } else {
+                jsonOutputs + jsOutputs
+            }
+
+            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, finalJsOutputs, options.sourceMap)
 
             return CompilationResult(
                 javascript = baseline,
