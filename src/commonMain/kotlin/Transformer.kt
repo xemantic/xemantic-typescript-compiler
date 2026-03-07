@@ -5309,9 +5309,13 @@ class Transformer(private val options: CompilerOptions) {
 
         // Emit var E; unless a class/function declared this name before the enum
         // (in source order), or a prior enum/namespace already emitted var E;
-        val needsVarDecl = enumName !in declaredNames && enumName !in emittedVarNames
-        emittedVarNames.add(enumName)
-        declaredNames.add(enumName)
+        // Inside function scopes, always emit `let` since each function has its own scope
+        val needsVarDecl = functionScopeDepth > 0 ||
+                (enumName !in declaredNames && enumName !in emittedVarNames)
+        if (functionScopeDepth == 0) {
+            emittedVarNames.add(enumName)
+            declaredNames.add(enumName)
+        }
         // In ES module format, preserve the `export` modifier so the file is still recognized
         // as a module file (e.g. `export enum E {}` → `export var E; IIFE`).
         // In CommonJS format the CommonJS transform handles exports separately, so no modifier.
@@ -5983,10 +5987,14 @@ class Transformer(private val options: CompilerOptions) {
 
         // Skip var N; if a class/function with the same name was declared BEFORE this
         // namespace (in source order), or if a prior enum/namespace already emitted var N;
-        val needsVarDecl = moduleName !in declaredNames && moduleName !in emittedVarNames
+        // Inside function scopes, always emit `let` since each function has its own scope
+        val needsVarDecl = functionScopeDepth > 0 ||
+                (moduleName !in declaredNames && moduleName !in emittedVarNames)
         // Track that this name now has a runtime var (for subsequent same-name dedup)
-        emittedVarNames.add(moduleName)
-        declaredNames.add(moduleName)
+        if (functionScopeDepth == 0) {
+            emittedVarNames.add(moduleName)
+            declaredNames.add(moduleName)
+        }
 
         // Inner namespace declarations use `let` (they're inside a function scope),
         // EXCEPT when the namespace uses dotted shorthand (`namespace A.B { }`), in which
