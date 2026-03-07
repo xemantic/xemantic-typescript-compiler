@@ -60,14 +60,9 @@ class Emitter(
     private fun emitEmptyExportIfNeeded(originalSourceFile: SourceFile, transformedSourceFile: SourceFile) {
         if (!hasModuleStatements(originalSourceFile)) return
 
-        // Only emit export {} for ES module format files (including Node16/NodeNext which use ESM)
+        // Only emit export {} for ES module format files
         val effectiveModule = options.effectiveModule
-        val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
-                effectiveModule == ModuleKind.ES2020 ||
-                effectiveModule == ModuleKind.ES2022 ||
-                effectiveModule == ModuleKind.ESNext ||
-                effectiveModule == ModuleKind.Node16 ||
-                effectiveModule == ModuleKind.NodeNext
+        val isESModuleFormat = isESModuleFormat(effectiveModule, originalSourceFile.fileName)
         if (!isESModuleFormat) return
 
         // Emit export {} when the transformed file has no module-level statements remaining.
@@ -121,15 +116,9 @@ class Emitter(
 
     private fun emitUseStrict(sourceFile: SourceFile) {
         // Check if the file is an ES module format — ESM files are inherently strict,
-        // no explicit "use strict" needed. Node16/NodeNext produce ES modules.
+        // no explicit "use strict" needed.
         val effectiveModule = options.effectiveModule
-        val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
-                effectiveModule == ModuleKind.ES2020 ||
-                effectiveModule == ModuleKind.ES2022 ||
-                effectiveModule == ModuleKind.ESNext ||
-                effectiveModule == ModuleKind.Node16 ||
-                effectiveModule == ModuleKind.NodeNext
-        if (hasModuleStatements(sourceFile) && isESModuleFormat) return
+        if (hasModuleStatements(sourceFile) && isESModuleFormat(effectiveModule, sourceFile.fileName)) return
 
         // AMD/UMD format: for module files, "use strict" goes inside the define()/factory function body.
         // The AMD transformer handles this by inserting it as the first body statement.
