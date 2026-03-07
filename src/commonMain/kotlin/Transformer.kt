@@ -7121,15 +7121,29 @@ class Transformer(private val options: CompilerOptions) {
         fun isRealTripleSlash(c: Comment) =
             c.text.startsWith("///") && c.text.drop(3).trimStart(' ').startsWith('<')
 
-        // First pass: find indices of individually-detached comments.
-        // A comment is detached if there are ≥2 newlines between it and the next item
-        // (next comment or the declaration itself).
-        val detachedIndices = mutableSetOf<Int>()
-        comments.forEachIndexed { index, comment ->
-            if (isRealTripleSlash(comment)) {
-                if (!hasSeenAnyTopLevelStatement) detachedIndices.add(index)
-            } else {
-                if (hasSeenAnyTopLevelStatement) return@forEachIndexed
+        // Find detached comments from the erased declaration.
+        // Triple-slash directives are always preserved (before any runtime code).
+        // Regular comments: only preserve the FIRST contiguous block, i.e., comments
+        // before the first blank-line gap. Comments after the first gap are considered
+        // attached to the declaration and are dropped with it.
+        val included = mutableSetOf<Int>()
+
+        // First: always include triple-slash directives (before runtime)
+        for (index in comments.indices) {
+            if (isRealTripleSlash(comments[index]) && !hasSeenAnyTopLevelStatement) {
+                included.add(index)
+            }
+        }
+
+        if (!hasSeenAnyTopLevelStatement) {
+            // Find the first blank-line gap scanning forward through non-triple-slash comments.
+            // Include all regular comments up to (and including) the one before the first gap.
+            var firstGapFound = false
+            for (index in comments.indices) {
+                val comment = comments[index]
+                if (isRealTripleSlash(comment)) continue // already handled
+                if (firstGapFound) break // stop after first gap
+
                 val nextStart = if (index + 1 < comments.size) {
                     comments[index + 1].pos.coerceIn(0, sourceText.length)
                 } else {
@@ -7139,29 +7153,18 @@ class Transformer(private val options: CompilerOptions) {
                     comment.end.coerceIn(0, sourceText.length),
                     nextStart,
                 )
-                if (gap.count { it == '\n' } >= 2) detachedIndices.add(index)
+                if (gap.count { it == '\n' } >= 2) {
+                    included.add(index)
+                    firstGapFound = true
+                } else {
+                    // Part of a contiguous block — include only if block ends with a gap
+                    included.add(index)
+                }
             }
-        }
 
-        if (detachedIndices.isEmpty()) return emptyList()
-
-        // Second pass: for each detached non-triple-slash comment, extend backwards through
-        // its consecutive block. If comment[i] is detached and comment[i-1] is in the same
-        // consecutive block (≤1 newline between them), include comment[i-1] too.
-        val included = detachedIndices.toMutableSet()
-        for (idx in detachedIndices.filter { !isRealTripleSlash(comments[it]) }) {
-            var i = idx
-            while (i > 0) {
-                val prev = comments[i - 1]
-                if (isRealTripleSlash(prev)) break
-                val curr = comments[i]
-                val gap = sourceText.substring(
-                    prev.end.coerceIn(0, sourceText.length),
-                    curr.pos.coerceIn(0, sourceText.length),
-                )
-                if (gap.count { it == '\n' } >= 2) break // different block
-                included.add(i - 1)
-                i--
+            // If no gap was found at all, none of the regular comments are detached
+            if (!firstGapFound) {
+                included.removeAll { !isRealTripleSlash(comments[it]) }
             }
         }
 

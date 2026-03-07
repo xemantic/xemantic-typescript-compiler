@@ -170,14 +170,41 @@ fun formatMultiFileBaseline(
 
 private fun toCRLF(text: String): String {
     // Convert newlines to CRLF, but preserve LF inside template literals (backtick strings).
+    // Must track comment context so backticks inside comments don't toggle template mode.
     val normalized = text.replace("\r\n", "\n")
     val sb = StringBuilder(normalized.length + normalized.length / 10)
     var inTemplate = false
+    var inLineComment = false
+    var inBlockComment = false
     var i = 0
     while (i < normalized.length) {
         val ch = normalized[i]
         when {
-            ch == '`' -> {
+            // Track line comments (// ...)
+            ch == '/' && !inTemplate && !inBlockComment && !inLineComment &&
+                    i + 1 < normalized.length && normalized[i + 1] == '/' -> {
+                inLineComment = true
+                sb.append("//")
+                i += 2
+                continue
+            }
+            // Track block comments (/* ... */)
+            ch == '/' && !inTemplate && !inBlockComment && !inLineComment &&
+                    i + 1 < normalized.length && normalized[i + 1] == '*' -> {
+                inBlockComment = true
+                sb.append("/*")
+                i += 2
+                continue
+            }
+            // End block comment
+            ch == '*' && inBlockComment && i + 1 < normalized.length && normalized[i + 1] == '/' -> {
+                inBlockComment = false
+                sb.append("*/")
+                i += 2
+                continue
+            }
+            // Backtick toggles template only outside comments
+            ch == '`' && !inLineComment && !inBlockComment -> {
                 inTemplate = !inTemplate
                 sb.append(ch)
             }
@@ -187,7 +214,14 @@ private fun toCRLF(text: String): String {
                 sb.append(normalized[i + 1])
                 i++
             }
-            ch == '\n' && !inTemplate -> sb.append("\r\n")
+            ch == '\n' -> {
+                inLineComment = false
+                if (inTemplate) {
+                    sb.append(ch)
+                } else {
+                    sb.append("\r\n")
+                }
+            }
             else -> sb.append(ch)
         }
         i++
