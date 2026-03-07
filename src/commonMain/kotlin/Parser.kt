@@ -329,6 +329,7 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBracket)
         val elements = mutableListOf<Node>()
+        var trailingComma = false
         while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
             if (token == SyntaxKind.Comma) {
                 elements.add(OmittedExpression(pos = getPos(), end = getPos()))
@@ -337,9 +338,13 @@ class Parser(private val source: String, private val fileName: String) {
             }
             elements.add(parseBindingElement())
             if (!parseOptional(SyntaxKind.Comma)) break
+            // Check if the comma we just consumed was a trailing comma
+            if (token == SyntaxKind.CloseBracket) {
+                trailingComma = true
+            }
         }
         parseExpected(SyntaxKind.CloseBracket)
-        return ArrayBindingPattern(elements = elements, pos = pos, end = getEnd())
+        return ArrayBindingPattern(elements = elements, hasTrailingComma = trailingComma, pos = pos, end = getEnd())
     }
 
     private fun parseBindingElement(): BindingElement {
@@ -957,6 +962,11 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parsePropertyName() = when (token) {
         StringLiteral -> parseStringLiteral()
         NumericLiteral -> parseNumericLiteral()
+        BigIntLiteral -> {
+            val pos = getPos()
+            val text = scanner.getTokenValue(); nextToken()
+            BigIntLiteralNode(text = text, pos = pos, end = getEnd())
+        }
         OpenBracket -> parseComputedPropertyName()
         Hash -> {
             nextToken(); parseIdentifierName()

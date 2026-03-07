@@ -2285,7 +2285,8 @@ class Emitter(
         }
         // If the last element is an OmittedExpression (elision), emit a trailing comma
         // to distinguish `[a, ,]` (hole at index 1) from `[a,]` (no hole).
-        if (node.elements.lastOrNull() is OmittedExpression) {
+        // Also preserve trailing commas from the source (hasTrailingComma).
+        if (node.elements.lastOrNull() is OmittedExpression || node.hasTrailingComma) {
             write(",")
         }
         write("]")

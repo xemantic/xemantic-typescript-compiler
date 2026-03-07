@@ -55,10 +55,15 @@ fun formatBaseline(
     newLine: String? = null,
     jsx: String? = null,
     mapRoot: String? = null,
+    outFile: String? = null,
 ): String {
     val baseName = fileName.substringAfterLast('/')
     val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
-    val jsName = baseName.replace(".tsx", tsxExtension).replace(".mts", ".mjs").replace(".cts", ".cjs").replace(".ts", ".js")
+    val jsName = if (outFile != null) {
+        outFile.substringAfterLast('/')
+    } else {
+        baseName.replace(".tsx", tsxExtension).replace(".mts", ".mjs").replace(".cts", ".cjs").replace(".ts", ".js")
+    }
 
     val sb = StringBuilder()
 
