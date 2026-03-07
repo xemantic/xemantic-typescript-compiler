@@ -7071,7 +7071,7 @@ class Transformer(private val options: CompilerOptions) {
             if (isRealTripleSlash(comment)) {
                 if (!hasSeenAnyTopLevelStatement) detachedIndices.add(index)
             } else {
-                if (hasSeenRuntimeStatement) return@forEachIndexed
+                if (hasSeenAnyTopLevelStatement) return@forEachIndexed
                 val nextStart = if (index + 1 < comments.size) {
                     comments[index + 1].pos.coerceIn(0, sourceText.length)
                 } else {
