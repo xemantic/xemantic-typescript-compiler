@@ -5062,17 +5062,22 @@ class Transformer(private val options: CompilerOptions) {
             it.token == ExtendsKeyword
         } == true
 
-        // Strip `implements` clauses, keep only `extends`; strip type arguments from extends
+        // Strip `implements` clauses, keep only `extends`; strip type arguments from extends.
+        // Filter out trailing object literal expressions from extends clause — these are
+        // parser error-recovery artifacts (e.g. `extends C, {}` where `{}` is the class body
+        // misinterpreted as an empty object literal in the heritage clause).
         val transformedHeritage = heritageClauses
             ?.filter { it.token == ExtendsKeyword }
             ?.map { clause ->
                 clause.copy(
-                    types = clause.types.map { ewta ->
-                        ewta.copy(
-                            expression = transformExpression(ewta.expression),
-                            typeArguments = null,
-                        )
-                    }
+                    types = clause.types
+                        .filter { it.expression !is ObjectLiteralExpression }
+                        .map { ewta ->
+                            ewta.copy(
+                                expression = transformExpression(ewta.expression),
+                                typeArguments = null,
+                            )
+                        }
                 )
             }
             ?.ifEmpty { null }
@@ -6183,7 +6188,7 @@ class Transformer(private val options: CompilerOptions) {
                     decl.copy(name = syntheticId(parts[idx]), body = buildNested(idx + 1))
                 }
             }
-            return transformModuleDeclaration(buildNested(0), nested, parentNsName, useDottedVar = true)
+            return transformModuleDeclaration(buildNested(0), nested, parentNsName, useDottedVar = !nested)
         }
 
         val moduleName = extractIdentifierName(decl.name)
@@ -6200,7 +6205,15 @@ class Transformer(private val options: CompilerOptions) {
                 val savedD = declaredNames.toMutableSet()
                 emittedVarNames.clear()
                 declaredNames.clear()
-                val innerStatements = transformModuleDeclaration(body, nested = true, parentNsName = moduleName, useDottedVar = useDottedVar)
+                // Detect name collision: if any declaration deep inside the nested module body
+                // shadows the namespace name, the IIFE parameter must be renamed.
+                val hasCollision = namespaceBodyHasNameCollision(moduleName, listOf(body))
+                val iifeParam = if (hasCollision) {
+                    val suffix = (nsRenameSuffix[moduleName] ?: 0) + 1
+                    nsRenameSuffix[moduleName] = suffix
+                    "${moduleName}_$suffix"
+                } else moduleName
+                val innerStatements = transformModuleDeclaration(body, nested = true, parentNsName = iifeParam, useDottedVar = useDottedVar)
                 emittedVarNames.clear(); emittedVarNames.addAll(savedE)
                 declaredNames.clear(); declaredNames.addAll(savedD)
                 return wrapInNamespaceIife(
@@ -6210,6 +6223,7 @@ class Transformer(private val options: CompilerOptions) {
                     nested = nested,
                     parentNsName = parentNsName,
                     useDottedVar = useDottedVar,
+                    iifeParamName = iifeParam,
                 )
             }
 

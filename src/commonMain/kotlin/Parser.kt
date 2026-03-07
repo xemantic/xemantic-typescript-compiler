@@ -162,6 +162,11 @@ class Parser(private val source: String, private val fileName: String) {
         TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
         EnumKeyword -> parseEnumDeclaration()
         NamespaceKeyword -> parseModuleDeclaration()
+        GlobalKeyword -> {
+            // `global { }` is a global augmentation (module declaration)
+            val isGlobalAug = lookAhead { nextToken(); token == SyntaxKind.OpenBrace }
+            if (isGlobalAug) parseModuleDeclaration() else parseExpressionStatement()
+        }
         ModuleKeyword -> {
             // `module.exports = ...` is an expression, not a module declaration
             val isDecl = lookAhead {
