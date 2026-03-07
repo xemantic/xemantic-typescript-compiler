@@ -152,17 +152,20 @@ class TypeScriptCompiler {
                     sourceEchoes.add(file.fileName to file.content)
                 }
 
-                // Skip non-TS files; include .js/.jsx only when outDir is set
-                // (without outDir, TypeScript skips re-emitting .js files to avoid overwriting sources)
-                val isJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".jsx")
-                if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") && !isJsFile) {
+                // Skip non-TS files; include .js/.jsx/.mjs/.cjs only when outDir is set
+                // (without outDir, TypeScript skips re-emitting JS files to avoid overwriting sources)
+                val isJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".jsx") ||
+                        file.fileName.endsWith(".mjs") || file.fileName.endsWith(".cjs")
+                val isTsFile = file.fileName.endsWith(".ts") || file.fileName.endsWith(".tsx") ||
+                        file.fileName.endsWith(".mts") || file.fileName.endsWith(".cts")
+                if (!isTsFile && !isJsFile) {
                     continue
                 }
                 if (isJsFile && options.outDir == null) {
                     continue
                 }
-                // Skip .d.ts files (they don't produce JS output)
-                if (file.fileName.endsWith(".d.ts")) {
+                // Skip .d.ts/.d.mts/.d.cts files (they don't produce JS output)
+                if (file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")) {
                     continue
                 }
 
@@ -183,7 +186,7 @@ class TypeScriptCompiler {
 
                 // .tsx → .jsx only when jsx=preserve; all other modes (react, react-jsx, etc.) produce .js
                 val tsxExtension = if (options.jsx?.lowercase() == "preserve") ".jsx" else ".js"
-                val jsName = file.fileName
+                var jsName = file.fileName
                     .replace(".tsx", tsxExtension)
                     .replace(".ts", ".js")
                 jsOutputMap[file.fileName] = jsName to javascript
