@@ -222,6 +222,12 @@ class Transformer(private val options: CompilerOptions) {
             return sourceFile.copy(statements = amdStatements)
         }
 
+        // UMD module transform — reuses AMD body with UMD wrapper.
+        if (options.effectiveModule == ModuleKind.UMD && isModuleFile(sourceFile)) {
+            val umdStatements = transformToUMD(withAwaiter, sourceFile)
+            return sourceFile.copy(statements = umdStatements)
+        }
+
         // System module transform — only for module files.
         if (options.effectiveModule == ModuleKind.System && isModuleFile(sourceFile)) {
             val sysStatements = transformToSystem(withAwaiter, sourceFile)
@@ -1786,6 +1792,213 @@ class Transformer(private val options: CompilerOptions) {
 
         result.add(defineCall)
         return result
+    }
+
+    /**
+     * Transforms to UMD module format by reusing the AMD transform body
+     * and wrapping it in a UMD factory pattern:
+     * ```
+     * (function (factory) {
+     *     if (typeof module === "object" && typeof module.exports === "object") {
+     *         var v = factory(require, exports);
+     *         if (v !== undefined) module.exports = v;
+     *     }
+     *     else if (typeof define === "function" && define.amd) {
+     *         define(depArray, factory);
+     *     }
+     * })(function (require, exports, ...) { body });
+     * ```
+     */
+    private fun transformToUMD(
+        statements: List<Statement>,
+        originalSourceFile: SourceFile,
+    ): List<Statement> {
+        val amdStatements = transformToAMD(statements, originalSourceFile)
+
+        // Find the define() call in the AMD output and extract its parts
+        val result = mutableListOf<Statement>()
+        var defineFound = false
+
+        for (stmt in amdStatements) {
+            if (!defineFound && stmt is ExpressionStatement) {
+                val call = stmt.expression as? CallExpression
+                val callee = call?.expression as? Identifier
+                if (callee?.text == "define") {
+                    defineFound = true
+                    // Extract dependency array and factory function from define(depArray, factory) or define(name, depArray, factory)
+                    val args = call.arguments
+                    val depArray: Expression
+                    val factoryFunc: Expression
+                    if (args.size >= 3 && args[0] is StringLiteralNode) {
+                        // define("name", [...], function(...) {...})
+                        depArray = args[1]
+                        factoryFunc = args[2]
+                    } else if (args.size >= 2) {
+                        // define([...], function(...) {...})
+                        depArray = args[0]
+                        factoryFunc = args[1]
+                    } else {
+                        result.add(stmt)
+                        continue
+                    }
+
+                    // Build UMD wrapper
+                    val umdWrapper = buildUMDWrapper(depArray, factoryFunc)
+                    result.add(umdWrapper)
+                    continue
+                }
+            }
+            result.add(stmt)
+        }
+
+        return result
+    }
+
+    private fun buildUMDWrapper(depArray: Expression, factoryFunc: Expression): ExpressionStatement {
+        val factoryParam = Parameter(name = syntheticId("factory"), pos = -1, end = -1)
+
+        // define(depArray, factory) — inside the AMD branch
+        val innerDefineCall = ExpressionStatement(
+            expression = CallExpression(
+                expression = syntheticId("define"),
+                arguments = listOf(depArray, syntheticId("factory")),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // typeof module === "object" && typeof module.exports === "object"
+        val moduleCheck = BinaryExpression(
+            left = BinaryExpression(
+                left = TypeOfExpression(expression = syntheticId("module"), pos = -1, end = -1),
+                operator = SyntaxKind.EqualsEqualsEquals,
+                right = StringLiteralNode(text = "object", pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            operator = SyntaxKind.AmpersandAmpersand,
+            right = BinaryExpression(
+                left = TypeOfExpression(
+                    expression = PropertyAccessExpression(
+                        expression = syntheticId("module"),
+                        name = syntheticId("exports"),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ),
+                operator = SyntaxKind.EqualsEqualsEquals,
+                right = StringLiteralNode(text = "object", pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // var v = factory(require, exports);
+        val varV = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(
+                    VariableDeclaration(
+                        name = syntheticId("v"),
+                        initializer = CallExpression(
+                            expression = syntheticId("factory"),
+                            arguments = listOf(syntheticId("require"), syntheticId("exports")),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                ),
+                flags = SyntaxKind.VarKeyword,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // if (v !== undefined) module.exports = v;
+        val innerIf = IfStatement(
+            expression = BinaryExpression(
+                left = syntheticId("v"),
+                operator = SyntaxKind.ExclamationEqualsEquals,
+                right = syntheticId("undefined"),
+                pos = -1, end = -1,
+            ),
+            thenStatement = ExpressionStatement(
+                expression = BinaryExpression(
+                    left = PropertyAccessExpression(
+                        expression = syntheticId("module"),
+                        name = syntheticId("exports"),
+                        pos = -1, end = -1,
+                    ),
+                    operator = SyntaxKind.Equals,
+                    right = syntheticId("v"),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // typeof define === "function" && define.amd
+        val defineCheck = BinaryExpression(
+            left = BinaryExpression(
+                left = TypeOfExpression(expression = syntheticId("define"), pos = -1, end = -1),
+                operator = SyntaxKind.EqualsEqualsEquals,
+                right = StringLiteralNode(text = "function", pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            operator = SyntaxKind.AmpersandAmpersand,
+            right = PropertyAccessExpression(
+                expression = syntheticId("define"),
+                name = syntheticId("amd"),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // CJS branch block
+        val cjsBranch = Block(
+            statements = listOf(varV, innerIf),
+            multiLine = true,
+            pos = -1, end = -1,
+        )
+
+        // AMD branch block
+        val amdBranch = Block(
+            statements = listOf(innerDefineCall),
+            multiLine = true,
+            pos = -1, end = -1,
+        )
+
+        // if (moduleCheck) { cjs } else if (defineCheck) { amd }
+        val outerIf = IfStatement(
+            expression = moduleCheck,
+            thenStatement = cjsBranch,
+            elseStatement = IfStatement(
+                expression = defineCheck,
+                thenStatement = amdBranch,
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // (function(factory) { outerIf })(factoryFunc)
+        return ExpressionStatement(
+            expression = CallExpression(
+                expression = ParenthesizedExpression(
+                    expression = FunctionExpression(
+                        parameters = listOf(factoryParam),
+                        body = Block(
+                            statements = listOf(outerIf),
+                            multiLine = true,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ),
+                arguments = listOf(factoryFunc),
+                pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
     }
 
     // System module transform
