@@ -6524,38 +6524,55 @@ class Transformer(private val options: CompilerOptions) {
                 finallyBlock = stmt.finallyBlock?.let { qStmt(it) as Block },
             )
             is LabeledStatement -> stmt.copy(statement = qStmt(stmt.statement))
-            is FunctionDeclaration -> stmt.copy(
-                parameters = stmt.parameters.map { p ->
-                    if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
-                },
-                body = stmt.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
-            )
-            is ClassDeclaration -> stmt.copy(
-                members = stmt.members.map { m ->
-                    when (m) {
-                        is MethodDeclaration -> m.copy(
-                            parameters = m.parameters.map { p ->
-                                if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
-                            },
-                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
-                        )
-                        is Constructor -> m.copy(
-                            parameters = m.parameters.map { p ->
-                                if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
-                            },
-                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
-                        )
-                        is GetAccessor -> m.copy(
-                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
-                        )
-                        is SetAccessor -> m.copy(
-                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
-                        )
-                        is PropertyDeclaration -> if (m.initializer != null) m.copy(initializer = q(m.initializer)) else m
-                        else -> m
-                    }
-                },
-            )
+            is FunctionDeclaration -> {
+                // Qualify parameter defaults, but for the body, exclude parameter names
+                // from qualification since they shadow outer namespace exports.
+                val paramNames = stmt.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                val bodyNames = names - paramNames
+                fun qBody(s: Statement) = if (bodyNames.isNotEmpty()) qualifyStatementRefs(nsName, bodyNames, s) else s
+                stmt.copy(
+                    parameters = stmt.parameters.map { p ->
+                        if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
+                    },
+                    body = stmt.body?.let { b -> b.copy(statements = b.statements.map { qBody(it) }) },
+                )
+            }
+            is ClassDeclaration -> {
+                fun qualifyMemberBody(params: List<Parameter>, body: Block?): Block? {
+                    if (body == null) return null
+                    val pNames = params.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                    val bNames = names - pNames
+                    return if (bNames.isNotEmpty()) {
+                        body.copy(statements = body.statements.map { qualifyStatementRefs(nsName, bNames, it) })
+                    } else body
+                }
+                stmt.copy(
+                    members = stmt.members.map { m ->
+                        when (m) {
+                            is MethodDeclaration -> m.copy(
+                                parameters = m.parameters.map { p ->
+                                    if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
+                                },
+                                body = qualifyMemberBody(m.parameters, m.body),
+                            )
+                            is Constructor -> m.copy(
+                                parameters = m.parameters.map { p ->
+                                    if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
+                                },
+                                body = qualifyMemberBody(m.parameters, m.body),
+                            )
+                            is GetAccessor -> m.copy(
+                                body = qualifyMemberBody(emptyList(), m.body),
+                            )
+                            is SetAccessor -> m.copy(
+                                body = qualifyMemberBody(m.parameters, m.body),
+                            )
+                            is PropertyDeclaration -> if (m.initializer != null) m.copy(initializer = q(m.initializer)) else m
+                            else -> m
+                        }
+                    },
+                )
+            }
             else -> stmt
         }
     }
