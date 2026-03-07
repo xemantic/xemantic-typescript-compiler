@@ -18,6 +18,8 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlin.math.pow
+
 /**
  * Transforms a TypeScript AST into a JavaScript-compatible AST suitable for emission.
  *
@@ -2535,9 +2537,10 @@ class Transformer(private val options: CompilerOptions) {
 
         // Build import binding order map for sorting export re-exports.
         // TypeScript emits re-export calls in import binding order, not ExportDeclaration order.
-        val importBindingOrder = mutableMapOf<String, Int>()
-        for ((i, binding) in importBindings.withIndex()) {
-            importBindingOrder.putIfAbsent(binding.localName, i)
+        val importBindingOrder = buildMap {
+            for ((i, binding) in importBindings.withIndex()) {
+                getOrPut(binding.localName) { i }
+            }
         }
         // Collect re-export statements (from ExportDeclaration) with their binding order for sorting.
         // These are emitted AFTER all non-ExportDeclaration execute statements.
@@ -6048,7 +6051,7 @@ class Transformer(private val options: CompilerOptions) {
                     SyntaxKind.Slash -> if (right != 0) left / right else null
                     SyntaxKind.Percent -> if (right != 0) left % right else null
                     SyntaxKind.AsteriskAsterisk -> {
-                        if (right >= 0) Math.pow(left.toDouble(), right.toDouble()).toInt() else null
+                        if (right >= 0) left.toDouble().pow(right).toInt() else null
                     }
                     SyntaxKind.LessThanLessThan -> left shl right
                     SyntaxKind.GreaterThanGreaterThan -> left shr right
