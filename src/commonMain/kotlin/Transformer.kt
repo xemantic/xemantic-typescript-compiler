@@ -1461,6 +1461,11 @@ class Transformer(private val options: CompilerOptions) {
                             val specStr2 = (normalizeModuleSpecifier(requireArg ?: syntheticId("")) as? StringLiteralNode)?.text
                                 ?: (requireArg as? StringLiteralNode)?.text ?: ""
                             namedModuleImports.add(specStr2 to name)
+                            // If this was an `export import x = require(...)`, also re-export it
+                            if (ModifierFlag.Export in stmt.modifiers) {
+                                if (name !in exportedVarNames) exportedVarNames.add(name)
+                                bodyStatements.add(makeExportAssignment(name))
+                            }
                             // Don't add to body — it's now a parameter
                             continue
                         }
