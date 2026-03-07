@@ -1663,8 +1663,8 @@ class Emitter(
         emitExpression(node.initializer)
         // Emit same-line trailing comments after the value expression, before the comma
         // (e.g. `f: a => 0 /*t1*/,` or `g: (a => 0) /*t2*/,`)
-        // NumericLiteralNode already emits same-line trailing comments in emitExpression
-        if (!options.removeComments && node.initializer !is NumericLiteralNode) {
+        // NumericLiteralNode and StringLiteralNode already emit same-line trailing comments in emitExpression
+        if (!options.removeComments && node.initializer !is NumericLiteralNode && node.initializer !is StringLiteralNode) {
             node.initializer.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
                 write(" "); write(it.text)
             }
