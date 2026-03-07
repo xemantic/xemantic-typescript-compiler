@@ -140,6 +140,8 @@ class TypeScriptCompiler {
             val sourceEchoes = mutableListOf<Pair<String, String>>() // fileName -> content
             // Map from tsFileName -> (jsName, javascript)
             val jsOutputMap = mutableMapOf<String, Pair<String, String>>()
+            // JSON files to re-emit (with outDir prefix)
+            val jsonOutputs = mutableListOf<Pair<String, String>>()
             // Map from tsFileName -> list of tsFileNames it imports (for dependency sort)
             val importDeps = mutableMapOf<String, List<String>>()
             // Ordered list of compilable TS file names
@@ -150,6 +152,14 @@ class TypeScriptCompiler {
                 val baseName = file.fileName.substringAfterLast('/')
                 if (baseName != "tsconfig.json") {
                     sourceEchoes.add(file.fileName to file.content)
+                }
+
+                // Re-emit JSON files when outDir is set
+                if (file.fileName.endsWith(".json") && options.outDir != null && options.fullEmitPaths) {
+                    val outDir = options.outDir.trimEnd('/')
+                    val jsonBaseName = file.fileName.substringAfterLast('/')
+                    jsonOutputs.add("$outDir/$jsonBaseName" to file.content)
+                    continue
                 }
 
                 // Skip non-TS files; include .js/.jsx/.mjs/.cjs only when outDir is set
@@ -188,7 +198,18 @@ class TypeScriptCompiler {
                 val tsxExtension = if (options.jsx?.lowercase() == "preserve") ".jsx" else ".js"
                 var jsName = file.fileName
                     .replace(".tsx", tsxExtension)
+                    .replace(".mts", ".mjs")
+                    .replace(".cts", ".cjs")
                     .replace(".ts", ".js")
+                // When fullEmitPaths + outDir, prepend outDir to basename
+                if (options.fullEmitPaths && options.outDir != null) {
+                    val outDir = options.outDir.trimEnd('/')
+                    val base = jsName.substringAfterLast('/')
+                    jsName = "$outDir/$base"
+                } else {
+                    // Strip directory prefix — baseline uses just basenames
+                    jsName = jsName.substringAfterLast('/')
+                }
                 jsOutputMap[file.fileName] = jsName to javascript
             }
 
@@ -196,7 +217,7 @@ class TypeScriptCompiler {
             val sortedTsFiles = topologicalSort(tsFileNames, importDeps)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
-            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, jsOutputs, options.sourceMap)
+            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, jsonOutputs + jsOutputs, options.sourceMap)
 
             return CompilationResult(
                 javascript = baseline,

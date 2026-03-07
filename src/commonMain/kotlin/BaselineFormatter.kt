@@ -36,7 +36,7 @@ fun formatBaseline(
 ): String {
     val baseName = fileName.substringAfterLast('/')
     val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
-    val jsName = baseName.replace(".tsx", tsxExtension).replace(".ts", ".js")
+    val jsName = baseName.replace(".tsx", tsxExtension).replace(".mts", ".mjs").replace(".cts", ".cjs").replace(".ts", ".js")
 
     val sb = StringBuilder()
 
@@ -116,15 +116,13 @@ fun formatMultiFileBaseline(
     // JS output sections
     for ((index, entry) in jsOutputs.withIndex()) {
         val (jsName, javascript) = entry
-        // Use just the filename (basename), not the full subdirectory path
-        val baseJsName = jsName.substringAfterLast('/')
         sb.append("//// [")
-        sb.append(baseJsName)
+        sb.append(jsName)
         sb.append("]\r\n")
         sb.append(toCRLF(javascript))
         sb.append("\r\n")
         if (sourceMap) {
-            sb.append("//# sourceMappingURL=$baseJsName.map")
+            sb.append("//# sourceMappingURL=${jsName.substringAfterLast('/')}.map")
             // Add CRLF separator between JS sections, but not after the last one
             if (index < jsOutputs.size - 1) {
                 sb.append("\r\n")
