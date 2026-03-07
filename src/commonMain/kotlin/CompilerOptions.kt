@@ -99,6 +99,7 @@ data class CompilerOptions(
     val verbatimModuleSyntax: Boolean = false,
     val noCheck: Boolean = false,
     val emitDeclarationOnly: Boolean = false,
+    val mapRoot: String? = null,
     val alwaysStrict: Boolean? = null,
     val newLine: String? = null,
     val fullEmitPaths: Boolean = false,
@@ -307,6 +308,7 @@ private fun applyDirective(options: CompilerOptions, key: String, value: String)
         "verbatimmodulesyntax" -> options.copy(verbatimModuleSyntax = boolValue)
         "nocheck" -> options.copy(noCheck = boolValue)
         "emitdeclarationonly" -> options.copy(emitDeclarationOnly = boolValue)
+        "maproot" -> options.copy(mapRoot = value.trim())
         "alwaysstrict" -> options.copy(alwaysStrict = boolValue)
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)

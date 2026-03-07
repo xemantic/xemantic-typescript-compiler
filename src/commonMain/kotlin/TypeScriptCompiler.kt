@@ -139,7 +139,7 @@ class TypeScriptCompiler {
             val emitter = Emitter(options)
             val javascript = emitter.emit(transformed, sourceFile)
 
-            val baseline = formatBaseline(fileName, file.content, javascript, options.sourceMap, options.newLine, options.jsx)
+            val baseline = formatBaseline(fileName, file.content, javascript, options.sourceMap, options.newLine, options.jsx, options.mapRoot)
 
             return CompilationResult(
                 javascript = baseline,
