@@ -108,7 +108,7 @@ git push
 ### Context discipline
 
 - Keep this file and `PLAN.md` up to date after each session so the next agent/developer starts with accurate state
-- Do not let CLAUDE.md exceed ~200 lines — trim resolved gotchas and move resolved fixes out of "priority" sections in PLAN.md
+- `PLAN.md` contains the prioritized fix plan with root cause categories, estimated test impact, and recommended fix order
 
 ## How to run tests
 
