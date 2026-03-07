@@ -3977,11 +3977,11 @@ class Transformer(private val options: CompilerOptions) {
      */
     private fun transformExpression(expr: Expression): Expression {
         return when (expr) {
-            // Type assertion / cast expressions: unwrap
-            is AsExpression -> transformExpression(expr.expression)
-            is NonNullExpression -> transformExpression(expr.expression)
-            is SatisfiesExpression -> transformExpression(expr.expression)
-            is TypeAssertionExpression -> transformExpression(expr.expression)
+            // Type assertion / cast expressions: unwrap, preserving leading comments
+            is AsExpression -> transferErasureComments(expr, transformExpression(expr.expression))
+            is NonNullExpression -> transferErasureComments(expr, transformExpression(expr.expression))
+            is SatisfiesExpression -> transferErasureComments(expr, transformExpression(expr.expression))
+            is TypeAssertionExpression -> transferErasureComments(expr, transformExpression(expr.expression))
 
             // Parenthesized: if the inner was a type-erasure node (e.g., (<T>expr)),
             // the outer () were just syntax for the assertion — drop them unless the
@@ -3992,10 +3992,7 @@ class Transformer(private val options: CompilerOptions) {
                 val wasTypeErasure = isTypeErasureNode(inner)
                         || (inner is ParenthesizedExpression && isTypeErasureNode(inner.expression))
                 val transformed = transformExpression(inner)
-                // When the type-erasure node had leading comments (e.g. `( /* comment */ expr as T )`),
-                // keep the parens so the comment is preserved inside `( /* comment */ expr )`.
-                val innerHasComments = hasLeadingCommentsInErasureChain(inner)
-                if (wasTypeErasure && !typeAssertionResultNeedsParens(transformed) && !innerHasComments) {
+                if (wasTypeErasure && !typeAssertionResultNeedsParens(transformed)) {
                     transformed
                 } else if (transformed is CommaListExpression) {
                     // CommaListExpression already includes its own parens; drop the outer ones.
@@ -7567,6 +7564,46 @@ class Transformer(private val options: CompilerOptions) {
         expr is TypeAssertionExpression || expr is AsExpression
                 || expr is NonNullExpression || expr is SatisfiesExpression
 
+    /** Transfers leading comments from a type-erasure node to the transformed result. */
+    private fun transferErasureComments(erasureNode: Expression, result: Expression): Expression {
+        val comments = erasureNode.leadingComments
+        if (comments.isNullOrEmpty()) return result
+        // Prepend erasure node's comments to the result's existing leading comments
+        val merged = comments + (result.leadingComments ?: emptyList())
+        return copyExpressionWithLeadingComments(result, merged)
+    }
+
+    /** Creates a copy of an Expression with different leadingComments. */
+    private fun copyExpressionWithLeadingComments(expr: Expression, comments: List<Comment>): Expression = when (expr) {
+        is Identifier -> expr.copy(leadingComments = comments)
+        is CallExpression -> expr.copy(leadingComments = comments)
+        is PropertyAccessExpression -> expr.copy(leadingComments = comments)
+        is BinaryExpression -> expr.copy(leadingComments = comments)
+        is ParenthesizedExpression -> expr.copy(leadingComments = comments)
+        is NumericLiteralNode -> expr.copy(leadingComments = comments)
+        is StringLiteralNode -> expr.copy(leadingComments = comments)
+        is PrefixUnaryExpression -> expr.copy(leadingComments = comments)
+        is PostfixUnaryExpression -> expr.copy(leadingComments = comments)
+        is ConditionalExpression -> expr.copy(leadingComments = comments)
+        is ElementAccessExpression -> expr.copy(leadingComments = comments)
+        is ObjectLiteralExpression -> expr.copy(leadingComments = comments)
+        is ArrayLiteralExpression -> expr.copy(leadingComments = comments)
+        is ArrowFunction -> expr.copy(leadingComments = comments)
+        is FunctionExpression -> expr.copy(leadingComments = comments)
+        is NewExpression -> expr.copy(leadingComments = comments)
+        is TemplateExpression -> expr.copy(leadingComments = comments)
+        is TaggedTemplateExpression -> expr.copy(leadingComments = comments)
+        is SpreadElement -> expr.copy(leadingComments = comments)
+        is AwaitExpression -> expr.copy(leadingComments = comments)
+        is YieldExpression -> expr.copy(leadingComments = comments)
+        is VoidExpression -> expr.copy(leadingComments = comments)
+        is TypeOfExpression -> expr.copy(leadingComments = comments)
+        is DeleteExpression -> expr.copy(leadingComments = comments)
+        is ClassExpression -> expr.copy(leadingComments = comments)
+        is CommaListExpression -> expr.copy(leadingComments = comments)
+        else -> expr // fallback: can't copy, return as-is
+    }
+
     /** Check if any node in a type-erasure chain (or its leftmost leaf) has leading comments. */
     private fun hasLeadingCommentsInErasureChain(expr: Expression): Boolean {
         var current = expr
@@ -7601,9 +7638,11 @@ class Transformer(private val options: CompilerOptions) {
      * - Prefix unary / keyword-prefix ops: needs `()` for member access — `(-A).x` ≠ `-A.x`
      */
     private fun typeAssertionResultNeedsParens(expr: Expression): Boolean = when (expr) {
-        // ObjectLiteralExpression, FunctionExpression, and ClassExpression are NOT listed here.
-        // Their parens are handled at the emitter level (expression statements and arrow bodies)
-        // so that the parens wrap the full expression chain, not just the inner node.
+        // ObjectLiteralExpression and FunctionExpression are NOT listed here —
+        // their parens are handled at the emitter level (expression statements and call callees).
+        // ClassExpression needs parens here because it can appear in contexts like `export default`
+        // where the emitter doesn't add parens.
+        is ClassExpression -> true
         is ArrowFunction -> true
         is PrefixUnaryExpression -> true
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
