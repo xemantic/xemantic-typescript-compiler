@@ -386,7 +386,7 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = parseExpression()
         // Capture same-line trailing comments between expression and `;`
         // (e.g. the `/*3*/` in `new Array /*3*/;`) before parseSemicolon advances past them.
-        val semiInline = if (!scanner.hasPrecedingLineBreak()) trailingComments() else null
+        val semiInline = if (!scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments() else null
         parseSemicolon()
         val trailing = trailingComments()
         return ExpressionStatement(
