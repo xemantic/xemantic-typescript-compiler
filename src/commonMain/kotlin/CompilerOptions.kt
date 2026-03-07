@@ -100,6 +100,7 @@ data class CompilerOptions(
     val noCheck: Boolean = false,
     val alwaysStrict: Boolean? = null,
     val newLine: String? = null,
+    val fullEmitPaths: Boolean = false,
 ) {
     val effectiveAlwaysStrict: Boolean
         get() = alwaysStrict ?: strict
@@ -306,6 +307,7 @@ private fun applyDirective(options: CompilerOptions, key: String, value: String)
         "nocheck" -> options.copy(noCheck = boolValue)
         "alwaysstrict" -> options.copy(alwaysStrict = boolValue)
         "newline" -> options.copy(newLine = value.trim())
+        "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
         else -> options
     }
 }
