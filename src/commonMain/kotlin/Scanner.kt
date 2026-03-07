@@ -369,7 +369,15 @@ class Scanner(private val text: String) {
                             if (!terminated) {
                                 // Unterminated multi-line comment -- just consume to end
                             }
-                            val hasTrailingNewLine = pos < end && isLineBreak(text[pos])
+                            // Check if there's a newline in whitespace after `*/`
+                            var hasTrailingNewLine = false
+                            var scanPos = pos
+                            while (scanPos < end && (text[scanPos] == ' ' || text[scanPos] == '\t')) {
+                                scanPos++
+                            }
+                            if (scanPos < end && isLineBreak(text[scanPos])) {
+                                hasTrailingNewLine = true
+                            }
                             val comment = Comment(
                                 kind = SyntaxKind.MultiLineComment,
                                 text = text.substring(commentStart, pos),
