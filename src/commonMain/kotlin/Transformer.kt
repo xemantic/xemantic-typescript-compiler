@@ -683,7 +683,7 @@ class Transformer(private val options: CompilerOptions) {
                                     pos = -1, end = -1,
                                 )
                             } else stmt.expression
-                            result.add(makeExportAssignment("default", rewrittenExpr, leadingComments = stmt.leadingComments))
+                            result.add(makeExportAssignment("default", rewrittenExpr, leadingComments = stmt.leadingComments, pos = stmt.pos))
                         }
                     }
                 }
@@ -1046,8 +1046,9 @@ class Transformer(private val options: CompilerOptions) {
         // The blank-line check uses the LAST comment's end relative to the statement,
         // not each comment individually. This ensures a contiguous block of comments
         // (like multiple /// reference directives) is not partially moved.
-        if (!hasExportEquals && result.size > 1 && result[1] is VariableStatement) {
-            val firstReal = result[1] as VariableStatement
+        val firstRealIdx = if (hasExportEquals) -1 else (1..<result.size).firstOrNull { result[it] !is NotEmittedStatement } ?: -1
+        if (firstRealIdx > 0 && (result[firstRealIdx] is VariableStatement || result[firstRealIdx] is ExpressionStatement)) {
+            val firstReal = result[firstRealIdx]
             val allComments = firstReal.leadingComments
             if (!allComments.isNullOrEmpty()) {
                 val source = originalSourceFile.text
@@ -1068,9 +1069,13 @@ class Transformer(private val options: CompilerOptions) {
                 }
                 if (splitIdx >= 0) {
                     val detached = allComments.subList(0, splitIdx + 1)
-                    val attached = allComments.subList(splitIdx + 1, allComments.size)
+                    val attached = allComments.subList(splitIdx + 1, allComments.size).ifEmpty { null }
                     prePreambleStatements.add(NotEmittedStatement(leadingComments = detached))
-                    result[1] = firstReal.copy(leadingComments = attached.ifEmpty { null })
+                    result[firstRealIdx] = when (firstReal) {
+                        is VariableStatement -> firstReal.copy(leadingComments = attached)
+                        is ExpressionStatement -> firstReal.copy(leadingComments = attached)
+                        else -> firstReal
+                    }
                 }
             }
         }
@@ -3185,7 +3190,7 @@ class Transformer(private val options: CompilerOptions) {
         )
     }
 
-    private fun makeExportAssignment(name: String, value: Expression? = null, leadingComments: List<Comment>? = null): Statement {
+    private fun makeExportAssignment(name: String, value: Expression? = null, leadingComments: List<Comment>? = null, pos: Int = -1): Statement {
         return ExpressionStatement(
             expression = BinaryExpression(
                 left = PropertyAccessExpression(
@@ -3197,7 +3202,7 @@ class Transformer(private val options: CompilerOptions) {
                 right = value ?: syntheticId(name),
                 pos = -1, end = -1,
             ),
-            pos = -1, end = -1,
+            pos = pos, end = -1,
             leadingComments = leadingComments,
         )
     }
