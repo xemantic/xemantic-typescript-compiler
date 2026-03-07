@@ -18,6 +18,8 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlin.math.pow
+
 /**
  * Transforms a TypeScript AST into a JavaScript-compatible AST suitable for emission.
  *
@@ -569,7 +571,7 @@ class Transformer(private val options: CompilerOptions) {
                                                         name = Identifier(text = name, pos = -1, end = -1),
                                                         pos = -1, end = -1,
                                                     ),
-                                                    operator = SyntaxKind.Equals,
+                                                    operator = Equals,
                                                     right = decl.initializer,
                                                     pos = -1, end = -1,
                                                 ),
@@ -671,7 +673,7 @@ class Transformer(private val options: CompilerOptions) {
                                             name = syntheticId("exports"),
                                             pos = -1, end = -1,
                                         ),
-                                        operator = SyntaxKind.Equals,
+                                        operator = Equals,
                                         right = stmt.expression,
                                         pos = -1, end = -1,
                                     ),
@@ -912,7 +914,7 @@ class Transformer(private val options: CompilerOptions) {
                         name = syntheticId(name),
                         pos = -1, end = -1,
                     ),
-                    operator = SyntaxKind.Equals,
+                    operator = Equals,
                     right = acc,
                     pos = -1, end = -1,
                 )
@@ -1356,7 +1358,7 @@ class Transformer(private val options: CompilerOptions) {
                                     ExpressionStatement(
                                         expression = BinaryExpression(
                                             left = syntheticId(tempName),
-                                            operator = SyntaxKind.Equals,
+                                            operator = Equals,
                                             right = CallExpression(
                                                 expression = syntheticId("__importDefault"),
                                                 arguments = listOf(syntheticId(tempName)),
@@ -1384,7 +1386,7 @@ class Transformer(private val options: CompilerOptions) {
                                     ExpressionStatement(
                                         expression = BinaryExpression(
                                             left = syntheticId(paramName),
-                                            operator = SyntaxKind.Equals,
+                                            operator = Equals,
                                             right = CallExpression(
                                                 expression = syntheticId("__importStar"),
                                                 arguments = listOf(syntheticId(paramName)),
@@ -1427,7 +1429,7 @@ class Transformer(private val options: CompilerOptions) {
                                     ExpressionStatement(
                                         expression = BinaryExpression(
                                             left = syntheticId(tempName),
-                                            operator = SyntaxKind.Equals,
+                                            operator = Equals,
                                             right = CallExpression(
                                                 expression = syntheticId("__importDefault"),
                                                 arguments = listOf(syntheticId(tempName)),
@@ -1508,7 +1510,7 @@ class Transformer(private val options: CompilerOptions) {
                                                     name = Identifier(text = n, pos = -1, end = -1),
                                                     pos = -1, end = -1,
                                                 ),
-                                                operator = SyntaxKind.Equals,
+                                                operator = Equals,
                                                 right = d.initializer,
                                                 pos = -1, end = -1,
                                             ),
@@ -1719,7 +1721,7 @@ class Transformer(private val options: CompilerOptions) {
                         name = syntheticId(name),
                         pos = -1, end = -1,
                     ),
-                    operator = SyntaxKind.Equals,
+                    operator = Equals,
                     right = acc,
                     pos = -1, end = -1,
                 )
@@ -1901,11 +1903,11 @@ class Transformer(private val options: CompilerOptions) {
         val moduleCheck = BinaryExpression(
             left = BinaryExpression(
                 left = TypeOfExpression(expression = syntheticId("module"), pos = -1, end = -1),
-                operator = SyntaxKind.EqualsEqualsEquals,
+                operator = EqualsEqualsEquals,
                 right = StringLiteralNode(text = "object", pos = -1, end = -1),
                 pos = -1, end = -1,
             ),
-            operator = SyntaxKind.AmpersandAmpersand,
+            operator = AmpersandAmpersand,
             right = BinaryExpression(
                 left = TypeOfExpression(
                     expression = PropertyAccessExpression(
@@ -1915,7 +1917,7 @@ class Transformer(private val options: CompilerOptions) {
                     ),
                     pos = -1, end = -1,
                 ),
-                operator = SyntaxKind.EqualsEqualsEquals,
+                operator = EqualsEqualsEquals,
                 right = StringLiteralNode(text = "object", pos = -1, end = -1),
                 pos = -1, end = -1,
             ),
@@ -1936,7 +1938,7 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     ),
                 ),
-                flags = SyntaxKind.VarKeyword,
+                flags = VarKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -1946,7 +1948,7 @@ class Transformer(private val options: CompilerOptions) {
         val innerIf = IfStatement(
             expression = BinaryExpression(
                 left = syntheticId("v"),
-                operator = SyntaxKind.ExclamationEqualsEquals,
+                operator = ExclamationEqualsEquals,
                 right = syntheticId("undefined"),
                 pos = -1, end = -1,
             ),
@@ -1957,7 +1959,7 @@ class Transformer(private val options: CompilerOptions) {
                         name = syntheticId("exports"),
                         pos = -1, end = -1,
                     ),
-                    operator = SyntaxKind.Equals,
+                    operator = Equals,
                     right = syntheticId("v"),
                     pos = -1, end = -1,
                 ),
@@ -1970,11 +1972,11 @@ class Transformer(private val options: CompilerOptions) {
         val defineCheck = BinaryExpression(
             left = BinaryExpression(
                 left = TypeOfExpression(expression = syntheticId("define"), pos = -1, end = -1),
-                operator = SyntaxKind.EqualsEqualsEquals,
+                operator = EqualsEqualsEquals,
                 right = StringLiteralNode(text = "function", pos = -1, end = -1),
                 pos = -1, end = -1,
             ),
-            operator = SyntaxKind.AmpersandAmpersand,
+            operator = AmpersandAmpersand,
             right = PropertyAccessExpression(
                 expression = syntheticId("define"),
                 name = syntheticId("amd"),
@@ -2490,7 +2492,7 @@ class Transformer(private val options: CompilerOptions) {
                 is ForInStatement -> {
                     // `for (var key in obj)` — hoist `key` to top-level var list
                     val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
                         for (d in init.declarations) {
                             for (n in collectBoundNames(d.name)) {
                                 if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
@@ -2501,7 +2503,7 @@ class Transformer(private val options: CompilerOptions) {
                 is ForOfStatement -> {
                     // `for (var x of arr)` — hoist `x`
                     val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
                         for (d in init.declarations) {
                             for (n in collectBoundNames(d.name)) {
                                 if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
@@ -2512,7 +2514,7 @@ class Transformer(private val options: CompilerOptions) {
                 is ForStatement -> {
                     // `for (var i = 0; ...)` — hoist `i`
                     val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
                         for (d in init.declarations) {
                             for (n in collectBoundNames(d.name)) {
                                 if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
@@ -2540,9 +2542,10 @@ class Transformer(private val options: CompilerOptions) {
 
         // Build import binding order map for sorting export re-exports.
         // TypeScript emits re-export calls in import binding order, not ExportDeclaration order.
-        val importBindingOrder = mutableMapOf<String, Int>()
-        for ((i, binding) in importBindings.withIndex()) {
-            importBindingOrder.putIfAbsent(binding.localName, i)
+        val importBindingOrder = buildMap {
+            for ((i, binding) in importBindings.withIndex()) {
+                getOrPut(binding.localName) { i }
+            }
         }
         // Collect re-export statements (from ExportDeclaration) with their binding order for sorting.
         // These are emitted AFTER all non-ExportDeclaration execute statements.
@@ -2596,7 +2599,7 @@ class Transformer(private val options: CompilerOptions) {
                                 ExpressionStatement(
                                     expression = BinaryExpression(
                                         left = syntheticId(anonName),
-                                        operator = SyntaxKind.Equals,
+                                        operator = Equals,
                                         right = ClassExpression(
                                             name = null,
                                             typeParameters = null,
@@ -2625,7 +2628,7 @@ class Transformer(private val options: CompilerOptions) {
                                 ExpressionStatement(
                                     expression = BinaryExpression(
                                         left = syntheticId(className),
-                                        operator = SyntaxKind.Equals,
+                                        operator = Equals,
                                         right = classExpr,
                                         pos = -1, end = -1,
                                     ),
@@ -2652,7 +2655,7 @@ class Transformer(private val options: CompilerOptions) {
                                 ExpressionStatement(
                                     expression = BinaryExpression(
                                         left = syntheticId(className),
-                                        operator = SyntaxKind.Equals,
+                                        operator = Equals,
                                         right = classExpr,
                                         pos = -1, end = -1,
                                     ),
@@ -2709,7 +2712,7 @@ class Transformer(private val options: CompilerOptions) {
                                     ExpressionStatement(
                                         expression = BinaryExpression(
                                             left = syntheticId(name),
-                                            operator = SyntaxKind.Equals,
+                                            operator = Equals,
                                             right = d.initializer,
                                             pos = -1, end = -1,
                                         ),
@@ -2786,7 +2789,7 @@ class Transformer(private val options: CompilerOptions) {
                 is ForInStatement -> {
                     // `for (var key in obj)` → hoist `key`, emit `for (key in obj)` (no var)
                     val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword &&
+                    if (init is VariableDeclarationList && init.flags == VarKeyword &&
                         init.declarations.size == 1) {
                         val name = extractIdentifierName(init.declarations[0].name)
                         if (name != null) {
@@ -2895,7 +2898,7 @@ class Transformer(private val options: CompilerOptions) {
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = syntheticId(nv),
-                                operator = SyntaxKind.Equals,
+                                operator = Equals,
                                 right = syntheticId(setterParam),
                                 pos = -1, end = -1,
                             ),
@@ -2928,7 +2931,7 @@ class Transformer(private val options: CompilerOptions) {
                             ExpressionStatement(
                                 expression = BinaryExpression(
                                     left = syntheticId(tv),
-                                    operator = SyntaxKind.Equals,
+                                    operator = Equals,
                                     right = syntheticId(setterParam),
                                     pos = -1, end = -1,
                                 ),
@@ -2999,7 +3002,7 @@ class Transformer(private val options: CompilerOptions) {
                         declarations = hoistedVarNames.map { name ->
                             VariableDeclaration(name = syntheticId(name), pos = -1, end = -1)
                         },
-                        flags = SyntaxKind.VarKeyword,
+                        flags = VarKeyword,
                         pos = -1, end = -1,
                     ),
                     pos = -1, end = -1,
@@ -3016,7 +3019,7 @@ class Transformer(private val options: CompilerOptions) {
                             name = syntheticId("__moduleName"),
                             initializer = BinaryExpression(
                                 left = syntheticId("context_1"),
-                                operator = SyntaxKind.AmpersandAmpersand,
+                                operator = AmpersandAmpersand,
                                 right = PropertyAccessExpression(
                                     expression = syntheticId("context_1"),
                                     name = syntheticId("id"),
@@ -3027,7 +3030,7 @@ class Transformer(private val options: CompilerOptions) {
                             pos = -1, end = -1,
                         )
                     ),
-                    flags = SyntaxKind.VarKeyword,
+                    flags = VarKeyword,
                     pos = -1, end = -1,
                 ),
                 pos = -1, end = -1,
@@ -3061,7 +3064,7 @@ class Transformer(private val options: CompilerOptions) {
                                 pos = -1, end = -1,
                             )
                         ),
-                        flags = SyntaxKind.VarKeyword,
+                        flags = VarKeyword,
                         pos = -1, end = -1,
                     ),
                     pos = -1, end = -1,
@@ -3183,7 +3186,7 @@ class Transformer(private val options: CompilerOptions) {
                 StringLiteralNode(text = name, pos = -1, end = -1),
                 BinaryExpression(
                     left = syntheticId(name),
-                    operator = SyntaxKind.Equals,
+                    operator = Equals,
                     right = value,
                     pos = -1, end = -1,
                 ),
@@ -3206,7 +3209,7 @@ class Transformer(private val options: CompilerOptions) {
         // Build the innermost assign: name = {}
         val assign = BinaryExpression(
             left = syntheticId(name),
-            operator = SyntaxKind.Equals,
+            operator = Equals,
             right = ObjectLiteralExpression(properties = emptyList(), pos = -1, end = -1),
             pos = -1, end = -1,
         )
@@ -3232,7 +3235,7 @@ class Transformer(private val options: CompilerOptions) {
         }
         val newArg = BinaryExpression(
             left = syntheticId(name),
-            operator = SyntaxKind.BarBar,
+            operator = BarBar,
             right = ParenthesizedExpression(expression = innerCall, pos = -1, end = -1),
             pos = -1, end = -1,
         )
@@ -3257,7 +3260,7 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                 ),
-                flags = SyntaxKind.VarKeyword,
+                flags = VarKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -3270,7 +3273,7 @@ class Transformer(private val options: CompilerOptions) {
                     argumentExpression = syntheticId("n"),
                     pos = -1, end = -1,
                 ),
-                operator = SyntaxKind.Equals,
+                operator = Equals,
                 right = ElementAccessExpression(
                     expression = syntheticId("m"),
                     argumentExpression = syntheticId("n"),
@@ -3283,7 +3286,7 @@ class Transformer(private val options: CompilerOptions) {
         // Base condition: n !== "default"
         val defaultCheck: Expression = BinaryExpression(
             left = syntheticId("n"),
-            operator = SyntaxKind.ExclamationEqualsEquals,
+            operator = ExclamationEqualsEquals,
             right = StringLiteralNode(text = "default", pos = -1, end = -1),
             pos = -1, end = -1,
         )
@@ -3291,9 +3294,9 @@ class Transformer(private val options: CompilerOptions) {
         val ifCondition: Expression = if (exportedNamesVar != null) {
             BinaryExpression(
                 left = defaultCheck,
-                operator = SyntaxKind.AmpersandAmpersand,
+                operator = AmpersandAmpersand,
                 right = PrefixUnaryExpression(
-                    operator = SyntaxKind.Exclamation,
+                    operator = Exclamation,
                     operand = CallExpression(
                         expression = PropertyAccessExpression(
                             expression = syntheticId(exportedNamesVar),
@@ -3319,7 +3322,7 @@ class Transformer(private val options: CompilerOptions) {
         val forIn = ForInStatement(
             initializer = VariableDeclarationList(
                 declarations = listOf(VariableDeclaration(name = syntheticId("n"), pos = -1, end = -1)),
-                flags = SyntaxKind.VarKeyword,
+                flags = VarKeyword,
                 pos = -1, end = -1,
             ),
             expression = syntheticId("m"),
@@ -3365,7 +3368,7 @@ class Transformer(private val options: CompilerOptions) {
         if (call.arguments.size != 1) return null
         val arg = call.arguments[0]
         // Simple form: N || (N = {})
-        if (arg !is BinaryExpression || arg.operator != SyntaxKind.BarBar) return null
+        if (arg !is BinaryExpression || arg.operator != BarBar) return null
         val leftId = arg.left as? Identifier ?: return null
         if (leftId.text != paramName) return null
         return paramName
@@ -3384,14 +3387,14 @@ class Transformer(private val options: CompilerOptions) {
         )
         val newArg = BinaryExpression(
             left = nsId,
-            operator = SyntaxKind.BarBar,
+            operator = BarBar,
             right = ParenthesizedExpression(
                 expression = BinaryExpression(
                     left = exportsProp,
-                    operator = SyntaxKind.Equals,
+                    operator = Equals,
                     right = BinaryExpression(
                         left = syntheticId(name),
-                        operator = SyntaxKind.Equals,
+                        operator = Equals,
                         right = ObjectLiteralExpression(properties = emptyList(), pos = -1, end = -1),
                         pos = -1, end = -1,
                     ),
@@ -3441,7 +3444,7 @@ class Transformer(private val options: CompilerOptions) {
                     name = syntheticId(name),
                     pos = -1, end = -1,
                 ),
-                operator = SyntaxKind.Equals,
+                operator = Equals,
                 right = value ?: syntheticId(name),
                 pos = -1, end = -1,
             ),
@@ -3460,7 +3463,7 @@ class Transformer(private val options: CompilerOptions) {
         VariableStatement(
             declarationList = VariableDeclarationList(
                 declarations = listOf(VariableDeclaration(name = syntheticId(name), pos = -1, end = -1)),
-                flags = SyntaxKind.VarKeyword,
+                flags = VarKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -3490,7 +3493,7 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                 ),
-                flags = if (useVar) SyntaxKind.VarKeyword else SyntaxKind.ConstKeyword,
+                flags = if (useVar) VarKeyword else ConstKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -3527,7 +3530,7 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                 ),
-                flags = SyntaxKind.ConstKeyword,
+                flags = ConstKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -3682,7 +3685,7 @@ class Transformer(private val options: CompilerOptions) {
                     listOf(VariableStatement(
                         declarationList = VariableDeclarationList(
                             declarations = scopeVars.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
-                            flags = SyntaxKind.VarKeyword,
+                            flags = VarKeyword,
                             pos = -1, end = -1,
                         ),
                         pos = -1, end = -1,
@@ -4004,7 +4007,7 @@ class Transformer(private val options: CompilerOptions) {
                 val left = transformExpression(expr.left)
                 val right = transformExpression(expr.right)
                 // Downlevel `**` to `Math.pow(left, right)` for targets below ES2016
-                if (expr.operator == SyntaxKind.AsteriskAsterisk &&
+                if (expr.operator == AsteriskAsterisk &&
                     options.effectiveTarget < ScriptTarget.ES2016) {
                     CallExpression(
                         expression = PropertyAccessExpression(
@@ -4017,11 +4020,11 @@ class Transformer(private val options: CompilerOptions) {
                     )
                 }
                 // Downlevel `**=` to `x = Math.pow(x, right)` for targets below ES2016
-                else if (expr.operator == SyntaxKind.AsteriskAsteriskEquals &&
+                else if (expr.operator == AsteriskAsteriskEquals &&
                     options.effectiveTarget < ScriptTarget.ES2016) {
                     BinaryExpression(
                         left = left,
-                        operator = SyntaxKind.Equals,
+                        operator = Equals,
                         right = CallExpression(
                             expression = PropertyAccessExpression(
                                 expression = syntheticId("Math"),
@@ -4035,7 +4038,7 @@ class Transformer(private val options: CompilerOptions) {
                     )
                 }
                 // Downlevel `??` to `!== null && !== void 0 ? :` for targets below ES2020
-                else if (expr.operator == SyntaxKind.QuestionQuestion &&
+                else if (expr.operator == QuestionQuestion &&
                     options.effectiveTarget < ScriptTarget.ES2020) {
                     // If left is a simple identifier, use it directly; otherwise use a temp var
                     val leftRef: Expression
@@ -4049,7 +4052,7 @@ class Transformer(private val options: CompilerOptions) {
                         val tempId = syntheticId(tempName)
                         // (_a = left)
                         val assign = ParenthesizedExpression(
-                            expression = BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = left, pos = -1, end = -1),
+                            expression = BinaryExpression(left = tempId, operator = Equals, right = left, pos = -1, end = -1),
                             pos = -1, end = -1,
                         )
                         nullCheck = assign
@@ -4058,19 +4061,19 @@ class Transformer(private val options: CompilerOptions) {
                     // nullCheck !== null && leftRef !== void 0 ? leftRef : right
                     val notNull = BinaryExpression(
                         left = nullCheck,
-                        operator = SyntaxKind.ExclamationEqualsEquals,
+                        operator = ExclamationEqualsEquals,
                         right = syntheticId("null"),
                         pos = -1, end = -1,
                     )
                     val notUndefined = BinaryExpression(
                         left = leftRef,
-                        operator = SyntaxKind.ExclamationEqualsEquals,
+                        operator = ExclamationEqualsEquals,
                         right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
                         pos = -1, end = -1,
                     )
                     val condition = BinaryExpression(
                         left = notNull,
-                        operator = SyntaxKind.AmpersandAmpersand,
+                        operator = AmpersandAmpersand,
                         right = notUndefined,
                         pos = -1, end = -1,
                     )
@@ -4099,12 +4102,12 @@ class Transformer(private val options: CompilerOptions) {
                         val tempName = nextTempVarName()
                         hoistedVarScopes.lastOrNull()?.add(tempName)
                         val tempId = syntheticId(tempName)
-                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = transformedExpr, pos = -1, end = -1), pos = -1, end = -1)
+                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = Equals, right = transformedExpr, pos = -1, end = -1), pos = -1, end = -1)
                         objRef = tempId
                     }
-                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
-                    val isUndefined = BinaryExpression(left = objRef, operator = SyntaxKind.EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
-                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val isNull = BinaryExpression(left = nullCheck, operator = EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(left = objRef, operator = EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = BarBar, right = isUndefined, pos = -1, end = -1)
                     val call = expr.copy(expression = objRef, typeArguments = null, arguments = transformedArgs, questionDotToken = false)
                     ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = call, pos = -1, end = -1)
                 } else {
@@ -4158,19 +4161,19 @@ class Transformer(private val options: CompilerOptions) {
                         hoistedVarScopes.lastOrNull()?.add(tempName)
                         val tempId = syntheticId(tempName)
                         nullCheck = ParenthesizedExpression(
-                            expression = BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = obj, pos = -1, end = -1),
+                            expression = BinaryExpression(left = tempId, operator = Equals, right = obj, pos = -1, end = -1),
                             pos = -1, end = -1,
                         )
                         objRef = tempId
                     }
                     // Build: `obj === null || obj === void 0 ? void 0 : obj.member`
-                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isNull = BinaryExpression(left = nullCheck, operator = EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
                     val isUndefined = BinaryExpression(
-                        left = objRef, operator = SyntaxKind.EqualsEqualsEquals,
+                        left = objRef, operator = EqualsEqualsEquals,
                         right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
                         pos = -1, end = -1,
                     )
-                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = BarBar, right = isUndefined, pos = -1, end = -1)
                     val access = expr.copy(expression = objRef, questionDotToken = false)
                     return ConditionalExpression(
                         condition = condition,
@@ -4219,12 +4222,12 @@ class Transformer(private val options: CompilerOptions) {
                         val tempName = nextTempVarName()
                         hoistedVarScopes.lastOrNull()?.add(tempName)
                         val tempId = syntheticId(tempName)
-                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = SyntaxKind.Equals, right = obj, pos = -1, end = -1), pos = -1, end = -1)
+                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = Equals, right = obj, pos = -1, end = -1), pos = -1, end = -1)
                         objRef = tempId
                     }
-                    val isNull = BinaryExpression(left = nullCheck, operator = SyntaxKind.EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
-                    val isUndefined = BinaryExpression(left = objRef, operator = SyntaxKind.EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
-                    val condition = BinaryExpression(left = isNull, operator = SyntaxKind.BarBar, right = isUndefined, pos = -1, end = -1)
+                    val isNull = BinaryExpression(left = nullCheck, operator = EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
+                    val isUndefined = BinaryExpression(left = objRef, operator = EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
+                    val condition = BinaryExpression(left = isNull, operator = BarBar, right = isUndefined, pos = -1, end = -1)
                     val access = expr.copy(expression = objRef, argumentExpression = key, questionDotToken = false)
                     return ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = access, pos = -1, end = -1)
                 }
@@ -4810,7 +4813,7 @@ class Transformer(private val options: CompilerOptions) {
                             pos = -1, end = -1,
                         )
                     ),
-                    flags = if (isRequire) SyntaxKind.ConstKeyword else SyntaxKind.VarKeyword,
+                    flags = if (isRequire) ConstKeyword else VarKeyword,
                     pos = -1, end = -1,
                 ),
                 modifiers = stripTypeScriptModifiers(decl.modifiers),
@@ -4944,7 +4947,7 @@ class Transformer(private val options: CompilerOptions) {
         val elements = mutableListOf<Expression>()
         elements.add(BinaryExpression(
             left = syntheticId(tempName),
-            operator = SyntaxKind.Equals,
+            operator = Equals,
             right = transformedExpr,
             pos = -1, end = -1,
         ))
@@ -5056,12 +5059,12 @@ class Transformer(private val options: CompilerOptions) {
     ): ClassTransformResult {
 
         val isDerived = heritageClauses?.any {
-            it.token == SyntaxKind.ExtendsKeyword
+            it.token == ExtendsKeyword
         } == true
 
         // Strip `implements` clauses, keep only `extends`; strip type arguments from extends
         val transformedHeritage = heritageClauses
-            ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+            ?.filter { it.token == ExtendsKeyword }
             ?.map { clause ->
                 clause.copy(
                     types = clause.types.map { ewta ->
@@ -5131,7 +5134,7 @@ class Transformer(private val options: CompilerOptions) {
                             name = syntheticParamId,
                             pos = -1, end = -1,
                         ),
-                        operator = SyntaxKind.Equals,
+                        operator = Equals,
                         right = syntheticParamId,
                         pos = -1, end = -1,
                     ),
@@ -5176,7 +5179,7 @@ class Transformer(private val options: CompilerOptions) {
                             ExpressionStatement(
                                 expression = BinaryExpression(
                                     left = lhs,
-                                    operator = SyntaxKind.Equals,
+                                    operator = Equals,
                                     right = transformExpression(prop.initializer),
                                     pos = -1, end = -1,
                                 ),
@@ -5358,7 +5361,7 @@ class Transformer(private val options: CompilerOptions) {
                             ExpressionStatement(
                                 expression = BinaryExpression(
                                     left = lhs,
-                                    operator = SyntaxKind.Equals,
+                                    operator = Equals,
                                     right = transformExpression(prop.initializer),
                                     pos = -1, end = -1,
                                 ),
@@ -5521,7 +5524,7 @@ class Transformer(private val options: CompilerOptions) {
                                     argumentExpression = memberNameExpr,
                                     pos = -1, end = -1,
                                 ),
-                                operator = SyntaxKind.Equals,
+                                operator = Equals,
                                 right = normalizedExpr,
                                 pos = -1, end = -1,
                             ),
@@ -5615,7 +5618,7 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                 ),
-                flags = if (nested || functionScopeDepth > 0) SyntaxKind.LetKeyword else SyntaxKind.VarKeyword,
+                flags = if (nested || functionScopeDepth > 0) LetKeyword else VarKeyword,
                 pos = -1, end = -1,
             ),
             modifiers = varModifiers,
@@ -5652,10 +5655,10 @@ class Transformer(private val options: CompilerOptions) {
                         )
                         BinaryExpression(
                             left = enumId,
-                            operator = SyntaxKind.Equals,
+                            operator = Equals,
                             right = BinaryExpression(
                                 left = parentProp,
-                                operator = SyntaxKind.BarBar,
+                                operator = BarBar,
                                 right = ParenthesizedExpression(
                                     expression = BinaryExpression(
                                         left = PropertyAccessExpression(
@@ -5663,7 +5666,7 @@ class Transformer(private val options: CompilerOptions) {
                                             name = Identifier(text = enumName, pos = -1, end = -1),
                                             pos = -1, end = -1,
                                         ),
-                                        operator = SyntaxKind.Equals,
+                                        operator = Equals,
                                         right = ObjectLiteralExpression(
                                             properties = emptyList(),
                                             pos = -1, end = -1,
@@ -5680,11 +5683,11 @@ class Transformer(private val options: CompilerOptions) {
                         // E || (E = {})
                         BinaryExpression(
                             left = enumId,
-                            operator = SyntaxKind.BarBar,
+                            operator = BarBar,
                             right = ParenthesizedExpression(
                                 expression = BinaryExpression(
                                     left = syntheticId(enumName),
-                                    operator = SyntaxKind.Equals,
+                                    operator = Equals,
                                     right = ObjectLiteralExpression(
                                         properties = emptyList(),
                                         pos = -1, end = -1,
@@ -5730,13 +5733,13 @@ class Transformer(private val options: CompilerOptions) {
                             argumentExpression = memberNameExpr,
                             pos = -1, end = -1,
                         ),
-                        operator = SyntaxKind.Equals,
+                        operator = Equals,
                         right = valueExpr,
                         pos = -1, end = -1,
                     ),
                     pos = -1, end = -1,
                 ),
-                operator = SyntaxKind.Equals,
+                operator = Equals,
                 right = memberNameExpr,
                 pos = -1, end = -1,
             ),
@@ -5945,7 +5948,7 @@ class Transformer(private val options: CompilerOptions) {
                             nextValue = (v ?: nextValue) + 1.0
                             v
                         }
-                        init is PrefixUnaryExpression && init.operator == SyntaxKind.Minus -> {
+                        init is PrefixUnaryExpression && init.operator == Minus -> {
                             val inner = (init.operand as? NumericLiteralNode)?.text?.toDoubleOrNull()
                             if (inner != null) {
                                 nextValue = -inner + 1.0
@@ -5977,7 +5980,7 @@ class Transformer(private val options: CompilerOptions) {
         val comment = Comment(
             text = "/* $commentLabel */",
             hasTrailingNewLine = false,
-            kind = SyntaxKind.MultiLineComment,
+            kind = MultiLineComment,
             pos = -1, end = -1,
         )
         return when (value) {
@@ -5992,7 +5995,7 @@ class Transformer(private val options: CompilerOptions) {
                 if (isNegative) {
                     ParenthesizedExpression(
                         expression = PrefixUnaryExpression(
-                            operator = SyntaxKind.Minus,
+                            operator = Minus,
                             operand = literal,
                             pos = -1, end = -1,
                         ),
@@ -6035,9 +6038,9 @@ class Transformer(private val options: CompilerOptions) {
             is PrefixUnaryExpression -> {
                 val inner = tryEvaluateNumericLiteral(expr.operand)
                 when (expr.operator) {
-                    SyntaxKind.Minus -> inner?.let { -it }
-                    SyntaxKind.Plus -> inner
-                    SyntaxKind.Tilde -> inner?.let { it.inv() }
+                    Minus -> inner?.let { -it }
+                    Plus -> inner
+                    Tilde -> inner?.let { it.inv() }
                     else -> null
                 }
             }
@@ -6047,20 +6050,20 @@ class Transformer(private val options: CompilerOptions) {
                 val right = tryEvaluateNumericLiteral(expr.right)
                 if (left == null || right == null) null
                 else when (expr.operator) {
-                    SyntaxKind.Plus -> left + right
-                    SyntaxKind.Minus -> left - right
-                    SyntaxKind.Asterisk -> left * right
-                    SyntaxKind.Slash -> if (right != 0) left / right else null
-                    SyntaxKind.Percent -> if (right != 0) left % right else null
-                    SyntaxKind.AsteriskAsterisk -> {
-                        if (right >= 0) Math.pow(left.toDouble(), right.toDouble()).toInt() else null
+                    Plus -> left + right
+                    Minus -> left - right
+                    Asterisk -> left * right
+                    Slash -> if (right != 0) left / right else null
+                    Percent -> if (right != 0) left % right else null
+                    AsteriskAsterisk -> {
+                        if (right >= 0) left.toDouble().pow(right).toInt() else null
                     }
-                    SyntaxKind.LessThanLessThan -> left shl right
-                    SyntaxKind.GreaterThanGreaterThan -> left shr right
-                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> left ushr right
-                    SyntaxKind.Ampersand -> left and right
-                    SyntaxKind.Bar -> left or right
-                    SyntaxKind.Caret -> left xor right
+                    LessThanLessThan -> left shl right
+                    GreaterThanGreaterThan -> left shr right
+                    GreaterThanGreaterThanGreaterThan -> left ushr right
+                    Ampersand -> left and right
+                    Bar -> left or right
+                    Caret -> left xor right
                     else -> null
                 }
             }
@@ -6092,9 +6095,9 @@ class Transformer(private val options: CompilerOptions) {
             is PrefixUnaryExpression -> {
                 val operand = evaluateConstantExpression(expr.operand, memberValues) ?: return null
                 when (expr.operator) {
-                    SyntaxKind.Minus -> -operand
-                    SyntaxKind.Plus -> operand
-                    SyntaxKind.Tilde -> operand.toInt().inv().toLong()
+                    Minus -> -operand
+                    Plus -> operand
+                    Tilde -> operand.toInt().inv().toLong()
                     else -> null
                 }
             }
@@ -6103,17 +6106,17 @@ class Transformer(private val options: CompilerOptions) {
                 val right = evaluateConstantExpression(expr.right, memberValues) ?: return null
                 // JS bitwise/shift ops work on 32-bit integers
                 when (expr.operator) {
-                    SyntaxKind.Plus -> left + right
-                    SyntaxKind.Minus -> left - right
-                    SyntaxKind.Asterisk -> left * right
-                    SyntaxKind.Slash -> if (right == 0L) null else left / right
-                    SyntaxKind.Percent -> if (right == 0L) null else left % right
-                    SyntaxKind.LessThanLessThan -> (left.toInt() shl (right.toInt() and 31)).toLong()
-                    SyntaxKind.GreaterThanGreaterThan -> (left.toInt() shr (right.toInt() and 31)).toLong()
-                    SyntaxKind.GreaterThanGreaterThanGreaterThan -> (left.toInt() ushr (right.toInt() and 31)).toUInt().toLong()
-                    SyntaxKind.Bar -> (left.toInt() or right.toInt()).toLong()
-                    SyntaxKind.Ampersand -> (left.toInt() and right.toInt()).toLong()
-                    SyntaxKind.Caret -> (left.toInt() xor right.toInt()).toLong()
+                    Plus -> left + right
+                    Minus -> left - right
+                    Asterisk -> left * right
+                    Slash -> if (right == 0L) null else left / right
+                    Percent -> if (right == 0L) null else left % right
+                    LessThanLessThan -> (left.toInt() shl (right.toInt() and 31)).toLong()
+                    GreaterThanGreaterThan -> (left.toInt() shr (right.toInt() and 31)).toLong()
+                    GreaterThanGreaterThanGreaterThan -> (left.toInt() ushr (right.toInt() and 31)).toUInt().toLong()
+                    Bar -> (left.toInt() or right.toInt()).toLong()
+                    Ampersand -> (left.toInt() and right.toInt()).toLong()
+                    Caret -> (left.toInt() xor right.toInt()).toLong()
                     else -> null
                 }
             }
@@ -6285,7 +6288,7 @@ class Transformer(private val options: CompilerOptions) {
         // EXCEPT when the namespace uses dotted shorthand (`namespace A.B { }`), in which
         // case TypeScript always emits `var` for all levels.
         // Also use `let` when inside a function body (functionScopeDepth > 0).
-        val varKeyword = if ((nested || functionScopeDepth > 0) && !useDottedVar) SyntaxKind.LetKeyword else SyntaxKind.VarKeyword
+        val varKeyword = if ((nested || functionScopeDepth > 0) && !useDottedVar) SyntaxKind.LetKeyword else VarKeyword
 
         // In ES module format, preserve the `export` modifier so the file is still recognized
         // as a module file (e.g. `export namespace N {}` → `export var N; IIFE`).
@@ -6329,10 +6332,10 @@ class Transformer(private val options: CompilerOptions) {
             )
             BinaryExpression(
                 left = nsId,
-                operator = SyntaxKind.Equals,
+                operator = Equals,
                 right = BinaryExpression(
                     left = parentProp,
-                    operator = SyntaxKind.BarBar,
+                    operator = BarBar,
                     right = ParenthesizedExpression(
                         expression = BinaryExpression(
                             left = PropertyAccessExpression(
@@ -6340,7 +6343,7 @@ class Transformer(private val options: CompilerOptions) {
                                 name = Identifier(text = moduleName, pos = -1, end = -1),
                                 pos = -1, end = -1,
                             ),
-                            operator = SyntaxKind.Equals,
+                            operator = Equals,
                             right = ObjectLiteralExpression(
                                 properties = emptyList(),
                                 pos = -1, end = -1,
@@ -6357,11 +6360,11 @@ class Transformer(private val options: CompilerOptions) {
             // N || (N = {})
             BinaryExpression(
                 left = nsId,
-                operator = SyntaxKind.BarBar,
+                operator = BarBar,
                 right = ParenthesizedExpression(
                     expression = BinaryExpression(
                         left = syntheticId(moduleName),
-                        operator = SyntaxKind.Equals,
+                        operator = Equals,
                         right = ObjectLiteralExpression(
                             properties = emptyList(),
                             pos = -1, end = -1,
@@ -6608,7 +6611,7 @@ class Transformer(private val options: CompilerOptions) {
                                     expression = Identifier(nsName),
                                     name = stmt.name,
                                 ),
-                                operator = SyntaxKind.Equals,
+                                operator = Equals,
                                 right = value,
                             ),
                         ))
@@ -6634,7 +6637,7 @@ class Transformer(private val options: CompilerOptions) {
                                             expression = Identifier(nsName),
                                             name = Identifier(varName),
                                         ),
-                                        operator = SyntaxKind.Equals,
+                                        operator = Equals,
                                         right = init,
                                         pos = -1, end = -1,
                                     )
@@ -6644,7 +6647,7 @@ class Transformer(private val options: CompilerOptions) {
                         if (assignments.isNotEmpty()) {
                             // Build a comma expression if there are multiple assignments
                             val expr = assignments.reduce { acc, e ->
-                                BinaryExpression(left = acc, operator = SyntaxKind.Comma, right = e, pos = -1, end = -1)
+                                BinaryExpression(left = acc, operator = Comma, right = e, pos = -1, end = -1)
                             }
                             result.add(ExpressionStatement(
                                 expression = expr,
@@ -6962,7 +6965,7 @@ class Transformer(private val options: CompilerOptions) {
                     name = Identifier(text = memberName, pos = -1, end = -1),
                     pos = -1, end = -1,
                 ),
-                operator = SyntaxKind.Equals,
+                operator = Equals,
                 right = syntheticId(memberName),
                 pos = -1, end = -1,
             ),
@@ -7243,7 +7246,7 @@ class Transformer(private val options: CompilerOptions) {
             is ClassDeclaration -> {
                 // Only `extends` clauses are value positions; `implements` clauses are type-only
                 node.heritageClauses?.forEach { hc ->
-                    if (hc.token == SyntaxKind.ExtendsKeyword) {
+                    if (hc.token == ExtendsKeyword) {
                         hc.types.forEach { collectRefsFromNode(it.expression, refs) }
                     }
                 }
@@ -7464,7 +7467,7 @@ class Transformer(private val options: CompilerOptions) {
                 ParenthesizedExpression(
                     expression = BinaryExpression(
                         left = NumericLiteralNode("0", pos = -1, end = -1),
-                        operator = SyntaxKind.Comma,
+                        operator = Comma,
                         right = newCallee,
                         pos = -1, end = -1,
                     ),
