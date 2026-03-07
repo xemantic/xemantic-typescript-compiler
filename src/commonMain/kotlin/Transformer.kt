@@ -5750,6 +5750,8 @@ class Transformer(private val options: CompilerOptions) {
         return when (name) {
             is Identifier -> name.text
             is StringLiteralNode -> name.text
+            is NumericLiteralNode -> name.text
+            is BigIntLiteralNode -> name.text
             is ComputedPropertyName -> "[computed]"
             else -> "unknown"
         }
@@ -5768,6 +5770,8 @@ class Transformer(private val options: CompilerOptions) {
                     name.copy(singleQuote = false)
                 }
             }
+            is NumericLiteralNode -> name
+            is BigIntLiteralNode -> name
             is ComputedPropertyName -> transformExpression(name.expression)
             else -> StringLiteralNode(text = "unknown", pos = -1, end = -1)
         }

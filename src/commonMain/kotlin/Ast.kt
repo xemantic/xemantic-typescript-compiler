@@ -1548,6 +1548,7 @@ data class ObjectBindingPattern(
 
 data class ArrayBindingPattern(
     val elements: List<Node>,
+    val hasTrailingComma: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
