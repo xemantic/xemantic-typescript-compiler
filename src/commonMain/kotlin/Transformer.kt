@@ -76,6 +76,11 @@ class Transformer(private val options: CompilerOptions) {
     // Counter for namespace IIFE parameter renaming (e.g. M_1, M_2, M_3)
     private val nsRenameSuffix = mutableMapOf<String, Int>()
 
+    // Stack of outer namespace contexts for cross-scope qualification.
+    // When inside a nested namespace, inner code can reference outer namespace exports.
+    // Each entry: (iifeParamName, exportedNames) for an outer namespace level.
+    private val outerNamespaceStack = mutableListOf<Pair<String, Set<String>>>()
+
     // Maps namespace name → set of ALL exported member names across ALL merged blocks.
     // Pre-collected so that later blocks can qualify references to members exported from earlier blocks.
     private val mergedNamespaceExports = mutableMapOf<String, MutableSet<String>>()
@@ -5934,7 +5939,7 @@ class Transformer(private val options: CompilerOptions) {
         } else moduleName
 
         // Transform body statements, rewriting exports using the IIFE parameter name
-        val transformedBody = transformNamespaceBody(iifeParamName, bodyStatements)
+        val transformedBody = transformNamespaceBody(iifeParamName, bodyStatements, originalName = moduleName)
 
         emittedVarNames.clear()
         emittedVarNames.addAll(savedEmittedVarNames)
@@ -6144,7 +6149,14 @@ class Transformer(private val options: CompilerOptions) {
                     (node.body?.statements?.any { checkNode(it) } == true)
                 is EnumDeclaration -> node.name.text == name
                 is VariableStatement -> node.declarationList.declarations.any { extractIdentifierName(it.name) == name }
-                is ModuleDeclaration -> extractIdentifierName(node.name) == name
+                is ModuleDeclaration -> extractIdentifierName(node.name) == name ||
+                    // Also check inside inner module bodies — a `var M` inside a child namespace
+                    // shadows the outer IIFE parameter since the child IIFE is a nested scope.
+                    when (val b = node.body) {
+                        is ModuleBlock -> b.statements.any { checkNode(it) }
+                        is ModuleDeclaration -> checkNode(b)
+                        else -> false
+                    }
                 is ImportEqualsDeclaration -> {
                     // Non-exported import-equals becomes a local `var M = ...` which shadows
                     // the namespace param. Exported import-equals becomes `M.M = ...` (no collision).
@@ -6173,6 +6185,7 @@ class Transformer(private val options: CompilerOptions) {
     private fun transformNamespaceBody(
         nsName: String,
         statements: List<Statement>,
+        originalName: String = nsName,
     ): List<Statement> {
         // First pass: collect exported variable names and locally declared names.
         // `exportedNames` is used for body-statement qualification (qualifyNamespaceRefs).
@@ -6220,7 +6233,12 @@ class Transformer(private val options: CompilerOptions) {
 
         // Include exports from merged blocks of the same namespace
         // so that references in this block to members exported from other blocks are qualified.
-        mergedNamespaceExports[nsName]?.let { exportedNames.addAll(it) }
+        // Use the original name (not the IIFE param name which may be renamed, e.g. M_1).
+        // Only apply at the top level — nested namespaces with the same name as an outer namespace
+        // are different scopes and should NOT inherit the outer's merged exports.
+        if (outerNamespaceStack.isEmpty()) {
+            mergedNamespaceExports[originalName]?.let { exportedNames.addAll(it) }
+        }
 
         // Exported variable names that DON'T have local bindings in the IIFE
         // (classes/functions/enums/modules are declared locally even when exported)
@@ -6354,7 +6372,11 @@ class Transformer(private val options: CompilerOptions) {
                         modifiers = stmt.modifiers - ModifierFlag.Export,
                     )
                     val transformed = transformFunctionDeclaration(strippedStmt)
-                    result.addAll(transformed)
+                    if (exportedVarOnlyNames.isNotEmpty()) {
+                        result.addAll(transformed.map { qualifyStatementRefs(nsName, exportedVarOnlyNames, it) })
+                    } else {
+                        result.addAll(transformed)
+                    }
 
                     // Track function name so a subsequent same-named namespace/enum
                     // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
@@ -6383,7 +6405,11 @@ class Transformer(private val options: CompilerOptions) {
                         heritageClauses = qualifiedHeritage,
                     )
                     val transformed = transformClassDeclaration(strippedStmt)
-                    result.addAll(transformed)
+                    if (exportedVarOnlyNames.isNotEmpty()) {
+                        result.addAll(transformed.map { qualifyStatementRefs(nsName, exportedVarOnlyNames, it) })
+                    } else {
+                        result.addAll(transformed)
+                    }
 
                     // Track class name so a subsequent same-named namespace/enum
                     // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
@@ -6412,7 +6438,10 @@ class Transformer(private val options: CompilerOptions) {
                     // When exported, embed the parent->child assignment in the IIFE arg
                     // (N = parent.N || (parent.N = {})) rather than a separate assignment
                     val parentForIife = if (isExported) nsName else null
+                    // Push current namespace context so inner bodies can qualify outer refs
+                    outerNamespaceStack.add(nsName to exportedNames)
                     val transformed = transformModuleDeclaration(strippedStmt, nested = true, parentNsName = parentForIife)
+                    outerNamespaceStack.removeLastOrNull()
                     result.addAll(transformed)
                 }
 
@@ -6427,7 +6456,19 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
-        return result
+        // Apply outer namespace qualification: inner namespace bodies may reference
+        // exports from enclosing namespaces (e.g., `x` → `M_1.x` when `x` is exported from M).
+        // Exclude names that are locally declared in this scope or that match the IIFE parameter
+        // (which is the local variable for this namespace) to avoid over-qualification.
+        var qualifiedResult: List<Statement> = result
+        val localAndParam = locallyDeclaredNames + nsName + originalName
+        for ((outerNsName, outerExportedNames) in outerNamespaceStack) {
+            val outerNamesNotLocal = outerExportedNames - localAndParam
+            if (outerNamesNotLocal.isNotEmpty()) {
+                qualifiedResult = qualifiedResult.map { qualifyStatementRefs(outerNsName, outerNamesNotLocal, it) }
+            }
+        }
+        return qualifiedResult
     }
 
     /**
@@ -6483,6 +6524,38 @@ class Transformer(private val options: CompilerOptions) {
                 finallyBlock = stmt.finallyBlock?.let { qStmt(it) as Block },
             )
             is LabeledStatement -> stmt.copy(statement = qStmt(stmt.statement))
+            is FunctionDeclaration -> stmt.copy(
+                parameters = stmt.parameters.map { p ->
+                    if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
+                },
+                body = stmt.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
+            )
+            is ClassDeclaration -> stmt.copy(
+                members = stmt.members.map { m ->
+                    when (m) {
+                        is MethodDeclaration -> m.copy(
+                            parameters = m.parameters.map { p ->
+                                if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
+                            },
+                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
+                        )
+                        is Constructor -> m.copy(
+                            parameters = m.parameters.map { p ->
+                                if (p.initializer != null) p.copy(initializer = q(p.initializer)) else p
+                            },
+                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
+                        )
+                        is GetAccessor -> m.copy(
+                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
+                        )
+                        is SetAccessor -> m.copy(
+                            body = m.body?.let { b -> b.copy(statements = b.statements.map { qStmt(it) }) },
+                        )
+                        is PropertyDeclaration -> if (m.initializer != null) m.copy(initializer = q(m.initializer)) else m
+                        else -> m
+                    }
+                },
+            )
             else -> stmt
         }
     }
