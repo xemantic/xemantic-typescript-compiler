@@ -1096,9 +1096,12 @@ class Transformer(private val options: CompilerOptions) {
             val helpers = buildString {
                 // __createBinding is needed by both __importStar and __exportStar
                 if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
-                // __setModuleDefault + __importStar only needed for namespace imports
-                if (needsImportStar) append(IMPORT_STAR_ONLY_HELPERS)
+                // __setModuleDefault needed for __importStar
+                if (needsImportStar) append(SET_MODULE_DEFAULT_HELPER)
+                // __exportStar comes before __importStar in TypeScript's emit order
                 if (needsExportStar) append(EXPORT_STAR_HELPER)
+                // __importStar for namespace imports
+                if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(0, RawStatement(code = helpers))
@@ -1803,13 +1806,10 @@ class Transformer(private val options: CompilerOptions) {
         // Runtime helpers go OUTSIDE the define wrapper (after amd comments, before define)
         if (needsImportStar || needsImportDefault || needsExportStar) {
             val helpers = buildString {
-                if (needsImportStar || needsExportStar) {
-                    append(CREATE_BINDING_HELPER)
-                }
-                if (needsImportStar) {
-                    append(IMPORT_STAR_ONLY_HELPERS)
-                }
+                if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
+                if (needsImportStar) append(SET_MODULE_DEFAULT_HELPER)
                 if (needsExportStar) append(EXPORT_STAR_HELPER)
+                if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(RawStatement(code = helpers))
@@ -7591,12 +7591,14 @@ class Transformer(private val options: CompilerOptions) {
 """
 
         /** `__setModuleDefault` + `__importStar` helpers — only needed for `import * as X from "module"`. */
-        val IMPORT_STAR_ONLY_HELPERS = """var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+        val SET_MODULE_DEFAULT_HELPER = """var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
     Object.defineProperty(o, "default", { enumerable: true, value: v });
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || (function () {
+"""
+
+        val IMPORT_STAR_FUNC_HELPER = """var __importStar = (this && this.__importStar) || (function () {
     var ownKeys = function(o) {
         ownKeys = Object.getOwnPropertyNames || function (o) {
             var ar = [];
@@ -7614,6 +7616,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 """
+
+        val IMPORT_STAR_ONLY_HELPERS get() = SET_MODULE_DEFAULT_HELPER + IMPORT_STAR_FUNC_HELPER
 
         /** Combined helpers for backward-compat use — equals `CREATE_BINDING_HELPER + IMPORT_STAR_ONLY_HELPERS`. */
         val IMPORT_STAR_HELPERS get() = CREATE_BINDING_HELPER + IMPORT_STAR_ONLY_HELPERS
