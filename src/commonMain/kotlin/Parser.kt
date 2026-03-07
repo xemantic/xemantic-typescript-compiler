@@ -371,19 +371,24 @@ class Parser(private val source: String, private val fileName: String) {
         val nameOrPropIsPropertyKey = when (token) {
             SyntaxKind.OpenBracket -> lookAhead { parseComputedPropertyName(); token == SyntaxKind.Colon }
             SyntaxKind.StringLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
-            SyntaxKind.NumericLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
+            SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
             else -> false
         }
         var nameOrProp: Expression = when {
             nameOrPropIsPropertyKey && token == SyntaxKind.OpenBracket -> parseComputedPropertyName()
             nameOrPropIsPropertyKey && token == SyntaxKind.StringLiteral -> parseStringLiteral()
             nameOrPropIsPropertyKey && token == SyntaxKind.NumericLiteral -> parseNumericLiteral()
+            nameOrPropIsPropertyKey && token == SyntaxKind.BigIntLiteral -> {
+                val bPos = getPos(); val text = scanner.getTokenValue(); nextToken()
+                BigIntLiteralNode(text = text, pos = bPos, end = getEnd())
+            }
             else -> parseBindingNameOrPattern()
         }
         if (postDotComments != null) nameOrProp = nameOrProp.withLeadingComments(postDotComments)
         return if (token == SyntaxKind.Colon &&
             (nameOrProp is Identifier || nameOrProp is ComputedPropertyName
-                || nameOrProp is StringLiteralNode || nameOrProp is NumericLiteralNode)) {
+                || nameOrProp is StringLiteralNode || nameOrProp is NumericLiteralNode
+                || nameOrProp is BigIntLiteralNode)) {
             nextToken()
             val name = parseBindingNameOrPattern()
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null

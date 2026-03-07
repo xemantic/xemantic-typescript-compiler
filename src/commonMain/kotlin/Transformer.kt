@@ -122,6 +122,9 @@ class Transformer(private val options: CompilerOptions) {
     // Causes the __awaiter helper to be prepended to the output statements.
     private var needsAwaiterHelper = false
 
+    // Counter for anonymous export default classes/functions (default_1, default_2, ...)
+    private var anonDefaultCounter = 0
+
 
     // Top-level names that are declared ONLY as interfaces or type aliases (no runtime value).
     // Used to filter export specifiers that refer to type-only names, e.g. `export { A, B }`
@@ -392,9 +395,6 @@ class Transformer(private val options: CompilerOptions) {
         var needsImportDefault = false
         var needsExportStar = false
 
-        // Counter for anonymous export default functions (default_1, default_2, ...)
-        var anonDefaultCounter = 0
-
         // Counter for generating unique temp names per module base name (e.g. b_1, b_2)
         val moduleNameCounter = mutableMapOf<String, Int>()
 
@@ -636,24 +636,23 @@ class Transformer(private val options: CompilerOptions) {
                     if (isExported) {
                         val strippedModifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default
                         val name = stmt.name?.text
-                        if (isDefault && name == null) {
-                            // Anonymous export default class: assign synthetic name "default_N"
+                        if (name == null) {
+                            // Anonymous exported class: assign synthetic name "default_N"
                             val anonName = "default_${++anonDefaultCounter}"
                             result.add(stmt.copy(modifiers = strippedModifiers, name = syntheticId(anonName)))
-                            if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(anonName)))
+                            val exportName = if (isDefault) "default" else anonName
+                            if (!hasExportEquals) result.add(makeExportAssignment(exportName, syntheticId(anonName)))
                         } else {
                             val emitted = stmt.copy(modifiers = strippedModifiers)
                             result.add(emitted)
-                            if (name != null) {
-                                if (isDefault) {
-                                    if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(name)))
-                                } else {
-                                    // Hoist exports.ClassName = void 0.
-                                    // When hasExportEquals, skip the exports.C = C; assignment
-                                    // (module.exports = X replaces all named exports).
-                                    if (name !in exportedVarNames) exportedVarNames.add(name)
-                                    if (!hasExportEquals) result.add(makeExportAssignment(name))
-                                }
+                            if (isDefault) {
+                                if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(name)))
+                            } else {
+                                // Hoist exports.ClassName = void 0.
+                                // When hasExportEquals, skip the exports.C = C; assignment
+                                // (module.exports = X replaces all named exports).
+                                if (name !in exportedVarNames) exportedVarNames.add(name)
+                                if (!hasExportEquals) result.add(makeExportAssignment(name))
                             }
                         }
                     } else {
@@ -1560,15 +1559,23 @@ class Transformer(private val options: CompilerOptions) {
                     val isExported = ModifierFlag.Export in stmt.modifiers
                     val isDefault = ModifierFlag.Default in stmt.modifiers
                     if (isExported) {
-                        val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default)
-                        bodyStatements.add(stripped)
                         val name = stmt.name?.text
-                        if (name != null) {
-                            if (isDefault) {
-                                if (!hasExportEquals) bodyStatements.add(makeExportAssignment("default", syntheticId(name)))
-                            } else {
-                                exportedVarNames.add(name)
-                                if (!hasExportEquals) bodyStatements.add(makeExportAssignment(name))
+                        if (name == null && isDefault) {
+                            // Anonymous export default class: assign synthetic name "default_N"
+                            val anonName = "default_${++anonDefaultCounter}"
+                            val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default, name = syntheticId(anonName))
+                            bodyStatements.add(stripped)
+                            if (!hasExportEquals) bodyStatements.add(makeExportAssignment("default", syntheticId(anonName)))
+                        } else {
+                            val stripped = stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default)
+                            bodyStatements.add(stripped)
+                            if (name != null) {
+                                if (isDefault) {
+                                    if (!hasExportEquals) bodyStatements.add(makeExportAssignment("default", syntheticId(name)))
+                                } else {
+                                    exportedVarNames.add(name)
+                                    if (!hasExportEquals) bodyStatements.add(makeExportAssignment(name))
+                                }
                             }
                         }
                     } else {
@@ -4779,10 +4786,21 @@ class Transformer(private val options: CompilerOptions) {
     ): List<Statement> {
         if (decl.isTypeOnly) return emptyList()
 
+        // Erase import if the referenced name is type-only (interface, type alias, or type-only namespace)
+        val ref = decl.moduleReference
+        if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
+            return emptyList()
+        }
+        if (ref is QualifiedName) {
+            val rootName = generateSequence(ref) { (it.left as? QualifiedName) }.last().left
+            if (rootName is Identifier && rootName.text in topLevelTypeOnlyNames) {
+                return emptyList()
+            }
+        }
+
         // `import x = M.N` → `var x = M.N;`
         // `import x = require("mod")` → `const x = require("mod")`
         // `import x = 5` (invalid, literal RHS) → `5;` (expression statement, TypeScript's error-recovery output)
-        val ref = decl.moduleReference
         val isRequire = ref is ExternalModuleReference
 
         // In ESM mode, `import x = require("mod")` is not valid — drop it entirely
@@ -5362,10 +5380,11 @@ class Transformer(private val options: CompilerOptions) {
             outputMembers.add(0, transformedConstructor)
         }
 
+        val trailingStatements = mutableListOf<Statement>()
+
         // Static properties without useDefineForClassFields → trailing statements
         // Use trailingVarName (class expression temp var) if provided, otherwise use class name.
         val effectiveName = trailingVarName ?: name?.text
-        val trailingStatements = mutableListOf<Statement>()
         if (!useDefineForClassFields && effectiveName != null) {
             for (prop in staticProperties) {
                 if (prop.initializer != null) {
@@ -6743,23 +6762,34 @@ class Transformer(private val options: CompilerOptions) {
                             type.copy(expression = qualifyNamespaceRefs(nsName, heritageQualifyNames, type.expression))
                         })
                     }
-                    val strippedStmt = stmt.copy(
-                        modifiers = stmt.modifiers - ModifierFlag.Export,
-                        heritageClauses = qualifiedHeritage,
-                    )
-                    val transformed = transformClassDeclaration(strippedStmt)
+                    // Anonymous export default class: assign synthetic name
+                    val classStmt = if (stmt.name == null && isExported) {
+                        val anonName = "default_${++anonDefaultCounter}"
+                        stmt.copy(
+                            modifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default,
+                            name = syntheticId(anonName),
+                            heritageClauses = qualifiedHeritage,
+                        )
+                    } else {
+                        stmt.copy(
+                            modifiers = stmt.modifiers - ModifierFlag.Export,
+                            heritageClauses = qualifiedHeritage,
+                        )
+                    }
+                    val transformed = transformClassDeclaration(classStmt)
                     if (exportedVarOnlyNames.isNotEmpty()) {
                         result.addAll(transformed.map { qualifyStatementRefs(nsName, exportedVarOnlyNames, it) })
                     } else {
                         result.addAll(transformed)
                     }
 
+                    val className = classStmt.name?.text
                     // Track class name so a subsequent same-named namespace/enum
                     // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
-                    stmt.name?.text?.let { declaredNames.add(it) }
+                    className?.let { declaredNames.add(it) }
 
-                    if (isExported && stmt.name != null) {
-                        result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
+                    if (isExported && className != null) {
+                        result.add(makeNamespaceExportAssignment(nsName, className))
                     }
                 }
 
