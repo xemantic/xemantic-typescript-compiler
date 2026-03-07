@@ -3992,7 +3992,10 @@ class Transformer(private val options: CompilerOptions) {
                 val wasTypeErasure = isTypeErasureNode(inner)
                         || (inner is ParenthesizedExpression && isTypeErasureNode(inner.expression))
                 val transformed = transformExpression(inner)
-                if (wasTypeErasure && !typeAssertionResultNeedsParens(transformed)) {
+                // When the type-erasure node had leading comments (e.g. `( /* comment */ expr as T )`),
+                // keep the parens so the comment is preserved inside `( /* comment */ expr )`.
+                val innerHasComments = hasLeadingCommentsInErasureChain(inner)
+                if (wasTypeErasure && !typeAssertionResultNeedsParens(transformed) && !innerHasComments) {
                     transformed
                 } else if (transformed is CommaListExpression) {
                     // CommaListExpression already includes its own parens; drop the outer ones.
@@ -7563,6 +7566,29 @@ class Transformer(private val options: CompilerOptions) {
     private fun isTypeErasureNode(expr: Expression): Boolean =
         expr is TypeAssertionExpression || expr is AsExpression
                 || expr is NonNullExpression || expr is SatisfiesExpression
+
+    /** Check if any node in a type-erasure chain (or its leftmost leaf) has leading comments. */
+    private fun hasLeadingCommentsInErasureChain(expr: Expression): Boolean {
+        var current = expr
+        while (true) {
+            if (!current.leadingComments.isNullOrEmpty()) return true
+            val next = when (current) {
+                is AsExpression -> current.expression
+                is TypeAssertionExpression -> current.expression
+                is NonNullExpression -> current.expression
+                is SatisfiesExpression -> current.expression
+                is ParenthesizedExpression -> current.expression
+                is PropertyAccessExpression -> current.expression
+                is ElementAccessExpression -> current.expression
+                is CallExpression -> current.expression
+                is BinaryExpression -> current.left
+                is ConditionalExpression -> current.condition
+                is TaggedTemplateExpression -> current.tag
+                else -> return false
+            }
+            current = next
+        }
+    }
 
     /**
      * Returns true if [expr] (the result of stripping a type assertion) still needs

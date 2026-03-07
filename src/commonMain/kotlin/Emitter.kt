@@ -1307,24 +1307,31 @@ class Emitter(
         for (comment in comments) {
             if (comment.hasPrecedingNewLine) {
                 // Comment is on its own line (e.g. JSDoc before first call argument).
-                // End the current line, emit the properly re-indented comment, then
-                // position the cursor at the start of the next line so the expression
-                // that follows is written at the correct indentation.
-                // Always follow with newline+indent (the comment itself is a full line,
-                // so the next expression must also start on its own line).
-                writeNewLine()
+                // Only emit newline if we're not already at the start of a line,
+                // to avoid double-newlines between consecutive own-line comments.
+                if (!isStartOfLine) {
+                    writeNewLine()
+                }
                 writeIndent()
                 write(reindentComment(comment))
-                writeNewLine()
-                writeIndent()
-            } else {
-                write(comment.text)
-                if (comment.hasTrailingNewLine) {
+                // Multi-line block comments (spanning lines) always end with a newline.
+                // Single-line block comments respect hasTrailingNewLine: if false,
+                // the expression follows on the same line (e.g. `/*c8*/ () => { }`).
+                val isMultiLineComment = comment.text.contains('\n')
+                if (isMultiLineComment || comment.hasTrailingNewLine) {
                     writeNewLine()
                 } else {
                     write(" ")
                 }
+            } else {
+                write(comment.text)
+                write(" ")
             }
+        }
+        // If the last comment ended with a newline, position cursor with indent
+        // for the expression that follows.
+        if (isStartOfLine) {
+            writeIndent()
         }
     }
 
@@ -1885,6 +1892,29 @@ class Emitter(
 
     private fun emitParenthesizedExpression(node: ParenthesizedExpression) {
         write("(")
+        // Emit leading comments between '(' and inner expression (e.g. `( /* Preserve */j = f())`)
+        if (!options.removeComments) {
+            val leftmost = leftmostExpressionDeep(node.expression)
+            val comments = leftmost.leadingComments
+            if (!comments.isNullOrEmpty()) {
+                for (comment in comments) {
+                    if (comment.hasPrecedingNewLine) {
+                        writeNewLine()
+                        writeIndent()
+                        write(reindentComment(comment))
+                        if (comment.hasTrailingNewLine) {
+                            writeNewLine()
+                            writeIndent()
+                        } else {
+                            write(" ")
+                        }
+                    } else {
+                        write(" ")
+                        write(comment.text)
+                    }
+                }
+            }
+        }
         emitExpression(node.expression)
         // Emit same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`)
         if (!options.removeComments) {
@@ -1997,6 +2027,21 @@ class Emitter(
         is CallExpression -> leftmostExpression(expr.expression)
         is TaggedTemplateExpression -> leftmostExpression(expr.tag)
         is NonNullExpression -> leftmostExpression(expr.expression)
+        else -> expr
+    }
+
+    /** Like [leftmostExpression] but also descends into BinaryExpression.left, ConditionalExpression, etc. */
+    private fun leftmostExpressionDeep(expr: Expression): Expression = when (expr) {
+        is BinaryExpression -> leftmostExpressionDeep(expr.left)
+        is ConditionalExpression -> leftmostExpressionDeep(expr.condition)
+        is PropertyAccessExpression -> leftmostExpressionDeep(expr.expression)
+        is ElementAccessExpression -> leftmostExpressionDeep(expr.expression)
+        is CallExpression -> leftmostExpressionDeep(expr.expression)
+        is TaggedTemplateExpression -> leftmostExpressionDeep(expr.tag)
+        is NonNullExpression -> leftmostExpressionDeep(expr.expression)
+        is ParenthesizedExpression -> leftmostExpressionDeep(expr.expression)
+        is AsExpression -> leftmostExpressionDeep(expr.expression)
+        is TypeAssertionExpression -> leftmostExpressionDeep(expr.expression)
         else -> expr
     }
 
