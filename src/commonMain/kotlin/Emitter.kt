@@ -506,6 +506,7 @@ class Emitter(
         write("return")
         if (node.expression != null) {
             write(" ")
+            emitInlineLeadingComments(node.expression)
             emitExpression(node.expression)
         }
         write(";")
