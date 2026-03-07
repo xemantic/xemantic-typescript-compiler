@@ -1525,7 +1525,7 @@ class Emitter(
                     if (!comment.hasPrecedingNewLine) {
                         // Same-line comment after the last comma/element: back up before last \n
                         if (sb.isNotEmpty() && sb[sb.length - 1] == '\n') {
-                            sb.deleteCharAt(sb.length - 1)
+                            sb.deleteAt(sb.length - 1)
                             write(" ")
                             write(comment.text)
                             sb.append('\n')
@@ -2527,7 +2527,7 @@ class Emitter(
         val comments = node.trailingComments ?: return
         // Back up past the trailing newline if present
         if (sb.isNotEmpty() && sb[sb.length - 1] == '\n') {
-            sb.deleteCharAt(sb.length - 1)
+            sb.deleteAt(sb.length - 1)
             for (comment in comments) {
                 write(" ")
                 write(comment.text)
