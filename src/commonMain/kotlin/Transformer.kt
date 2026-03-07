@@ -935,6 +935,21 @@ class Transformer(private val options: CompilerOptions) {
             result.addAll(rewritten)
         }
 
+        // Rewrite references to "direct" exported vars (exports.x = value, no local var kept).
+        // References to these names throughout the body must become exports.name.
+        if (directExportedVarNames.isNotEmpty()) {
+            val exportRewriteMap: Map<String, Expression> = directExportedVarNames.associateWith { name ->
+                PropertyAccessExpression(
+                    expression = syntheticId("exports"),
+                    name = syntheticId(name),
+                    pos = -1, end = -1,
+                ) as Expression
+            }
+            val rewritten = result.map { stmt -> rewriteIdInStatement(stmt, exportRewriteMap) }
+            result.clear()
+            result.addAll(rewritten)
+        }
+
         // Collect internal import alias names (from `import x = M.N`) for elision.
         // Only erase when the module reference root is a namespace declared in this file,
         // AND the alias name never appears elsewhere in the source (including type positions).
