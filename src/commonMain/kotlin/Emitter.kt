@@ -320,7 +320,10 @@ class Emitter(
 
     private fun emitExpressionStatement(node: ExpressionStatement) {
         writeIndent()
+        val needsWrap = expressionNeedsParensInStatementPosition(node.expression)
+        if (needsWrap) write("(")
         emitExpression(node.expression)
+        if (needsWrap) write(")")
         // Emit any inline block comments between expression and `;` (e.g. `Array /*3*/;`)
         // Line comments (//) must go after the semicolon since they extend to end of line.
         val blockComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
@@ -1953,7 +1956,8 @@ class Emitter(
                 } else {
                     write(" ")
                 }
-                if (body is ObjectLiteralExpression) {
+                val leftmost = getLeftmostExpression(body, stopAtCallExpressions = false)
+                if (leftmost is ObjectLiteralExpression) {
                     write("(")
                     emitExpression(body)
                     write(")")
@@ -2624,5 +2628,39 @@ class Emitter(
             sb.append(text)
         }
         writeNewLine()
+    }
+
+    /**
+     * Walks down the left side of an expression tree to find the leftmost
+     * (first-to-be-emitted) expression. When [stopAtCallExpressions] is true,
+     * the walk stops at CallExpression/NewExpression callee boundaries.
+     */
+    private fun getLeftmostExpression(expr: Expression, stopAtCallExpressions: Boolean): Expression =
+        when (expr) {
+            is CallExpression -> if (stopAtCallExpressions) expr else getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is BinaryExpression -> getLeftmostExpression(expr.left, stopAtCallExpressions)
+            is ConditionalExpression -> getLeftmostExpression(expr.condition, stopAtCallExpressions)
+            is TaggedTemplateExpression -> getLeftmostExpression(expr.tag, stopAtCallExpressions)
+            is PropertyAccessExpression -> getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is ElementAccessExpression -> getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is PostfixUnaryExpression -> getLeftmostExpression(expr.operand, stopAtCallExpressions)
+            is NewExpression -> if (stopAtCallExpressions) expr else getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is AsExpression -> getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is NonNullExpression -> getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is SatisfiesExpression -> getLeftmostExpression(expr.expression, stopAtCallExpressions)
+            is ParenthesizedExpression -> expr  // stop: parens are opaque
+            is CommaListExpression -> expr  // stop
+            else -> expr
+        }
+
+    /**
+     * Returns true if the given expression needs to be wrapped in parentheses
+     * when it appears as the body of an expression statement or arrow function concise body,
+     * because its leftmost token would be ambiguous (e.g., `{` as block vs object literal,
+     * or `function` as declaration vs expression).
+     */
+    private fun expressionNeedsParensInStatementPosition(expr: Expression): Boolean {
+        val leftmost = getLeftmostExpression(expr, stopAtCallExpressions = false)
+        return leftmost is ObjectLiteralExpression || leftmost is FunctionExpression
     }
 }

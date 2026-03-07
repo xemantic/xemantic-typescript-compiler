@@ -4186,7 +4186,7 @@ class Transformer(private val options: CompilerOptions) {
                 val memberName = expr.name.text
                 if (baseName != null) {
                     val inlined = tryInlineConstEnumMember(baseName, memberName, "$baseName.$memberName")
-                    inlined ?: expr.copy(expression = transformExpression(expr.expression))
+                    inlined ?: expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
                 } else {
                     // Check for namespaced const enum: M.SomeConstEnum.X
                     // Try the last component of the LHS as the enum name
@@ -4201,9 +4201,9 @@ class Transformer(private val options: CompilerOptions) {
                         }
                         val commentLabel = "${accessChainText(expr.expression)}.$memberName"
                         val inlined = tryInlineConstEnumMember(nestedEnumName, memberName, commentLabel)
-                        inlined ?: expr.copy(expression = transformExpression(expr.expression))
+                        inlined ?: expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
                     } else {
-                        expr.copy(expression = transformExpression(expr.expression))
+                        expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
                     }
                 }
             }
@@ -4246,12 +4246,12 @@ class Transformer(private val options: CompilerOptions) {
                     else """$baseName["$keyStr"]"""
                     val inlined = tryInlineConstEnumMember(baseName, keyStr, commentLabel)
                     inlined ?: expr.copy(
-                        expression = transformExpression(expr.expression),
+                        expression = parenthesizeForAccess(transformExpression(expr.expression)),
                         argumentExpression = transformExpression(expr.argumentExpression),
                     )
                 } else {
                     expr.copy(
-                        expression = transformExpression(expr.expression),
+                        expression = parenthesizeForAccess(transformExpression(expr.expression)),
                         argumentExpression = transformExpression(expr.argumentExpression),
                     )
                 }
@@ -7575,15 +7575,27 @@ class Transformer(private val options: CompilerOptions) {
      * - Prefix unary / keyword-prefix ops: needs `()` for member access — `(-A).x` ≠ `-A.x`
      */
     private fun typeAssertionResultNeedsParens(expr: Expression): Boolean = when (expr) {
-        is ObjectLiteralExpression -> true
-        is FunctionExpression, is ClassExpression -> true
+        // ObjectLiteralExpression, FunctionExpression, and ClassExpression are NOT listed here.
+        // Their parens are handled at the emitter level (expression statements and arrow bodies)
+        // so that the parens wrap the full expression chain, not just the inner node.
         is ArrowFunction -> true
-        is NewExpression -> expr.arguments == null
         is PrefixUnaryExpression -> true
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
         is AwaitExpression, is YieldExpression -> true
         else -> false
     }
+
+    /**
+     * Wraps [expr] in parentheses if it is a `NewExpression` without argument parens,
+     * which would be ambiguous as the LHS of a member-access or element-access
+     * (e.g. `new a.b` means `new (a.b)`, not `(new a).b`).
+     */
+    private fun parenthesizeForAccess(expr: Expression): Expression =
+        if (expr is NewExpression && expr.arguments == null) {
+            ParenthesizedExpression(expression = expr, pos = expr.pos, end = expr.end)
+        } else {
+            expr
+        }
 
     companion object {
         /** TypeScript `__awaiter` helper — emitted at the top of files with downleveled async functions. */
