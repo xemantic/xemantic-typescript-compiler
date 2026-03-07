@@ -5428,8 +5428,14 @@ class Transformer(private val options: CompilerOptions) {
         // Initialize from previous declaration of same enum (merged enums)
         val previousMembers = allEnumMemberValues[enumName]
         val memberValues = previousMembers?.toMutableMap() ?: mutableMapOf()
-        // Track known member names for qualifying bare identifiers in initializers
-        val knownMemberNames = previousMembers?.keys?.toMutableSet() ?: mutableSetOf()
+        // Track known member names for qualifying bare identifiers in initializers.
+        // Collect ALL member names upfront — TypeScript qualifies references to any member,
+        // not just previously-declared ones (e.g., `A = A` → `E.A`).
+        val knownMemberNames = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf()).apply {
+            for (m in decl.members) {
+                add(extractEnumMemberName(m.name))
+            }
+        }
 
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)

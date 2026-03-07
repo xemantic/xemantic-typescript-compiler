@@ -1373,8 +1373,7 @@ class Emitter(
                     val longVal = numVal.toULongOrNull(base)
                     longVal?.toString() ?: numText
                 } else {
-                    val numVal = numText.toDoubleOrNull()
-                    if (numVal != null && numVal.isInfinite()) "Infinity" else numText
+                    numText
                 }
                 write(emitText)
                 // Only emit same-line trailing comments (hasPrecedingNewLine=false).
