@@ -122,6 +122,10 @@ class Transformer(private val options: CompilerOptions) {
     // Causes the __awaiter helper to be prepended to the output statements.
     private var needsAwaiterHelper = false
 
+    // Set to true when object destructuring with rest elements is transformed.
+    // Causes the __rest helper to be prepended to the output statements.
+    private var needsRestHelper = false
+
     // Counter for anonymous export default classes/functions (default_1, default_2, ...)
     private var anonDefaultCounter = 0
 
@@ -144,6 +148,7 @@ class Transformer(private val options: CompilerOptions) {
         hasSeenAnyTopLevelStatement = false
         inAsyncBody = false
         needsAwaiterHelper = false
+        needsRestHelper = false
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
         // are interfaces — TypeScript erases them and may produce `export {}` to preserve module semantics.
@@ -216,37 +221,42 @@ class Transformer(private val options: CompilerOptions) {
             }
         } else transformed
 
+        // Inject __rest helper if any object destructuring rest was transformed.
+        val withRest = if (needsRestHelper) {
+            listOf(RawStatement(code = REST_HELPER)) + withAwaiter
+        } else withAwaiter
+
         // CommonJS module transform (also for Node16/NodeNext with .ts/.cts files)
         val effectiveModule = options.effectiveModule
         val useCJS = effectiveModule == ModuleKind.CommonJS ||
                 ((effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) &&
                         !isESModuleFormat(effectiveModule, sourceFile.fileName))
         if (useCJS && isModuleFile(sourceFile)) {
-            val cjsStatements = transformToCommonJS(withAwaiter, sourceFile)
+            val cjsStatements = transformToCommonJS(withRest, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
         }
 
         // AMD module transform — only for module files (files with imports/exports).
         // Non-module files in AMD format are emitted as-is (no define wrapper).
         if (options.effectiveModule == ModuleKind.AMD && isModuleFile(sourceFile)) {
-            val amdStatements = transformToAMD(withAwaiter, sourceFile)
+            val amdStatements = transformToAMD(withRest, sourceFile)
             return sourceFile.copy(statements = amdStatements)
         }
 
         // UMD module transform — reuses AMD body with UMD wrapper.
         if (options.effectiveModule == ModuleKind.UMD && isModuleFile(sourceFile)) {
-            val umdStatements = transformToUMD(withAwaiter, sourceFile)
+            val umdStatements = transformToUMD(withRest, sourceFile)
             return sourceFile.copy(statements = umdStatements)
         }
 
         // System module transform — only for module files.
         if (options.effectiveModule == ModuleKind.System && isModuleFile(sourceFile)) {
-            val sysStatements = transformToSystem(withAwaiter, sourceFile)
+            val sysStatements = transformToSystem(withRest, sourceFile)
             return sourceFile.copy(statements = sysStatements)
         }
 
         // ES module import elision: erase imports whose bindings are unused in value positions
-        val elided = elideUnusedESModuleImports(withAwaiter)
+        val elided = elideUnusedESModuleImports(withRest)
 
         // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
         // only when x is unused AND the aliased module reference roots into a namespace
@@ -3938,7 +3948,7 @@ class Transformer(private val options: CompilerOptions) {
         // Declare modifier on the variable statement — erase, but preserve detached comments
         if (ModifierFlag.Declare in stmt.modifiers) return orphanedComments(stmt)
 
-        val transformedList = transformVariableDeclarationList(stmt.declarationList)
+        val transformedList = transformVariableDeclarationListWithRest(stmt.declarationList)
         val strippedModifiers = stripTypeScriptModifiers(stmt.modifiers)
         return listOf(
             stmt.copy(
@@ -3954,6 +3964,100 @@ class Transformer(private val options: CompilerOptions) {
         return list.copy(
             declarations = list.declarations.map { transformVariableDeclaration(it) }
         )
+    }
+
+    /**
+     * Like transformVariableDeclarationList but also handles object rest patterns.
+     * `var { a, ...rest } = expr` → `var { a } = expr, rest = __rest(expr, ["a"])`
+     */
+    private fun transformVariableDeclarationListWithRest(
+        list: VariableDeclarationList
+    ): VariableDeclarationList {
+        val newDecls = mutableListOf<VariableDeclaration>()
+        for (decl in list.declarations) {
+            val name = decl.name
+            if (name is ObjectBindingPattern && name.elements.any { it.dotDotDotToken }
+                && options.effectiveTarget < ScriptTarget.ES2018) {
+                val restElement = name.elements.last { it.dotDotDotToken }
+                val nonRestElements = name.elements.filter { !it.dotDotDotToken }
+
+                // Collect the property names that are excluded from __rest
+                val excludedKeys = nonRestElements.map { elem ->
+                    val keyName = when {
+                        elem.propertyName is Identifier -> elem.propertyName.text
+                        elem.propertyName is StringLiteralNode -> elem.propertyName.text
+                        elem.propertyName is NumericLiteralNode -> elem.propertyName.text
+                        elem.name is Identifier -> (elem.name as Identifier).text
+                        else -> return@map null
+                    }
+                    StringLiteralNode(text = keyName, singleQuote = false, pos = -1, end = -1)
+                }.filterNotNull()
+
+                val initExpr = decl.initializer?.let { transformExpression(it) }
+
+                // If initializer is complex (not a simple identifier) AND there are
+                // non-rest elements (need to destructure), use a temp var to avoid
+                // evaluating the expression twice.
+                val sourceExpr: Expression
+                if (initExpr != null && initExpr !is Identifier && nonRestElements.isNotEmpty()) {
+                    val tempName = nextTempVarName()
+                    hoistedVarScopes.lastOrNull()?.add(tempName)
+                    sourceExpr = syntheticId(tempName)
+                    // Emit: _a = expr, { a } = _a, rest = __rest(_a, ["a"])
+                    newDecls.add(VariableDeclaration(
+                        name = syntheticId(tempName),
+                        initializer = initExpr,
+                        pos = -1, end = -1,
+                    ))
+                    val newPattern = ObjectBindingPattern(
+                        elements = nonRestElements.map { transformBindingElement(it) },
+                        pos = -1, end = -1,
+                    )
+                    newDecls.add(VariableDeclaration(
+                        name = newPattern,
+                        initializer = sourceExpr,
+                        pos = -1, end = -1,
+                    ))
+                } else {
+                    sourceExpr = initExpr ?: syntheticId("undefined")
+                    // Emit non-rest part (if there are non-rest elements)
+                    if (nonRestElements.isNotEmpty()) {
+                        val newPattern = ObjectBindingPattern(
+                            elements = nonRestElements.map { transformBindingElement(it) },
+                            pos = -1, end = -1,
+                        )
+                        newDecls.add(VariableDeclaration(
+                            name = newPattern,
+                            initializer = sourceExpr,
+                            pos = -1, end = -1,
+                            leadingComments = decl.leadingComments,
+                        ))
+                    }
+                }
+
+                // Emit rest part: rest = __rest(source, ["a", "b"])
+                val restName = transformBindingName(restElement.name)
+                newDecls.add(VariableDeclaration(
+                    name = restName,
+                    initializer = CallExpression(
+                        expression = syntheticId("__rest"),
+                        arguments = listOf(
+                            sourceExpr,
+                            ArrayLiteralExpression(
+                                elements = excludedKeys,
+                                pos = -1, end = -1,
+                            ),
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+                needsRestHelper = true
+            } else {
+                newDecls.add(transformVariableDeclaration(decl))
+            }
+        }
+        return list.copy(declarations = newDecls)
     }
 
     private fun transformVariableDeclaration(decl: VariableDeclaration): VariableDeclaration {
@@ -7720,6 +7824,20 @@ class Transformer(private val options: CompilerOptions) {
         }
 
     companion object {
+        /** TypeScript `__rest` helper — emitted when object destructuring uses rest elements. */
+        val REST_HELPER = """var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
+"""
+
         /** TypeScript `__awaiter` helper — emitted at the top of files with downleveled async functions. */
         val AWAITER_HELPER = """var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
