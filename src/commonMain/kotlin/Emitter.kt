@@ -2234,7 +2234,14 @@ class Emitter(
                 if (binNode.operator == SyntaxKind.InKeyword || binNode.operator == SyntaxKind.InstanceOfKeyword) {
                     write(" $op ")
                 } else if (binNode.operator == SyntaxKind.Comma) {
-                    write("$op ")
+                    if (rightNewLine) {
+                        write("$op")
+                        writeNewLine()
+                        repeat(indentLevel + 1) { sb.append("    ") }
+                        isStartOfLine = false
+                    } else {
+                        write("$op ")
+                    }
                 } else if (rightNewLine) {
                     write(" $op")
                     writeNewLine()
@@ -2273,7 +2280,15 @@ class Emitter(
             write(" $op ")
             emitRight()
         } else if (node.operator == SyntaxKind.Comma) {
-            write("$op ")
+            val commaNewLine = node.left.end > 0 && hasNewLineInSource(node.left.end, node.right.pos)
+            if (commaNewLine) {
+                write("$op")
+                writeNewLine()
+                repeat(indentLevel + 1) { sb.append("    ") }
+                isStartOfLine = false
+            } else {
+                write("$op ")
+            }
             emitRight()
         } else if (node.operatorHasPrecedingLineBreak) {
             // Operator is on a new line in the source (possibly with comments before it).
