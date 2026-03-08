@@ -1,94 +1,79 @@
 # Test Fix Plan
 
-**Baseline:** 4480 tests, 543 failing (after duplicate `@filename` fix)
+**Current State:** 4480 tests, 395 failing (4,085 passing — 91.2%)
 
-## Root Cause Categories (ranked by estimated impact)
+## Remaining Failure Categories (ranked by estimated count)
 
-### 1. Missing emit helpers (~80-100 tests) — HIGH COMPLEXITY
-The compiler does not emit TypeScript helper functions injected at file top:
-- `__decorate` (decorator support) — ~20 tests
-- `__awaiter` (async/await downlevel) — ~15 tests
-- `__classPrivateFieldGet/Set` (private fields) — ~15 tests
-- `__importDefault/__importStar` (esModuleInterop) — ~15 tests
-- `__createBinding/__exportStar` (export * re-exports) — ~10 tests
-- `__rest` (object rest destructuring) — ~5 tests
+### 1. Missing/incomplete emit helpers (~60 tests) — HIGH COMPLEXITY
+- `__rest` in destructuring assignments (~15) — declaration form works, assignment form (`[{ ...x }] = expr`) does not
+- `__awaiter`/`__generator` (~12) — `__generator` helper not implemented
+- `__decorate` metadata edge cases (~15) — `__decorate` exists but `__metadata`, decorator on computed properties, etc.
+- `__importDefault`/`__importStar` (~19) — helpers already emitted, but CommonJS export edge cases (missing `exports.default = void 0`, re-export assignments)
+- `__setFunctionName`, `__createBinding`, `__exportStar`, `__classPrivateFieldGet/Set` — various counts
 
-These are large feature gaps requiring whole subsystems to be implemented.
+### 2. Parser error recovery (~50 tests) — MEDIUM-HIGH COMPLEXITY
+TypeScript's parser produces specific error recovery output. Our parser differs in:
+- `yield` in type assertion context
+- Numeric literals with trailing decimals (`2.toString()`)
+- Arrow function misparse in generics
+- Missing token recovery
+- Tagged template incomplete expressions
 
-### 2. `export` inside namespace not transformed to property assignment (~15-20 tests) — MEDIUM
-`export var x = 1` inside a `namespace` should become `M.x = 1`. The compiler leaves the `export` keyword in the output instead.
+### 3. Module transform edge cases (~30 tests) — MEDIUM
+- `outFile` AMD bundling with named modules (~27) — requires bundle mode
+- CommonJS `exports.default = void 0` initialization
+- Module file ordering (topological sort)
+- `modulePreserve` mode handling
 
-### 3. `const enum` inlining (~15-20 tests) — BLOCKED
-Requires type checker to know enum member values. Cannot fix until type checker is implemented.
+### 4. Type-checker-driven transforms (~30 tests) — BLOCKED
+- Destructuring downlevel (e.g. `let { toString } = 1` → `toString = 1..toString`) — needs type info
+- Import alias elision (`import x = M.N` when N is non-instantiated) — needs type checker
+- `const enum` cross-file inlining (~15 tests)
 
-### 4. `import = require()` elision (~15-20 tests) — BLOCKED
-Determining whether `import X = require("mod")` is type-only requires the type checker.
+### 5. Internal comments (~15 tests) — HIGH COMPLEXITY
+Tests like `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments` need per-token comment tracking (`preDotComments`, `postDotComments`, label comments, etc.)
 
-### 5. Constructor parameter properties / class member transforms (~10-15 tests) — MEDIUM
-- `public a: number` in constructor params should emit `this.a = a;` — currently drops parameter entirely
-- `static f = 3` leaks as `static; f = 3;` instead of being hoisted to `ClassName.f = 3;` after class
-- `public`/`private` keywords on constructor params leak as identifier expressions
+### 6. Other (~50+ tests)
+- Static field transform (`static x = 1` → `C.x = 1`) — ~5 tests
+- Comment preservation edge cases (orphaned comments, triple-slash references) — ~10 tests
+- Unicode/BOM encoding issues — ~3 tests
+- Multi-file ordering — ~10 tests
+- SystemJS variable hoisting — ~10 tests
 
-### 6. Comment emission issues (~24+ tests) — MEDIUM
-Multiple sub-bugs in Emitter.kt:
-- Comments inside parens dropped: `( /* Preserve */j = f())` → `(j = f())`
-- Leading comments on call args produce extra blank lines/unwanted newline breaks
-- Missing newline after block comments with `hasTrailingNewLine`
-- Comments in switch cases dropped
+## Completed Fixes (chronological)
 
-### 7. Type assertion parentheses (~14 tests) — LOW COMPLEXITY
-- `(<any>new a)` → `(new a)` instead of `new a` (unnecessary parens on NewExpression)
-- Comments inside type-assertion parens lost when parens stripped
-- `castFunctionExpressionShouldBeParenthesized`: paren placement differs from TypeScript output
+- [x] Deduplicate consecutive identical `@filename` directives in multi-file parser
+- [x] `removeComments` pinned comments
+- [x] `export {}` for type-only exports
+- [x] Binary operator trailing comments
+- [x] Yield expression trailing comments
+- [x] AMD module format support (+241 tests)
+- [x] CommonJS export ordering
+- [x] System module + optional chaining + nullish coalescing + ternary formatting (+129 tests)
+- [x] Enum folding (+9 tests)
+- [x] JSDoc-in-args, param block comments, trailing expr comments (+8 tests)
+- [x] Object.assign nested form, destructuring keys, namespace qualification, const spacing (+49 tests)
+- [x] ClassExpression parens in extends clause
+- [x] Operator trailing comments in inline binary expressions
+- [x] Parameter trailing comments before type annotation erasure
+- [x] Catch block multiline forcing
+- [x] Iterative binary expression chain operator trailing comments
+- [x] JSON file trailing comma stripping
+- [x] `moduleDetection: force` support for `export {}` and `use strict`
+- [x] `.mts/.mjs/.cts/.cjs` file extension module detection
+- [x] BigInt binary/octal to decimal conversion
 
-### 8. AMD module format (~15-20 tests) — MEDIUM
-- Missing module name strings for named AMD modules
-- Import path resolution using relative instead of resolved paths
+## Recommended Next Steps (diminishing returns)
 
-### 9. Parser error recovery edge cases (~15-20 tests) — MEDIUM
-- `<<T>(x: T) => T>f` misparse as arrow function
-- `yield` treated as YieldExpression in type assertion context instead of identifier
-- Arrow function expression statements split at `=>`
-- `bigint` property names not parsed
-- Error recovery for missing tokens
+### Potentially tractable (5-20 tests each, complex)
+1. **`__rest` in assignment patterns** — extend destructuring rest to handle assignments, not just declarations
+2. **CommonJS `exports.default = void 0` + re-export** — fix export initialization and re-export handling
+3. **Static class fields** — transform `static x = 1` to `ClassName.x = 1` after class body
+4. **Internal comment AST fields** — add `preDotComments`/`postDotComments` to `PropertyAccessExpression` etc.
 
-### 10. SystemJS variable hoisting (~10 tests) — MEDIUM
-Variables in SystemJS modules not hoisted to top of `execute` function.
-
-### 11. Multi-file baseline formatting (~10-15 tests) — LOW-MEDIUM
-- Duplicate file headers (FIXED: +1 test)
-- Wrong file ordering
-- Missing output file sections
-
-### 12. Misc issues (~10-15 tests) — LOW
-- UTF-16 BOM handling (`bom-utf16be`, `bom-utf16le`)
-- `export default` unnamed classes missing synthetic name
-- CommonJS destructuring with exported names
-- Binary expression stack overflow (`binderBinaryExpressionStress`)
-
-## Recommended Fix Order (highest ROI first)
-
-### Wave 1 — Quick wins touching different files
-1. **Type assertion parens** (Transformer.kt) — fix `typeAssertionResultNeedsParens` for NewExpression
-2. **Comment emission** (Emitter.kt) — fix comment-inside-parens, hasTrailingNewLine newline
-
-### Wave 2 — Class/constructor transforms
-3. **Constructor parameter properties** (Transformer.kt) — fix `public`/`private` keyword leaking
-4. **Static class field transforms** (Transformer.kt) — hoist static fields outside class
-
-### Wave 3 — Namespace/module transforms
-5. **`export` inside namespace** (Transformer.kt) — transform to property assignment
-6. **AMD named modules** (Transformer.kt) — add module name to `define()` call
-
-### Wave 4 — Larger features
-7. **`__decorate` helper** (Transformer.kt) — implement decorator downlevel transform
-8. **`__importDefault/__importStar`** (Transformer.kt) — implement esModuleInterop helpers
-9. **Binary expression iterative emit** (Emitter.kt) — prevent stack overflow
-
-### Deferred (blocked on type checker)
-- `const enum` inlining
-- `import = require()` type-only elision
-
-## Completed Fixes
-
-- [x] Deduplicate consecutive identical `@filename` directives in multi-file parser (+1 test)
+### Blocked / out of scope
+- `const enum` inlining — type checker needed
+- `import = require()` elision — type checker needed
+- Declaration emit (804 tests) — type analysis needed
+- `outFile` bundling — significant infrastructure
+- `__generator` helper — complex state machine transform
