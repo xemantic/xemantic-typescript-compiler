@@ -187,7 +187,8 @@ class Parser(private val source: String, private val fileName: String) {
                 when (token) {
                     VarKeyword, LetKeyword, ConstKeyword, FunctionKeyword, ClassKeyword,
                     InterfaceKeyword, TypeKeyword, EnumKeyword, NamespaceKeyword, ModuleKeyword,
-                    AbstractKeyword, GlobalKeyword, ImportKeyword, ExportKeyword -> true
+                    AbstractKeyword, GlobalKeyword, ImportKeyword, ExportKeyword,
+                    DeclareKeyword -> true
                     else -> false
                 }
             }
@@ -1790,6 +1791,8 @@ class Parser(private val source: String, private val fileName: String) {
 
             GlobalKeyword -> parseModuleDeclaration(modifiers, comments)
             ImportKeyword -> parseImportDeclaration(modifiers, comments)
+            // `declare declare ...` — duplicate declare keyword, skip and recurse
+            DeclareKeyword -> parseDeclareDeclaration(modifiers, comments)
 
             // `declare export function/class/...` — add Export modifier and recurse
             ExportKeyword -> {
