@@ -66,6 +66,7 @@ data class CompilerOptions(
     val module: ModuleKind? = null,
     val strict: Boolean = false,
     val noEmit: Boolean = false,
+    val noEmitHelpers: Boolean = false,
     val declaration: Boolean = false,
     val removeComments: Boolean = false,
     val preserveConstEnums: Boolean = false,
@@ -298,6 +299,7 @@ private fun applyDirective(options: CompilerOptions, key: String, value: String)
 
         "strict" -> options.copy(strict = boolValue)
         "noemit" -> options.copy(noEmit = boolValue)
+        "noemithelpers" -> options.copy(noEmitHelpers = boolValue)
         "declaration" -> options.copy(declaration = boolValue)
         "removecomments" -> options.copy(removeComments = boolValue)
         "preserveconstenums" -> options.copy(preserveConstEnums = boolValue)
