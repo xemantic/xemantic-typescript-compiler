@@ -256,23 +256,13 @@ class Transformer(private val options: CompilerOptions) {
         val elided = elideUnusedESModuleImports(withHelpers)
 
         // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
-        // only when x is unused AND the aliased module reference roots into a namespace
-        // declared in this file. We check the original source text for any occurrence of
-        // the alias name (including type-position uses like `var p: x.T`) so we don't
-        // erase aliases that appear only in type annotations.
-        val topLevelNsNames = sourceFile.statements
-            .filterIsInstance<ModuleDeclaration>()
-            .mapNotNull { (it.name as? Identifier)?.text }
-            .toSet()
+        // only when x is explicitly type-only (import type x = M.N).
+        // Without a type checker, we cannot safely determine if a value-position import
+        // is unused, so we keep all non-type-only import aliases.
         val unusedAliasNames = sourceFile.statements
             .filterIsInstance<ImportEqualsDeclaration>()
-            .filter { !it.isTypeOnly && it.moduleReference !is ExternalModuleReference }
-            .filter { decl -> namespaceAliasRoot(decl.moduleReference) in topLevelNsNames }
+            .filter { it.isTypeOnly && it.moduleReference !is ExternalModuleReference }
             .mapNotNull { decl -> decl.name.text.ifEmpty { null } }
-            .filter { name ->
-                // Count word-boundary occurrences in source text; ≤1 means only the declaration
-                Regex("\\b${Regex.escape(name)}\\b").findAll(sourceFile.text).count() <= 1
-            }
             .toSet()
         val finalStatements = if (unusedAliasNames.isNotEmpty()) {
             elided.filter { stmt ->
