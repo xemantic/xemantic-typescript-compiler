@@ -769,7 +769,11 @@ class Emitter(
             write("finally")
             emitInnerComments(node.afterFinallyComments)
             emitBlockBody(node.finallyBlock, emitOpenBraceComments = true)
+        } else {
+            // Emit trailing comments after catch block when there's no finally
+            emitTrailingComments(node.afterCatchBlockComments)
         }
+        emitTrailingComments(node)
         writeNewLine()
     }
 
