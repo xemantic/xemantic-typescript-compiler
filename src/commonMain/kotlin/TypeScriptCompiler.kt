@@ -180,10 +180,15 @@ class TypeScriptCompiler {
                 }
 
                 // Re-emit JSON files when outDir is set
-                if (file.fileName.endsWith(".json") && options.outDir != null && options.fullEmitPaths) {
-                    val outDir = options.outDir.trimEnd('/')
-                    val jsonBaseName = file.fileName.substringAfterLast('/')
-                    jsonOutputs.add("$outDir/$jsonBaseName" to file.content)
+                if (file.fileName.endsWith(".json") && options.outDir != null) {
+                    if (options.fullEmitPaths) {
+                        val outDir = options.outDir.trimEnd('/')
+                        val jsonBaseName = file.fileName.substringAfterLast('/')
+                        jsonOutputs.add("$outDir/$jsonBaseName" to file.content)
+                    } else {
+                        val jsonBaseName = file.fileName.substringAfterLast('/')
+                        jsonOutputs.add(jsonBaseName to file.content)
+                    }
                     continue
                 }
 
