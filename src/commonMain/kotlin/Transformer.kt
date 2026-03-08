@@ -343,16 +343,19 @@ class Transformer(private val options: CompilerOptions) {
 
     private fun isModuleFile(
         sourceFile: SourceFile
-    ) = sourceFile.statements.any { stmt ->
-        stmt is ImportDeclaration || stmt is ExportDeclaration ||
-                (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) || stmt is ExportAssignment ||
-                (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is InterfaceDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is TypeAliasDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers)
+    ): Boolean {
+        if (options.moduleDetection == "force") return true
+        return sourceFile.statements.any { stmt ->
+            stmt is ImportDeclaration || stmt is ExportDeclaration ||
+                    (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) || stmt is ExportAssignment ||
+                    (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is InterfaceDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is TypeAliasDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers)
+        }
     }
 
     // -----------------------------------------------------------------

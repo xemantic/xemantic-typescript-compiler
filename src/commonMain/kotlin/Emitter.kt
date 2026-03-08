@@ -104,16 +104,19 @@ class Emitter(
         }
     }
 
-    private fun hasModuleStatements(sourceFile: SourceFile): Boolean = sourceFile.statements.any {
-        it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
-                (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference) ||
-                (it is VariableStatement && ModifierFlag.Export in it.modifiers) ||
-                (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
-                (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||
-                (it is EnumDeclaration && ModifierFlag.Export in it.modifiers) ||
-                (it is ModuleDeclaration && ModifierFlag.Export in it.modifiers) ||
-                (it is InterfaceDeclaration && ModifierFlag.Export in it.modifiers) ||
-                (it is TypeAliasDeclaration && ModifierFlag.Export in it.modifiers)
+    private fun hasModuleStatements(sourceFile: SourceFile): Boolean {
+        if (options.moduleDetection == "force") return true
+        return sourceFile.statements.any {
+            it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
+                    (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference) ||
+                    (it is VariableStatement && ModifierFlag.Export in it.modifiers) ||
+                    (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
+                    (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||
+                    (it is EnumDeclaration && ModifierFlag.Export in it.modifiers) ||
+                    (it is ModuleDeclaration && ModifierFlag.Export in it.modifiers) ||
+                    (it is InterfaceDeclaration && ModifierFlag.Export in it.modifiers) ||
+                    (it is TypeAliasDeclaration && ModifierFlag.Export in it.modifiers)
+        }
     }
 
     // ---------------------------------------------------------------------------
