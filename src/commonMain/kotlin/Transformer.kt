@@ -1938,12 +1938,15 @@ class Transformer(private val options: CompilerOptions) {
                     val args = call.arguments
                     val depArray: Expression
                     val factoryFunc: Expression
+                    val amdModuleName: StringLiteralNode?
                     if (args.size >= 3 && args[0] is StringLiteralNode) {
                         // define("name", [...], function(...) {...})
+                        amdModuleName = args[0] as StringLiteralNode
                         depArray = args[1]
                         factoryFunc = args[2]
                     } else if (args.size >= 2) {
                         // define([...], function(...) {...})
+                        amdModuleName = null
                         depArray = args[0]
                         factoryFunc = args[1]
                     } else {
@@ -1952,7 +1955,7 @@ class Transformer(private val options: CompilerOptions) {
                     }
 
                     // Build UMD wrapper
-                    val umdWrapper = buildUMDWrapper(depArray, factoryFunc)
+                    val umdWrapper = buildUMDWrapper(depArray, factoryFunc, amdModuleName)
                     result.add(umdWrapper)
                     continue
                 }
@@ -1963,14 +1966,19 @@ class Transformer(private val options: CompilerOptions) {
         return result
     }
 
-    private fun buildUMDWrapper(depArray: Expression, factoryFunc: Expression): ExpressionStatement {
+    private fun buildUMDWrapper(depArray: Expression, factoryFunc: Expression, amdModuleName: StringLiteralNode? = null): ExpressionStatement {
         val factoryParam = Parameter(name = syntheticId("factory"), pos = -1, end = -1)
 
-        // define(depArray, factory) — inside the AMD branch
+        // define([name,] depArray, factory) — inside the AMD branch
+        val defineArgs = if (amdModuleName != null) {
+            listOf(amdModuleName, depArray, syntheticId("factory"))
+        } else {
+            listOf(depArray, syntheticId("factory"))
+        }
         val innerDefineCall = ExpressionStatement(
             expression = CallExpression(
                 expression = syntheticId("define"),
-                arguments = listOf(depArray, syntheticId("factory")),
+                arguments = defineArgs,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
