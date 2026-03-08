@@ -349,6 +349,7 @@ data class ClassDeclaration(
     val heritageClauses: List<HeritageClause>? = null,
     val members: List<ClassElement>,
     val modifiers: Set<ModifierFlag> = emptySet(),
+    val decorators: List<Decorator>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
