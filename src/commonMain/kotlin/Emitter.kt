@@ -1519,9 +1519,19 @@ class Emitter(
                 }
             }
             is BigIntLiteralNode -> {
-                // TypeScript lowercases hex digits in bigint literals (e.g. 0xFFFFn → 0xffffn)
                 val text = node.text.replace("_", "")
-                write(if (text.startsWith("0x") || text.startsWith("0X")) text.lowercase() else text)
+                // TypeScript converts binary/octal BigInt literals to decimal (e.g. 0b101n → 5n, 0o567n → 375n)
+                // and lowercases hex digits (e.g. 0xFFFFn → 0xffffn)
+                val withoutN = text.removeSuffix("n").removeSuffix("N")
+                val converted = when {
+                    withoutN.startsWith("0b", ignoreCase = true) ->
+                        withoutN.substring(2).toLongOrNull(2)?.toString() ?: withoutN
+                    withoutN.startsWith("0o", ignoreCase = true) ->
+                        withoutN.substring(2).toLongOrNull(8)?.toString() ?: withoutN
+                    withoutN.startsWith("0x", ignoreCase = true) -> withoutN.lowercase()
+                    else -> withoutN
+                }
+                write("${converted}n")
             }
             is RegularExpressionLiteralNode -> write(node.text)
             is NoSubstitutionTemplateLiteralNode -> emitNoSubstitutionTemplateLiteral(node)
