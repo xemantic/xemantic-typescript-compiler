@@ -100,7 +100,7 @@ fun formatBaseline(
     sb.append(if (useLF) "\n" else "\r\n")
     if (sourceMap) {
         val mapPrefix = if (mapRoot != null) "${mapRoot.trimEnd('/')}/" else ""
-        sb.append("//# sourceMappingURL=$mapPrefix$jsName.map")
+        sb.append("//# sourceMappingURL=$mapPrefix${percentEncodeSourceMapUrl(jsName)}.map")
     }
 
     return sb.toString()
@@ -157,7 +157,7 @@ fun formatMultiFileBaseline(
         val isJsOutput = jsName.endsWith(".js") || jsName.endsWith(".jsx") ||
                 jsName.endsWith(".mjs") || jsName.endsWith(".cjs")
         if (sourceMap && isJsOutput) {
-            sb.append("//# sourceMappingURL=${jsName.substringAfterLast('/')}.map")
+            sb.append("//# sourceMappingURL=${percentEncodeSourceMapUrl(jsName.substringAfterLast('/'))}.map")
             // Add CRLF separator between JS sections, but not after the last one
             if (index < jsOutputs.size - 1) {
                 sb.append("\r\n")
@@ -165,6 +165,28 @@ fun formatMultiFileBaseline(
         }
     }
 
+    return sb.toString()
+}
+
+/**
+ * Percent-encodes non-ASCII characters and spaces in a source map URL path,
+ * matching TypeScript's URL encoding behavior for source map comments.
+ */
+private fun percentEncodeSourceMapUrl(path: String): String {
+    val sb = StringBuilder()
+    for (ch in path) {
+        if (ch.code > 127 || ch == ' ' || ch == '[' || ch == ']') {
+            // Encode as UTF-8 bytes, each byte percent-encoded
+            val bytes = ch.toString().encodeToByteArray()
+            for (b in bytes) {
+                sb.append('%')
+                sb.append(((b.toInt() and 0xFF) shr 4).digitToChar(16).uppercaseChar())
+                sb.append((b.toInt() and 0x0F).digitToChar(16).uppercaseChar())
+            }
+        } else {
+            sb.append(ch)
+        }
+    }
     return sb.toString()
 }
 
