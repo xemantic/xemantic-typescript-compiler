@@ -723,7 +723,7 @@ class Transformer(private val options: CompilerOptions) {
                     } else {
                         val bindings = clause.namedBindings
                         if (clause.name != null && bindings == null) {
-                            // Default import: const b_1 = __importDefault(require("./b"))
+                            // Default import only: const b_1 = __importDefault(require("./b"))
                             // TypeScript uses the module specifier basename as temp name, not the local name
                             needsImportDefault = true
                             val localName = clause.name.text
@@ -740,12 +740,47 @@ class Transformer(private val options: CompilerOptions) {
                             needsImportStar = true
                             result.add(makeImportHelperConst(bindings.name.text, "__importStar", moduleSpecifier, stmt.leadingComments))
                             // Namespace keeps its name, no rename needed
+                        } else if (clause.name != null && bindings is NamedImports) {
+                            // Combined default + named: import c, { x, y } from "m"
+                            // If all named bindings are "default", use __importDefault.
+                            // If there are non-default named bindings, use __importStar.
+                            val hasNonDefaultNamedElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
+                            val localName = clause.name.text
+                            val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                            if (hasNonDefaultNamedElement) {
+                                needsImportStar = true
+                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments))
+                            } else {
+                                needsImportDefault = true
+                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                            }
+                            // Rename default import: c → tempName.default
+                            renameMap[localName] = PropertyAccessExpression(
+                                expression = syntheticId(tempName),
+                                name = syntheticId("default"),
+                                pos = -1, end = -1,
+                            )
+                            // Rename named bindings: x → tempName.x, etc.
+                            for (element in bindings.elements) {
+                                val importedName = (element.propertyName ?: element.name).text
+                                val localAlias = element.name.text
+                                renameMap[localAlias] = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId(importedName),
+                                    pos = -1, end = -1,
+                                )
+                            }
                         } else if (bindings is NamedImports) {
                             // import { a, b as c } from "y" → const y_1 = require("y")
                             // import { default as x } → treated like a default import
                             val hasDefaultElement = bindings.elements.any { (it.propertyName ?: it.name).text == "default" }
+                            val hasNonDefaultElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            if (hasDefaultElement) {
+                            if (hasDefaultElement && hasNonDefaultElement) {
+                                // Both default and named: need __importStar to preserve all exports
+                                needsImportStar = true
+                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments))
+                            } else if (hasDefaultElement) {
                                 needsImportDefault = true
                                 result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
                             } else {
@@ -761,17 +796,6 @@ class Transformer(private val options: CompilerOptions) {
                                     pos = -1, end = -1,
                                 )
                             }
-                        } else if (clause.name != null && bindings != null) {
-                            // Combined default + named: complex case
-                            needsImportDefault = true
-                            val localName = clause.name.text
-                            val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
-                            renameMap[localName] = PropertyAccessExpression(
-                                expression = syntheticId(tempName),
-                                name = syntheticId("default"),
-                                pos = -1, end = -1,
-                            )
                         }
                     }
                 }
@@ -828,11 +852,37 @@ class Transformer(private val options: CompilerOptions) {
                                 }
                             }
                             is NamespaceExport -> {
-                                // export * as ns from "m" → Object.defineProperty(exports, "ns", ...)
+                                // export * as ns from "m" → exports.ns = __importStar(require("m"))
                                 needsImportStar = true
-                                val tempName = generateModuleTempName(stmt.moduleSpecifier, moduleNameCounter)
-                                result.add(makeImportHelperConst(tempName, "__importStar", stmt.moduleSpecifier, stmt.leadingComments))
-                                result.add(makeReExportGetter(clause.name.text, tempName, null))
+                                val exportName = clause.name.text
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                val normalizedSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
+                                result.add(
+                                    ExpressionStatement(
+                                        expression = BinaryExpression(
+                                            left = PropertyAccessExpression(
+                                                expression = syntheticId("exports"),
+                                                name = syntheticId(exportName),
+                                                pos = -1, end = -1,
+                                            ),
+                                            operator = Equals,
+                                            right = CallExpression(
+                                                expression = syntheticId("__importStar"),
+                                                arguments = listOf(
+                                                    CallExpression(
+                                                        expression = syntheticId("require"),
+                                                        arguments = listOf(normalizedSpec),
+                                                        pos = -1, end = -1,
+                                                    ),
+                                                ),
+                                                pos = -1, end = -1,
+                                            ),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                        leadingComments = stmt.leadingComments,
+                                    )
+                                )
                             }
                             else -> result.add(stmt)
                         }
@@ -889,10 +939,16 @@ class Transformer(private val options: CompilerOptions) {
         // Early pre-preamble extraction: handle NotEmittedStatement at result[1] BEFORE
         // function stub / void0 hoist insertions change its position.
         // result[0] is the esModule preamble (synthetic); result[1] is the first real stmt.
-        if (!hasExportEquals && result.size > 1 && result[1] is NotEmittedStatement) {
-            val firstReal = result[1] as NotEmittedStatement
+        // Early pre-preamble extraction: check result[1] for detached leading comments
+        // BEFORE void0/stub insertions change positions.
+        // result[0] is the esModule preamble (synthetic); result[1] is the first real stmt.
+        // Only handle NotEmittedStatement, FunctionDeclaration, ClassDeclaration here.
+        // VariableStatement/ExpressionStatement are handled by the post-elision extraction below.
+        if (!hasExportEquals && result.size > 1 &&
+            (result[1] is NotEmittedStatement || result[1] is FunctionDeclaration || result[1] is ClassDeclaration)) {
+            val firstReal = result[1]
             val allComments = firstReal.leadingComments
-            if (!allComments.isNullOrEmpty()) {
+            if (!allComments.isNullOrEmpty() && firstReal.pos >= 0) {
                 val source = originalSourceFile.text
                 val stmtPos = firstReal.pos
                 val detached = allComments.filter { c ->
@@ -900,9 +956,17 @@ class Transformer(private val options: CompilerOptions) {
                 }
                 if (detached.isNotEmpty()) {
                     val attached = allComments - detached.toSet()
-                    prePreambleStatements.add(firstReal.copy(leadingComments = detached))
-                    if (attached.isEmpty()) result.removeAt(1)
-                    else result[1] = firstReal.copy(leadingComments = attached)
+                    val attachedOrNull = attached.ifEmpty { null }
+                    prePreambleStatements.add(NotEmittedStatement(leadingComments = detached))
+                    when (firstReal) {
+                        is NotEmittedStatement -> {
+                            if (attached.isEmpty()) result.removeAt(1)
+                            else result[1] = firstReal.copy(leadingComments = attachedOrNull)
+                        }
+                        is FunctionDeclaration -> result[1] = firstReal.copy(leadingComments = attachedOrNull)
+                        is ClassDeclaration -> result[1] = firstReal.copy(leadingComments = attachedOrNull)
+                        else -> {}
+                    }
                 }
             }
         }
@@ -970,7 +1034,10 @@ class Transformer(private val options: CompilerOptions) {
                     pos = -1, end = -1,
                 ) as Expression
             }
-            val rewritten = result.map { stmt -> rewriteIdInStatement(stmt, exportRewriteMap) }
+            val functionExportStubSet = functionExportStubs.toHashSet()
+            val rewritten = result.map { stmt ->
+                if (stmt in functionExportStubSet) stmt else rewriteIdInStatement(stmt, exportRewriteMap)
+            }
             result.clear()
             result.addAll(rewritten)
         }
@@ -1067,7 +1134,7 @@ class Transformer(private val options: CompilerOptions) {
         // not each comment individually. This ensures a contiguous block of comments
         // (like multiple /// reference directives) is not partially moved.
         val firstRealIdx = if (hasExportEquals) -1 else (1..<result.size).firstOrNull { result[it] !is NotEmittedStatement } ?: -1
-        if (firstRealIdx > 0 && (result[firstRealIdx] is VariableStatement || result[firstRealIdx] is ExpressionStatement)) {
+        if (firstRealIdx > 0 && (result[firstRealIdx] is VariableStatement || result[firstRealIdx] is ExpressionStatement || result[firstRealIdx] is FunctionDeclaration || result[firstRealIdx] is ClassDeclaration)) {
             val firstReal = result[firstRealIdx]
             val allComments = firstReal.leadingComments
             if (!allComments.isNullOrEmpty()) {
@@ -1094,6 +1161,8 @@ class Transformer(private val options: CompilerOptions) {
                     result[firstRealIdx] = when (firstReal) {
                         is VariableStatement -> firstReal.copy(leadingComments = attached)
                         is ExpressionStatement -> firstReal.copy(leadingComments = attached)
+                        is FunctionDeclaration -> firstReal.copy(leadingComments = attached)
+                        is ClassDeclaration -> firstReal.copy(leadingComments = attached)
                         else -> firstReal
                     }
                 }
@@ -1471,9 +1540,9 @@ class Transformer(private val options: CompilerOptions) {
                             val specStr2 = (normalizeModuleSpecifier(requireArg ?: syntheticId("")) as? StringLiteralNode)?.text
                                 ?: (requireArg as? StringLiteralNode)?.text ?: ""
                             namedModuleImports.add(specStr2 to name)
-                            // If this was an `export import x = require(...)`, also re-export it
+                            // If this was an `export import x = require(...)`, also re-export it.
+                            // Don't add to exportedVarNames (no void 0 hoist needed for re-exported require).
                             if (ModifierFlag.Export in stmt.modifiers) {
-                                if (name !in exportedVarNames) exportedVarNames.add(name)
                                 bodyStatements.add(makeExportAssignment(name))
                             }
                             // Don't add to body — it's now a parameter
