@@ -106,6 +106,7 @@ data class CompilerOptions(
     val newLine: String? = null,
     val fullEmitPaths: Boolean = false,
     val noResolve: Boolean = false,
+    val moduleDetection: String? = null,
 ) {
     val effectiveAlwaysStrict: Boolean
         get() = alwaysStrict ?: strict
@@ -275,6 +276,12 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
         options = applyDirective(options, key, value)
     }
 
+    // Apply options from tsconfig.json if present in the file entries
+    val tsconfigEntry = fileEntries.find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
+    if (tsconfigEntry != null) {
+        options = applyTsconfigOptions(options, tsconfigEntry.content)
+    }
+
     if (fileEntries.isEmpty()) {
         // Single-file test: use the original parseCompilerOptions for source cleanup
         val (_, cleanedSource) = parseCompilerOptions(source)
@@ -339,6 +346,65 @@ private fun applyDirective(options: CompilerOptions, key: String, value: String)
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
         "noresolve" -> options.copy(noResolve = boolValue)
+        "moduledetection" -> options.copy(moduleDetection = value.trim())
         else -> options
     }
+}
+
+/**
+ * Parses a tsconfig.json content and applies its `compilerOptions` to the given options.
+ * Uses simple string matching rather than a full JSON parser.
+ */
+private fun applyTsconfigOptions(options: CompilerOptions, json: String): CompilerOptions {
+    // Extract the compilerOptions block
+    val compilerOptionsStart = json.indexOf("\"compilerOptions\"")
+    if (compilerOptionsStart < 0) return options
+
+    val braceStart = json.indexOf('{', compilerOptionsStart + "\"compilerOptions\"".length)
+    if (braceStart < 0) return options
+
+    // Find matching closing brace
+    var depth = 1
+    var pos = braceStart + 1
+    while (pos < json.length && depth > 0) {
+        when (json[pos]) {
+            '{' -> depth++
+            '}' -> depth--
+        }
+        pos++
+    }
+    val compilerOptionsBlock = json.substring(braceStart + 1, pos - 1)
+
+    // Parse key-value pairs from the block
+    val kvPattern = Regex(""""(\w+)"\s*:\s*("([^"]*)"|(true|false)|(\d+))""")
+    val kvPairs = mutableListOf<Pair<String, String>>()
+    for (match in kvPattern.findAll(compilerOptionsBlock)) {
+        val key = match.groupValues[1].lowercase()
+        val value = match.groupValues[3].ifEmpty {
+            match.groupValues[4].ifEmpty {
+                match.groupValues[5]
+            }
+        }
+        kvPairs.add(key to value)
+    }
+
+    // Only apply a safe subset of tsconfig options that our transpiler handles correctly.
+    // Options like outDir, rootDir, paths, etc. affect module resolution in complex ways
+    // that we don't fully support — skip them to avoid regressions.
+    val allowedTsconfigOptions = setOf(
+        "target", "module", "strict", "noemit", "noemithelpers",
+        "declaration", "removecomments", "preserveconstenums", "sourcemap",
+        "experimentaldecorators", "emitdecoratormetadata", "jsx",
+        "esmoduleinterop", "isolatedmodules", "downleveliteration",
+        "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
+        "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
+        "alwaysstrict", "newline", "noresolve", "moduledetection",
+    )
+
+    var result = options
+    for ((key, value) in kvPairs) {
+        if (key !in allowedTsconfigOptions) continue
+        result = applyDirective(result, key, value)
+    }
+    return result
 }
