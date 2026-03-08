@@ -2358,6 +2358,16 @@ class Emitter(
                 isStartOfLine = false
             } else {
                 write(" $op ")
+                // Emit inline trailing comments after operator (e.g. `a + /*e3*/ b`)
+                if (!options.removeComments) {
+                    val opTrailing = node.operatorTrailingComments
+                    if (opTrailing != null) {
+                        for (comment in opTrailing) {
+                            write(comment.text)
+                            write(" ")
+                        }
+                    }
+                }
             }
             emitRight()
         }
