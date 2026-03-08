@@ -6530,7 +6530,7 @@ class Transformer(private val options: CompilerOptions) {
         for (bodyStmt in bodyStmts) {
             val isExported = when (bodyStmt) {
                 is VariableStatement -> ModifierFlag.Export in bodyStmt.modifiers
-                is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers && bodyStmt.body != null
+                is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
                 is ClassDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
                 is EnumDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
                 is ModuleDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
@@ -6542,11 +6542,14 @@ class Transformer(private val options: CompilerOptions) {
                 is VariableStatement -> for (decl in bodyStmt.declarationList.declarations) {
                     extractIdentifierName(decl.name)?.let { exports.add(it) }
                 }
-                is FunctionDeclaration -> if (bodyStmt.body != null) bodyStmt.name?.text?.let { exports.add(it) }
+                is FunctionDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
                 is ClassDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
                 is EnumDeclaration -> exports.add(bodyStmt.name.text)
                 is ModuleDeclaration -> {
-                    extractIdentifierName(bodyStmt.name)?.let { exports.add(it) }
+                    // For dotted namespace names (X.Y.Z), use the first part (X)
+                    val nsExportName = extractIdentifierName(bodyStmt.name)
+                        ?: flattenDottedNamespaceName(bodyStmt.name).firstOrNull()
+                    nsExportName?.let { exports.add(it) }
                     // Recurse into nested namespaces to collect their exports too
                     if (!hasDeclareModifier(bodyStmt) && !isTypeOnlyNamespace(bodyStmt)) {
                         collectMergedNamespaceExportsFromModule(bodyStmt)
@@ -7404,8 +7407,11 @@ class Transformer(private val options: CompilerOptions) {
                     // When exported, embed the parent->child assignment in the IIFE arg
                     // (N = parent.N || (parent.N = {})) rather than a separate assignment
                     val parentForIife = if (isExported) nsName else null
-                    // Push current namespace context so inner bodies can qualify outer refs
-                    outerNamespaceStack.add(nsName to exportedNames)
+                    // Push current namespace context so inner bodies can qualify outer refs.
+                    // Exclude locally declared names (functions/classes/enums) since they are
+                    // available in the IIFE scope without qualification.
+                    val exportedForStack = exportedNames - locallyDeclaredNames
+                    outerNamespaceStack.add(nsName to exportedForStack)
                     val transformed = transformModuleDeclaration(strippedStmt, nested = true, parentNsName = parentForIife)
                     outerNamespaceStack.removeLastOrNull()
                     result.addAll(transformed)
