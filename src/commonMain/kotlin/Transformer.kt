@@ -345,6 +345,9 @@ class Transformer(private val options: CompilerOptions) {
         sourceFile: SourceFile
     ): Boolean {
         if (options.moduleDetection == "force") return true
+        // .mts/.mjs/.cts/.cjs files are always module files
+        val fn = sourceFile.fileName
+        if (fn.endsWith(".mts") || fn.endsWith(".mjs") || fn.endsWith(".cts") || fn.endsWith(".cjs")) return true
         return sourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) || stmt is ExportAssignment ||
