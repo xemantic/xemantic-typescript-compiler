@@ -327,10 +327,22 @@ class Emitter(
 
     private fun emitExpressionStatement(node: ExpressionStatement) {
         writeIndent()
-        val needsWrap = expressionNeedsParensInStatementPosition(node.expression)
-        if (needsWrap) write("(")
-        emitExpression(node.expression)
-        if (needsWrap) write(")")
+        val expr = node.expression
+        val needsWrap = expressionNeedsParensInStatementPosition(expr)
+        if (needsWrap && expr is CallExpression && !expr.questionDotToken
+            && getLeftmostExpression(expr.expression, stopAtCallExpressions = true) is FunctionExpression) {
+            // IIFE: wrap callee in parens so `(function() {})()` not `(function() {}())`
+            write("(")
+            emitExpression(expr.expression)
+            write(")")
+            write("(")
+            emitCallArguments(expr.arguments)
+            write(")")
+        } else {
+            if (needsWrap) write("(")
+            emitExpression(expr)
+            if (needsWrap) write(")")
+        }
         // Emit any inline block comments between expression and `;` (e.g. `Array /*3*/;`)
         // Line comments (//) must go after the semicolon since they extend to end of line.
         val blockComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
@@ -1882,15 +1894,19 @@ class Emitter(
         }
         // type arguments erased
         write("(")
+        emitCallArguments(node.arguments)
+        write(")")
+    }
+
+    private fun emitCallArguments(arguments: List<Expression>) {
         var firstArg = true
-        for (arg in node.arguments) {
+        for (arg in arguments) {
             if (arg is OmittedExpression) continue // skip missing arguments
             if (!firstArg) write(", ")
             firstArg = false
             emitInlineLeadingComments(arg)
             emitExpression(arg)
         }
-        write(")")
     }
 
     private fun emitNewExpression(node: NewExpression) {
