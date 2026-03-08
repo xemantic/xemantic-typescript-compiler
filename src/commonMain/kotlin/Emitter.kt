@@ -122,9 +122,13 @@ class Emitter(
 
     private fun emitUseStrict(sourceFile: SourceFile) {
         // Check if the file is an ES module format — ESM files are inherently strict,
-        // no explicit "use strict" needed.
+        // no explicit "use strict" needed. But for .mts/.mjs under CommonJS module setting,
+        // TypeScript still emits "use strict".
         val effectiveModule = options.effectiveModule
-        if (hasModuleStatements(sourceFile) && isESModuleFormat(effectiveModule, sourceFile.fileName)) return
+        val isESM = isESModuleFormat(effectiveModule, sourceFile.fileName)
+        val isCommonJSOverride = effectiveModule == ModuleKind.CommonJS &&
+                (sourceFile.fileName.endsWith(".mts") || sourceFile.fileName.endsWith(".mjs"))
+        if (hasModuleStatements(sourceFile) && isESM && !isCommonJSOverride) return
 
         // AMD/UMD format: for module files, "use strict" goes inside the define()/factory function body.
         // The AMD transformer handles this by inserting it as the first body statement.
