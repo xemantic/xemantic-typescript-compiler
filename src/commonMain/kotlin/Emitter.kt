@@ -2252,11 +2252,19 @@ class Emitter(
                     }
                 } else if (rightNewLine) {
                     write(" $op")
+                    // Emit trailing comments after operator (e.g. `a && // comment\nb`)
+                    if (!options.removeComments) {
+                        binNode.operatorTrailingComments?.forEach { write(" "); write(it.text) }
+                    }
                     writeNewLine()
                     repeat(indentLevel + 1) { sb.append("    ") }
                     isStartOfLine = false
                 } else {
                     write(" $op ")
+                    // Emit inline trailing comments after operator (e.g. `a + /*e3*/ b`)
+                    if (!options.removeComments) {
+                        binNode.operatorTrailingComments?.forEach { write(it.text); write(" ") }
+                    }
                 }
                 emitExpression(binNode.right)
             }
@@ -2357,6 +2365,16 @@ class Emitter(
             val rightNewLine = node.left.end > 0 && hasNewLineInSource(node.left.end, node.right.pos)
             if (rightNewLine) {
                 write(" $op")
+                // Emit trailing comments after operator on same line (e.g. `a && // no error\nb`)
+                if (!options.removeComments) {
+                    val opTrailing = node.operatorTrailingComments
+                    if (opTrailing != null) {
+                        for (comment in opTrailing) {
+                            write(" ")
+                            write(comment.text)
+                        }
+                    }
+                }
                 writeNewLine()
                 repeat(indentLevel + 1) { sb.append("    ") }
                 isStartOfLine = false
