@@ -81,8 +81,8 @@ class Transformer(private val options: CompilerOptions) {
 
     // Stack of outer namespace contexts for cross-scope qualification.
     // When inside a nested namespace, inner code can reference outer namespace exports.
-    // Each entry: (iifeParamName, exportedNames) for an outer namespace level.
-    private val outerNamespaceStack = mutableListOf<Pair<String, Set<String>>>()
+    // Each entry: Triple(iifeParamName, originalName, exportedNames) for an outer namespace level.
+    private val outerNamespaceStack = mutableListOf<Triple<String, String, Set<String>>>()
 
     // Maps namespace name → set of ALL exported member names across ALL merged blocks.
     // Pre-collected so that later blocks can qualify references to members exported from earlier blocks.
@@ -6856,7 +6856,7 @@ class Transformer(private val options: CompilerOptions) {
                 // references to exports from this (parent) namespace via outerNamespaceStack.
                 val mergedExports = mergedNamespaceExports[moduleName] ?: emptySet()
                 if (mergedExports.isNotEmpty()) {
-                    outerNamespaceStack.add(iifeParam to mergedExports)
+                    outerNamespaceStack.add(Triple(iifeParam, moduleName, mergedExports))
                 }
                 val innerStatements = transformModuleDeclaration(body, nested = true, parentNsName = iifeParam, useDottedVar = useDottedVar)
                 if (mergedExports.isNotEmpty()) {
@@ -7191,9 +7191,13 @@ class Transformer(private val options: CompilerOptions) {
         // Include exports from merged blocks of the same namespace
         // so that references in this block to members exported from other blocks are qualified.
         // Use the original name (not the IIFE param name which may be renamed, e.g. M_1).
-        // Apply at top level and for dotted namespace parts (which are nested structurally but
-        // semantically represent separate namespace declarations, e.g. `namespace A.B`).
-        if (outerNamespaceStack.isEmpty() || originalName in mergedNamespaceExports) {
+        // Apply at top level and for dotted namespace parts, but NOT for genuinely nested
+        // namespaces that happen to share a name with an outer namespace (e.g.,
+        // `namespace M { namespace m4 { namespace M {} } }` — the inner M is different from outer M).
+        // Detect genuine nesting by checking if any entry on outerNamespaceStack has the same
+        // original name — if so, this is a nested namespace shadowing an outer one.
+        val isShadowingOuter = outerNamespaceStack.any { it.second == originalName }
+        if ((outerNamespaceStack.isEmpty() || originalName in mergedNamespaceExports) && !isShadowingOuter) {
             mergedNamespaceExports[originalName]?.let { exportedNames.addAll(it) }
         }
         // Exported variable names that DON'T have local bindings in the IIFE
@@ -7410,10 +7414,10 @@ class Transformer(private val options: CompilerOptions) {
                     // (N = parent.N || (parent.N = {})) rather than a separate assignment
                     val parentForIife = if (isExported) nsName else null
                     // Push current namespace context so inner bodies can qualify outer refs.
-                    // Exclude locally declared names (functions/classes/enums) since they are
-                    // available in the IIFE scope without qualification.
-                    val exportedForStack = exportedNames - locallyDeclaredNames
-                    outerNamespaceStack.add(nsName to exportedForStack)
+                    // Use exportedVarOnlyNames: functions/classes/enums are local variables in the
+                    // IIFE and don't need qualification, but exported vars become nsName.x = ...
+                    // assignments and DO need qualification from inner scopes.
+                    outerNamespaceStack.add(Triple(nsName, originalName, exportedVarOnlyNames))
                     val transformed = transformModuleDeclaration(strippedStmt, nested = true, parentNsName = parentForIife)
                     outerNamespaceStack.removeLastOrNull()
                     result.addAll(transformed)
@@ -7436,7 +7440,7 @@ class Transformer(private val options: CompilerOptions) {
         // (which is the local variable for this namespace) to avoid over-qualification.
         var qualifiedResult: List<Statement> = result
         val localAndParam = locallyDeclaredNames + nsName + originalName
-        for ((outerNsName, outerExportedNames) in outerNamespaceStack) {
+        for ((outerNsName, _, outerExportedNames) in outerNamespaceStack) {
             val outerNamesNotLocal = outerExportedNames - localAndParam
             if (outerNamesNotLocal.isNotEmpty()) {
                 qualifiedResult = qualifiedResult.map { qualifyStatementRefs(outerNsName, outerNamesNotLocal, it) }
