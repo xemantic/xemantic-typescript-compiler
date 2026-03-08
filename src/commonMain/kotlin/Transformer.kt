@@ -6479,35 +6479,77 @@ class Transformer(private val options: CompilerOptions) {
             if (stmt !is ModuleDeclaration) continue
             if (hasDeclareModifier(stmt)) continue
             if (isTypeOnlyNamespace(stmt)) continue
-            val nsName = extractIdentifierName(stmt.name) ?: continue
-            val exports = mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }
-            val body = stmt.body
-            val bodyStmts = when (body) {
-                is ModuleBlock -> body.statements
-                else -> continue
+            // Recursively collect from all nesting levels of dotted namespaces
+            collectMergedNamespaceExportsFromModule(stmt)
+        }
+    }
+
+    private fun collectMergedNamespaceExportsFromModule(module: ModuleDeclaration) {
+        // For dotted namespaces (namespace A.B.C), the parser stores the name as a
+        // PropertyAccessExpression, not nested ModuleDeclarations. Flatten the dotted
+        // name and treat each level as a nested namespace.
+        if (module.name is PropertyAccessExpression) {
+            val parts = flattenDottedNamespaceName(module.name)
+            if (parts.isEmpty()) return
+            // Each part (except the last) exports the next part as a child namespace
+            for (i in 0 until parts.size - 1) {
+                mergedNamespaceExports.getOrPut(parts[i]) { mutableSetOf() }.add(parts[i + 1])
             }
-            for (bodyStmt in bodyStmts) {
-                val isExported = when (bodyStmt) {
-                    is VariableStatement -> ModifierFlag.Export in bodyStmt.modifiers
-                    is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers && bodyStmt.body != null
-                    is ClassDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
-                    is EnumDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
-                    is ModuleDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
-                    is ImportEqualsDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
-                    else -> false
+            // The last part owns the actual body exports
+            val lastPart = parts.last()
+            val bodyStmts = when (val body = module.body) {
+                is ModuleBlock -> body.statements
+                else -> return
+            }
+            collectExportsFromBody(lastPart, bodyStmts)
+            return
+        }
+
+        val nsName = extractIdentifierName(module.name) ?: return
+        val body = module.body
+        // For nested ModuleDeclarations (e.g. from manual nesting, not dotted syntax)
+        if (body is ModuleDeclaration) {
+            mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }
+                .add(extractIdentifierName(body.name) ?: return)
+            collectMergedNamespaceExportsFromModule(body)
+            return
+        }
+        val bodyStmts = when (body) {
+            is ModuleBlock -> body.statements
+            else -> return
+        }
+        collectExportsFromBody(nsName, bodyStmts)
+    }
+
+    private fun collectExportsFromBody(nsName: String, bodyStmts: List<Statement>) {
+        val exports = mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }
+        for (bodyStmt in bodyStmts) {
+            val isExported = when (bodyStmt) {
+                is VariableStatement -> ModifierFlag.Export in bodyStmt.modifiers
+                is FunctionDeclaration -> ModifierFlag.Export in bodyStmt.modifiers && bodyStmt.body != null
+                is ClassDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                is EnumDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                is ModuleDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                is ImportEqualsDeclaration -> ModifierFlag.Export in bodyStmt.modifiers
+                else -> false
+            }
+            if (!isExported) continue
+            when (bodyStmt) {
+                is VariableStatement -> for (decl in bodyStmt.declarationList.declarations) {
+                    extractIdentifierName(decl.name)?.let { exports.add(it) }
                 }
-                if (!isExported) continue
-                when (bodyStmt) {
-                    is VariableStatement -> for (decl in bodyStmt.declarationList.declarations) {
-                        extractIdentifierName(decl.name)?.let { exports.add(it) }
+                is FunctionDeclaration -> if (bodyStmt.body != null) bodyStmt.name?.text?.let { exports.add(it) }
+                is ClassDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
+                is EnumDeclaration -> exports.add(bodyStmt.name.text)
+                is ModuleDeclaration -> {
+                    extractIdentifierName(bodyStmt.name)?.let { exports.add(it) }
+                    // Recurse into nested namespaces to collect their exports too
+                    if (!hasDeclareModifier(bodyStmt) && !isTypeOnlyNamespace(bodyStmt)) {
+                        collectMergedNamespaceExportsFromModule(bodyStmt)
                     }
-                    is FunctionDeclaration -> if (bodyStmt.body != null) bodyStmt.name?.text?.let { exports.add(it) }
-                    is ClassDeclaration -> bodyStmt.name?.text?.let { exports.add(it) }
-                    is EnumDeclaration -> exports.add(bodyStmt.name.text)
-                    is ModuleDeclaration -> extractIdentifierName(bodyStmt.name)?.let { exports.add(it) }
-                    is ImportEqualsDeclaration -> exports.add(bodyStmt.name.text)
-                    else -> {}
                 }
+                is ImportEqualsDeclaration -> exports.add(bodyStmt.name.text)
+                else -> {}
             }
         }
     }
@@ -6803,7 +6845,16 @@ class Transformer(private val options: CompilerOptions) {
                     nsRenameSuffix[moduleName] = suffix
                     "${moduleName}_$suffix"
                 } else moduleName
+                // Push merged exports for this namespace level so inner bodies can qualify
+                // references to exports from this (parent) namespace via outerNamespaceStack.
+                val mergedExports = mergedNamespaceExports[moduleName] ?: emptySet()
+                if (mergedExports.isNotEmpty()) {
+                    outerNamespaceStack.add(iifeParam to mergedExports)
+                }
                 val innerStatements = transformModuleDeclaration(body, nested = true, parentNsName = iifeParam, useDottedVar = useDottedVar)
+                if (mergedExports.isNotEmpty()) {
+                    outerNamespaceStack.removeLastOrNull()
+                }
                 emittedVarNames.clear(); emittedVarNames.addAll(savedE)
                 declaredNames.clear(); declaredNames.addAll(savedD)
                 return wrapInNamespaceIife(
@@ -7133,12 +7184,11 @@ class Transformer(private val options: CompilerOptions) {
         // Include exports from merged blocks of the same namespace
         // so that references in this block to members exported from other blocks are qualified.
         // Use the original name (not the IIFE param name which may be renamed, e.g. M_1).
-        // Only apply at the top level — nested namespaces with the same name as an outer namespace
-        // are different scopes and should NOT inherit the outer's merged exports.
-        if (outerNamespaceStack.isEmpty()) {
+        // Apply at top level and for dotted namespace parts (which are nested structurally but
+        // semantically represent separate namespace declarations, e.g. `namespace A.B`).
+        if (outerNamespaceStack.isEmpty() || originalName in mergedNamespaceExports) {
             mergedNamespaceExports[originalName]?.let { exportedNames.addAll(it) }
         }
-
         // Exported variable names that DON'T have local bindings in the IIFE
         // (classes/functions/enums/modules are declared locally even when exported)
         val exportedVarOnlyNames = exportedNames - locallyDeclaredNames +
