@@ -190,16 +190,18 @@ class Transformer(private val options: CompilerOptions) {
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
-        // Inject __awaiter helper if any async function was downleveled.
-        // When the FIRST original statement itself contains async code, TypeScript emits
-        // its leading comments BEFORE the helper (comment → __awaiter → stmt). When async
-        // code appears in a later statement, __awaiter goes first and comments stay with
-        // their statements.
-        val withAwaiter = if (needsAwaiterHelper) {
-            // TypeScript emits the first statement's leading comments BEFORE __awaiter
-            // for all statement types EXCEPT FunctionDeclaration (which goes after).
+        // Collect helpers to inject at top of file.
+        val helpers = mutableListOf<RawStatement>()
+        if (needsRestHelper) helpers.add(RawStatement(code = REST_HELPER))
+        if (needsAwaiterHelper) helpers.add(RawStatement(code = AWAITER_HELPER))
+
+        // When helpers are present, lift leading comments from the first transformed statement
+        // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
+        // Exception: FunctionDeclaration keeps its comments after helpers when __awaiter is the only helper.
+        val withHelpers = if (helpers.isNotEmpty()) {
             val firstOrigStmt = sourceFile.statements.firstOrNull()
-            val shouldLiftComments = firstOrigStmt != null && firstOrigStmt !is FunctionDeclaration
+            val onlyAwaiter = needsAwaiterHelper && !needsRestHelper
+            val shouldLiftComments = firstOrigStmt != null && !(onlyAwaiter && firstOrigStmt is FunctionDeclaration)
             val firstStmt = transformed.firstOrNull()
             val firstComments = firstStmt?.leadingComments
             if (shouldLiftComments && !firstComments.isNullOrEmpty()) {
@@ -212,19 +214,14 @@ class Transformer(private val options: CompilerOptions) {
                     else -> null
                 }
                 if (firstStripped != null) {
-                    listOf(commentHolder, RawStatement(code = AWAITER_HELPER), firstStripped) + transformed.drop(1)
+                    listOf(commentHolder) + helpers + listOf(firstStripped) + transformed.drop(1)
                 } else {
-                    listOf(RawStatement(code = AWAITER_HELPER)) + transformed
+                    helpers + transformed
                 }
             } else {
-                listOf(RawStatement(code = AWAITER_HELPER)) + transformed
+                helpers + transformed
             }
         } else transformed
-
-        // Inject __rest helper if any object destructuring rest was transformed.
-        val withRest = if (needsRestHelper) {
-            listOf(RawStatement(code = REST_HELPER)) + withAwaiter
-        } else withAwaiter
 
         // CommonJS module transform (also for Node16/NodeNext with .ts/.cts files)
         val effectiveModule = options.effectiveModule
@@ -232,31 +229,31 @@ class Transformer(private val options: CompilerOptions) {
                 ((effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) &&
                         !isESModuleFormat(effectiveModule, sourceFile.fileName))
         if (useCJS && isModuleFile(sourceFile)) {
-            val cjsStatements = transformToCommonJS(withRest, sourceFile)
+            val cjsStatements = transformToCommonJS(withHelpers, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
         }
 
         // AMD module transform — only for module files (files with imports/exports).
         // Non-module files in AMD format are emitted as-is (no define wrapper).
         if (options.effectiveModule == ModuleKind.AMD && isModuleFile(sourceFile)) {
-            val amdStatements = transformToAMD(withRest, sourceFile)
+            val amdStatements = transformToAMD(withHelpers, sourceFile)
             return sourceFile.copy(statements = amdStatements)
         }
 
         // UMD module transform — reuses AMD body with UMD wrapper.
         if (options.effectiveModule == ModuleKind.UMD && isModuleFile(sourceFile)) {
-            val umdStatements = transformToUMD(withRest, sourceFile)
+            val umdStatements = transformToUMD(withHelpers, sourceFile)
             return sourceFile.copy(statements = umdStatements)
         }
 
         // System module transform — only for module files.
         if (options.effectiveModule == ModuleKind.System && isModuleFile(sourceFile)) {
-            val sysStatements = transformToSystem(withRest, sourceFile)
+            val sysStatements = transformToSystem(withHelpers, sourceFile)
             return sourceFile.copy(statements = sysStatements)
         }
 
         // ES module import elision: erase imports whose bindings are unused in value positions
-        val elided = elideUnusedESModuleImports(withRest)
+        val elided = elideUnusedESModuleImports(withHelpers)
 
         // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
         // only when x is unused AND the aliased module reference roots into a namespace
