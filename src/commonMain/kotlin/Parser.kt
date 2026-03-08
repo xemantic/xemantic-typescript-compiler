@@ -2378,7 +2378,11 @@ class Parser(private val source: String, private val fileName: String) {
 
                 OpenParen -> {
                     val args = parseArgumentList()
-                    CallExpression(expression = result, arguments = args, pos = result.pos, end = getEnd())
+                    // Only capture trailing comments on the call when the chain continues
+                    // (next token is `.` or `[`). Otherwise leave them for the enclosing
+                    // statement to capture as preSemicolonComments / trailingComments.
+                    val callTrailing = if (token == Dot || token == OpenBracket) trailingComments() else null
+                    CallExpression(expression = result, arguments = args, pos = result.pos, end = getEnd(), trailingComments = callTrailing)
                 }
 
                 LessThan -> {
