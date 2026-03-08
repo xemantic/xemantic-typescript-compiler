@@ -5610,8 +5610,14 @@ class Transformer(private val options: CompilerOptions) {
                     types = clause.types
                         .filter { it.expression !is ObjectLiteralExpression }
                         .map { ewta ->
+                            var expr = transformExpression(ewta.expression)
+                            // In extends position, ClassExpression doesn't need parens
+                            // (e.g. `extends (class {} as Foo)` → `extends class {}`)
+                            if (expr is ParenthesizedExpression && expr.expression is ClassExpression) {
+                                expr = expr.expression
+                            }
                             ewta.copy(
-                                expression = transformExpression(ewta.expression),
+                                expression = expr,
                                 typeArguments = null,
                             )
                         }
