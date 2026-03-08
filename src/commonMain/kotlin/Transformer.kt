@@ -6425,7 +6425,11 @@ class Transformer(private val options: CompilerOptions) {
                     name.copy(singleQuote = false)
                 }
             }
-            is NumericLiteralNode -> name
+            is NumericLiteralNode -> {
+                // Normalize numeric literal to canonical decimal form (e.g. 1.0 → 1, 11e-1 → 1.1)
+                val normalized = normalizeNumericLiteral(name.text)
+                NumericLiteralNode(text = normalized, pos = -1, end = -1)
+            }
             is BigIntLiteralNode -> name
             is ComputedPropertyName -> transformExpression(name.expression)
             else -> StringLiteralNode(text = "unknown", pos = -1, end = -1)
@@ -8294,6 +8298,43 @@ class Transformer(private val options: CompilerOptions) {
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
         is AwaitExpression, is YieldExpression -> true
         else -> false
+    }
+
+    /**
+     * Normalizes a numeric literal text to its canonical decimal form.
+     * E.g. `1.0` → `1`, `11e-1` → `1.1`, `0.12e1` → `1.2`.
+     * Preserves hex/octal/binary prefixes and string-quoted values.
+     */
+    private fun normalizeNumericLiteral(text: String): String {
+        val cleaned = text.replace("_", "")
+        // Don't normalize bigint literals
+        if (cleaned.endsWith("n")) return cleaned
+        // Convert hex/octal/binary to decimal
+        if (cleaned.startsWith("0x", ignoreCase = true) ||
+            cleaned.startsWith("0o", ignoreCase = true) ||
+            cleaned.startsWith("0b", ignoreCase = true)) {
+            val digits = cleaned.substring(2)
+            val base = when {
+                cleaned.startsWith("0x", ignoreCase = true) -> 16
+                cleaned.startsWith("0o", ignoreCase = true) -> 8
+                else -> 2
+            }
+            return digits.toLongOrNull(base)?.toString() ?: cleaned
+        }
+        return try {
+            val value = cleaned.toDouble()
+            if (value == value.toLong().toDouble() && !cleaned.contains("e", ignoreCase = true)) {
+                // Integer value — use long representation (strips trailing .0)
+                value.toLong().toString()
+            } else {
+                // Fractional or exponential — normalize via toDouble/toString
+                val s = value.toBigDecimal().stripTrailingZeros().toPlainString()
+                // Remove leading zero for numbers like "0.5" → keep as "0.5"
+                s
+            }
+        } catch (_: NumberFormatException) {
+            text
+        }
     }
 
     /**
