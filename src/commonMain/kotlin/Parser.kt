@@ -2804,6 +2804,13 @@ class Parser(private val source: String, private val fileName: String) {
         val properties = mutableListOf<Node>()
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+            // Skip extra commas (error recovery for double commas like `{ x: 0,, }`)
+            if (token == SyntaxKind.Comma) {
+                nextToken()
+                // If closing brace follows, treat this as a trailing comma
+                if (token == SyntaxKind.CloseBrace) hasTrailingComma = true
+                continue
+            }
             properties.add(parseObjectLiteralElement())
             // TypeScript allows semicolons as property separators in object literals
             val hadComma = parseOptional(SyntaxKind.Comma)
