@@ -309,6 +309,17 @@ class Scanner(private val text: String) {
         // treat all comments as leading comments since there's no previous token
         var seenLineBreak = !hasScannedToken
         hasScannedToken = true
+
+        // Skip shebang (#!) at start of file
+        if (pos == 0 && pos + 1 < end && text[0] == '#' && text[1] == '!') {
+            pos = 2
+            while (pos < end && !isLineBreak(text[pos])) {
+                pos++
+            }
+            seenLineBreak = true
+            precedingLineBreak = true
+        }
+
         while (pos < end) {
             val ch = text[pos]
             when {
