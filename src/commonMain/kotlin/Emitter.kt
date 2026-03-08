@@ -106,6 +106,9 @@ class Emitter(
 
     private fun hasModuleStatements(sourceFile: SourceFile): Boolean {
         if (options.moduleDetection == "force") return true
+        // .mts/.mjs/.cts/.cjs files are always module files
+        val fn = sourceFile.fileName
+        if (fn.endsWith(".mts") || fn.endsWith(".mjs") || fn.endsWith(".cts") || fn.endsWith(".cjs")) return true
         return sourceFile.statements.any {
             it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
                     (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference) ||
