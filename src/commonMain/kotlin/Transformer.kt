@@ -6054,6 +6054,8 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
+        // Track which members have been processed (even if non-constant)
+        val processedMembers = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf())
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
             val memberNameExpr = memberNameToString(member.name)
@@ -6086,7 +6088,12 @@ class Transformer(private val options: CompilerOptions) {
                     } else {
                         // Numeric / expression initializer: E[E["X"] = expr] = "X"
                         // Try to fold constant expressions (e.g. 1 << 1 → 2)
-                        val foldedValue = evaluateConstantExpression(initExpr, memberValues)
+                        var foldedValue = evaluateConstantExpression(initExpr, memberValues)
+                        // Forward references to not-yet-defined members resolve to 0
+                        // (TypeScript emits 0 for forward enum member references)
+                        if (foldedValue == null && isForwardEnumRef(initExpr, enumName, memberName, knownMemberNames, processedMembers)) {
+                            foldedValue = 0L
+                        }
                         val emitExpr = if (foldedValue != null) {
                             NumericLiteralNode(text = foldedValue.toString(), pos = -1, end = -1)
                         } else {
@@ -6130,6 +6137,7 @@ class Transformer(private val options: CompilerOptions) {
             }
             // Track this member name for qualifying later members' initializers
             knownMemberNames.add(memberName)
+            processedMembers.add(memberName)
             // Copy leading/trailing comments from the enum member to the generated statement
             iifeBody.add(
                 if (member.leadingComments != null || member.trailingComments != null) {
@@ -6305,6 +6313,40 @@ class Transformer(private val options: CompilerOptions) {
      * e.g., inside `enum Foo { a=2, x=a.b }`, `a` → `Foo.a` producing `Foo.a.b`.
      * Only qualifies identifiers that match known enum member names.
      */
+    /**
+     * Checks if an initializer expression is a forward reference to a not-yet-defined
+     * enum member (NOT the same member — self-references keep their qualified form).
+     * Forward references resolve to 0 in TypeScript.
+     * Matches patterns: `Y` (bare identifier), `E.Y`, `E["Y"]`
+     */
+    private fun isForwardEnumRef(
+        expr: Expression,
+        enumName: String,
+        currentMemberName: String,
+        knownMembers: Set<String>,
+        processedMembers: Set<String>,
+    ): Boolean {
+        // A forward reference is to a member that is known but NOT yet processed.
+        // Members that were processed but had non-constant values are NOT forward refs.
+        fun isForwardRef(refName: String): Boolean =
+            refName != currentMemberName && refName in knownMembers && refName !in processedMembers
+
+        // Bare identifier: X = Y where Y is a known member but not yet resolved
+        if (expr is Identifier && isForwardRef(expr.text)) return true
+        // E.Y property access
+        if (expr is PropertyAccessExpression && expr.expression is Identifier) {
+            val obj = expr.expression as Identifier
+            if (obj.text == enumName && isForwardRef(expr.name.text)) return true
+        }
+        // E["Y"] element access
+        if (expr is ElementAccessExpression && expr.expression is Identifier) {
+            val obj = expr.expression as Identifier
+            val arg = expr.argumentExpression
+            if (obj.text == enumName && arg is StringLiteralNode && isForwardRef(arg.text)) return true
+        }
+        return false
+    }
+
     private fun qualifyEnumMemberRefs(
         expr: Expression,
         enumName: String,
