@@ -50,6 +50,12 @@ class Emitter(
      */
     fun emit(sourceFile: SourceFile, originalSourceFile: SourceFile? = null): String {
         sourceText = (originalSourceFile ?: sourceFile).text
+        // Re-emit shebang line if present
+        if (sourceText.startsWith("#!")) {
+            val lineEnd = sourceText.indexOf('\n')
+            val shebangLine = if (lineEnd >= 0) sourceText.substring(0, lineEnd) else sourceText
+            sb.appendLine(shebangLine)
+        }
         emitUseStrict(originalSourceFile ?: sourceFile)
         emitStatements(sourceFile.statements)
         // If the file is a module but all statements were skipped, emit "export {}"
