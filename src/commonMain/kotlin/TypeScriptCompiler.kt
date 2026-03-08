@@ -185,10 +185,10 @@ class TypeScriptCompiler {
                     if (options.fullEmitPaths) {
                         val outDir = options.outDir.trimEnd('/')
                         val jsonBaseName = file.fileName.substringAfterLast('/')
-                        jsonOutputs.add("$outDir/$jsonBaseName" to file.content)
+                        jsonOutputs.add("$outDir/$jsonBaseName" to stripJsonTrailingCommas(file.content))
                     } else {
                         val jsonBaseName = file.fileName.substringAfterLast('/')
-                        jsonOutputs.add(jsonBaseName to file.content)
+                        jsonOutputs.add(jsonBaseName to stripJsonTrailingCommas(file.content))
                     }
                     continue
                 }
@@ -384,3 +384,8 @@ private fun topologicalSort(
 
     return result
 }
+
+private val trailingCommaRegex = Regex(",(?=\\s*[}\\]])")
+
+private fun stripJsonTrailingCommas(content: String): String =
+    content.replace(trailingCommaRegex, "")
