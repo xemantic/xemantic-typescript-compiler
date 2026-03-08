@@ -1531,6 +1531,7 @@ class Emitter(
                 val sameLine = element.trailingComments?.filter { !it.hasPrecedingNewLine }
                 val ownLine = element.trailingComments?.filter { it.hasPrecedingNewLine }
                 // NumericLiteralNode already emits same-line trailing comments in emitExpression
+                val hasLineComment = !options.removeComments && sameLine?.any { it.text.startsWith("//") } == true
                 if (!options.removeComments && element !is NumericLiteralNode) sameLine?.forEach { write(" "); write(it.text) }
                 if (!options.removeComments && !ownLine.isNullOrEmpty()) {
                     // Own-line pre-comma comment: newline, indent, comment, " ,"
@@ -1540,6 +1541,11 @@ class Emitter(
                         write(comment.text)
                     }
                     write(" ,")
+                } else if (hasLineComment && !isLast) {
+                    // Same-line // comment followed by more elements: put comma on next line
+                    writeNewLine()
+                    writeIndent()
+                    write(",")
                 } else {
                     if (!isLast || node.hasTrailingComma) write(",")
                 }

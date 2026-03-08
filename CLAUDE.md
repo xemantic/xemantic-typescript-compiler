@@ -61,6 +61,10 @@ Maximize the number of passing tests by fixing bugs in `Transformer.kt`, `Emitte
 
 The pipeline: Scanner → Parser → Transformer → Emitter → BaselineFormatter. Key files live in `src/commonMain/kotlin/`.
 
+### Fix discipline
+
+**Do not over-analyze.** At this stage, most easy wins have been captured. Pick a specific failing test, read the diff, implement the fix, test, commit. Limit analysis to ≤3 tool calls before starting implementation. If a fix attempt causes regressions, revert immediately and move on to the next test — do not iterate more than twice on the same fix. Favor breadth (many small fixes) over depth (one perfect fix).
+
 ### Reference TypeScript sources
 
 The original TypeScript compiler source is in `typescript-repo/src/compiler/`. When a fix is ambiguous or behavior is unclear, read the corresponding TypeScript source file (e.g. `typescript-repo/src/compiler/emitter.ts`, `parser.ts`, `transformer.ts`, `factory/emitHelpers.ts`) to verify the Kotlin implementation against the original. The 1M context window can accommodate these files.
