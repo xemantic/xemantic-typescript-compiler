@@ -204,7 +204,7 @@ class Parser(private val source: String, private val fileName: String) {
                 else -> parseExpressionStatement()
             }
         }
-        At -> { parseDecorators(); parseStatement() }
+        At -> { val decs = parseDecorators(); parseDecoratedStatement(decs) }
         SyntaxKind.LabeledStatement -> null // won't appear as token
         else -> {
             if (isIdentifier() && lookAhead { nextToken(); token == Colon }) {
@@ -213,6 +213,20 @@ class Parser(private val source: String, private val fileName: String) {
                 parseExpressionStatement()
             }
         }
+    }
+
+    /**
+     * After parsing decorators (@dec), parse the declaration they attach to.
+     * For class declarations, attach the decorators to the ClassDeclaration node.
+     * For export class, the result is a ClassDeclaration with Export modifier —
+     * decorators are attached after parsing.
+     */
+    private fun parseDecoratedStatement(decorators: List<Decorator>?): Statement? {
+        val stmt = parseStatement()
+        if (stmt is ClassDeclaration && decorators != null) {
+            return stmt.copy(decorators = decorators)
+        }
+        return stmt
     }
 
     private fun parseBlock(): Block {
@@ -768,6 +782,7 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseClassDeclaration(
         modifiers: Set<ModifierFlag> = emptySet(),
         outerComments: List<Comment>? = null,
+        decorators: List<Decorator>? = null,
     ): ClassDeclaration {
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
@@ -786,6 +801,7 @@ class Parser(private val source: String, private val fileName: String) {
             heritageClauses = heritage,
             members = members,
             modifiers = modifiers,
+            decorators = decorators,
             pos = pos,
             end = getEnd(),
             leadingComments = comments,
@@ -855,7 +871,7 @@ class Parser(private val source: String, private val fileName: String) {
             }
             if (result) {
                 nextToken() // skip 'get'
-                return parseGetAccessor(modifiers, comments, pos)
+                return parseGetAccessor(modifiers, comments, pos, decorators)
             }
         }
 
@@ -869,7 +885,7 @@ class Parser(private val source: String, private val fileName: String) {
             }
             if (result) {
                 nextToken() // skip 'set'
-                return parseSetAccessor(modifiers, comments, pos)
+                return parseSetAccessor(modifiers, comments, pos, decorators)
             }
         }
 
@@ -933,7 +949,7 @@ class Parser(private val source: String, private val fileName: String) {
         )
     }
 
-    private fun parseGetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int): GetAccessor {
+    private fun parseGetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int, decorators: List<Decorator>? = null): GetAccessor {
         val name = parsePropertyName()
         val params = parseParameterList()
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
@@ -947,6 +963,7 @@ class Parser(private val source: String, private val fileName: String) {
             type = type,
             body = body,
             modifiers = modifiers,
+            decorators = decorators,
             pos = pos,
             end = getEnd(),
             leadingComments = comments,
@@ -954,7 +971,7 @@ class Parser(private val source: String, private val fileName: String) {
         )
     }
 
-    private fun parseSetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int): SetAccessor {
+    private fun parseSetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int, decorators: List<Decorator>? = null): SetAccessor {
         val name = parsePropertyName()
         val params = parseParameterList()
         // Setters cannot have a return type annotation, but parse it for error recovery (preserved in emit).
@@ -969,6 +986,7 @@ class Parser(private val source: String, private val fileName: String) {
             type = type,
             body = body,
             modifiers = modifiers,
+            decorators = decorators,
             pos = pos,
             end = getEnd(),
             leadingComments = comments,
@@ -1796,7 +1814,8 @@ class Parser(private val source: String, private val fileName: String) {
             val pos = getPos()
             nextToken()
             val expr = parseLeftHandSideExpression()
-            decorators.add(Decorator(expression = expr, pos = pos, end = getEnd()))
+            val trailing = scanner.getTrailingComments()
+            decorators.add(Decorator(expression = expr, pos = pos, end = getEnd(), trailingComments = trailing))
         }
         return decorators
     }
