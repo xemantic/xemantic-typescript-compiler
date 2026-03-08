@@ -2346,10 +2346,12 @@ class Parser(private val source: String, private val fileName: String) {
             val name = parseIdentifier()
             return MetaProperty(keywordToken = NewKeyword, name = name, pos = pos, end = getEnd())
         }
-        // For `new`, the constructor expression only allows member access (. and []),
-        // NOT function calls. parseCallAndAccess would greedily consume `()` and turn
+        // For `new`, the constructor expression allows member access (. and []) and nested `new`,
+        // but NOT function calls. parseCallAndAccess would greedily consume `()` and turn
         // `new Foo()` into `new (Foo())` — use parseMemberAccessOnly instead.
-        val expr = parseMemberAccessOnly(parsePrimaryExpression())
+        // Handle nested `new` (e.g. `new new Date`) by recursing.
+        val baseExpr = if (token == NewKeyword) parseNewExpression() else parsePrimaryExpression()
+        val expr = parseMemberAccessOnly(baseExpr)
         val typeArgs = tryParseTypeArguments()
         val args = if (token == OpenParen) parseArgumentList() else null
         return NewExpression(expression = expr, typeArguments = typeArgs, arguments = args, pos = pos, end = getEnd())
