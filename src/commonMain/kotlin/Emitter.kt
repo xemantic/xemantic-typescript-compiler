@@ -2215,7 +2215,7 @@ class Emitter(
         val chain = mutableListOf<BinaryExpression>()
         var cur: Expression = node
         while (cur is BinaryExpression && !cur.operatorHasPrecedingLineBreak
-            && cur.left !is ConditionalExpression
+            && !(cur.left is ConditionalExpression && cur.operator != SyntaxKind.Comma)
             && !(cur.right is ConditionalExpression && rightConditionalNeedsParens(cur.operator))) {
             chain.add(cur)
             cur = cur.left
@@ -2244,8 +2244,10 @@ class Emitter(
             return
         }
         // Standard recursive path for single node or complex formatting
-        // A ConditionalExpression on the left of a binary operator always needs parentheses
-        if (node.left is ConditionalExpression) {
+        // A ConditionalExpression on the left of a binary operator needs parentheses
+        // for most operators (since `a ? b : c + d` parses as `a ? b : (c + d)`),
+        // but NOT for comma (since `a ? b : c, d` correctly parses as `(a ? b : c), d`).
+        if (node.left is ConditionalExpression && node.operator != SyntaxKind.Comma) {
             write("(")
             emitExpression(node.left)
             write(")")
