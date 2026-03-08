@@ -369,9 +369,14 @@ class Emitter(
     }
 
     private fun emitIfStatementCore(node: IfStatement) {
-        write("if (")
+        write("if")
+        emitInnerComments(node.afterKeywordComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         emitExpression(node.expression)
+        emitInnerComments(node.beforeCloseParenComments)
         write(")")
+        emitInnerComments(node.afterCloseParenComments)
         if (node.elseStatement != null) {
             // Emit then-block without trailing newline so we can put else on same/next line
             if (node.thenStatement is Block) {
@@ -379,8 +384,14 @@ class Emitter(
                 emitBlockBody(block, emitOpenBraceComments = true)
                 if (block.multiLine || (block.statements.isEmpty() && block.multiLine)) {
                     // } is on its own line, else goes on next line
+                    emitInnerComments(node.beforeElseComments)
                     writeNewLine()
                     writeIndent()
+                    write("else")
+                } else if (!node.beforeElseComments.isNullOrEmpty()) {
+                    // There are comments between } and else; emit them then break line
+                    emitInnerComments(node.beforeElseComments)
+                    writeNewLine()
                     write("else")
                 } else {
                     // } else on same line
@@ -395,6 +406,7 @@ class Emitter(
                 writeIndent()
                 write("else")
             }
+            emitInnerComments(node.afterElseComments)
             if (node.elseStatement is IfStatement) {
                 write(" ")
                 emitIfStatementCore(node.elseStatement)
@@ -420,29 +432,45 @@ class Emitter(
     private fun emitDoStatement(node: DoStatement) {
         writeIndent()
         write("do")
+        emitInnerComments(node.afterDoComments)
         emitEmbeddedStatement(node.statement, trailingOnSameLine = true)
         if (node.statement is Block) {
-            write(" while (")
+            emitInnerComments(node.beforeWhileComments)
+            write(" while")
         } else {
             writeIndent()
-            write("while (")
+            write("while")
         }
+        emitInnerComments(node.afterWhileComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         emitExpression(node.expression)
-        write(");")
+        emitInnerComments(node.beforeCloseParenComments)
+        write(")")
+        emitInnerComments(node.afterCloseParenComments)
+        write(";")
         writeNewLine()
     }
 
     private fun emitWhileStatement(node: WhileStatement) {
         writeIndent()
-        write("while (")
+        write("while")
+        emitInnerComments(node.afterKeywordComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         emitExpression(node.expression)
+        emitInnerComments(node.beforeCloseParenComments)
         write(")")
+        emitInnerComments(node.afterCloseParenComments)
         emitEmbeddedStatement(node.statement)
     }
 
     private fun emitForStatement(node: ForStatement) {
         writeIndent()
-        write("for (")
+        write("for")
+        emitInnerComments(node.afterKeywordComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         if (node.initializer != null) {
             when (val init = node.initializer) {
                 is VariableDeclarationList -> emitVariableDeclarationList(init)
@@ -451,49 +479,73 @@ class Emitter(
                 }
             }
         }
-        write(if (node.condition != null) "; " else ";")
+        emitInnerComments(node.afterInitComments)
+        write(";")
+        emitInnerComments(node.afterSemicolon1Comments)
         if (node.condition != null) {
+            write(" ")
             emitExpression(node.condition)
         }
-        write(if (node.incrementor != null) "; " else ";")
+        emitInnerComments(node.afterConditionComments)
+        write(";")
+        emitInnerComments(node.afterSemicolon2Comments)
         if (node.incrementor != null) {
+            write(" ")
             emitExpression(node.incrementor)
         }
+        emitInnerComments(node.beforeCloseParenComments)
         write(")")
+        emitInnerComments(node.afterCloseParenComments)
         emitEmbeddedStatement(node.statement)
     }
 
     private fun emitForInStatement(node: ForInStatement) {
         writeIndent()
-        write("for (")
+        write("for")
+        emitInnerComments(node.afterKeywordComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         when (val init = node.initializer) {
             is VariableDeclarationList -> emitVariableDeclarationList(init)
             is Expression -> emitExpression(init)
             else -> { /* should not happen */
             }
         }
-        write(" in ")
+        emitInnerComments(node.afterInitComments)
+        write(" in")
+        emitInnerComments(node.afterInComments)
+        write(" ")
         emitExpression(node.expression)
+        emitInnerComments(node.beforeCloseParenComments)
         write(")")
+        emitInnerComments(node.afterCloseParenComments)
         emitEmbeddedStatement(node.statement)
     }
 
     private fun emitForOfStatement(node: ForOfStatement) {
         writeIndent()
-        write("for ")
+        write("for")
+        emitInnerComments(node.afterKeywordComments)
+        write(" ")
         if (node.awaitModifier) {
             write("await ")
         }
         write("(")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         when (val init = node.initializer) {
             is VariableDeclarationList -> emitVariableDeclarationList(init)
             is Expression -> emitExpression(init)
             else -> { /* should not happen */
             }
         }
-        write(" of ")
+        emitInnerComments(node.afterInitComments)
+        write(" of")
+        emitInnerComments(node.afterOfComments)
+        write(" ")
         emitExpression(node.expression)
+        emitInnerComments(node.beforeCloseParenComments)
         write(")")
+        emitInnerComments(node.afterCloseParenComments)
         emitEmbeddedStatement(node.statement)
     }
 
@@ -537,17 +589,28 @@ class Emitter(
 
     private fun emitWithStatement(node: WithStatement) {
         writeIndent()
-        write("with (")
+        write("with")
+        emitInnerComments(node.afterKeywordComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         emitExpression(node.expression)
+        emitInnerComments(node.beforeCloseParenComments)
         write(")")
+        emitInnerComments(node.afterCloseParenComments)
         emitEmbeddedStatement(node.statement)
     }
 
     private fun emitSwitchStatement(node: SwitchStatement) {
         writeIndent()
-        write("switch (")
+        write("switch")
+        emitInnerComments(node.afterKeywordComments)
+        write(" (")
+        emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         emitExpression(node.expression)
-        write(") {")
+        emitInnerComments(node.beforeCloseParenComments)
+        write(")")
+        emitInnerComments(node.afterCloseParenComments)
+        write(" {")
         writeNewLine()
         for (clause in node.caseBlock) {
             when (clause) {
@@ -579,8 +642,11 @@ class Emitter(
         indentLevel++
         emitLeadingComments(node)
         writeIndent()
-        write("case ")
+        write("case")
+        emitInnerComments(node.afterCaseComments)
+        write(" ")
         emitExpression(node.expression)
+        emitInnerComments(node.afterExprComments)
         write(":")
         if (node.singleLine && node.statements.isNotEmpty()) {
             write(" ")
@@ -614,7 +680,9 @@ class Emitter(
         indentLevel++
         emitLeadingComments(node)
         writeIndent()
-        write("default:")
+        write("default")
+        emitInnerComments(node.afterDefaultComments)
+        write(":")
         if (node.singleLine && node.statements.isNotEmpty()) {
             write(" ")
             val saved = isStartOfLine
@@ -659,7 +727,9 @@ class Emitter(
 
     private fun emitThrowStatement(node: ThrowStatement) {
         writeIndent()
-        write("throw ")
+        write("throw")
+        emitInnerComments(node.afterKeywordComments)
+        write(" ")
         if (node.expression != null) {
             emitExpression(node.expression)
         }
@@ -671,26 +741,33 @@ class Emitter(
     private fun emitTryStatement(node: TryStatement) {
         writeIndent()
         write("try")
+        emitInnerComments(node.afterTryComments)
         emitBlockBody(node.tryBlock, emitOpenBraceComments = true)
         if (node.catchClause != null) {
             writeNewLine()
             writeIndent()
             write("catch")
+            emitInnerComments(node.catchClause.afterCatchComments)
             if (node.catchClause.variableDeclaration != null) {
                 write(" (")
+                emitInnerComments(node.catchClause.afterOpenParenComments, trailingSpace = false)
                 emitExpression(node.catchClause.variableDeclaration.name)
                 if (node.catchClause.variableDeclaration.initializer != null) {
                     write(" = ")
                     emitExpression(node.catchClause.variableDeclaration.initializer)
                 }
+                emitInnerComments(node.catchClause.beforeCloseParenComments)
                 write(")")
+                emitInnerComments(node.catchClause.afterCloseParenComments)
             }
             emitBlockBody(node.catchClause.block, emitOpenBraceComments = true)
         }
         if (node.finallyBlock != null) {
+            emitInnerComments(node.afterCatchBlockComments)
             writeNewLine()
             writeIndent()
             write("finally")
+            emitInnerComments(node.afterFinallyComments)
             emitBlockBody(node.finallyBlock, emitOpenBraceComments = true)
         }
         writeNewLine()
@@ -2674,6 +2751,32 @@ class Emitter(
             }
             sb.append('\n')
             isStartOfLine = true
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Inner-comment emission
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Emits inner comments (comments between tokens within a statement).
+     * Each comment is preceded by a space. If [trailingSpace] is false,
+     * the last comment does not get a trailing space (used for comments
+     * that appear right before an expression with no intervening space).
+     */
+    private fun emitInnerComments(comments: List<Comment>?, trailingSpace: Boolean = true) {
+        if (options.removeComments || comments.isNullOrEmpty()) return
+        for ((index, comment) in comments.withIndex()) {
+            if (comment.hasPrecedingNewLine) {
+                writeNewLine()
+                writeIndent()
+            } else {
+                write(" ")
+            }
+            write(comment.text)
+            if (comment.text.startsWith("//")) {
+                writeNewLine()
+            }
         }
     }
 
