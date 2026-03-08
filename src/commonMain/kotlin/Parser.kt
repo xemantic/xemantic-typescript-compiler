@@ -2259,7 +2259,7 @@ class Parser(private val source: String, private val fileName: String) {
                 }
 
                 LessThan -> {
-                    // Try type arguments for call/tagged-template — wrap in tryScan so if no `(` or
+                    // Try type arguments for call/tagged-template/instantiation — wrap in tryScan so if no `(` or
                     // template follows, scanner is restored to before `<` (fixing `i < 10` in for-loop)
                     val callExpr: Expression? = scanner.tryScan {
                         val typeArgs = tryParseTypeArguments()
@@ -2280,6 +2280,16 @@ class Parser(private val source: String, private val fileName: String) {
                                     tag = result,
                                     typeArguments = typeArgs,
                                     template = template,
+                                    pos = result.pos,
+                                    end = getEnd()
+                                )
+                            }
+                            // Instantiation expression: expr<Type> followed by a token that
+                            // cannot start a binary expression (so it's type args, not comparison).
+                            // Wrap in ParenthesizedExpression to match TypeScript's emit behavior.
+                            typeArgs != null && canFollowTypeArgumentsInExpression() -> {
+                                ParenthesizedExpression(
+                                    expression = result,
                                     pos = result.pos,
                                     end = getEnd()
                                 )
@@ -3065,6 +3075,13 @@ class Parser(private val source: String, private val fileName: String) {
             if (!preCommaComments.isNullOrEmpty()) {
                 pendingLeadingComments = preCommaComments
             }
+            // Also capture inline comments after the comma (scanner treats them as trailing
+            // because there's no preceding line break, but they are semantically leading
+            // comments of the next parameter).
+            val postCommaComments = trailingComments()
+            if (!postCommaComments.isNullOrEmpty()) {
+                pendingLeadingComments = (pendingLeadingComments ?: emptyList()) + postCommaComments
+            }
         }
         parseExpected(SyntaxKind.CloseParen)
         // If no parameters but there are inline comments between ( and ), create a placeholder.
@@ -3139,6 +3156,26 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseTypeArgumentsOpt(): List<TypeNode>? {
         return tryParseTypeArguments()
+    }
+
+    /**
+     * Checks if the current token can follow type arguments in an expression context,
+     * indicating an instantiation expression (e.g., `foo<number>` without a call).
+     * Based on TypeScript's `canFollowTypeArgumentsInExpression`.
+     */
+    private fun canFollowTypeArgumentsInExpression(): Boolean = when (token) {
+        // These tokens can follow a type argument list in an expression context
+        SyntaxKind.Comma, SyntaxKind.Dot, SyntaxKind.QuestionDot,
+        SyntaxKind.CloseParen, SyntaxKind.CloseBracket,
+        SyntaxKind.Colon, SyntaxKind.Semicolon, SyntaxKind.Question,
+        SyntaxKind.EqualsEquals, SyntaxKind.EqualsEqualsEquals,
+        SyntaxKind.ExclamationEquals, SyntaxKind.ExclamationEqualsEquals,
+        SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar,
+        SyntaxKind.QuestionQuestion, SyntaxKind.Caret,
+        SyntaxKind.Ampersand, SyntaxKind.Bar,
+        SyntaxKind.CloseBrace, SyntaxKind.EndOfFile,
+        SyntaxKind.Equals -> true
+        else -> false
     }
 
     private fun tryParseTypeArguments(): List<TypeNode>? {
