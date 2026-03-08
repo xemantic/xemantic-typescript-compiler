@@ -7254,9 +7254,11 @@ class Transformer(private val options: CompilerOptions) {
                     }
                     if (isExported) {
                         // `export import X = R` → `nsName.X = R`
+                        // Use exportedVarOnlyNames to avoid qualifying locally-declared names
+                        // (e.g., IIFE parameters for nested namespaces should stay unqualified)
                         val value: Expression = when (ref) {
-                            is Expression -> qualifyNamespaceRefs(nsName, exportedNames, transformExpression(ref))
-                            is QualifiedName -> qualifyNamespaceRefs(nsName, exportedNames, qualifiedNameToPropertyAccess(ref))
+                            is Expression -> qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(ref))
+                            is QualifiedName -> qualifyNamespaceRefs(nsName, exportedVarOnlyNames, qualifiedNameToPropertyAccess(ref))
                             else -> syntheticId(stmt.name.text)
                         }
                         result.add(ExpressionStatement(
