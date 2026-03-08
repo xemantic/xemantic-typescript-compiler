@@ -3237,14 +3237,24 @@ class Parser(private val source: String, private val fileName: String) {
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
         val dotTrailing = if (dotDotDot) trailingComments() else null
         val name = parseBindingNameOrPattern()
+        // Capture trailing comments after the name before type annotation, since they will be lost
+        // when the type annotation is parsed and erased (e.g. `...restGreetings /* comment */: string[]`)
+        val nameTrailing = if (token == SyntaxKind.Colon || token == SyntaxKind.Question) {
+            trailingComments()
+        } else null
         val question = parseOptional(SyntaxKind.Question)
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
         val trailing = trailingComments()
+        val allTrailing = when {
+            nameTrailing != null && trailing != null -> nameTrailing + trailing
+            nameTrailing != null -> nameTrailing
+            else -> trailing
+        }
         return Parameter(
             name = name, type = type, initializer = init, dotDotDotToken = dotDotDot,
             questionToken = question, modifiers = modifiers, decorators = decorators, pos = pos, end = getEnd(),
-            leadingComments = comments, trailingComments = trailing,
+            leadingComments = comments, trailingComments = allTrailing,
             dotDotDotTrailingComments = dotTrailing,
         )
     }
