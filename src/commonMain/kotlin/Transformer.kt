@@ -4324,7 +4324,15 @@ class Transformer(private val options: CompilerOptions) {
                         || (inner is ParenthesizedExpression && isTypeErasureNode(inner.expression))
                 val transformed = transformExpression(inner)
                 if (wasTypeErasure && !typeAssertionResultNeedsParens(transformed)) {
-                    transformed
+                    // Keep parens only if there are comments DEEPLY NESTED inside the expression
+                    // (not on the top-level `leadingComments`). Top-level comments can safely move
+                    // outside the parens when dropped; deeply nested ones (e.g. on `this` inside a
+                    // call chain) were written between ( and ) and need the parens to stay.
+                    if (transformed.leadingComments.isNullOrEmpty() && hasCommentsInTree(transformed)) {
+                        expr.copy(expression = transformed)
+                    } else {
+                        transformed
+                    }
                 } else if (transformed is CommaListExpression) {
                     // CommaListExpression already includes its own parens; drop the outer ones.
                     transformed
@@ -8322,6 +8330,23 @@ class Transformer(private val options: CompilerOptions) {
         is TypeOfExpression, is VoidExpression, is DeleteExpression -> true
         is AwaitExpression, is YieldExpression -> true
         else -> false
+    }
+
+    /** Returns true if the expression tree has any leading or trailing comments anywhere. */
+    private fun hasCommentsInTree(expr: Expression): Boolean {
+        if (!expr.leadingComments.isNullOrEmpty() || !expr.trailingComments.isNullOrEmpty()) return true
+        return when (expr) {
+            is CallExpression -> hasCommentsInTree(expr.expression) || expr.arguments.any { hasCommentsInTree(it) }
+            is PropertyAccessExpression -> hasCommentsInTree(expr.expression)
+            is ParenthesizedExpression -> hasCommentsInTree(expr.expression)
+            is BinaryExpression -> hasCommentsInTree(expr.left) || hasCommentsInTree(expr.right)
+            is ConditionalExpression -> hasCommentsInTree(expr.condition) || hasCommentsInTree(expr.whenTrue) || hasCommentsInTree(expr.whenFalse)
+            is NewExpression -> hasCommentsInTree(expr.expression) || expr.arguments?.any { hasCommentsInTree(it) } == true
+            is PrefixUnaryExpression -> hasCommentsInTree(expr.operand)
+            is PostfixUnaryExpression -> hasCommentsInTree(expr.operand)
+            is ElementAccessExpression -> hasCommentsInTree(expr.expression) || hasCommentsInTree(expr.argumentExpression)
+            else -> false
+        }
     }
 
     /**
