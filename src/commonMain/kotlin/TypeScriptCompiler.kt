@@ -21,17 +21,27 @@ package com.xemantic.typescript.compiler
 /**
  * The result of compiling a TypeScript source file.
  *
- * @property javascript The compiled JavaScript output, or `null` if compilation
- *   produced only errors and generated no output.
+ * @property fileName The logical file name of the compilation unit.
+ * @property sourceEchoes The parsed source files as (fileName, cleanedContent) pairs.
+ * @property jsOutputs The compiled JS outputs as (jsFileName, javascript) pairs.
+ * @property isMultiFile Whether this compilation used multi-file format
+ *   (explicit `@Filename:` directives).
+ * @property options The compiler options used for this compilation.
  * @property diagnostics The list of diagnostic messages (errors, warnings, hints)
  *   produced during compilation.
  */
 data class CompilationResult(
-    val javascript: String?,
+    val fileName: String = "input.ts",
+    val sourceEchoes: List<Pair<String, String>> = emptyList(),
+    val jsOutputs: List<Pair<String, String>> = emptyList(),
+    val isMultiFile: Boolean = false,
+    val options: CompilerOptions = CompilerOptions(),
     val diagnostics: List<Diagnostic> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
+    /** The JS content of the single output, or `null` for multi-file or declaration-only results. */
+    val javascript: String? get() = jsOutputs.singleOrNull()?.second
 }
 
 /**
@@ -122,9 +132,10 @@ class TypeScriptCompiler {
 
             // emitDeclarationOnly: produce source echo only, no JS output
             if (options.emitDeclarationOnly) {
-                val baseline = formatSourceOnlyBaseline(fileName, file.content)
                 return CompilationResult(
-                    javascript = baseline,
+                    fileName = fileName,
+                    sourceEchoes = listOf(fileName to file.content),
+                    options = options,
                     diagnostics = diagnostics,
                 )
             }
@@ -139,25 +150,36 @@ class TypeScriptCompiler {
             val emitter = Emitter(options)
             val javascript = emitter.emit(transformed, sourceFile)
 
-            val baseline = formatBaseline(fileName, file.content, javascript, options.sourceMap, options.newLine, options.jsx, options.mapRoot, options.outFile)
+            val tsxExtension = if (options.jsx?.lowercase() == "preserve") ".jsx" else ".js"
+            val jsName = options.outFile?.substringAfterLast('/')
+                ?: file.fileName.substringAfterLast('/')
+                    .replace(".tsx", tsxExtension)
+                    .replace(".mts", ".mjs")
+                    .replace(".cts", ".cjs")
+                    .replace(".ts", ".js")
 
             return CompilationResult(
-                javascript = baseline,
+                fileName = fileName,
+                sourceEchoes = listOf(fileName to file.content),
+                jsOutputs = listOf(jsName to javascript),
+                options = options,
                 diagnostics = diagnostics,
             )
         } else {
             // Multi-file compilation — emitDeclarationOnly: produce source echoes only
             if (options.emitDeclarationOnly) {
-                val sourceEchoes = mutableListOf<Pair<String, String>>()
+                val declSourceEchoes = mutableListOf<Pair<String, String>>()
                 for (file in parsed.files) {
                     val baseName = file.fileName.substringAfterLast('/')
                     if (baseName != "tsconfig.json") {
-                        sourceEchoes.add(file.fileName to file.content)
+                        declSourceEchoes.add(file.fileName to file.content)
                     }
                 }
-                val baseline = formatMultiFileBaseline(fileName, sourceEchoes, emptyList())
                 return CompilationResult(
-                    javascript = baseline,
+                    fileName = fileName,
+                    sourceEchoes = declSourceEchoes,
+                    isMultiFile = true,
+                    options = options,
                     diagnostics = diagnostics,
                 )
             }
@@ -269,10 +291,12 @@ class TypeScriptCompiler {
                 jsonOutputs + jsOutputs
             }
 
-            val baseline = formatMultiFileBaseline(fileName, sourceEchoes, finalJsOutputs, options.sourceMap)
-
             return CompilationResult(
-                javascript = baseline,
+                fileName = fileName,
+                sourceEchoes = sourceEchoes,
+                jsOutputs = finalJsOutputs,
+                isMultiFile = true,
+                options = options,
                 diagnostics = diagnostics,
             )
         }
