@@ -207,6 +207,14 @@ class Parser(private val source: String, private val fileName: String) {
         }
         At -> { val decs = parseDecorators(); parseDecoratedStatement(decs) }
         SyntaxKind.LabeledStatement -> null // won't appear as token
+        PrivateKeyword, PublicKeyword, ProtectedKeyword -> {
+            // Access modifier keywords in module/namespace context (e.g. `private y = x;`).
+            // TypeScript treats these as property declarations; skip the modifier and parse the rest.
+            if (lookAhead { nextToken(); isIdentifier() }) {
+                nextToken()
+            }
+            parseExpressionStatement()
+        }
         else -> {
             if (isIdentifier() && lookAhead { nextToken(); token == Colon }) {
                 parseLabeledStatement()
