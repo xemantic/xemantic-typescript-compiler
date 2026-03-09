@@ -69,7 +69,16 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-Maximize the number of passing tests by fixing bugs in `Transformer.kt`, `Emitter.kt`, and `Parser.kt`. Work autonomously: pick a fix, implement it, run the full suite, commit if net-positive, repeat.
+Maximize the number of passing tests by fixing bugs in `Transformer.kt`, `Emitter.kt`, and `Parser.kt`. Work autonomously:
+
+1. pick the top fix from the PLAN.md
+2. implement it
+3. run the full suite
+4. if net-positive, update PLAN.md, and CLAUDE.md and commit
+5. otherwise continue with the same fix until done
+6. if implementation is completely hopeless, break the loop and wait for instructions
+
+Do not switch to other fix until current fix is finished. Once succeeded with a fix, assuming that PLAN.md is updated. Clean up the context window and start with the next fix.
 
 The pipeline: Scanner → Parser → Transformer → Emitter → BaselineFormatter. Key files live in `src/commonMain/kotlin/`.
 
