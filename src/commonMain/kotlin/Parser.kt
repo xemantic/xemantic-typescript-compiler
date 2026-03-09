@@ -2909,6 +2909,7 @@ class Parser(private val source: String, private val fileName: String) {
             val params = parseParameterList()
             val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             val body = if (token == SyntaxKind.OpenBrace) parseBlock() else null
+            val trailingComments = scanner.getTrailingComments()
             return MethodDeclaration(
                 name = name,
                 typeParameters = typeParams,
@@ -2919,7 +2920,8 @@ class Parser(private val source: String, private val fileName: String) {
                 asteriskToken = asterisk,
                 pos = pos,
                 end = getEnd(),
-                leadingComments = comments
+                leadingComments = comments,
+                trailingComments = trailingComments
             )
         }
 
