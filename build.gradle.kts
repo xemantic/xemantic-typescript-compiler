@@ -287,7 +287,7 @@ val generateTypeScriptTests by tasks.registering {
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
                     sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
-                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").javascript")
+                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").toBaseline()")
                     sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
                     sb.appendLine("    }")
                 }
