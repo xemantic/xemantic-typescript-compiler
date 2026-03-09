@@ -69,22 +69,26 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-Maximize the number of passing tests by fixing bugs in `Transformer.kt`, `Emitter.kt`, and `Parser.kt`. Work autonomously:
+Maximize the number of passing tests by fixing bugs in `Transformer.kt`, `Emitter.kt`, and `Parser.kt`. The pipeline: Scanner → Parser → Transformer → Emitter → BaselineFormatter. Key files live in `src/commonMain/kotlin/`.
 
-1. pick the top fix from the PLAN.md
-2. implement it
-3. run the full suite
-4. if net-positive, update PLAN.md, and CLAUDE.md and commit
-5. otherwise continue with the same fix until done
-6. if implementation is completely hopeless, break the loop and wait for instructions
+### Execution protocol (MANDATORY — follow exactly)
 
-Do not switch to other fix until current fix is finished. Once succeeded with a fix, assuming that PLAN.md is updated. Clean up the context window and start with the next fix.
+PLAN.md contains a **QUEUE** — a numbered list of fixes in strict order. Execute them top-to-bottom:
 
-The pipeline: Scanner → Parser → Transformer → Emitter → BaselineFormatter. Key files live in `src/commonMain/kotlin/`.
+1. Find the first unchecked (`- [ ]`) item in the QUEUE
+2. Implement it — the item already names the test(s), file, and fix area
+3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
+4. If net-positive: check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit
+5. If net-negative after **2 attempts**: mark the item `- [S]` (skipped), commit nothing, move to the next item
+6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
-### Fix discipline
-
-**Do not over-analyze.** At this stage, most easy wins have been captured. Pick a specific failing test, read the diff, implement the fix, test, commit. Limit analysis to ≤3 tool calls before starting implementation. If a fix attempt causes regressions, revert immediately and move on to the next test — do not iterate more than twice on the same fix. Favor breadth (many small fixes) over depth (one perfect fix).
+**HARD RULES:**
+- **Do NOT re-analyze or re-prioritize the queue.** The analysis is already done. Just execute.
+- **Do NOT search for "easier" or "better" fixes** outside the queue. The queue IS the plan.
+- **Do NOT spend more than 2 tool calls on analysis** before writing code. Read the failing test diff, read the fix area, start coding.
+- **Do NOT skip ahead** in the queue — work item 1 before item 2, always.
+- **Do NOT switch items** mid-fix — finish or skip the current item before moving on.
+- One item at a time. No parallelism within a single session unless using subagent worktrees.
 
 ### Reference TypeScript sources
 

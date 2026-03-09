@@ -2,89 +2,29 @@
 
 **Current State:** 4480 tests, 395 failing (4,085 passing — 91.2%)
 
-## Smallest-Diff Failures (best ROI targets)
+## QUEUE (execute top-to-bottom, do NOT re-order or skip ahead)
 
-### 1-line diff failures (21 tests)
-Most actionable group. Common root causes:
+- [ ] **1. parseCommaSeparatedNewline formatting** (3 tests: `parseCommaSeparatedNewlineString`, `parseCommaSeparatedNewlineNew`, `parseCommaSeparatedNewlineNumber`) — **File:** `Emitter.kt` — **Fix:** call expression argument list single-line detection. `(a,\n    '')` should emit as `(a, '')`.
+- [ ] **2. Inline/trailing comments after type erasure** (~10 tests: `commentsArgumentsOfCallExpression2`, `chainedSpecializationToObjectTypeLiteral`, `promiseChaining`, `promiseChaining1`, `overEagerReturnTypeSpecialization`, `narrowedConstInMethod`, `genericChainedCalls`, `privateName`, `genericObjectSpreadResultInSwitch`, `crashInGetTextOfComputedPropertyName`) — **File:** `Emitter.kt` — **Fix:** comments survive in source but are lost when type annotations/assertions are erased during emit.
+- [ ] **3. Parens + comments on type assertions** (2 tests: `commentEmitOnParenthesizedAssertionInReturnStatement`, `commentEmitOnParenthesizedAssertionInReturnStatement2`) — **File:** `Transformer.kt` — **Fix:** when dropping `ParenthesizedExpression` wrapping a type assertion, preserve comments inside. Keep parens if inner node has leading/trailing comments.
+- [ ] **4. Extra blank line fix** (1 test: `isolatedModules_resolveJsonModule_strict_outDir_commonJs`) — **File:** likely `Emitter.kt` or `BaselineFormatter.kt` — **Fix:** extra blank line in output, probably a trailing newline issue.
+- [ ] **5. `moduleProperty1` private keyword leak** (1 test: `moduleProperty1`) — **File:** `Transformer.kt` or `Emitter.kt` — **Fix:** `private;` emitted as identifier instead of being erased.
+- [ ] **6. Single-line if/else not collapsed** (3 tests: `conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`) — **File:** `Emitter.kt` — **Fix:** emitter not detecting single-line context for `if/else` inside single-line function bodies.
+- [ ] **7. Detached arrow function comments** (2 tests: `detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`) — **File:** `Emitter.kt` — **Fix:** triple-slash XML doc comments before arrow function body not preserved.
+- [ ] **8. `__rest` in assignment patterns** (~15 tests) — **File:** `Transformer.kt` — **Fix:** extend destructuring rest to handle assignment form (`[{ ...x }] = expr`), not just declarations.
+- [ ] **9. CommonJS `exports.default = void 0` + re-export** (~19 tests) — **File:** `Transformer.kt` — **Fix:** missing `exports.default = void 0` initialization and re-export assignments.
+- [ ] **10. Static class fields** (~5 tests) — **File:** `Transformer.kt` — **Fix:** transform `static x = 1` to `ClassName.x = 1` after class body.
+- [ ] **11. Computed property name hoisting** (~10-20 tests) — **File:** `Transformer.kt` — **Fix:** extract computed property names to temp vars for class bodies.
+- [ ] **12. Parser error recovery** (~50 tests) — **File:** `Parser.kt` — **Fix:** various error recovery differences (yield in type assertion, numeric trailing decimals, arrow misparse in generics, missing token recovery, tagged template incomplete expressions).
 
-**Import alias for non-instantiated modules (5 tests):**
-`acceptableAlias1`, `duplicateVarsAcrossFileBoundaries`, `exportImportNonInstantiatedModule`, `moduleSharesNameWithImportDeclarationInsideIt3`, `typeofInternalModules`
-— Transformer emits/omits `var x = M.Y` incorrectly for import aliases based on whether the target module is instantiated. Requires type checker knowledge — **BLOCKED**.
-
-**Inline sourcemap (3 tests):**
-`jsFileCompilationWithMapFileAsJsWithInlineSourceMap`, `optionsInlineSourceMapMapRoot`, `optionsInlineSourceMapSourceRoot`
-— Missing inline sourcemap comment generation (`//# sourceMappingURL=data:...`). Out of scope.
-
-**Parser error recovery (4 tests):**
-`classMemberWithMissingIdentifier`, `restParamModifier`, `unexpectedStatementBlockTerminator`, `importTypeWithUnparenthesizedGenericFunctionParsed`
-
-**Extra blank line (1 test):**
-`isolatedModules_resolveJsonModule_strict_outDir_commonJs` — likely trivial formatting fix.
-
-**Access modifier leaking (1 test):**
-`moduleProperty1` — `private;` emitted as identifier instead of being erased.
-
-### Small-diff groups by root cause (from agent analysis)
-
-**Inline/trailing comments dropped after type erasure (~10 tests):**
-`commentsArgumentsOfCallExpression2`, `chainedSpecializationToObjectTypeLiteral`, `promiseChaining`, `promiseChaining1`, `overEagerReturnTypeSpecialization`, `narrowedConstInMethod`, `genericChainedCalls`, `privateName`, `genericObjectSpreadResultInSwitch`, `crashInGetTextOfComputedPropertyName`
-— Fix area: `Emitter.kt` trailing comment emission. Comments survive in source but lost during emit.
-
-**parseCommaSeparatedNewline (3 tests):**
-`parseCommaSeparatedNewlineString`, `parseCommaSeparatedNewlineNew`, `parseCommaSeparatedNewlineNumber`
-— `(a,\n    '')` should be `(a, '')`. Call expression argument list single-line detection.
-
-**Single-line if/else not collapsed (3 tests):**
-`conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`
-— Emitter not detecting single-line context for `if/else` inside single-line function bodies.
-
-**Parens + comments on type assertions (2 tests):**
-`commentEmitOnParenthesizedAssertionInReturnStatement`, `commentEmitOnParenthesizedAssertionInReturnStatement2`
-— When dropping `ParenthesizedExpression` wrapping type assertion, comments inside should be preserved.
-
-**Detached arrow function comments (2 tests):**
-`detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`
-— Triple-slash XML doc comments before arrow function body not preserved.
-
-## Remaining Failure Categories (ranked by estimated count)
-
-### 1. Missing/incomplete emit helpers (~60 tests) — HIGH COMPLEXITY
-- `__rest` in destructuring assignments (~15) — declaration form works, assignment form (`[{ ...x }] = expr`) does not
-- `__awaiter`/`__generator` (~12) — `__generator` helper not implemented
-- `__decorate` metadata edge cases (~15) — `__decorate` exists but `__metadata`, decorator on computed properties, etc.
-- `__importDefault`/`__importStar` (~19) — helpers already emitted, but CommonJS export edge cases (missing `exports.default = void 0`, re-export assignments)
-- `__esDecorate`/`__setFunctionName` — modern decorator helpers, not implemented
-- `__createBinding`/`__exportStar` — CommonJS re-export helpers
-
-### 2. Parser error recovery (~50 tests) — MEDIUM-HIGH COMPLEXITY
-TypeScript's parser produces specific error recovery output. Our parser differs in:
-- `yield` in type assertion context
-- Numeric literals with trailing decimals (`2.toString()`)
-- Arrow function misparse in generics (`<T = undefined>`)
-- Missing token recovery
-- Tagged template incomplete expressions (~6 tests)
-
-### 3. Module transform edge cases (~30 tests) — MEDIUM
-- `outFile` AMD bundling with named modules (~27) — requires bundle mode
-- CommonJS `exports.default = void 0` initialization
-- Module file ordering (topological sort)
-- `modulePreserve` mode handling
-
-### 4. Type-checker-driven transforms (~30 tests) — BLOCKED
-- Destructuring downlevel (e.g. `let { toString } = 1` → `toString = 1..toString`) — needs type info
-- Import alias elision (`import x = M.N` when N is non-instantiated) — needs type checker
-- `const enum` cross-file inlining (~15 tests)
-
-### 5. Internal comments (~15 tests) — HIGH COMPLEXITY
-Tests like `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments` need per-token comment tracking (`preDotComments`, `postDotComments`, label comments, etc.)
-
-### 6. Other (~50+ tests)
-- Static field transform (`static x = 1` → `C.x = 1`) — ~5 tests
-- Comment preservation edge cases (orphaned comments, triple-slash references) — ~10 tests
-- Unicode/BOM encoding issues — ~3 tests
-- Multi-file ordering — ~10 tests
-- SystemJS variable hoisting — ~10 tests
-- Computed property name hoisting to temp vars — ~10-20 tests
+### Blocked / out of scope (do NOT attempt)
+- `const enum` inlining — type checker needed
+- `import = require()` elision — type checker needed
+- Declaration emit (804 tests) — type analysis needed
+- `outFile` bundling — significant infrastructure
+- `__generator` helper — complex state machine transform
+- Inline sourcemaps — not implemented
+- Import alias for non-instantiated modules (5 tests) — type checker needed
 
 ## Completed Fixes (chronological)
 
@@ -109,25 +49,51 @@ Tests like `propertyAccessExpressionInnerComments`, `elementAccessExpressionInte
 - [x] `.mts/.mjs/.cts/.cjs` file extension module detection
 - [x] BigInt binary/octal to decimal conversion
 
-## Recommended Next Steps (diminishing returns)
+## Analysis Reference (for context only — DO NOT re-analyze, everything actionable is in QUEUE above)
 
-### Easiest wins (3-10 tests each)
-1. **parseCommaSeparatedNewline formatting** (3 tests) — call expression argument list single-line detection in Emitter.kt
-2. **Inline/trailing comments after type erasure** (~10 tests) — comment transfer in Emitter.kt
-3. **Parens + comments on type assertions** (2 tests) — keep parens when inner has comments in Transformer.kt
-4. **Extra blank line fix** (1 test) — `isolatedModules_resolveJsonModule_strict_outDir_commonJs`
-5. **`moduleProperty1` private keyword leak** (1 test) — access modifier not being erased
+### 1-line diff failures (21 tests)
 
-### Medium complexity (5-20 tests each)
-6. **`__rest` in assignment patterns** — extend destructuring rest to handle assignments, not just declarations
-7. **CommonJS `exports.default = void 0` + re-export** — fix export initialization and re-export handling
-8. **Static class fields** — transform `static x = 1` to `ClassName.x = 1` after class body
-9. **Computed property name hoisting** — extract to temp vars for class bodies
+**Import alias for non-instantiated modules (5 tests):**
+`acceptableAlias1`, `duplicateVarsAcrossFileBoundaries`, `exportImportNonInstantiatedModule`, `moduleSharesNameWithImportDeclarationInsideIt3`, `typeofInternalModules`
+— Requires type checker knowledge — **BLOCKED**.
 
-### Blocked / out of scope
-- `const enum` inlining — type checker needed
-- `import = require()` elision — type checker needed
-- Declaration emit (804 tests) — type analysis needed
-- `outFile` bundling — significant infrastructure
-- `__generator` helper — complex state machine transform
-- Inline sourcemaps — not implemented
+**Inline sourcemap (3 tests):**
+`jsFileCompilationWithMapFileAsJsWithInlineSourceMap`, `optionsInlineSourceMapMapRoot`, `optionsInlineSourceMapSourceRoot`
+— Out of scope.
+
+**Parser error recovery (4 tests):**
+`classMemberWithMissingIdentifier`, `restParamModifier`, `unexpectedStatementBlockTerminator`, `importTypeWithUnparenthesizedGenericFunctionParsed`
+
+**Extra blank line (1 test):**
+`isolatedModules_resolveJsonModule_strict_outDir_commonJs`
+
+**Access modifier leaking (1 test):**
+`moduleProperty1` — `private;` emitted as identifier instead of being erased.
+
+### Small-diff groups by root cause
+
+**Inline/trailing comments dropped after type erasure (~10 tests):**
+`commentsArgumentsOfCallExpression2`, `chainedSpecializationToObjectTypeLiteral`, `promiseChaining`, `promiseChaining1`, `overEagerReturnTypeSpecialization`, `narrowedConstInMethod`, `genericChainedCalls`, `privateName`, `genericObjectSpreadResultInSwitch`, `crashInGetTextOfComputedPropertyName`
+— Comments survive in source but lost during emit.
+
+**parseCommaSeparatedNewline (3 tests):**
+`parseCommaSeparatedNewlineString`, `parseCommaSeparatedNewlineNew`, `parseCommaSeparatedNewlineNumber`
+— `(a,\n    '')` should be `(a, '')`.
+
+**Single-line if/else not collapsed (3 tests):**
+`conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`
+
+**Parens + comments on type assertions (2 tests):**
+`commentEmitOnParenthesizedAssertionInReturnStatement`, `commentEmitOnParenthesizedAssertionInReturnStatement2`
+
+**Detached arrow function comments (2 tests):**
+`detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`
+
+### Remaining failure categories
+
+- Missing/incomplete emit helpers (~60 tests) — `__rest` assignments, `__generator`, `__decorate` metadata, `__importDefault`/`__importStar` edge cases
+- Parser error recovery (~50 tests) — yield in type assertion, numeric trailing decimals, arrow misparse, tagged templates
+- Module transform edge cases (~30 tests) — `outFile` bundling, CommonJS init, module ordering
+- Type-checker-driven transforms (~30 tests) — **BLOCKED**
+- Internal comments (~15 tests) — per-token comment tracking
+- Other (~50+ tests) — static fields, comment preservation, Unicode/BOM, multi-file ordering, SystemJS, computed property hoisting
