@@ -1340,6 +1340,12 @@ class Emitter(
             is ExpressionStatement -> {
                 emitExpression(stmt.expression)
                 write(";")
+                if (!options.removeComments) {
+                    stmt.preSemicolonComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                        write(" ")
+                        write(it.text)
+                    }
+                }
             }
 
             is IfStatement -> {
