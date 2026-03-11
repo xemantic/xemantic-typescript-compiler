@@ -205,7 +205,18 @@ class Parser(private val source: String, private val fileName: String) {
                 else -> parseExpressionStatement()
             }
         }
-        At -> { val decs = parseDecorators(); parseDecoratedStatement(decs) }
+        At -> {
+            // Capture leading comments (e.g. JSDoc) that appear before the first decorator.
+            // They would otherwise be lost since parseDecorators() doesn't call leadingComments().
+            val outerComments = leadingComments()
+            val decs = parseDecorators()
+            val stmt = parseDecoratedStatement(decs)
+            // Attach captured comments to the resulting statement
+            if (outerComments != null && stmt is ClassDeclaration) {
+                val merged = (outerComments + (stmt.leadingComments ?: emptyList())).ifEmpty { null }
+                stmt.copy(leadingComments = merged)
+            } else stmt
+        }
         SyntaxKind.LabeledStatement -> null // won't appear as token
         PrivateKeyword, PublicKeyword, ProtectedKeyword -> {
             // Access modifier keywords in module/namespace context (e.g. `private y = x;`).
