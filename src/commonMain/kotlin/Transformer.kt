@@ -509,7 +509,11 @@ class Transformer(private val options: CompilerOptions) {
                     collectBoundNames(decl.name).forEach { n -> runtimeDeclaredNames.add(n) }
                 }
                 is EnumDeclaration -> runtimeDeclaredNames.add(stmt.name.text)
-                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { runtimeDeclaredNames.add(it) }
+                is ModuleDeclaration -> {
+                    val n = extractIdentifierName(stmt.name)
+                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                    n?.let { runtimeDeclaredNames.add(it) }
+                }
                 else -> {}
             }
         }
@@ -523,8 +527,11 @@ class Transformer(private val options: CompilerOptions) {
         for (stmt in originalSourceFile.statements) {
             when {
                 stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers &&
-                        !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) ->
-                    extractIdentifierName(stmt.name)?.let { exportedNsEnumNames.add(it) }
+                        !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
+                    val n = extractIdentifierName(stmt.name)
+                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                    n?.let { exportedNsEnumNames.add(it) }
+                }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) &&
                         (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
