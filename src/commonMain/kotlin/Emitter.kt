@@ -1260,6 +1260,10 @@ class Emitter(
         if (node.isExportEquals) {
             // `export = X` is a CommonJS-only construct. For ES module format it is
             // simply dropped; TypeScript emits `export {}` to preserve module semantics.
+            // For CommonJS format, top-level `export = x` is already transformed to
+            // `module.exports = x` by the transformer. If the emitter sees an ExportAssignment
+            // with isExportEquals=true, it must be in a non-top-level context (e.g. inside a
+            // function body — a parse error that TypeScript emits as-is).
             val effectiveModule = options.effectiveModule
             val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
                     effectiveModule == ModuleKind.ES2020 ||
@@ -1267,7 +1271,7 @@ class Emitter(
                     effectiveModule == ModuleKind.ESNext
             if (isESModuleFormat) return
             writeIndent()
-            write("module.exports = ")
+            write("export = ")
         } else {
             writeIndent()
             write("export default ")
