@@ -4174,9 +4174,12 @@ class Transformer(private val options: CompilerOptions) {
                 // If initializer is complex (not a simple identifier) AND there are
                 // non-rest elements (need to destructure), use a temp var to avoid
                 // evaluating the expression twice.
+                // Also check the ORIGINAL expression: if it was a type assertion (AsExpression
+                // or TypeAssertionExpression), TypeScript caches it even though the cast erases to an identifier.
+                val originalIsTypeAssertion = decl.initializer is AsExpression || decl.initializer is TypeAssertionExpression
                 val sourceExpr: Expression
                 val needsTempVar = initExpr != null && nonRestElements.isNotEmpty() &&
-                    (initExpr !is Identifier || (initExpr as Identifier).text == "this")
+                    (initExpr !is Identifier || (initExpr as Identifier).text == "this" || originalIsTypeAssertion)
                 if (needsTempVar) {
                     val tempName = nextTempVarName()
                     // Don't hoist — the temp var is declared inline in the same declaration list
