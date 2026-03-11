@@ -186,6 +186,24 @@ class Transformer(private val options: CompilerOptions) {
                         extractIdentifierName(stmt.name)?.let { topLevelRuntimeNames.add(it) }
                     }
                 }
+                is ImportDeclaration -> {
+                    // Import bindings are runtime values — they must not be treated as type-only
+                    // even if the same name is declared as an interface/type in this file.
+                    // E.g.: `export default interface Foo {}; import Foo from "./b"` — Foo is runtime.
+                    val clause = stmt.importClause
+                    if (clause != null && !clause.isTypeOnly) {
+                        clause.name?.text?.let { topLevelRuntimeNames.add(it) }
+                        val bindings = clause.namedBindings
+                        when (bindings) {
+                            is NamespaceImport -> topLevelRuntimeNames.add(bindings.name.text)
+                            is NamedImports -> bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
+                                topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
+                                topLevelRuntimeNames.add(spec.name.text)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
                 else -> {}
             }
         }
@@ -428,6 +446,10 @@ class Transformer(private val options: CompilerOptions) {
         val directExportedVarNames = mutableSetOf<String>()
         // Collect export assignments to emit at the end
         val deferredExportAssignments = mutableListOf<Statement>()
+        // Track: imported local name → the import const statement (for re-export positioning)
+        val importStmtForLocalName = mutableMapOf<String, Statement>()
+        // Track: import stmt → export assignments to insert immediately after it
+        val exportAssignmentsAfterImport = mutableMapOf<Statement, MutableList<Statement>>()
         // Collect function export stubs (exports.fn = fn) to insert after void0 hoists.
         // Function declarations are JS-hoisted, so their export stubs must appear BEFORE
         // any variable initializer assignments that might override the same name.
@@ -747,6 +769,7 @@ class Transformer(private val options: CompilerOptions) {
                             val localName = clause.name.text
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                             result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                            importStmtForLocalName[localName] = result.last()
                             // Rename: Namespace → b_1.default
                             renameMap[localName] = PropertyAccessExpression(
                                 expression = syntheticId(tempName),
@@ -756,7 +779,9 @@ class Transformer(private val options: CompilerOptions) {
                         } else if (bindings is NamespaceImport) {
                             // import * as x from "y" → const x = __importStar(require("y"))
                             needsImportStar = true
-                            result.add(makeImportHelperConst(bindings.name.text, "__importStar", moduleSpecifier, stmt.leadingComments))
+                            val localName = bindings.name.text
+                            result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments))
+                            importStmtForLocalName[localName] = result.last()
                             // Namespace keeps its name, no rename needed
                         } else if (clause.name != null && bindings is NamedImports) {
                             // Combined default + named: import c, { x, y } from "m"
@@ -772,6 +797,8 @@ class Transformer(private val options: CompilerOptions) {
                                 needsImportDefault = true
                                 result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
                             }
+                            val importConstStmt = result.last()
+                            importStmtForLocalName[localName] = importConstStmt
                             // Rename default import: c → tempName.default
                             renameMap[localName] = PropertyAccessExpression(
                                 expression = syntheticId(tempName),
@@ -782,6 +809,7 @@ class Transformer(private val options: CompilerOptions) {
                             for (element in bindings.elements) {
                                 val importedName = (element.propertyName ?: element.name).text
                                 val localAlias = element.name.text
+                                importStmtForLocalName[localAlias] = importConstStmt
                                 renameMap[localAlias] = PropertyAccessExpression(
                                     expression = syntheticId(tempName),
                                     name = syntheticId(importedName),
@@ -804,10 +832,12 @@ class Transformer(private val options: CompilerOptions) {
                             } else {
                                 result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments))
                             }
+                            val importConstStmt = result.last()
                             // Rename: a → y_1.a, c → y_1.b
                             for (element in bindings.elements) {
                                 val importedName = (element.propertyName ?: element.name).text
                                 val localAlias = element.name.text
+                                importStmtForLocalName[localAlias] = importConstStmt
                                 renameMap[localAlias] = PropertyAccessExpression(
                                     expression = syntheticId(tempName),
                                     name = syntheticId(importedName),
@@ -931,7 +961,14 @@ class Transformer(private val options: CompilerOptions) {
                                         )
                                     } else syntheticId(localName)
                                     if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
-                                    result.add(makeExportAssignment(exportName, localExpr))
+                                    val exportAssignment = makeExportAssignment(exportName, localExpr)
+                                    val importStmt = importStmtForLocalName[localName]
+                                    if (importStmt != null) {
+                                        // Re-export of an imported binding: insert right after its import stmt
+                                        exportAssignmentsAfterImport.getOrPut(importStmt) { mutableListOf() }.add(exportAssignment)
+                                    } else {
+                                        result.add(exportAssignment)
+                                    }
                                 }
                             }
                         }
@@ -952,6 +989,19 @@ class Transformer(private val options: CompilerOptions) {
                     }
                 }
             }
+        }
+
+        // Insert re-export assignments immediately after their corresponding import statements.
+        // e.g. `export { zzz as default }` where `zzz` came from `import zzz from "./b"` →
+        // `exports.default = b_1.default` must appear right after `const b_1 = __importDefault(...)`.
+        if (exportAssignmentsAfterImport.isNotEmpty()) {
+            val expanded = mutableListOf<Statement>()
+            for (stmt in result) {
+                expanded.add(stmt)
+                exportAssignmentsAfterImport[stmt]?.let { expanded.addAll(it) }
+            }
+            result.clear()
+            result.addAll(expanded)
         }
 
         // Early pre-preamble extraction: handle NotEmittedStatement at result[1] BEFORE
