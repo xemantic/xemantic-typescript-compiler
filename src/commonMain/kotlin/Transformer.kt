@@ -231,13 +231,18 @@ class Transformer(private val options: CompilerOptions) {
 
         // When helpers are present, lift leading comments from the first transformed statement
         // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
+        // Only lift when the first original statement itself has comments (meaning the comment
+        // belongs to the first original statement, not a later one). If the first original
+        // statement was erased (e.g. `declare function`) and had no comments, the first
+        // transformed statement's comments came from a later original statement — don't lift.
         // Exception: FunctionDeclaration keeps its comments after helpers when __awaiter is the only helper.
         val withHelpers = if (helpers.isNotEmpty()) {
             val firstOrigStmt = sourceFile.statements.firstOrNull()
             val onlyAwaiter = needsAwaiterHelper && !needsRestHelper
-            val shouldLiftComments = firstOrigStmt != null && !(onlyAwaiter && firstOrigStmt is FunctionDeclaration)
             val firstStmt = transformed.firstOrNull()
             val firstComments = firstStmt?.leadingComments
+            val shouldLiftComments = firstOrigStmt?.leadingComments != null &&
+                !(onlyAwaiter && firstOrigStmt is FunctionDeclaration)
             if (shouldLiftComments && !firstComments.isNullOrEmpty()) {
                 val commentHolder = NotEmittedStatement(leadingComments = firstComments)
                 val firstStripped: Statement? = when (firstStmt) {
