@@ -446,9 +446,13 @@ class Transformer(private val options: CompilerOptions) {
         val directExportedVarNames = mutableSetOf<String>()
         // Collect export assignments to emit at the end
         val deferredExportAssignments = mutableListOf<Statement>()
+        // Track export names already emitted as function stubs (for deduplication)
+        val functionStubExportedNames = mutableSetOf<String>()
         // Track: imported local name → the import const statement (for re-export positioning)
         val importStmtForLocalName = mutableMapOf<String, Statement>()
-        // Track: import stmt → export assignments to insert immediately after it
+        // Track: declared local name → the declaration statement (for export positioning)
+        val declarationStmtForName = mutableMapOf<String, Statement>()
+        // Track: stmt → export assignments to insert immediately after it (imports and declarations)
         val exportAssignmentsAfterImport = mutableMapOf<Statement, MutableList<Statement>>()
         // Collect function export stubs (exports.fn = fn) to insert after void0 hoists.
         // Function declarations are JS-hoisted, so their export stubs must appear BEFORE
@@ -458,13 +462,19 @@ class Transformer(private val options: CompilerOptions) {
         // TypeScript emits these BEFORE Object.defineProperty (after "use strict").
         val prePreambleStatements = mutableListOf<Statement>()
 
-        // Pre-scan original source for function/class declaration names.
-        // These names are JS-hoisted and must not get a void0 hoist when re-exported via
-        // `export { name }` — they should use a function export stub instead.
-        val functionAndClassNames = mutableSetOf<String>()
+        // Pre-scan original source for function declaration names.
+        // Function declarations are JS-hoisted — when re-exported via `export { name }`,
+        // they use a function export stub placed before other code (the function is already available).
+        // Class declarations are NOT JS-hoisted — they use the same approach as variables
+        // (void0 hoist + assignment after the class body).
+        val functionAndClassNames = mutableSetOf<String>()  // kept for backward compat checks
+        val functionOnlyNames = mutableSetOf<String>()
         for (stmt in originalSourceFile.statements) {
             when (stmt) {
-                is FunctionDeclaration -> stmt.name?.text?.let { functionAndClassNames.add(it) }
+                is FunctionDeclaration -> stmt.name?.text?.let {
+                    functionAndClassNames.add(it)
+                    functionOnlyNames.add(it)
+                }
                 is ClassDeclaration -> stmt.name?.text?.let { functionAndClassNames.add(it) }
                 else -> {}
             }
@@ -630,6 +640,11 @@ class Transformer(private val options: CompilerOptions) {
                         }
                     } else {
                         result.add(stmt)
+                        // Track for positioning non-exported var export assignments (from `export { foo }`)
+                        val addedStmt = result.last()
+                        for (decl in stmt.declarationList.declarations) {
+                            for (name in collectBoundNames(decl.name)) declarationStmtForName[name] = addedStmt
+                        }
                     }
                 }
 
@@ -698,6 +713,8 @@ class Transformer(private val options: CompilerOptions) {
                         }
                     } else {
                         result.add(stmt)
+                        // Track for positioning non-exported class export assignments (from `export { Foo }`)
+                        stmt.name?.text?.let { declarationStmtForName[it] = result.last() }
                     }
                 }
 
@@ -942,9 +959,13 @@ class Transformer(private val options: CompilerOptions) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
-                            if (localName in functionAndClassNames) {
-                                // Function/class: use stub (no void0 hoist needed)
-                                functionExportStubs.add(makeExportAssignment(exportName, syntheticId(localName)))
+                            if (localName in functionOnlyNames) {
+                                // Function declaration (JS-hoisted): use stub placed before other code.
+                                // No void0 hoist needed (function is available immediately). Deduplicate.
+                                if (exportName !in functionStubExportedNames) {
+                                    functionStubExportedNames.add(exportName)
+                                    functionExportStubs.add(makeExportAssignment(exportName, syntheticId(localName)))
+                                }
                             } else {
                                 // Variable: void0 hoist + assignment.
                                 // Skip assignment for `export { undefined }` — `undefined` is a global;
@@ -960,14 +981,18 @@ class Transformer(private val options: CompilerOptions) {
                                             pos = -1, end = -1,
                                         )
                                     } else syntheticId(localName)
-                                    if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                    val isNewExport = exportName !in exportedVarNames
+                                    if (isNewExport) exportedVarNames.add(exportName)
                                     val exportAssignment = makeExportAssignment(exportName, localExpr)
-                                    val importStmt = importStmtForLocalName[localName]
-                                    if (importStmt != null) {
-                                        // Re-export of an imported binding: insert right after its import stmt
-                                        exportAssignmentsAfterImport.getOrPut(importStmt) { mutableListOf() }.add(exportAssignment)
-                                    } else {
-                                        result.add(exportAssignment)
+                                    if (isNewExport) {
+                                        val anchorStmt = importStmtForLocalName[localName]
+                                            ?: declarationStmtForName[localName]
+                                        if (anchorStmt != null) {
+                                            // Re-export of an imported/declared binding: insert right after it
+                                            exportAssignmentsAfterImport.getOrPut(anchorStmt) { mutableListOf() }.add(exportAssignment)
+                                        } else {
+                                            result.add(exportAssignment)
+                                        }
                                     }
                                 }
                             }
