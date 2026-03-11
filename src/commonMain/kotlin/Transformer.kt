@@ -620,12 +620,47 @@ class Transformer(private val options: CompilerOptions) {
                                                 decl.initializer is ClassExpression
                                     }
                             if (needsKeepDeclaration) {
-                                // Keep declaration + emit exports.x = x; right after
-                                result.add(stmt.copy(modifiers = strippedModifiers))
-                                for (decl in stmt.declarationList.declarations) {
-                                    val names = collectBoundNames(decl.name)
-                                    if (names.isNotEmpty() && decl.initializer != null) {
-                                        for (name in names) result.add(makeExportAssignment(name))
+                                // Try to flatten ObjectBindingPattern to direct exports.prop = expr.prop
+                                val hasFunctionInit = stmt.declarationList.declarations.any { d ->
+                                    d.initializer is FunctionExpression ||
+                                            d.initializer is ArrowFunction ||
+                                            d.initializer is ClassExpression
+                                }
+                                val flattenPairs = if (!hasFunctionInit) {
+                                    stmt.declarationList.declarations.map { tryExpandObjectBinding(it) }
+                                } else null
+                                if (flattenPairs != null && flattenPairs.all { it != null }) {
+                                    // All decls can be flattened — emit exports.prop = expr.prop directly
+                                    var isFirst = true
+                                    for (pairs in flattenPairs) {
+                                        for ((localName, valueExpr) in pairs!!) {
+                                            directExportedVarNames.add(localName)
+                                            val leadingComments = if (isFirst) stmt.leadingComments else null
+                                            result.add(ExpressionStatement(
+                                                expression = BinaryExpression(
+                                                    left = PropertyAccessExpression(
+                                                        expression = syntheticId("exports"),
+                                                        name = Identifier(text = localName, pos = -1, end = -1),
+                                                        pos = -1, end = -1,
+                                                    ),
+                                                    operator = Equals,
+                                                    right = valueExpr,
+                                                    pos = -1, end = -1,
+                                                ),
+                                                leadingComments = leadingComments,
+                                                pos = -1, end = -1,
+                                            ))
+                                            isFirst = false
+                                        }
+                                    }
+                                } else {
+                                    // Keep declaration + emit exports.x = x; right after
+                                    result.add(stmt.copy(modifiers = strippedModifiers))
+                                    for (decl in stmt.declarationList.declarations) {
+                                        val names = collectBoundNames(decl.name)
+                                        if (names.isNotEmpty() && decl.initializer != null) {
+                                            for (name in names) result.add(makeExportAssignment(name))
+                                        }
                                     }
                                 }
                             } else {
@@ -1688,11 +1723,44 @@ class Transformer(private val options: CompilerOptions) {
                                             d.initializer is ClassExpression
                                 }
                         if (needsKeepDeclaration) {
-                            bodyStatements.add(stmt.copy(modifiers = strippedModifiers))
-                            for (d in stmt.declarationList.declarations) {
-                                val names = collectBoundNames(d.name)
-                                if (names.isNotEmpty() && d.initializer != null) {
-                                    for (n in names) bodyStatements.add(makeExportAssignment(n))
+                            // Try to flatten ObjectBindingPattern to direct exports.prop = expr.prop
+                            val hasFunctionInit = stmt.declarationList.declarations.any { d ->
+                                d.initializer is FunctionExpression ||
+                                        d.initializer is ArrowFunction ||
+                                        d.initializer is ClassExpression
+                            }
+                            val flattenPairs = if (!hasFunctionInit) {
+                                stmt.declarationList.declarations.map { tryExpandObjectBinding(it) }
+                            } else null
+                            if (flattenPairs != null && flattenPairs.all { it != null }) {
+                                var isFirst = true
+                                for (pairs in flattenPairs) {
+                                    for ((localName, valueExpr) in pairs!!) {
+                                        val leadingComments = if (isFirst) stmt.leadingComments else null
+                                        bodyStatements.add(ExpressionStatement(
+                                            expression = BinaryExpression(
+                                                left = PropertyAccessExpression(
+                                                    expression = syntheticId("exports"),
+                                                    name = Identifier(text = localName, pos = -1, end = -1),
+                                                    pos = -1, end = -1,
+                                                ),
+                                                operator = Equals,
+                                                right = valueExpr,
+                                                pos = -1, end = -1,
+                                            ),
+                                            leadingComments = leadingComments,
+                                            pos = -1, end = -1,
+                                        ))
+                                        isFirst = false
+                                    }
+                                }
+                            } else {
+                                bodyStatements.add(stmt.copy(modifiers = strippedModifiers))
+                                for (d in stmt.declarationList.declarations) {
+                                    val names = collectBoundNames(d.name)
+                                    if (names.isNotEmpty() && d.initializer != null) {
+                                        for (n in names) bodyStatements.add(makeExportAssignment(n))
+                                    }
                                 }
                             }
                         } else {
@@ -2876,8 +2944,19 @@ class Transformer(private val options: CompilerOptions) {
                                     pendingLeadingComments.addAll(stmt.leadingComments)
                                 }
                             } else {
-                                // Destructuring — keep the statement but strip export
-                                executeStatements.add(stripped)
+                                // Destructuring — try to flatten to individual hoisted var assignments
+                                val pairs = tryExpandObjectBinding(d)
+                                if (pairs != null && pairs.all { (n, _) -> n in hoistedVarNamesSet }) {
+                                    for ((localName, valueExpr) in pairs) {
+                                        executeStatements.add(ExpressionStatement(
+                                            expression = makeSystemExportInlineAssign(localName, valueExpr),
+                                            leadingComments = stmt.leadingComments,
+                                            pos = -1, end = -1,
+                                        ))
+                                    }
+                                } else {
+                                    executeStatements.add(stripped)
+                                }
                             }
                         }
                     } else {
@@ -2898,8 +2977,25 @@ class Transformer(private val options: CompilerOptions) {
                                     )
                                 )
                             } else if (name == null) {
-                                // Complex binding — keep as-is (with `let` since it's block-scoped)
-                                executeStatements.add(stripped)
+                                // Destructuring — try to flatten to individual hoisted var assignments
+                                val pairs = tryExpandObjectBinding(d)
+                                if (pairs != null && pairs.all { (n, _) -> n in hoistedVarNamesSet }) {
+                                    for ((localName, valueExpr) in pairs) {
+                                        executeStatements.add(ExpressionStatement(
+                                            expression = BinaryExpression(
+                                                left = syntheticId(localName),
+                                                operator = Equals,
+                                                right = valueExpr,
+                                                pos = -1, end = -1,
+                                            ),
+                                            leadingComments = stmt.leadingComments,
+                                            pos = -1, end = -1,
+                                        ))
+                                    }
+                                } else {
+                                    // Complex binding — keep as-is (with `let` since it's block-scoped)
+                                    executeStatements.add(stripped)
+                                }
                             }
                             // If name != null and no initializer: already hoisted, nothing to emit.
                             // Transfer leading comments to the next statement (typically the IIFE).
@@ -8304,6 +8400,42 @@ class Transformer(private val options: CompilerOptions) {
                 collectBoundNames(elem.name)
             }
             else -> emptyList()
+        }
+    }
+
+    /**
+     * Tries to expand a [VariableDeclarator] with an [ObjectBindingPattern] into a list of
+     * (localName, valueExpr) pairs for direct module export. Each pair maps the local binding
+     * name to a [PropertyAccessExpression] of the initializer.
+     *
+     * Returns `null` if the binding cannot be simply expanded: nested patterns, default values,
+     * rest elements, computed property names, or no initializer.
+     *
+     * Example: `{ toString }` from `1` → `[("toString", 1..toString)]`
+     * Example: `{ foo: bar }` from `obj` → `[("bar", obj.foo)]`
+     */
+    private fun tryExpandObjectBinding(decl: VariableDeclaration): List<Pair<String, Expression>>? {
+        val pattern = decl.name as? ObjectBindingPattern ?: return null
+        val initializer = decl.initializer ?: return null
+        for (elem in pattern.elements) {
+            if (elem.dotDotDotToken) return null
+            if (elem.initializer != null) return null
+            if (elem.name !is Identifier) return null
+        }
+        return pattern.elements.map { elem ->
+            val localName = (elem.name as Identifier).text
+            val propName = when (val pn = elem.propertyName) {
+                is Identifier -> pn.text
+                is StringLiteralNode -> pn.text
+                null -> localName
+                else -> return null  // computed property name — can't expand
+            }
+            val valueExpr = PropertyAccessExpression(
+                expression = initializer,
+                name = Identifier(text = propName, pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+            localName to valueExpr
         }
     }
 
