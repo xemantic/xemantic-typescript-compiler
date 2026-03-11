@@ -1626,7 +1626,8 @@ class Transformer(private val options: CompilerOptions) {
                 }
 
                 // import X = require("mod") → already transformed to var X = require("mod")
-                // In AMD, we need to detect this and convert to a dep+param instead
+                // In AMD: convert to dep+param (factory receives the module value).
+                // In UMD: keep as const X = require("mod") in the factory body (add dep for pre-loading, no param).
                 is VariableStatement -> {
                     // Check if this is a require import (from ImportEqualsDeclaration transform)
                     val decl = stmt.declarationList.declarations
@@ -1637,13 +1638,18 @@ class Transformer(private val options: CompilerOptions) {
                             val requireArg = (init as CallExpression).arguments.firstOrNull()
                             val specStr2 = (normalizeModuleSpecifier(requireArg ?: syntheticId("")) as? StringLiteralNode)?.text
                                 ?: (requireArg as? StringLiteralNode)?.text ?: ""
-                            namedModuleImports.add(specStr2 to name)
+                            if (options.effectiveModule == ModuleKind.UMD) {
+                                // UMD: keep const X = require("mod") in the factory body (strip source-file leading comments)
+                                unnamedModuleImports.add(specStr2)
+                                bodyStatements.add(stmt.copy(leadingComments = null))
+                            } else {
+                                // AMD: make it a factory dep+param
+                                namedModuleImports.add(specStr2 to name)
+                            }
                             // If this was an `export import x = require(...)`, also re-export it.
-                            // Don't add to exportedVarNames (no void 0 hoist needed for re-exported require).
                             if (ModifierFlag.Export in stmt.modifiers) {
                                 bodyStatements.add(makeExportAssignment(name))
                             }
-                            // Don't add to body — it's now a parameter
                             continue
                         }
                     }
