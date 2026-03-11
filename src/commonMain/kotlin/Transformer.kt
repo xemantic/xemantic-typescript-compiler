@@ -6090,6 +6090,49 @@ class Transformer(private val options: CompilerOptions) {
                             questionToken = false,
                             exclamationToken = false,
                         ))
+                    } else if (ModifierFlag.Static in member.modifiers &&
+                        member.initializer != null &&
+                        options.effectiveTarget >= ScriptTarget.ES2022) {
+                        // ES2022+ with useDefineForClassFields=false: use static initializer block
+                        // instead of trailing ClassName.prop = val statement
+                        val thisRef = syntheticId("this")
+                        val lhsExpr: Expression? = when (nm) {
+                            is Identifier -> PropertyAccessExpression(
+                                expression = thisRef,
+                                name = nm.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
+                                pos = -1, end = -1,
+                            )
+                            is StringLiteralNode -> ElementAccessExpression(
+                                expression = thisRef,
+                                argumentExpression = nm,
+                                pos = -1, end = -1,
+                            )
+                            is ComputedPropertyName -> ElementAccessExpression(
+                                expression = thisRef,
+                                argumentExpression = transformExpression(nm.expression),
+                                pos = -1, end = -1,
+                            )
+                            else -> null
+                        }
+                        if (lhsExpr != null) {
+                            outputMembers.add(ClassStaticBlockDeclaration(
+                                body = Block(
+                                    statements = listOf(ExpressionStatement(
+                                        expression = BinaryExpression(
+                                            left = lhsExpr,
+                                            operator = Equals,
+                                            right = transformExpression(member.initializer),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    )),
+                                    multiLine = false,
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                                leadingComments = member.leadingComments,
+                            ))
+                        }
                     }
                     // else: moved to constructor body or trailing statements — skip here
                 }
@@ -6142,10 +6185,11 @@ class Transformer(private val options: CompilerOptions) {
 
         // Static properties without useDefineForClassFields → trailing statements
         // Use trailingVarName (class expression temp var) if provided, otherwise use class name.
+        // Exception: ES2022+ targets use static { this.prop = val } inside the class body (already added above).
         val effectiveName = trailingVarName ?: name?.text
         if (!useDefineForClassFields && effectiveName != null) {
             for (prop in staticProperties) {
-                if (prop.initializer != null) {
+                if (prop.initializer != null && options.effectiveTarget < ScriptTarget.ES2022) {
                     val classId = Identifier(text = effectiveName, pos = -1, end = -1)
                     val lhs: Expression? = when (val nm = prop.name) {
                         is Identifier -> PropertyAccessExpression(
