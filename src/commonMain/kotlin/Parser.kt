@@ -194,6 +194,11 @@ class Parser(private val source: String, private val fileName: String) {
             }
             if (isDeclare) parseDeclareDeclaration() else parseExpressionStatement()
         }
+        CaseKeyword -> {
+            // `case` without `switch` — error recovery: skip the token and return null
+            nextToken()
+            null
+        }
         DefaultKeyword -> {
             // `default` without `export` — error recovery: skip and parse the declaration
             nextToken()
