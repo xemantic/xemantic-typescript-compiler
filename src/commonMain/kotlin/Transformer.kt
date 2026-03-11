@@ -4672,7 +4672,7 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             // Arrow function: strip types (and downlevel async if target < ES2017)
-            is ArrowFunction -> {
+            is ArrowFunction -> withFreshTempVarCounter {
                 val strippedModifiers = stripTypeScriptModifiers(expr.modifiers)
                 val isAsync = ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017
                 val prevInAsyncBody = inAsyncBody
@@ -4733,7 +4733,7 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             // Function expression: strip types (and downlevel async if target < ES2017)
-            is FunctionExpression -> {
+            is FunctionExpression -> withFreshTempVarCounter {
                 val strippedModifiers = stripTypeScriptModifiers(expr.modifiers)
                 val isAsync = ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017
                 val prevInAsyncBody = inAsyncBody
