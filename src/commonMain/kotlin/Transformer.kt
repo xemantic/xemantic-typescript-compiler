@@ -4024,8 +4024,9 @@ class Transformer(private val options: CompilerOptions) {
     private fun transformFunctionDeclaration(
         decl: FunctionDeclaration
     ): List<Statement> {
-        // Overload signatures (no body, not declare) are erased
-        if (decl.body == null) return emptyList()
+        // Overload signatures (no body, not declare) are erased.
+        // Preserve any detached/file-start comments (orphanedComments handles the rules).
+        if (decl.body == null) return orphanedComments(decl)
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers)
         val isAsync = ModifierFlag.Async in decl.modifiers && options.effectiveTarget < ScriptTarget.ES2017
