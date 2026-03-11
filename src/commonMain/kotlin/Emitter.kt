@@ -44,6 +44,9 @@ class Emitter(
     // leading comments have been emitted). Used to preserve /*!...*/ pinned comments
     // at file start even when removeComments=true.
     private var atFileStart = true
+    // When true (inside a semi-inline function body), if-statement then-blocks are forced
+    // to multi-line even if they were single-line in the source.
+    private var forceBlocksMultiLine = false
 
     /**
      * Emits the given [sourceFile] as JavaScript and returns the resulting source text.
@@ -272,7 +275,15 @@ class Emitter(
             write("export ")
         }
         emitVariableDeclarationList(node.declarationList)
+        val blockComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
+        val lineComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && it.text.startsWith("//") }
+        if (!options.removeComments) {
+            blockComments?.forEach { write(" "); write(it.text) }
+        }
         write(";")
+        if (!options.removeComments) {
+            lineComments?.forEach { write(" "); write(it.text) }
+        }
         writeNewLine()
     }
 
@@ -391,8 +402,14 @@ class Emitter(
             // Emit then-block without trailing newline so we can put else on same/next line
             if (node.thenStatement is Block) {
                 val block = node.thenStatement
-                emitBlockBody(block, emitOpenBraceComments = true)
-                if (block.multiLine || (block.statements.isEmpty() && block.multiLine)) {
+                // In semi-inline function body context, force then-block to multi-line
+                val savedForce = forceBlocksMultiLine
+                val blockToEmit = if (forceBlocksMultiLine && block.statements.isNotEmpty() && !block.multiLine)
+                    block.copy(multiLine = true) else block
+                forceBlocksMultiLine = false  // Don't propagate into the then-block's contents
+                emitBlockBody(blockToEmit, emitOpenBraceComments = true)
+                forceBlocksMultiLine = savedForce
+                if (blockToEmit.multiLine || (blockToEmit.statements.isEmpty() && blockToEmit.multiLine)) {
                     // } is on its own line, else goes on next line
                     emitInnerComments(node.beforeElseComments)
                     writeNewLine()
@@ -826,7 +843,7 @@ class Emitter(
         write("(")
         emitParameters(node.parameters)
         write(")")
-        emitBlockBody(node.body)
+        emitBlockBody(node.body, isFunctionBody = true)
         writeNewLine()
     }
 
@@ -940,7 +957,7 @@ class Emitter(
         write("(")
         emitParameters(node.parameters)
         write(")")
-        emitBlockBody(node.body)
+        emitBlockBody(node.body, isFunctionBody = true)
         writeNewLine()
     }
 
@@ -950,7 +967,7 @@ class Emitter(
         write("constructor(")
         emitParameters(node.parameters)
         write(")")
-        emitBlockBody(node.body)
+        emitBlockBody(node.body, isFunctionBody = true)
         writeNewLine()
     }
 
@@ -965,7 +982,7 @@ class Emitter(
         write("(")
         emitParameters(node.parameters)
         write(")")
-        emitBlockBody(node.body)
+        emitBlockBody(node.body, isFunctionBody = true)
         writeNewLine()
     }
 
@@ -985,7 +1002,7 @@ class Emitter(
             write(": ")
             write(typeNodeToKeywordText(node.type))
         }
-        emitBlockBody(node.body)
+        emitBlockBody(node.body, isFunctionBody = true)
         writeNewLine()
     }
 
@@ -1284,9 +1301,24 @@ class Emitter(
      * Emits a block `{ ... }` for function/class bodies where the opening brace
      * is placed on the same line as the preceding declaration.
      */
-    private fun emitBlockBody(block: Block, singleLineIfEmpty: Boolean = true, emitOpenBraceComments: Boolean = false) {
+    private fun emitBlockBody(block: Block, singleLineIfEmpty: Boolean = true, emitOpenBraceComments: Boolean = false, isFunctionBody: Boolean = false) {
         if (block.statements.isEmpty() && !block.multiLine) {
             write(" { }")
+        } else if (!block.multiLine && block.statements.isNotEmpty() && isFunctionBody &&
+            block.statements.any { it is IfStatement }) {
+            // Semi-inline function body: contains if/else — keep outer braces on same line
+            // but expand content to multi-line (TypeScript's format for single-line source bodies
+            // with compound statements). e.g.: `function foo() { if (true)\n    return "";\nelse\n    return 0; }`
+            write(" { ")
+            skipNextIndent = true
+            val savedForce = forceBlocksMultiLine
+            forceBlocksMultiLine = true
+            emitBlockStatements(block.statements)
+            forceBlocksMultiLine = savedForce
+            // Strip trailing newline and close on same line as last statement
+            if (sb.isNotEmpty() && sb.last() == '\n') sb.deleteAt(sb.length - 1)
+            isStartOfLine = false
+            write(" }")
         } else if (!block.multiLine && block.statements.isNotEmpty()) {
             // Single-line block: emit all statements on one line
             write(" { ")
@@ -2550,9 +2582,28 @@ class Emitter(
     private fun emitObjectBindingPattern(node: ObjectBindingPattern) {
         if (node.elements.isEmpty()) { write("{}"); return }
         write("{ ")
+        // Check if the first non-rest element has a preceding-newline line comment
+        // If so, TypeScript formats as multi-line: `{ \n// comment\nfoo }`
+        val firstNonRest = node.elements.firstOrNull { !it.dotDotDotToken }
+        val firstLineComments = if (!options.removeComments)
+            firstNonRest?.leadingComments?.filter { it.hasPrecedingNewLine && it.text.startsWith("//") }
+        else null
+        val multiLine = !firstLineComments.isNullOrEmpty()
         for ((index, element) in node.elements.withIndex()) {
             if (index > 0) write(", ")
-            emitBindingElement(element)
+            if (element === firstNonRest && multiLine) {
+                // Emit the line comments before the element, each on its own line at current indent
+                for (comment in firstLineComments!!) {
+                    writeNewLine()
+                    writeIndent()
+                    write(comment.text)
+                }
+                writeNewLine()
+                writeIndent()
+                emitBindingElement(element, skipLeadingLineComments = true)
+            } else {
+                emitBindingElement(element)
+            }
         }
         if (node.hasTrailingComma) write(",")
         write(" }")
@@ -2580,7 +2631,11 @@ class Emitter(
         write("]")
     }
 
-    private fun emitBindingElement(node: BindingElement) {
+    private fun emitBindingElement(node: BindingElement, skipLeadingLineComments: Boolean = false) {
+        if (!options.removeComments && !skipLeadingLineComments) {
+            // Emit any block leading comments (line comments are handled by emitObjectBindingPattern)
+            node.leadingComments?.filter { !it.hasPrecedingNewLine }?.forEach { write(it.text); write(" ") }
+        }
         if (node.dotDotDotToken) {
             write("...")
             emitSpreadComments(node.name)

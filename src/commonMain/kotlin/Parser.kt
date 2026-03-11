@@ -274,6 +274,9 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
         val declList = parseVariableDeclarationList()
+        // Capture same-line trailing comments between last declaration and `;`
+        // (e.g. `/*number*/` in `var z = x.then() /*number*/; // comment`)
+        val semiInline = if (!scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments() else null
         parseSemicolon()
         val trailing = trailingComments()
         return VariableStatement(
@@ -282,7 +285,8 @@ class Parser(private val source: String, private val fileName: String) {
             pos = pos,
             end = getEnd(),
             leadingComments = comments,
-            trailingComments = trailing
+            trailingComments = trailing,
+            preSemicolonComments = semiInline
         )
     }
 
@@ -388,6 +392,8 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseBindingElement(): BindingElement {
         val pos = getPos()
+        // Capture leading comments before `...` or the element name (e.g. `// Omit` before `foo`)
+        val elemComments = if (!dotDotDotToken()) leadingComments() else null
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
         val postDotComments = if (dotDotDot) leadingComments() ?: scanner.getTrailingComments() else null
         // Detect computed property name [expr]: x or string/numeric property name "foo": x / 0: x
@@ -421,13 +427,24 @@ class Parser(private val source: String, private val fileName: String) {
                 initializer = init,
                 dotDotDotToken = dotDotDot,
                 pos = pos,
-                end = getEnd()
+                end = getEnd(),
+                leadingComments = elemComments,
             )
         } else {
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
-            BindingElement(name = nameOrProp, initializer = init, dotDotDotToken = dotDotDot, pos = pos, end = getEnd())
+            BindingElement(
+                name = nameOrProp,
+                initializer = init,
+                dotDotDotToken = dotDotDot,
+                pos = pos,
+                end = getEnd(),
+                leadingComments = elemComments,
+            )
         }
     }
+
+    /** True if the current token is `...` (DotDotDot) — used to decide whether to capture leading comments first. */
+    private fun dotDotDotToken(): Boolean = token == SyntaxKind.DotDotDot
 
     private fun parseExpressionStatement(): ExpressionStatement {
         val pos = getPos()
