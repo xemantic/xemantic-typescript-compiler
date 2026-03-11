@@ -1,6 +1,6 @@
 # Test Fix Plan
 
-**Current State:** 4508 tests, 383 failing (4,125 passing — 91.5%)
+**Current State:** 4508 tests, 376 failing (4,132 passing — 91.7%)
 
 ## QUEUE (execute top-to-bottom, do NOT re-order or skip ahead)
 
@@ -11,7 +11,7 @@
 - [x] **5. `moduleProperty1` private keyword leak** — already fixed
 - [x] **6. Single-line if/else not collapsed** (3 tests: `conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`) — FIXED: semi-inline function body format with `isFunctionBody` flag and `forceBlocksMultiLine` context.
 - [x] **7. Detached arrow function comments** (2 tests: `detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`) — **File:** `Emitter.kt` — **Fix:** triple-slash XML doc comments before arrow function body not preserved.
-- [ ] **8. `__rest` in assignment patterns** (~15 tests) — **File:** `Transformer.kt` — **Fix:** extend destructuring rest to handle assignment form (`[{ ...x }] = expr`), not just declarations.
+- [x] **8. `__rest` in assignment patterns** (~15 tests) — **File:** `Transformer.kt` — **Fix:** extend destructuring rest to handle assignment form (`[{ ...x }] = expr`), not just declarations. Fixed: for-of with object rest var, parameter rest destructuring, nested object binding rest. Also added withFreshTempVarCounter for per-function temp var naming.
 - [ ] **9. CommonJS `exports.default = void 0` + re-export** (~19 tests) — **File:** `Transformer.kt` — **Fix:** missing `exports.default = void 0` initialization and re-export assignments.
 - [ ] **10. Static class fields** (~5 tests) — **File:** `Transformer.kt` — **Fix:** transform `static x = 1` to `ClassName.x = 1` after class body.
 - [ ] **11. Computed property name hoisting** (~10-20 tests) — **File:** `Transformer.kt` — **Fix:** extract computed property names to temp vars for class bodies.

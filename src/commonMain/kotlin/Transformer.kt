@@ -146,6 +146,13 @@ class Transformer(private val options: CompilerOptions) {
         return if (n < 26) "_" + ('a' + n) else "_${('a' + n / 26)}${('a' + n % 26)}"
     }
 
+    /** Executes [block] with a fresh temp-var counter (per-function-scope), then restores. */
+    private fun <T> withFreshTempVarCounter(block: () -> T): T {
+        val saved = tempVarCounter
+        tempVarCounter = 0
+        return try { block() } finally { tempVarCounter = saved }
+    }
+
     fun transform(sourceFile: SourceFile): SourceFile {
         sourceText = sourceFile.text
         currentFileName = sourceFile.fileName
@@ -3949,53 +3956,56 @@ class Transformer(private val options: CompilerOptions) {
         val isAsync = ModifierFlag.Async in decl.modifiers && options.effectiveTarget < ScriptTarget.ES2017
         val prevInAsyncBody = inAsyncBody
         inAsyncBody = isAsync
-        val transformedBody = transformBlock(decl.body, isFunctionScope = true)
-        inAsyncBody = prevInAsyncBody
+        return withFreshTempVarCounter {
+            val transformedBody = transformBlock(decl.body, isFunctionScope = true)
+            inAsyncBody = prevInAsyncBody
 
-        if (isAsync) {
-            needsAwaiterHelper = true
-            // Transform parameters inside the function scope so async arrows in
-            // default parameters see the correct functionScopeDepth for `this` binding.
-            functionScopeDepth++
-            val transformedParams = transformParameters(decl.parameters)
-            functionScopeDepth--
-            // When any parameter has a default value, move all params to the generator
-            // and pass `arguments` as the 2nd arg to __awaiter so defaults can be re-evaluated.
-            // Otherwise keep params in the outer function and pass `void 0`.
-            val hasDefaultParams = decl.parameters.any { it.initializer != null }
-            val (outerParams, generatorParams, secondArg) = if (hasDefaultParams) {
-                Triple(emptyList<Parameter>(), transformedParams, syntheticId("arguments") as Expression)
+            if (isAsync) {
+                needsAwaiterHelper = true
+                // Transform parameters inside the function scope so async arrows in
+                // default parameters see the correct functionScopeDepth for `this` binding.
+                functionScopeDepth++
+                val transformedParams = transformParameters(decl.parameters)
+                functionScopeDepth--
+                // When any parameter has a default value, move all params to the generator
+                // and pass `arguments` as the 2nd arg to __awaiter so defaults can be re-evaluated.
+                // Otherwise keep params in the outer function and pass `void 0`.
+                val hasDefaultParams = decl.parameters.any { it.initializer != null }
+                val (outerParams, generatorParams, secondArg) = if (hasDefaultParams) {
+                    Triple(emptyList<Parameter>(), transformedParams, syntheticId("arguments") as Expression)
+                } else {
+                    val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+                    Triple(transformedParams, emptyList<Parameter>(), void0 as Expression)
+                }
+                val awaiterBody = Block(
+                    statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), secondArg, transformedBody, generatorParams))),
+                    multiLine = true,
+                )
+                listOf(decl.copy(
+                    typeParameters = null,
+                    parameters = outerParams,
+                    type = null,
+                    body = awaiterBody,
+                    modifiers = strippedModifiers - ModifierFlag.Async,
+                    asteriskToken = false,
+                ))
             } else {
-                val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
-                Triple(transformedParams, emptyList<Parameter>(), void0 as Expression)
+                // Transform parameters inside the function scope so async arrows in
+                // default parameters see the correct functionScopeDepth for `this` binding.
+                functionScopeDepth++
+                val (params, finalBody) = flattenRestParameters(decl.parameters, transformedBody)
+                functionScopeDepth--
+                listOf(
+                    decl.copy(
+                        typeParameters = null,
+                        parameters = params,
+                        type = null,
+                        body = finalBody,
+                        modifiers = strippedModifiers,
+                    )
+                )
             }
-            val awaiterBody = Block(
-                statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), secondArg, transformedBody, generatorParams))),
-                multiLine = true,
-            )
-            return listOf(decl.copy(
-                typeParameters = null,
-                parameters = outerParams,
-                type = null,
-                body = awaiterBody,
-                modifiers = strippedModifiers - ModifierFlag.Async,
-                asteriskToken = false,
-            ))
         }
-        // Transform parameters inside the function scope so async arrows in
-        // default parameters see the correct functionScopeDepth for `this` binding.
-        functionScopeDepth++
-        val params = transformParameters(decl.parameters)
-        functionScopeDepth--
-        return listOf(
-            decl.copy(
-                typeParameters = null,
-                parameters = params,
-                type = null,
-                body = transformedBody,
-                modifiers = strippedModifiers,
-            )
-        )
     }
 
     /** Builds `__awaiter(thisArg, secondArg, void 0, function* (params...) { body })`. */
@@ -4134,6 +4144,65 @@ class Transformer(private val options: CompilerOptions) {
                     pos = -1, end = -1,
                 ))
                 needsRestHelper = true
+            } else if (name is ObjectBindingPattern && options.effectiveTarget < ScriptTarget.ES2018 &&
+                name.elements.any { elem -> !elem.dotDotDotToken && elem.name is ObjectBindingPattern &&
+                    (elem.name as ObjectBindingPattern).elements.any { it.dotDotDotToken } }) {
+                // Nested object binding with rest: `const { f: { a, ...spread } } = value`
+                // → `const _a = value.f, { a } = _a, spread = __rest(_a, ["a"])`
+                val initExpr = decl.initializer?.let { transformExpression(it) }
+                    ?: syntheticId("undefined")
+                val remainingElements = mutableListOf<BindingElement>()
+                for (elem in name.elements) {
+                    val elemName = elem.name
+                    if (!elem.dotDotDotToken && elemName is ObjectBindingPattern &&
+                        elemName.elements.any { it.dotDotDotToken }) {
+                        // Compute property access: value.f (or value["key"])
+                        val keyStr = when {
+                            elem.propertyName is Identifier -> (elem.propertyName as Identifier).text
+                            elem.propertyName is StringLiteralNode -> null // use bracket access
+                            elem.name is Identifier -> (elem.name as Identifier).text
+                            else -> null
+                        }
+                        val propAccess: Expression = if (elem.propertyName is StringLiteralNode) {
+                            ElementAccessExpression(
+                                expression = initExpr, argumentExpression = transformExpression(elem.propertyName as Expression),
+                                pos = -1, end = -1,
+                            )
+                        } else if (keyStr != null) {
+                            PropertyAccessExpression(expression = initExpr, name = syntheticId(keyStr), pos = -1, end = -1)
+                        } else {
+                            initExpr
+                        }
+                        // Create temp var for the property access
+                        val nestedTempName = nextTempVarName()
+                        newDecls.add(VariableDeclaration(
+                            name = syntheticId(nestedTempName), initializer = propAccess, pos = -1, end = -1,
+                        ))
+                        // Recursively expand the nested binding with rest using the temp var
+                        val subList = transformVariableDeclarationListWithRest(
+                            VariableDeclarationList(
+                                flags = list.flags,
+                                declarations = listOf(VariableDeclaration(
+                                    name = elemName, initializer = syntheticId(nestedTempName), pos = -1, end = -1,
+                                )),
+                                pos = -1, end = -1,
+                            )
+                        )
+                        newDecls.addAll(subList.declarations)
+                    } else {
+                        remainingElements.add(elem)
+                    }
+                }
+                // If there are remaining (non-nested-rest) elements, emit them
+                if (remainingElements.isNotEmpty()) {
+                    newDecls.add(VariableDeclaration(
+                        name = ObjectBindingPattern(
+                            elements = remainingElements.map { transformBindingElement(it) }, pos = -1, end = -1,
+                        ),
+                        initializer = initExpr,
+                        pos = -1, end = -1,
+                    ))
+                }
             } else {
                 newDecls.add(transformVariableDeclaration(decl))
             }
@@ -4547,13 +4616,32 @@ class Transformer(private val options: CompilerOptions) {
                         hasParenthesizedParameters = true,
                     )
                 } else {
-                    expr.copy(
-                        typeParameters = null,
-                        parameters = transformParameters(expr.parameters),
-                        type = null,
-                        body = transformedBody,
-                        modifiers = strippedModifiers,
-                    )
+                    val hasRestParam = options.effectiveTarget < ScriptTarget.ES2018 &&
+                        expr.parameters.any { p -> p.name is ObjectBindingPattern && (p.name as ObjectBindingPattern).elements.any { it.dotDotDotToken } }
+                    if (hasRestParam) {
+                        val blockBody: Block = when (transformedBody) {
+                            is Block -> transformedBody
+                            is Expression -> Block(statements = listOf(ReturnStatement(expression = transformedBody, pos = -1, end = -1)), multiLine = false, pos = -1, end = -1)
+                            else -> Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
+                        }
+                        val (newParams, newBody) = flattenRestParameters(expr.parameters, blockBody)
+                        expr.copy(
+                            typeParameters = null,
+                            parameters = newParams,
+                            type = null,
+                            body = newBody,
+                            modifiers = strippedModifiers,
+                            hasParenthesizedParameters = true,
+                        )
+                    } else {
+                        expr.copy(
+                            typeParameters = null,
+                            parameters = transformParameters(expr.parameters),
+                            type = null,
+                            body = transformedBody,
+                            modifiers = strippedModifiers,
+                        )
+                    }
                 }
             }
 
@@ -4580,11 +4668,12 @@ class Transformer(private val options: CompilerOptions) {
                         asteriskToken = false,
                     )
                 } else {
+                    val (newParams, newBody) = flattenRestParameters(expr.parameters, transformedBody)
                     expr.copy(
                         typeParameters = null,
-                        parameters = transformParameters(expr.parameters),
+                        parameters = newParams,
                         type = null,
-                        body = transformedBody,
+                        body = newBody,
                         modifiers = strippedModifiers,
                     )
                 }
@@ -4880,6 +4969,71 @@ class Transformer(private val options: CompilerOptions) {
         }
     }
 
+    /**
+     * When any parameter has ObjectBindingPattern with rest elements (e.g. `{ a, ...rest } = {}`),
+     * replace it with a temp var and prepend a `var { a } = _temp, rest = __rest(_temp, ["a"])`
+     * statement to the function body (after prologue directives).
+     *
+     * Returns the new (params, body) pair. Also sets needsRestHelper if applicable.
+     */
+    private fun flattenRestParameters(
+        params: List<Parameter>,
+        body: Block,
+    ): Pair<List<Parameter>, Block> {
+        if (options.effectiveTarget >= ScriptTarget.ES2018) return Pair(params, body)
+        val newParams = mutableListOf<Parameter>()
+        val restStmts = mutableListOf<VariableStatement>()
+        for (param in params) {
+            val name = param.name
+            if (name is ObjectBindingPattern && name.elements.any { it.dotDotDotToken }) {
+                val tempName = nextTempVarName()
+                val tempId = syntheticId(tempName)
+                // Replace parameter with temp var keeping the default initializer
+                newParams.add(param.copy(
+                    name = tempId,
+                    type = null,
+                    initializer = param.initializer?.let { transformExpression(it) },
+                    questionToken = false,
+                    modifiers = emptySet(),
+                ))
+                // Build `var { a } = tempId, rest = __rest(tempId, ["a"])`
+                val restDecl = transformVariableDeclarationListWithRest(
+                    VariableDeclarationList(
+                        flags = VarKeyword,
+                        declarations = listOf(VariableDeclaration(name = name, initializer = tempId, pos = -1, end = -1)),
+                        pos = -1, end = -1,
+                    )
+                )
+                restStmts.add(VariableStatement(declarationList = restDecl, pos = -1, end = -1))
+                needsRestHelper = true
+            } else {
+                newParams.add(param.copy(
+                    name = transformBindingName(name),
+                    type = null,
+                    initializer = param.initializer?.let { transformExpression(it) },
+                    questionToken = false,
+                    modifiers = emptySet(),
+                ))
+            }
+        }
+        if (restStmts.isEmpty()) return Pair(params.map { param ->
+            param.copy(
+                name = transformBindingName(param.name),
+                type = null,
+                initializer = param.initializer?.let { transformExpression(it) },
+                questionToken = false,
+                modifiers = emptySet(),
+            )
+        }, body)
+        // Insert after prologue directives
+        val bodyStmts = body.statements.toMutableList()
+        val insertAt = bodyStmts.indexOfFirst { stmt ->
+            !(stmt is ExpressionStatement && stmt.expression is StringLiteralNode)
+        }.let { if (it < 0) bodyStmts.size else it }
+        bodyStmts.addAll(insertAt, restStmts)
+        return Pair(newParams, body.copy(statements = bodyStmts, multiLine = true))
+    }
+
     // -----------------------------------------------------------------
     // Block transform
     // -----------------------------------------------------------------
@@ -4932,7 +5086,42 @@ class Transformer(private val options: CompilerOptions) {
     }
 
     private fun transformForOfStatement(stmt: ForOfStatement): Statement {
-        val init = when (val i = stmt.initializer) {
+        val i = stmt.initializer
+        // Handle `for (let/const/var { a, ...rest } of expr)` when target < ES2018:
+        // Replace the destructuring variable with a temp var and expand inside the loop body.
+        if (i is VariableDeclarationList && i.declarations.size == 1 &&
+            options.effectiveTarget < ScriptTarget.ES2018) {
+            val decl = i.declarations[0]
+            val name = decl.name
+            if (name is ObjectBindingPattern && name.elements.any { it.dotDotDotToken }) {
+                val tempName = nextTempVarName()
+                val tempId = syntheticId(tempName)
+                // New for-of initializer: same keyword, single temp var (no init)
+                val newInit = i.copy(declarations = listOf(VariableDeclaration(
+                    name = tempId, pos = -1, end = -1,
+                )))
+                // Build the destructuring statement from the temp var:
+                // `let { a } = tempId, rest = __rest(tempId, ["a"])`
+                val restDecl = transformVariableDeclarationListWithRest(
+                    i.copy(declarations = listOf(decl.copy(name = name, initializer = tempId)))
+                )
+                val restStmt = VariableStatement(declarationList = restDecl, pos = -1, end = -1)
+                needsRestHelper = true
+                // Wrap original body to also execute the destructuring first
+                val origBody = transformStatementSingle(stmt.statement)
+                val newBodyStmts = mutableListOf<Statement>(restStmt)
+                when (origBody) {
+                    is Block -> newBodyStmts.addAll(origBody.statements)
+                    else -> newBodyStmts.add(origBody)
+                }
+                return stmt.copy(
+                    initializer = newInit,
+                    expression = transformExpression(stmt.expression),
+                    statement = Block(statements = newBodyStmts, multiLine = true, pos = -1, end = -1),
+                )
+            }
+        }
+        val init = when (i) {
             is VariableDeclarationList -> transformVariableDeclarationList(i)
             is Expression -> transformExpression(i)
             else -> i
@@ -5759,9 +5948,11 @@ class Transformer(private val options: CompilerOptions) {
         val needsConstructor = propInitStatements.isNotEmpty() || existingConstructor != null
         val transformedConstructor: Constructor? = if (needsConstructor) {
             if (existingConstructor != null) {
-                val transformedParams = transformParameters(existingConstructor.parameters)
-                val existingBody = existingConstructor.body?.let { transformBlock(it, isFunctionScope = true) }
-                    ?: Block(statements = emptyList(), pos = -1, end = -1)
+                val (transformedParams, existingBody) = withFreshTempVarCounter {
+                    val rawBody = existingConstructor.body?.let { transformBlock(it, isFunctionScope = true) }
+                        ?: Block(statements = emptyList(), pos = -1, end = -1)
+                    flattenRestParameters(existingConstructor.parameters, rawBody)
+                }
 
                 // Find the position of super() call in existing body
                 val bodyStatements = existingBody.statements.toMutableList()
