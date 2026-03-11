@@ -1486,7 +1486,9 @@ class Parser(private val source: String, private val fileName: String) {
         if (isTypeOnly) nextToken()
 
         // import = require() or import = X.Y
-        if (isIdentifier() && scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Equals }) {
+        // Also allow keyword tokens (e.g. `import public = require("1")`) — TypeScript parses these
+        // as ImportEqualsDeclaration even when the name is a strict-mode reserved word.
+        if ((isIdentifier() || isKeyword()) && scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Equals }) {
             val name = parseIdentifier()
             parseExpected(SyntaxKind.Equals)
             val moduleRef: Node =

@@ -5379,6 +5379,10 @@ class Transformer(private val options: CompilerOptions) {
     ): List<Statement> {
         if (decl.isTypeOnly) return emptyList()
 
+        // Strict-mode reserved words cannot be used as variable names — erase the declaration.
+        // E.g. `import public = require("1")` in a strict-mode file produces no output.
+        if (decl.name.text in strictModeReservedWords) return emptyList()
+
         // Erase import if the referenced name is type-only (interface, type alias, or type-only namespace)
         val ref = decl.moduleReference
         if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
@@ -8982,6 +8986,12 @@ class Transformer(private val options: CompilerOptions) {
         }
 
     companion object {
+        /** Strict-mode future reserved words that cannot be used as variable names. */
+        val strictModeReservedWords = setOf(
+            "implements", "interface", "let", "package",
+            "private", "protected", "public", "static", "yield",
+        )
+
         /** TypeScript `__rest` helper — emitted when object destructuring uses rest elements. */
         val REST_HELPER = """var __rest = (this && this.__rest) || function (s, e) {
     var t = {};
