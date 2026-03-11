@@ -2650,7 +2650,7 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
-        // Top-level var declarations from non-import statements
+        // Top-level declarations from non-import statements — vars/lets/consts, classes, namespaces, enums, import aliases
         for (stmt in originalSourceFile.statements) {
             when (stmt) {
                 is VariableStatement -> {
@@ -2671,11 +2671,8 @@ class Transformer(private val options: CompilerOptions) {
                 }
                 is ModuleDeclaration -> {
                     if (!hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt)) {
-                        // For simple namespaces, extractIdentifierName gets the name.
-                        // For dotted namespaces (A.B.C stored as PropertyAccessExpression), get the root.
                         val n = extractIdentifierName(stmt.name)
                             ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
-                        // Skip if a function declaration with the same name is hoisted as a function
                         n?.let { if (it !in functionDeclNames && hoistedVarNamesSet.add(it)) hoistedVarNames.add(it) }
                     }
                 }
@@ -2687,50 +2684,17 @@ class Transformer(private val options: CompilerOptions) {
                     }
                 }
                 is ImportEqualsDeclaration -> {
-                    // import cls = alias.Class or export import cls2 = alias.Class
-                    // (non-external module references — internal aliases)
-                    // The name gets hoisted as a var
                     if (!stmt.isTypeOnly && stmt.moduleReference !is ExternalModuleReference) {
                         val n = stmt.name.text
                         if (n.isNotEmpty() && hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
                     }
                 }
-                is ForInStatement -> {
-                    // `for (var key in obj)` — hoist `key` to top-level var list
-                    val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
-                        for (d in init.declarations) {
-                            for (n in collectBoundNames(d.name)) {
-                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
-                            }
-                        }
-                    }
-                }
-                is ForOfStatement -> {
-                    // `for (var x of arr)` — hoist `x`
-                    val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
-                        for (d in init.declarations) {
-                            for (n in collectBoundNames(d.name)) {
-                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
-                            }
-                        }
-                    }
-                }
-                is ForStatement -> {
-                    // `for (var i = 0; ...)` — hoist `i`
-                    val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
-                        for (d in init.declarations) {
-                            for (n in collectBoundNames(d.name)) {
-                                if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
-                            }
-                        }
-                    }
-                }
                 else -> {}
             }
         }
+        // Recursively collect all `var` declarations from the module body (excluding function/class bodies).
+        // This handles vars inside loop bodies, if-blocks, try-catch, etc. that are still module-scoped.
+        collectVarNamesFromStmts(originalSourceFile.statements, hoistedVarNames, hoistedVarNamesSet)
 
         // Pass 2: build the execute body and function-level hoists
         // Function declarations are hoisted OUTSIDE execute with exports_1("name", fn)
@@ -3047,9 +3011,13 @@ class Transformer(private val options: CompilerOptions) {
         // For System format, do NOT wrap bare-identifier calls as (0, expr)() — that's CJS-only.
         // preBodyExports (namespace re-exports) come FIRST, then body, then pending re-exports.
         val allExecuteStatements = preBodyExports + executeStatements
+        // Strip `var` from any `var` declarations nested inside execute body (e.g. inside loop bodies).
+        // Top-level var declarations are already handled above (converted to assignments or hoisted).
+        // This handles `for (let x of []) { var v = x; }` → body becomes `{ v = x; }`.
+        val strippedVarsExecute = allExecuteStatements.flatMap { stripVarDeclsFromStatement(it, hoistedVarNamesSet) }
         val renamedExecute = if (renameMap.isNotEmpty()) {
-            allExecuteStatements.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
-        } else allExecuteStatements.toList()
+            strippedVarsExecute.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
+        } else strippedVarsExecute.toList()
         // Rewrite identifiers inside hoisted function bodies (e.g. references to import bindings)
         if (renameMap.isNotEmpty() && functionHoists.isNotEmpty()) {
             val rewritten = functionHoists.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
@@ -8177,6 +8145,148 @@ class Transformer(private val options: CompilerOptions) {
      * Collects all bound identifier names from a binding name (Identifier or binding pattern).
      * e.g. `[a, , b]` → ["a", "b"], `{ x, y: z }` → ["x", "z"], `name` → ["name"]
      */
+    /**
+     * Recursively strips `var` declarations from nested statements in System module execute body.
+     * - `var x = init;` where `x` is in hoistedNames → `x = init;` (assignment)
+     * - `var x;` where `x` is in hoistedNames → removed (already declared at top)
+     * - Does NOT cross function/class body boundaries (those have their own var scope).
+     * Returns 0 or more replacement statements.
+     */
+    private fun stripVarDeclsFromStatement(stmt: Statement, hoistedNames: Set<String>): List<Statement> {
+        return when (stmt) {
+            is VariableStatement -> {
+                if (stmt.declarationList.flags != VarKeyword) return listOf(stmt)
+                // For each var declaration: if hoisted, convert to assignment or remove
+                val assignments = mutableListOf<Statement>()
+                for (d in stmt.declarationList.declarations) {
+                    val name = extractIdentifierName(d.name)
+                    if (name != null && name in hoistedNames) {
+                        if (d.initializer != null) {
+                            assignments.add(ExpressionStatement(
+                                expression = BinaryExpression(
+                                    left = syntheticId(name), operator = Equals,
+                                    right = d.initializer, pos = -1, end = -1,
+                                ),
+                                leadingComments = if (assignments.isEmpty()) stmt.leadingComments else null,
+                                pos = -1, end = -1,
+                            ))
+                        }
+                        // else: no initializer — already hoisted, emit nothing
+                    } else {
+                        // Not in hoisted set (shouldn't happen but keep it)
+                        assignments.add(stmt)
+                    }
+                }
+                assignments
+            }
+            is Block -> listOf(stmt.copy(statements = stmt.statements.flatMap { stripVarDeclsFromStatement(it, hoistedNames) }))
+            is IfStatement -> listOf(stmt.copy(
+                thenStatement = stripVarDeclsFromStatement(stmt.thenStatement, hoistedNames).singleOrNull() ?: stmt.thenStatement,
+                elseStatement = stmt.elseStatement?.let { stripVarDeclsFromStatement(it, hoistedNames).singleOrNull() ?: it },
+            ))
+            is ForStatement -> listOf(stmt.copy(
+                statement = stripVarDeclsFromStatement(stmt.statement, hoistedNames).singleOrNull() ?: stmt.statement,
+            ))
+            is ForOfStatement -> listOf(stmt.copy(
+                statement = stripVarDeclsFromStatement(stmt.statement, hoistedNames).singleOrNull() ?: stmt.statement,
+            ))
+            is ForInStatement -> listOf(stmt.copy(
+                statement = stripVarDeclsFromStatement(stmt.statement, hoistedNames).singleOrNull() ?: stmt.statement,
+            ))
+            is WhileStatement -> listOf(stmt.copy(
+                statement = stripVarDeclsFromStatement(stmt.statement, hoistedNames).singleOrNull() ?: stmt.statement,
+            ))
+            is DoStatement -> listOf(stmt.copy(
+                statement = stripVarDeclsFromStatement(stmt.statement, hoistedNames).singleOrNull() ?: stmt.statement,
+            ))
+            is LabeledStatement -> listOf(stmt.copy(
+                statement = stripVarDeclsFromStatement(stmt.statement, hoistedNames).singleOrNull() ?: stmt.statement,
+            ))
+            is TryStatement -> listOf(stmt.copy(
+                tryBlock = stmt.tryBlock.copy(statements = stmt.tryBlock.statements.flatMap { stripVarDeclsFromStatement(it, hoistedNames) }),
+                catchClause = stmt.catchClause?.let { it.copy(block = it.block.copy(statements = it.block.statements.flatMap { s -> stripVarDeclsFromStatement(s, hoistedNames) })) },
+                finallyBlock = stmt.finallyBlock?.copy(statements = stmt.finallyBlock.statements.flatMap { stripVarDeclsFromStatement(it, hoistedNames) }),
+            ))
+            is SwitchStatement -> listOf(stmt.copy(
+                caseBlock = stmt.caseBlock.map { clause ->
+                    when (clause) {
+                        is CaseClause -> clause.copy(statements = clause.statements.flatMap { stripVarDeclsFromStatement(it, hoistedNames) })
+                        is DefaultClause -> clause.copy(statements = clause.statements.flatMap { stripVarDeclsFromStatement(it, hoistedNames) })
+                        else -> clause
+                    }
+                }
+            ))
+            // FunctionDeclaration, FunctionExpression, ArrowFunction, ClassDeclaration: don't recurse
+            else -> listOf(stmt)
+        }
+    }
+
+    /**
+     * Recursively collects all `var` declaration names from a list of statements,
+     * NOT crossing function/class body boundaries.
+     * Used for System module var hoisting.
+     */
+    private fun collectVarNamesFromStmts(stmts: List<Statement>, result: MutableList<String>, resultSet: MutableSet<String>) {
+        for (stmt in stmts) collectVarNamesFromStmt(stmt, result, resultSet)
+    }
+
+    private fun collectVarNamesFromStmt(stmt: Statement, result: MutableList<String>, resultSet: MutableSet<String>) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (stmt.declarationList.flags == VarKeyword && ModifierFlag.Declare !in stmt.modifiers) {
+                    for (d in stmt.declarationList.declarations) {
+                        for (n in collectBoundNames(d.name)) if (resultSet.add(n)) result.add(n)
+                    }
+                }
+            }
+            is Block -> collectVarNamesFromStmts(stmt.statements, result, resultSet)
+            is IfStatement -> {
+                collectVarNamesFromStmt(stmt.thenStatement, result, resultSet)
+                stmt.elseStatement?.let { collectVarNamesFromStmt(it, result, resultSet) }
+            }
+            is ForStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList && init.flags == VarKeyword) {
+                    for (d in init.declarations) for (n in collectBoundNames(d.name)) if (resultSet.add(n)) result.add(n)
+                }
+                stmt.statement?.let { collectVarNamesFromStmt(it, result, resultSet) }
+            }
+            is ForOfStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList && init.flags == VarKeyword) {
+                    for (d in init.declarations) for (n in collectBoundNames(d.name)) if (resultSet.add(n)) result.add(n)
+                }
+                collectVarNamesFromStmt(stmt.statement, result, resultSet)
+            }
+            is ForInStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList && init.flags == VarKeyword) {
+                    for (d in init.declarations) for (n in collectBoundNames(d.name)) if (resultSet.add(n)) result.add(n)
+                }
+                collectVarNamesFromStmt(stmt.statement, result, resultSet)
+            }
+            is WhileStatement -> collectVarNamesFromStmt(stmt.statement, result, resultSet)
+            is DoStatement -> collectVarNamesFromStmt(stmt.statement, result, resultSet)
+            is LabeledStatement -> collectVarNamesFromStmt(stmt.statement, result, resultSet)
+            is TryStatement -> {
+                collectVarNamesFromStmts(stmt.tryBlock.statements, result, resultSet)
+                stmt.catchClause?.let { collectVarNamesFromStmts(it.block.statements, result, resultSet) }
+                stmt.finallyBlock?.let { collectVarNamesFromStmts(it.statements, result, resultSet) }
+            }
+            is SwitchStatement -> stmt.caseBlock.forEach { clause ->
+                val stmts = when (clause) {
+                    is CaseClause -> clause.statements
+                    is DefaultClause -> clause.statements
+                    else -> emptyList()
+                }
+                collectVarNamesFromStmts(stmts, result, resultSet)
+            }
+            // FunctionDeclaration, FunctionExpression, ArrowFunction, ClassDeclaration:
+            // Do NOT recurse — vars inside are function-scoped, not module-scoped.
+            else -> {}
+        }
+    }
+
     private fun collectBoundNames(name: Node): List<String> {
         return when (name) {
             is Identifier -> listOf(name.text)
