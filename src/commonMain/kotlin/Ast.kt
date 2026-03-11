@@ -113,6 +113,8 @@ data class VariableStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Inline comments between the last declaration and `;` (e.g. `/*number*/` in `var z = x.then() /*number*/;`). */
+    val preSemicolonComments: List<Comment>? = null,
 ) : Statement {
     override val kind: SyntaxKind = SyntaxKind.VariableStatement
 }
