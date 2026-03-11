@@ -2169,16 +2169,24 @@ class Emitter(
             }
 
             is Expression -> {
-                val bodyComments = if (!options.removeComments) body.leadingComments else null
-                if (!bodyComments.isNullOrEmpty()) {
-                    // Leading comments on the body expression go on their own line(s)
+                val leftmost = getLeftmostExpression(body, stopAtCallExpressions = false)
+                // Leading comments may be on the body expression itself or on its leftmost leaf.
+                // Triple-slash / detached comments before the body are attached to the leftmost leaf
+                // by the parser (since the leaf is the first token parsed), not to the outer expression.
+                val commentsNode = when {
+                    !options.removeComments && !body.leadingComments.isNullOrEmpty() -> body
+                    !options.removeComments && !leftmost.leadingComments.isNullOrEmpty() -> leftmost
+                    else -> null
+                }
+                if (commentsNode != null) {
+                    // Leading comments on the body go on their own line(s), then body on its own line
                     write(" ")
                     writeNewLine()
-                    emitLeadingComments(body)
+                    emitLeadingComments(commentsNode)
+                    writeIndent()
                 } else {
                     write(" ")
                 }
-                val leftmost = getLeftmostExpression(body, stopAtCallExpressions = false)
                 if (leftmost is ObjectLiteralExpression) {
                     write("(")
                     emitExpression(body)

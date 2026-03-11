@@ -10,7 +10,7 @@
 - [x] **4. Extra blank line fix** — already fixed
 - [x] **5. `moduleProperty1` private keyword leak** — already fixed
 - [x] **6. Single-line if/else not collapsed** (3 tests: `conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`) — FIXED: semi-inline function body format with `isFunctionBody` flag and `forceBlocksMultiLine` context.
-- [ ] **7. Detached arrow function comments** (2 tests: `detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`) — **File:** `Emitter.kt` — **Fix:** triple-slash XML doc comments before arrow function body not preserved.
+- [x] **7. Detached arrow function comments** (2 tests: `detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`) — **File:** `Emitter.kt` — **Fix:** triple-slash XML doc comments before arrow function body not preserved.
 - [ ] **8. `__rest` in assignment patterns** (~15 tests) — **File:** `Transformer.kt` — **Fix:** extend destructuring rest to handle assignment form (`[{ ...x }] = expr`), not just declarations.
 - [ ] **9. CommonJS `exports.default = void 0` + re-export** (~19 tests) — **File:** `Transformer.kt` — **Fix:** missing `exports.default = void 0` initialization and re-export assignments.
 - [ ] **10. Static class fields** (~5 tests) — **File:** `Transformer.kt` — **Fix:** transform `static x = 1` to `ClassName.x = 1` after class body.
