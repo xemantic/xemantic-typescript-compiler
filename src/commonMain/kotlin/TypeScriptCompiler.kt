@@ -411,6 +411,10 @@ private fun topologicalSort(
 }
 
 private val trailingCommaRegex = Regex(",(?=\\s*[}\\]])")
+private val emptyObjectRegex = Regex("\\{\\s+\\}")
+private val emptyArrayRegex = Regex("\\[\\s+\\]")
 
 private fun stripJsonTrailingCommas(content: String): String =
     content.replace(trailingCommaRegex, "")
+        .replace(emptyObjectRegex, "{}")
+        .replace(emptyArrayRegex, "[]")
