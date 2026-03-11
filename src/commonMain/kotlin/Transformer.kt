@@ -236,12 +236,21 @@ class Transformer(private val options: CompilerOptions) {
         // statement was erased (e.g. `declare function`) and had no comments, the first
         // transformed statement's comments came from a later original statement — don't lift.
         // Exception: FunctionDeclaration keeps its comments after helpers when __awaiter is the only helper.
+        // Only lift DETACHED comments (blank line ≥2 newlines between comment end and statement pos).
+        // Adjacent comments (no blank line) stay with the statement, after helpers.
         val withHelpers = if (helpers.isNotEmpty()) {
             val firstOrigStmt = sourceFile.statements.firstOrNull()
             val onlyAwaiter = needsAwaiterHelper && !needsRestHelper
             val firstStmt = transformed.firstOrNull()
             val firstComments = firstStmt?.leadingComments
-            val shouldLiftComments = firstOrigStmt?.leadingComments != null &&
+            // Only lift if the comment(s) are detached from the first original statement by a blank line
+            val firstOrigComments = firstOrigStmt?.leadingComments
+            val hasDetachedComment = firstOrigComments != null && firstOrigStmt.pos >= 0 &&
+                firstOrigComments.any { comment ->
+                    comment.end >= 0 &&
+                        sourceFile.text.substring(comment.end, firstOrigStmt.pos).count { it == '\n' } >= 2
+                }
+            val shouldLiftComments = hasDetachedComment &&
                 !(onlyAwaiter && firstOrigStmt is FunctionDeclaration)
             if (shouldLiftComments && !firstComments.isNullOrEmpty()) {
                 val commentHolder = NotEmittedStatement(leadingComments = firstComments)
