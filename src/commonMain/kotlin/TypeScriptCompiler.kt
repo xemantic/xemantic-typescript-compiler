@@ -334,10 +334,15 @@ private fun extractRelativeImports(
             else -> null
         } ?: continue
 
-        if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue
-
-        // Resolve the relative path
-        val resolved = resolveRelativePath(dir, specifier)
+        // Resolve the specifier against known files.
+        // For relative specifiers (./x, ../x) resolve relative to the current file's directory.
+        // For bare specifiers (e.g. "file1") also try matching against known filenames directly
+        // (TypeScript resolves these in single-folder compilations).
+        val resolved = if (specifier.startsWith("./") || specifier.startsWith("../")) {
+            resolveRelativePath(dir, specifier)
+        } else {
+            specifier
+        }
 
         // Try with .ts and .tsx extensions, and also /index.ts for directory imports (e.g. "./")
         val sep = if (resolved.isEmpty() || resolved.endsWith("/")) "" else "/"
