@@ -7253,15 +7253,17 @@ class Transformer(private val options: CompilerOptions) {
             val stmt: ExpressionStatement = when {
                 member.initializer != null -> {
                     val initExpr = transformExpression(member.initializer)
-                    if (isStringLiteral(initExpr)) {
+                    val constStringVal = evaluateConstantStringExpression(initExpr)
+                    if (constStringVal != null) {
                         // String enum member: E["B"] = "hello" (no reverse mapping)
                         // After a string member, auto-increment is disrupted; next numeric
                         // member must have explicit initializer. We don't track further.
                         autoIncrementValid = false
-                        // Normalize to double quotes (TypeScript always emits double quotes for enum values)
-                        val normalizedExpr = if (initExpr is StringLiteralNode && initExpr.singleQuote) {
-                            initExpr.copy(singleQuote = false, rawText = null)
-                        } else initExpr
+                        // Always emit the folded string value as a double-quoted literal.
+                        val stringExpr = StringLiteralNode(
+                            text = constStringVal, singleQuote = false, rawText = null,
+                            pos = -1, end = -1,
+                        )
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
@@ -7270,7 +7272,7 @@ class Transformer(private val options: CompilerOptions) {
                                     pos = -1, end = -1,
                                 ),
                                 operator = Equals,
-                                right = normalizedExpr,
+                                right = stringExpr,
                                 pos = -1, end = -1,
                             ),
                             pos = -1, end = -1,
@@ -7663,6 +7665,41 @@ class Transformer(private val options: CompilerOptions) {
 
     private fun isStringLiteral(expr: Expression): Boolean {
         return expr is StringLiteralNode
+    }
+
+    /**
+     * Tries to evaluate [expr] as a constant string value.
+     * Returns the string value if successful, null otherwise.
+     * Handles:
+     * - String literals
+     * - Parenthesized string literals: ("foo") → "foo"
+     * - String + numeric literal: "" + 2 → "2"
+     * - Numeric literal + string: 2 + "" → "2"
+     * - NoSubstitutionTemplateLiteral (plain template with no expressions): `foo` → "foo"
+     */
+    private fun evaluateConstantStringExpression(expr: Expression): String? {
+        return when (expr) {
+            is StringLiteralNode -> expr.text
+            is NoSubstitutionTemplateLiteralNode -> expr.text
+            is ParenthesizedExpression -> evaluateConstantStringExpression(expr.expression)
+            is BinaryExpression -> {
+                if (expr.operator != SyntaxKind.Plus) return null
+                // "" + numericLiteral → string
+                val leftStr = evaluateConstantStringExpression(expr.left)
+                val rightStr = evaluateConstantStringExpression(expr.right)
+                if (leftStr != null && rightStr != null) return leftStr + rightStr
+                val leftNum = tryEvaluateNumericLiteral(expr.left)
+                val rightNum = tryEvaluateNumericLiteral(expr.right)
+                if (leftStr != null && rightNum != null) {
+                    return leftStr + rightNum.toString()
+                }
+                if (leftNum != null && rightStr != null) {
+                    return leftNum.toString() + rightStr
+                }
+                null
+            }
+            else -> null
+        }
     }
 
     /**

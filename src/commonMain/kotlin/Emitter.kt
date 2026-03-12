@@ -1751,7 +1751,12 @@ class Emitter(
                 }
             }
         }
-        write("`")
+        // Unterminated template: ends with an unclosed `${` — emit it without closing backtick
+        if (node.isUnterminated) {
+            write("\${")
+        } else {
+            write("`")
+        }
     }
 
     private fun emitArrayLiteral(node: ArrayLiteralExpression) {
@@ -2147,13 +2152,13 @@ class Emitter(
             // because `1.` is a valid decimal literal.  Emit an extra `.` to fix:
             // NumericLiteralNode("1")  -> write "1" then "." then ".foo"  -> "1..foo"
             val expr = node.expression
-            // Extra dot needed for `1.foo` disambiguation, but NOT when the numeric
-            // literal has a trailing comment that will be emitted (comments act as
-            // whitespace in JS: `1 /*c*/.foo` is unambiguous). When removeComments is
-            // true, comments are not emitted so the extra dot is always required.
+            // Extra dot needed for `1.foo` disambiguation, but NOT when:
+            // - The numeric literal has a trailing comment (acts as whitespace: `1 /*c*/.foo`)
+            // - The dot is on a new line (newLineBefore): newline acts as whitespace for disambiguation
+            // When removeComments is true, comments are not emitted so only the newLine check applies.
             val hasEmittedTrailingComment = !options.removeComments && !expr.trailingComments.isNullOrEmpty()
             if (expr is NumericLiteralNode && numericNeedsExtraDot(expr.text)
-                && !hasEmittedTrailingComment) {
+                && !hasEmittedTrailingComment && !node.newLineBefore) {
                 write(".")
             }
             write(".")
@@ -2299,7 +2304,8 @@ class Emitter(
         }
         emitExpression(node.expression)
         // Emit same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`)
-        if (!options.removeComments) {
+        // Skip StringLiteralNode/NumericLiteralNode — they emit their own trailing comments in emitExpression.
+        if (!options.removeComments && node.expression !is StringLiteralNode && node.expression !is NumericLiteralNode) {
             node.expression.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
                 write(" "); write(it.text)
             }

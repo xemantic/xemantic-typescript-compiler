@@ -3339,6 +3339,7 @@ class Parser(private val source: String, private val fileName: String) {
         nextToken() // consume template head
         val head = StringLiteralNode(text = headText, pos = pos, end = getEnd())
         val spans = mutableListOf<TemplateSpan>()
+        var isUnterminated = false
         while (token != SyntaxKind.EndOfFile) {
             val spanPos = getPos()
             val expr = parseExpression()
@@ -3354,8 +3355,17 @@ class Parser(private val source: String, private val fileName: String) {
             }
             spans.add(TemplateSpan(expression = expr, literal = literal, pos = spanPos, end = getEnd()))
             if (literalKind == SyntaxKind.TemplateTail) break
+            // After a TemplateMiddle, if we're now at EOF there's an unclosed `${` at the end
+            if (token == SyntaxKind.EndOfFile) {
+                isUnterminated = true
+                break
+            }
         }
-        return TemplateExpression(head = head, templateSpans = spans, pos = pos, end = getEnd())
+        // If loop exited immediately (no spans) due to EOF after TemplateHead, the `${` is unclosed
+        if (spans.isEmpty() && token == SyntaxKind.EndOfFile) {
+            isUnterminated = true
+        }
+        return TemplateExpression(head = head, templateSpans = spans, isUnterminated = isUnterminated, pos = pos, end = getEnd())
     }
 
     private fun parseExpressionRest(left: Expression): Expression {
