@@ -75,6 +75,35 @@ class Parser(private val source: String, private val fileName: String) {
         // ASI: implicit at }, EOF, or after line break
     }
 
+    /**
+     * Parses an optional import attribute clause: `assert { ... }` or `with { ... }`.
+     * Returns the raw source text of the clause (including the keyword and braces),
+     * or null if not present. Used to preserve assertions in esnext output.
+     */
+    private fun parseImportAttributes(): String? {
+        // `assert` is not a keyword — check as identifier value
+        val isAssert = token == SyntaxKind.Identifier && scanner.getTokenValue() == "assert"
+        val isWith = token == SyntaxKind.WithKeyword
+        if (!isAssert && !isWith) return null
+        val startPos = scanner.getTokenPos()
+        nextToken() // consume 'assert' or 'with'
+        if (token != SyntaxKind.OpenBrace) return null
+        // Skip balanced braces { ... }
+        var depth = 0
+        while (token != SyntaxKind.EndOfFile) {
+            when (token) {
+                SyntaxKind.OpenBrace -> { depth++; nextToken() }
+                SyntaxKind.CloseBrace -> {
+                    depth--
+                    nextToken()
+                    if (depth == 0) return source.substring(startPos, scanner.getTokenPos()).trimEnd()
+                }
+                else -> nextToken()
+            }
+        }
+        return null
+    }
+
     private fun canParseSemicolon(): Boolean =
         token == SyntaxKind.Semicolon ||
                 token == SyntaxKind.CloseBrace ||
@@ -1560,6 +1589,7 @@ class Parser(private val source: String, private val fileName: String) {
         // import "module" (side-effect import)
         if (token == SyntaxKind.StringLiteral) {
             val spec = parseStringLiteral()
+            parseImportAttributes()
             parseSemicolon()
             return ImportDeclaration(moduleSpecifier = spec, pos = pos, end = getEnd(), leadingComments = comments)
         }
@@ -1568,13 +1598,15 @@ class Parser(private val source: String, private val fileName: String) {
         val clause = parseImportClause(isTypeOnly)
         parseExpected(SyntaxKind.FromKeyword)
         val moduleSpec = parseStringLiteral()
+        val assertClause = parseImportAttributes()
         parseSemicolon()
         return ImportDeclaration(
             importClause = clause,
             moduleSpecifier = moduleSpec,
             pos = pos,
             end = getEnd(),
-            leadingComments = comments
+            leadingComments = comments,
+            assertClause = assertClause,
         )
     }
 
@@ -1721,6 +1753,7 @@ class Parser(private val source: String, private val fileName: String) {
             } else null
             parseExpected(SyntaxKind.FromKeyword)
             val spec = parseStringLiteral()
+            val assertClauseNs = parseImportAttributes()
             parseSemicolon()
             return ExportDeclaration(
                 exportClause = nsExport,
@@ -1728,7 +1761,8 @@ class Parser(private val source: String, private val fileName: String) {
                 isTypeOnly = isTypeOnly,
                 pos = pos,
                 end = getEnd(),
-                leadingComments = comments
+                leadingComments = comments,
+                assertClause = assertClauseNs,
             )
         }
 
@@ -1736,6 +1770,7 @@ class Parser(private val source: String, private val fileName: String) {
         if (token == SyntaxKind.OpenBrace) {
             val namedExports = parseNamedExports()
             val moduleSpec = if (parseOptional(SyntaxKind.FromKeyword)) parseStringLiteral() else null
+            val assertClauseNamed = if (moduleSpec != null) parseImportAttributes() else null
             parseSemicolon()
             return ExportDeclaration(
                 exportClause = namedExports,
@@ -1743,7 +1778,8 @@ class Parser(private val source: String, private val fileName: String) {
                 isTypeOnly = isTypeOnly,
                 pos = pos,
                 end = getEnd(),
-                leadingComments = comments
+                leadingComments = comments,
+                assertClause = assertClauseNamed,
             )
         }
 
