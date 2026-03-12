@@ -1701,9 +1701,12 @@ class Emitter(
                 writeNewLine()
                 indentLevel++
             }
+            // Track whether the previous element ended on the same line as the current one starts.
+            // Used to preserve `}, {` inline formatting when the source has adjacent elements on the same line.
+            var prevWasSameLine = firstElemOnSameLine
             for ((index, element) in node.elements.withIndex()) {
                 emitLeadingComments(element)
-                if (!firstElemOnSameLine || index > 0) writeIndent()
+                if (!prevWasSameLine) writeIndent()
                 emitExpression(element)
                 val isLast = index == node.elements.size - 1
                 // Split trailing comments: same-line (hasPrecedingNewLine=false) go before comma;
@@ -1727,15 +1730,35 @@ class Emitter(
                         write(comment.text)
                     }
                     write(" ,")
+                    writeNewLine()
+                    prevWasSameLine = false
                 } else if (hasLineComment && !isLast) {
                     // Same-line // comment followed by more elements: put comma on next line
                     writeNewLine()
                     writeIndent()
                     write(",")
+                    writeNewLine()
+                    prevWasSameLine = false
                 } else {
                     if (!isLast || node.hasTrailingComma) write(",")
+                    // Check if the next element starts on the same source line as this element ends.
+                    // Only apply this for compound elements (ObjectLiteralExpression or ArrayLiteralExpression)
+                    // to preserve `}, {` inline formatting when the source has it. Skip for simple elements
+                    // (OmittedExpression, literals) since TypeScript always puts those on separate lines.
+                    val nextElement = if (!isLast) node.elements[index + 1] else null
+                    val bothAreCompound = element is ObjectLiteralExpression || element is ArrayLiteralExpression
+                    val nextOnSameLine = bothAreCompound && nextElement != null
+                        && element.end >= 0 && nextElement.pos >= 0
+                        && element.end < sourceText.length && nextElement.pos <= sourceText.length
+                        && !sourceText.substring(element.end, nextElement.pos).contains('\n')
+                    if (!isLast && nextOnSameLine) {
+                        write(" ")
+                        prevWasSameLine = true
+                    } else {
+                        writeNewLine()
+                        prevWasSameLine = false
+                    }
                 }
-                writeNewLine()
             }
             // Emit any comments that appeared before the closing `]`
             if (!options.removeComments && node.trailingComments != null) {
