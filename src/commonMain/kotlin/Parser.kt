@@ -1632,7 +1632,8 @@ class Parser(private val source: String, private val fileName: String) {
             val spec = parseStringLiteral()
             parseImportAttributes()
             parseSemicolon()
-            return ImportDeclaration(moduleSpecifier = spec, pos = pos, end = getEnd(), leadingComments = comments)
+            val trailing = trailingComments()
+            return ImportDeclaration(moduleSpecifier = spec, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
         }
 
         // import clause from "module"
@@ -1641,6 +1642,7 @@ class Parser(private val source: String, private val fileName: String) {
         val moduleSpec = parseStringLiteral()
         val assertClause = parseImportAttributes()
         parseSemicolon()
+        val trailing = trailingComments()
         return ImportDeclaration(
             importClause = clause,
             moduleSpecifier = moduleSpec,
@@ -1648,6 +1650,7 @@ class Parser(private val source: String, private val fileName: String) {
             end = getEnd(),
             leadingComments = comments,
             assertClause = assertClause,
+            trailingComments = trailing,
         )
     }
 
