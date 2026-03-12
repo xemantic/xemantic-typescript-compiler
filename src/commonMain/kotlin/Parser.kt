@@ -1858,6 +1858,13 @@ class Parser(private val source: String, private val fileName: String) {
                 inner
             }
 
+            // export public/private/protected/static import ... (error: modifiers on import)
+            PublicKeyword, PrivateKeyword, ProtectedKeyword, StaticKeyword -> {
+                nextToken() // skip the invalid modifier
+                if (token == ImportKeyword) parseImportDeclaration(modifiers, comments)
+                else parseExpressionStatement()
+            }
+
             else -> parseExpressionStatement()
         }
     }
