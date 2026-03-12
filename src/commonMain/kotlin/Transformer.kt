@@ -143,7 +143,15 @@ class Transformer(private val options: CompilerOptions) {
 
     private fun nextTempVarName(): String {
         val n = tempVarCounter++
-        return if (n < 26) "_" + ('a' + n) else "_${('a' + n / 26)}${('a' + n % 26)}"
+        // TypeScript skips `_i` to avoid confusion with `1` (one) in some fonts.
+        // The sequence is: _a, _b, ..., _h, _j, _k, ..., _z, _aa, _ab, ... (skipping 'i' everywhere).
+        fun letterAt(idx: Int): Char = if (idx < 8) 'a' + idx else 'a' + idx + 1  // skip 'i' at position 8
+        return if (n < 25) {  // 25 single-letter names: a-h (8) + j-z (17)
+            "_${letterAt(n)}"
+        } else {
+            val m = n - 25  // 0-based index into two-letter names
+            "_${letterAt(m / 25)}${letterAt(m % 25)}"
+        }
     }
 
     /** Executes [block] with a fresh temp-var counter (per-function-scope), then restores. */
@@ -475,6 +483,9 @@ class Transformer(private val options: CompilerOptions) {
         // Function declarations are JS-hoisted, so their export stubs must appear BEFORE
         // any variable initializer assignments that might override the same name.
         val functionExportStubs = mutableListOf<Statement>()
+        // Track `export default class X` names — their static initializers must appear
+        // BEFORE the `exports.default = X` assignment (TypeScript's ordering).
+        val defaultExportedClassNames = mutableSetOf<String>()
         // Collect module-level leading comments to place before the preamble.
         // TypeScript emits these BEFORE Object.defineProperty (after "use strict").
         val prePreambleStatements = mutableListOf<Statement>()
@@ -761,6 +772,7 @@ class Transformer(private val options: CompilerOptions) {
                             val emitted = stmt.copy(modifiers = strippedModifiers)
                             result.add(emitted)
                             if (isDefault) {
+                                defaultExportedClassNames.add(name)
                                 if (!hasExportEquals) result.add(makeExportAssignment("default", syntheticId(name)))
                             } else {
                                 // Hoist exports.ClassName = void 0.
@@ -1088,6 +1100,34 @@ class Transformer(private val options: CompilerOptions) {
             }
             result.clear()
             result.addAll(expanded)
+        }
+
+        // Fix ordering for `export default class X { static prop = ... }`:
+        // TypeScript emits static initializers (X.prop = ...) BEFORE exports.default = X.
+        // Our main loop adds exports.default = X immediately after the class; reorder here.
+        if (defaultExportedClassNames.isNotEmpty()) {
+            val adjusted = mutableListOf<Statement>()
+            var pendingDefaultExport: Statement? = null
+            var pendingClassName: String? = null
+            for (stmt in result) {
+                val defaultTarget = extractExportsDefaultTarget(stmt)
+                if (defaultTarget != null && defaultTarget in defaultExportedClassNames) {
+                    pendingDefaultExport = stmt
+                    pendingClassName = defaultTarget
+                } else if (pendingClassName != null && isClassStaticInit(stmt, pendingClassName!!)) {
+                    adjusted.add(stmt)
+                } else {
+                    if (pendingDefaultExport != null) {
+                        adjusted.add(pendingDefaultExport!!)
+                        pendingDefaultExport = null
+                        pendingClassName = null
+                    }
+                    adjusted.add(stmt)
+                }
+            }
+            pendingDefaultExport?.let { adjusted.add(it) }
+            result.clear()
+            result.addAll(adjusted)
         }
 
         // Early pre-preamble extraction: handle NotEmittedStatement at result[1] BEFORE
@@ -3790,6 +3830,33 @@ class Transformer(private val options: CompilerOptions) {
             ),
             pos = -1, end = -1,
         )
+    }
+
+    /**
+     * Returns the class name if stmt is `exports.default = ClassName`, else null.
+     * Used to identify default-export assignments for static-init ordering.
+     */
+    private fun extractExportsDefaultTarget(stmt: Statement): String? {
+        val expr = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: return null
+        if (expr.operator != Equals) return null
+        val left = expr.left as? PropertyAccessExpression ?: return null
+        if ((left.expression as? Identifier)?.text != "exports") return null
+        if (left.name.text != "default") return null
+        return (expr.right as? Identifier)?.text
+    }
+
+    /**
+     * Returns true if stmt is a static property assignment `className.prop = ...`
+     * (i.e. a trailing static initializer produced for an `export default class`).
+     */
+    private fun isClassStaticInit(stmt: Statement, className: String): Boolean {
+        val expr = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: return false
+        if (expr.operator != Equals) return false
+        return when (val left = expr.left) {
+            is PropertyAccessExpression -> (left.expression as? Identifier)?.text == className
+            is ElementAccessExpression -> (left.expression as? Identifier)?.text == className
+            else -> false
+        }
     }
 
     private fun makeExportAssignment(name: String, value: Expression? = null, leadingComments: List<Comment>? = null, pos: Int = -1): Statement {
