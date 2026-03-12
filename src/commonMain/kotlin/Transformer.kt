@@ -1556,6 +1556,10 @@ class Transformer(private val options: CompilerOptions) {
         // Import reassignment statements (ns = __importStar(ns), mod = __importDefault(mod))
         // These must appear at the TOP of the body (after "use strict" + preamble)
         val importReassignments = mutableListOf<Statement>()
+        // Export assignments for `export import X = require(...)` — these must NOT be rewritten
+        // by the directExportedVarNames substitution (exports.X = X must stay, not → exports.X = exports.X).
+        // Tracked separately and inserted into the body after the identifier rewrite step.
+        val protectedExportAssignments = mutableListOf<Pair<String, Statement>>() // (name → statement)
 
         // Pass 1: collect imports to build deps/params, build body for non-imports
         for (stmt in statementsWithoutStrict) {
@@ -1698,8 +1702,11 @@ class Transformer(private val options: CompilerOptions) {
                                 namedModuleImports.add(specStr2 to name)
                             }
                             // If this was an `export import x = require(...)`, also re-export it.
+                            // Track the export assignment separately so it isn't rewritten by
+                            // the directExportedVarNames substitution (exports.x = x must stay).
                             if (ModifierFlag.Export in stmt.modifiers) {
-                                bodyStatements.add(makeExportAssignment(name))
+                                directExportedVarNames.add(name)
+                                protectedExportAssignments.add(name to makeExportAssignment(name))
                             }
                             continue
                         }
@@ -1932,9 +1939,10 @@ class Transformer(private val options: CompilerOptions) {
         } else renamedBody0
 
         // Import elision: determine which namedModuleImports are actually used.
-        // Collect refs from body + function stubs + deferred, but NOT importReassignments
-        // (otherwise every reassigned import would count as "used" by its own reassignment).
-        val allRefs = collectValueReferences(renamedBody + functionExportStubs + deferredExportAssignments)
+        // Collect refs from body + function stubs + deferred + protected export assignments,
+        // but NOT importReassignments (otherwise every reassigned import would count as "used").
+        val protectedAssignStmts = protectedExportAssignments.map { it.second }
+        val allRefs = collectValueReferences(renamedBody + functionExportStubs + deferredExportAssignments + protectedAssignStmts)
 
         // Filter namedModuleImports to keep only used ones
         val usedNamedModuleImports = namedModuleImports.filter { (_, paramName) ->
@@ -2007,6 +2015,14 @@ class Transformer(private val options: CompilerOptions) {
 
         // Import reassignments (hoisted to top of body, after preamble)
         fullBody.addAll(filteredReassignments)
+
+        // Protected export assignments for `export import X = require(...)`.
+        // These must not be rewritten by the directExportedVarNames substitution
+        // (exports.X = X must stay as-is, not become exports.X = exports.X).
+        // Insert them before the main body so they appear right after the preamble.
+        for ((_, exportAssignStmt) in protectedExportAssignments) {
+            fullBody.add(exportAssignStmt)
+        }
 
         // Main body
         fullBody.addAll(renamedBody)
