@@ -2503,7 +2503,10 @@ class Parser(private val source: String, private val fileName: String) {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
                     nextToken()
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
-                    val name = parseIdentifierName()
+                    // After `.`, only consume if the token is a valid property name.
+                    // Non-name tokens (e.g. `}`) are left for the enclosing block to consume.
+                    val name = if (isIdentifier() || isKeyword()) parseIdentifierName()
+                               else { reportError("Identifier expected."); Identifier(text = "", pos = getPos(), end = getPos()) }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
 
@@ -2676,7 +2679,8 @@ class Parser(private val source: String, private val fileName: String) {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
                     nextToken()
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
-                    val name = parseIdentifierName()
+                    val name = if (isIdentifier() || isKeyword()) parseIdentifierName()
+                               else { reportError("Identifier expected."); Identifier(text = "", pos = getPos(), end = getPos()) }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
                 OpenBracket -> {
