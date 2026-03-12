@@ -61,9 +61,18 @@ class Emitter(
             sb.appendLine(shebangLine)
         }
         emitUseStrict(originalSourceFile ?: sourceFile)
-        emitStatements(sourceFile.statements)
+        // Check if the last statement is a Parser-generated EOF NotEmittedStatement (pos == -1).
+        // TypeScript emits `export {}` BEFORE these EOF trivia comments but AFTER file-start
+        // orphaned comments (which have pos > 0 and appear earlier in the list).
+        val statements = sourceFile.statements
+        val eofNes = statements.lastOrNull()
+            ?.takeIf { it is NotEmittedStatement && it.pos == -1 } as? NotEmittedStatement
+        val mainStatements = if (eofNes != null) statements.dropLast(1) else statements
+        emitStatements(mainStatements)
         // If the file is a module but all statements were skipped, emit "export {}"
         emitEmptyExportIfNeeded(originalSourceFile ?: sourceFile, sourceFile)
+        // Emit EOF trailing comments AFTER export {}
+        if (eofNes != null) emitLeadingComments(eofNes)
         return sb.toString().trimEnd('\n')
     }
 
