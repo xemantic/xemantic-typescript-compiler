@@ -235,10 +235,14 @@ private fun toCRLF(text: String): String {
 
             '\n' -> {
                 inLineComment = false
-                if (inString) {
-                    // Preserve LF as-is inside string literals (TypeScript doesn't CRLF-ify these)
+                if (inTemplate) {
+                    // Template literals can span lines — preserve LF as-is
                     sb.append(ch)
                 } else {
+                    // Single/double-quoted strings cannot span lines.
+                    // A raw \n terminates them (syntax error). Reset string tracking.
+                    inSingleQuote = false
+                    inDoubleQuote = false
                     sb.append("\r\n")
                 }
             }

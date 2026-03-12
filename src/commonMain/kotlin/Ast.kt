@@ -625,6 +625,7 @@ data class NoSubstitutionTemplateLiteralNode(
 data class TemplateExpression(
     val head: StringLiteralNode,
     val templateSpans: List<TemplateSpan>,
+    val isUnterminated: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
