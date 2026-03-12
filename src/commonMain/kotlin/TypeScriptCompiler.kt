@@ -201,9 +201,11 @@ class TypeScriptCompiler {
                     sourceEchoes.add(file.fileName to file.content)
                 }
 
-                // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json)
+                // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
+                // and not files from node_modules which TypeScript never re-emits)
                 if (file.fileName.endsWith(".json") && options.outDir != null
-                    && baseName != "tsconfig.json" && baseName != "package.json") {
+                    && baseName != "tsconfig.json" && baseName != "package.json"
+                    && !file.fileName.contains("/node_modules/")) {
                     val jsonContent = stripJsonTrailingCommas(file.content).trimEnd()
                     if (options.fullEmitPaths) {
                         val outDir = options.outDir.trimEnd('/')
