@@ -2829,33 +2829,47 @@ class Emitter(
         }
         val anyHasLeadingOrTrailingComments = anyHasLeadingComments || anyHasNewlineTrailingComments
         if (anyHasLeadingOrTrailingComments) {
-            // Emit parameters with comments using comma-first style:
-            // leading comments go on their own lines, then [, ]paramName, then trailing comments.
-            // After all params, emit a newline so the closing `)` appears on its own line.
-            for ((index, param) in emittableParams.withIndex()) {
-                writeNewLine()
-                emitLeadingComments(param)
-                writeIndent()
-                if (index > 0) write(", ")
-                emitParameter(param, emitInlineTrailingOnly = false)
-                // Emit trailing comments: inline ones stay on same line, newline-separated on their own lines
-                val trailing = param.trailingComments
-                if (!trailing.isNullOrEmpty()) {
-                    for (comment in trailing) {
-                        if (comment.hasPrecedingNewLine) {
-                            writeNewLine()
-                            writeIndent()
-                            write(comment.text)
-                        } else {
-                            write(" ")
-                            write(comment.text)
+            if (anyHasNewlineTrailingComments) {
+                // Comma-first format: used when any param has trailing comments on their own lines.
+                // The comma appears before the next parameter (comma-first), and `)` is on its own line.
+                for ((index, param) in emittableParams.withIndex()) {
+                    writeNewLine()
+                    emitLeadingComments(param)
+                    writeIndent()
+                    if (index > 0) write(", ")
+                    emitParameter(param, emitInlineTrailingOnly = false)
+                    // Emit trailing comments: inline ones stay on same line, newline-separated on their own lines
+                    val trailing = param.trailingComments
+                    if (!trailing.isNullOrEmpty()) {
+                        for (comment in trailing) {
+                            if (comment.hasPrecedingNewLine) {
+                                writeNewLine()
+                                writeIndent()
+                                write(comment.text)
+                            } else {
+                                write(" ")
+                                write(comment.text)
+                            }
                         }
                     }
                 }
+                // Newline before the closing `)` so it appears on its own line
+                writeNewLine()
+                writeIndent()
+            } else {
+                // Comma-after format: used when params have only leading comments (JSDoc style).
+                // The comma appears after the parameter, and `)` follows immediately after the last param.
+                for ((index, param) in emittableParams.withIndex()) {
+                    val isLast = index == emittableParams.size - 1
+                    writeNewLine()
+                    emitLeadingComments(param)
+                    writeIndent()
+                    emitParameter(param, emitInlineTrailingOnly = false)
+                    // Comma goes AFTER the parameter (if not the last)
+                    if (!isLast) write(", ")
+                }
+                // No extra newline/indent — closing `)` follows immediately after the last parameter
             }
-            // Newline before the closing `)` so it appears on its own line
-            writeNewLine()
-            writeIndent()
         } else {
             for ((index, param) in emittableParams.withIndex()) {
                 if (index > 0) write(", ")
