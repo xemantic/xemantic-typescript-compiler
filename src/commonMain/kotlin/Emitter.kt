@@ -930,6 +930,9 @@ class Emitter(
         }
         // type parameters erased
         emitHeritageClauses(node.heritageClauses)
+        if (!options.removeComments) {
+            node.beforeOpenBraceComments?.forEach { write(" "); write(it.text) }
+        }
         write(" {")
         writeNewLine()
         indentLevel++

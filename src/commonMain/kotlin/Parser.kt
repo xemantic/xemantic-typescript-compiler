@@ -1026,6 +1026,7 @@ class Parser(private val source: String, private val fileName: String) {
         val name = if (isIdentifier() && token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword) parseIdentifier() else null
         val typeParams = parseTypeParametersOpt()
         val heritage = parseHeritageClauses()
+        val beforeOpenBrace = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseClassMembers()
         parseExpected(SyntaxKind.CloseBrace)
@@ -1037,6 +1038,7 @@ class Parser(private val source: String, private val fileName: String) {
             members = members,
             modifiers = modifiers,
             decorators = decorators,
+            beforeOpenBraceComments = beforeOpenBrace,
             pos = pos,
             end = getEnd(),
             leadingComments = comments,

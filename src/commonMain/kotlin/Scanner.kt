@@ -276,9 +276,16 @@ class Scanner(private val text: String) {
             }
             if (pos < end && text[pos] == '/') {
                 pos++ // skip closing /
-                // Scan flags
-                while (pos < end && isIdentifierPart(text[pos])) {
-                    pos++
+                // Scan flags — handle both BMP and non-BMP (surrogate-pair) Unicode identifier parts
+                while (pos < end) {
+                    val fc = text[pos]
+                    if (fc.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) {
+                        pos += 2 // supplementary Unicode char (surrogate pair) — valid flag char
+                    } else if (isIdentifierPart(fc)) {
+                        pos++
+                    } else {
+                        break
+                    }
                 }
             }
             tokenValue = text.substring(tokenPos, pos)
