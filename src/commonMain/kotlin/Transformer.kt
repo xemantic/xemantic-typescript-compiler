@@ -5277,7 +5277,10 @@ class Transformer(private val options: CompilerOptions) {
             !(stmt is ExpressionStatement && stmt.expression is StringLiteralNode)
         }.let { if (it < 0) bodyStmts.size else it }
         bodyStmts.addAll(insertAt, restStmts)
-        return Pair(newParams, body.copy(statements = bodyStmts, multiLine = true))
+        // Preserve multiLine = false for originally-empty single-line bodies (e.g. `{ }`),
+        // so the result is emitted as `{ var ...; }` on one line like TypeScript does.
+        val newMultiLine = body.multiLine || body.statements.isNotEmpty()
+        return Pair(newParams, body.copy(statements = bodyStmts, multiLine = newMultiLine))
     }
 
     // -----------------------------------------------------------------
