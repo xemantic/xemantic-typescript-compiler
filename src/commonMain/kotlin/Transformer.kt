@@ -506,6 +506,13 @@ class Transformer(private val options: CompilerOptions) {
                         else earlyRuntimeNames.add(n)
                     }
                 }
+                is ImportEqualsDeclaration -> {
+                    // `export import a = X.Y` creates a runtime binding to namespace X
+                    if (!stmt.isTypeOnly && ModifierFlag.Export in stmt.modifiers &&
+                        stmt.moduleReference !is ExternalModuleReference) {
+                        namespaceAliasRoot(stmt.moduleReference)?.let { earlyRuntimeNames.add(it) }
+                    }
+                }
                 else -> {}
             }
         }
@@ -634,7 +641,14 @@ class Transformer(private val options: CompilerOptions) {
                     }
                 }
                 is ImportEqualsDeclaration -> {
-                    if (!stmt.isTypeOnly) runtimeDeclaredNames.add(stmt.name.text)
+                    if (!stmt.isTypeOnly) {
+                        runtimeDeclaredNames.add(stmt.name.text)
+                        // `export import a = X.Y` creates a runtime binding to namespace X
+                        if (ModifierFlag.Export in stmt.modifiers &&
+                            stmt.moduleReference !is ExternalModuleReference) {
+                            namespaceAliasRoot(stmt.moduleReference)?.let { runtimeDeclaredNames.add(it) }
+                        }
+                    }
                 }
                 else -> {}
             }
