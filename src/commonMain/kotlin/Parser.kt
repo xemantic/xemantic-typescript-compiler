@@ -840,12 +840,14 @@ class Parser(private val source: String, private val fileName: String) {
             val labelTrailingComments = scanner.consumeTrailingComments()
             val firstStmtStart = getPos() // scanner.getTokenPos() = start of first statement token
             val stmts = parseCaseClauseStatements()
+            // Capture trailing comments after the last block's `}` (e.g. `case: { } /*22*/`)
+            val stmtsWithTrailing = attachLastBlockTrailingComments(stmts)
             // Single-line if no newline between case clause start and first statement,
             // and no statement is a multiLine block (which must be emitted multi-line)
-            val singleLine = stmts.size == 1 && firstStmtStart > pos &&
+            val singleLine = stmtsWithTrailing.size == 1 && firstStmtStart > pos &&
                     firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n') &&
-                    stmts.none { it is Block && it.multiLine }
-            CaseClause(expression = expr, statements = stmts, singleLine = singleLine,
+                    stmtsWithTrailing.none { it is Block && it.multiLine }
+            CaseClause(expression = expr, statements = stmtsWithTrailing, singleLine = singleLine,
                 afterCaseComments = afterCase, afterExprComments = afterExpr,
                 pos = pos, end = getEnd(),
                 labelTrailingComments = labelTrailingComments, leadingComments = comments)
@@ -856,10 +858,11 @@ class Parser(private val source: String, private val fileName: String) {
             val labelTrailingComments = scanner.consumeTrailingComments()
             val firstStmtStart = getPos()
             val stmts = parseCaseClauseStatements()
-            val singleLine = stmts.size == 1 && firstStmtStart > pos &&
+            val stmtsWithTrailing = attachLastBlockTrailingComments(stmts)
+            val singleLine = stmtsWithTrailing.size == 1 && firstStmtStart > pos &&
                     firstStmtStart <= source.length && !source.substring(pos, firstStmtStart).contains('\n') &&
-                    stmts.none { it is Block && it.multiLine }
-            DefaultClause(statements = stmts, singleLine = singleLine,
+                    stmtsWithTrailing.none { it is Block && it.multiLine }
+            DefaultClause(statements = stmtsWithTrailing, singleLine = singleLine,
                 afterDefaultComments = afterDefault,
                 pos = pos, end = getEnd(),
                 labelTrailingComments = labelTrailingComments, leadingComments = comments)
@@ -879,6 +882,16 @@ class Parser(private val source: String, private val fileName: String) {
             }
         }
         return stmts
+    }
+
+    /**
+     * After [parseCaseClauseStatements], captures any same-line trailing comment left in the scanner
+     * (e.g. `} /*22*/`) and attaches it to the last [Block] statement via [Block.copy].
+     */
+    private fun attachLastBlockTrailingComments(stmts: List<Statement>): List<Statement> {
+        val trailing = scanner.consumeTrailingComments() ?: return stmts
+        val lastBlock = stmts.lastOrNull() as? Block ?: return stmts
+        return stmts.dropLast(1) + lastBlock.copy(trailingComments = trailing)
     }
 
     private fun parseThrowStatement(): ThrowStatement {
@@ -963,9 +976,15 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val comments = leadingComments()
         val label = parseIdentifier()
+        val afterLabelComments = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.Colon)
+        val afterColonComments = scanner.consumeTrailingComments()
         val stmt = parseStatement() ?: EmptyStatement()
-        return LabeledStatement(label = label, statement = stmt, pos = pos, end = getEnd(), leadingComments = comments)
+        return LabeledStatement(
+            label = label, statement = stmt,
+            afterLabelComments = afterLabelComments, afterColonComments = afterColonComments,
+            pos = pos, end = getEnd(), leadingComments = comments,
+        )
     }
 
     // ── Declarations ────────────────────────────────────────────────────────
