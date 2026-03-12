@@ -1776,7 +1776,9 @@ class Emitter(
     }
 
     private fun emitObjectLiteral(node: ObjectLiteralExpression) {
-        if (node.properties.isEmpty()) {
+        // Filter out overload signatures (bodyless methods) — these are error-recovery nodes
+        val properties = node.properties.filter { !shouldSkipObjectProperty(it) }
+        if (properties.isEmpty()) {
             write("{}")
             return
         }
@@ -1785,11 +1787,11 @@ class Emitter(
             write("{")
             writeNewLine()
             indentLevel++
-            for ((index, prop) in node.properties.withIndex()) {
-                val isLast = index == node.properties.size - 1
+            for ((index, prop) in properties.withIndex()) {
+                val isLast = index == properties.size - 1
                 // Check if this property continues on the same line as the previous one.
                 val sameLineAsPrev = if (index == 0) false else {
-                    val prev = node.properties[index - 1]
+                    val prev = properties[index - 1]
                     val prevEnd = prev.end; val currStart = prop.pos
                     prevEnd > 0 && currStart > 0 && prevEnd <= currStart && currStart <= sourceText.length &&
                         !sourceText.substring(prevEnd, currStart).contains('\n')
@@ -1803,7 +1805,7 @@ class Emitter(
                 emitObjectProperty(prop)
                 // Check if next property is on the same line as this one.
                 val nextOnSameLine = !isLast && run {
-                    val next = node.properties[index + 1]
+                    val next = properties[index + 1]
                     val currEnd = prop.end; val nextStart = next.pos
                     currEnd > 0 && nextStart > 0 && currEnd <= nextStart && nextStart <= sourceText.length &&
                         !sourceText.substring(currEnd, nextStart).contains('\n')
@@ -1829,13 +1831,21 @@ class Emitter(
             write("}")
         } else {
             write("{ ")
-            for ((index, prop) in node.properties.withIndex()) {
+            for ((index, prop) in properties.withIndex()) {
                 if (index > 0) write(", ")
                 emitObjectProperty(prop)
             }
             if (node.hasTrailingComma) write(",")
             write(" }")
         }
+    }
+
+    private fun shouldSkipObjectProperty(prop: Node): Boolean = when (prop) {
+        // Method/accessor overload signatures (no body) are erased from object literals
+        is MethodDeclaration -> prop.body == null
+        is GetAccessor -> prop.body == null
+        is SetAccessor -> prop.body == null
+        else -> false
     }
 
     private fun emitObjectProperty(prop: Node) {
