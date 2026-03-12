@@ -136,7 +136,14 @@ class Parser(private val source: String, private val fileName: String) {
     private fun parseStatement(): Statement? = when (token) {
         OpenBrace -> parseBlock()
         Semicolon -> parseEmptyStatement()
-        VarKeyword, LetKeyword -> parseVariableStatement()
+        VarKeyword -> parseVariableStatement()
+        // `let` is a declaration keyword only when followed by an identifier, `[`, or `{`.
+        // `let = 30` uses `let` as an identifier — fall through to expression parsing.
+        LetKeyword -> if (lookAhead { nextToken(); token == OpenBracket || token == OpenBrace || isIdentifier() }) {
+            parseVariableStatement()
+        } else {
+            parseExpressionStatement()
+        }
         ConstKeyword -> if (lookAhead { nextToken(); token == EnumKeyword }) {
             nextToken(); parseEnumDeclaration(setOf(ModifierFlag.Const))
         } else {
