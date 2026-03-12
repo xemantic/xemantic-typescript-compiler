@@ -401,6 +401,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
         "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
         "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
         "alwaysstrict", "newline", "noresolve", "moduledetection",
+        "outdir", "allowjs",
     )
 
     var result = options
