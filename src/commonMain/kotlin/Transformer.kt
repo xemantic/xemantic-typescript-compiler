@@ -6677,13 +6677,7 @@ class Transformer(private val options: CompilerOptions) {
             is MethodDeclaration -> {
                 // Overload signatures (no body) are removed
                 if (element.body == null) return null
-                element.copy(
-                    typeParameters = null,
-                    parameters = transformParameters(element.parameters),
-                    type = null,
-                    body = transformBlock(element.body, isFunctionScope = true),
-                    modifiers = stripMemberModifiers(element.modifiers),
-                )
+                transformMethodDeclarationElement(element)
             }
 
             is GetAccessor -> {
