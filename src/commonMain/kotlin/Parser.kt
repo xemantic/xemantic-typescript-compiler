@@ -2367,7 +2367,11 @@ class Parser(private val source: String, private val fileName: String) {
         nextToken() // skip <
         val type = parseType()
         parseExpected(SyntaxKind.GreaterThan)
-        val expr = parseUnaryExpression()
+        // `yield` cannot be the argument of a type assertion — TypeScript emits `;` (empty) for
+        // the assertion and parses `yield ...` as the next statement. Use OmittedExpression so
+        // the erasure produces just `;` and `yield expr` remains as a separate statement.
+        val expr = if (token == SyntaxKind.YieldKeyword) OmittedExpression(pos = pos, end = pos)
+                   else parseUnaryExpression()
         return TypeAssertionExpression(type = type, expression = expr, pos = pos, end = getEnd())
     }
 
