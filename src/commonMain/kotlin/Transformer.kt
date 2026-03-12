@@ -778,8 +778,11 @@ class Transformer(private val options: CompilerOptions) {
                                 val decls = stmt.declarationList.declarations
                                 for ((dIdx, decl) in decls.withIndex()) {
                                     val name = extractIdentifierName(decl.name)
-                                    if (name != null && decl.initializer != null) {
+                                    if (name != null) {
+                                        // Always track: even no-initializer exports need identifier substitution.
                                         directExportedVarNames.add(name)
+                                    }
+                                    if (name != null && decl.initializer != null) {
                                         val leadingComments = if (isFirst) stmt.leadingComments else null
                                         val isLastDecl = dIdx == decls.size - 1
                                         // Preserve trailing comments from the declarator or the statement (for last declarator)
@@ -1783,7 +1786,7 @@ class Transformer(private val options: CompilerOptions) {
                 if (!needsKeepDeclaration) {
                     for (decl in stmt.declarationList.declarations) {
                         val n = extractIdentifierName(decl.name)
-                        if (n != null && decl.initializer != null) directExportedVarNames.add(n)
+                        if (n != null) directExportedVarNames.add(n)
                     }
                 }
             }
@@ -7509,19 +7512,23 @@ class Transformer(private val options: CompilerOptions) {
         // Members that were processed but had non-constant values are NOT forward refs.
         fun isForwardRef(refName: String): Boolean =
             refName != currentMemberName && refName in knownMembers && refName !in processedMembers
+        // For qualified access E1.Z on the current enum, also treat as forward ref when
+        // Z is not yet processed — covers forward refs to members in later merged enum blocks.
+        fun isForwardRefOnCurrentEnum(refName: String): Boolean =
+            refName != currentMemberName && refName !in processedMembers
 
         // Bare identifier: X = Y where Y is a known member but not yet resolved
         if (expr is Identifier && isForwardRef(expr.text)) return true
         // E.Y property access
         if (expr is PropertyAccessExpression && expr.expression is Identifier) {
             val obj = expr.expression as Identifier
-            if (obj.text == enumName && isForwardRef(expr.name.text)) return true
+            if (obj.text == enumName && isForwardRefOnCurrentEnum(expr.name.text)) return true
         }
         // E["Y"] element access
         if (expr is ElementAccessExpression && expr.expression is Identifier) {
             val obj = expr.expression as Identifier
             val arg = expr.argumentExpression
-            if (obj.text == enumName && arg is StringLiteralNode && isForwardRef(arg.text)) return true
+            if (obj.text == enumName && arg is StringLiteralNode && isForwardRefOnCurrentEnum(arg.text)) return true
         }
         return false
     }
@@ -7945,11 +7952,15 @@ class Transformer(private val options: CompilerOptions) {
             }
             is Identifier -> memberValues[expr.text]
             is PropertyAccessExpression -> {
-                // Handle cross-enum references like Foo.a where Foo is a previously-defined enum
+                // Handle cross-enum references like Foo.a or M.N.Foo.a where Foo is a previously-defined enum.
+                // For qualified paths (M.N.E1.a), extract the enum name (second-to-last segment) and member name.
                 val obj = expr.expression
-                if (obj is Identifier) {
-                    allEnumMemberValues[obj.text]?.get(expr.name.text)
-                } else null
+                val memberName = expr.name.text
+                when {
+                    obj is Identifier -> allEnumMemberValues[obj.text]?.get(memberName)
+                    obj is PropertyAccessExpression -> allEnumMemberValues[obj.name.text]?.get(memberName)
+                    else -> null
+                }
             }
             is ElementAccessExpression -> {
                 // Handle E["member"] access (e.g. E["__foo"])
