@@ -409,6 +409,7 @@ data class ClassDeclaration(
     val members: List<ClassElement>,
     val modifiers: Set<ModifierFlag> = emptySet(),
     val decorators: List<Decorator>? = null,
+    val beforeOpenBraceComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
