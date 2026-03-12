@@ -141,6 +141,9 @@ class Transformer(private val options: CompilerOptions) {
     // Populated at the start of transform() from the original source file statements.
     private val topLevelTypeOnlyNames = mutableSetOf<String>()
 
+    // Source file top-level statements, stored for qualified-path type-only namespace checks.
+    private var topLevelStatements: List<Statement> = emptyList()
+
     private fun nextTempVarName(): String {
         val n = tempVarCounter++
         // TypeScript skips both `_i` and `_n` in temp variable names.
@@ -176,6 +179,7 @@ class Transformer(private val options: CompilerOptions) {
         needsRestHelper = false
         needsDecorateHelper = false
         needsParamHelper = false
+        topLevelStatements = sourceFile.statements
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
         // are interfaces — TypeScript erases them and may produce `export {}` to preserve module semantics.
@@ -5902,11 +5906,8 @@ class Transformer(private val options: CompilerOptions) {
             if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
                 return emptyList()
             }
-            if (ref is QualifiedName) {
-                val rootName = generateSequence(ref) { (it.left as? QualifiedName) }.last().left
-                if (rootName is Identifier && rootName.text in topLevelTypeOnlyNames) {
-                    return emptyList()
-                }
+            if (ref is QualifiedName && isQualifiedPathTypeOnly(ref)) {
+                return emptyList()
             }
         }
 
@@ -8352,9 +8353,15 @@ class Transformer(private val options: CompilerOptions) {
                     val ref = stmt.moduleReference
                     if (ref is Identifier) {
                         val refName = ref.text
+                        // Check top-level type-only names (e.g. namespaces with only interfaces)
+                        if (refName in topLevelTypeOnlyNames) continue
                         val referencedNs = statements.filterIsInstance<ModuleDeclaration>()
                             .firstOrNull { extractIdentifierName(it.name) == refName }
                         if (referencedNs != null && isTypeOnlyNamespace(referencedNs)) continue
+                    }
+                    if (ref is QualifiedName) {
+                        val rootName = generateSequence(ref) { (it.left as? QualifiedName) }.last().left
+                        if (rootName is Identifier && rootName.text in topLevelTypeOnlyNames) continue
                     }
                     // For non-exported internal imports (import Y = X), erase if the alias
                     // is not used in any value position in the namespace body.
@@ -8756,6 +8763,38 @@ class Transformer(private val options: CompilerOptions) {
             ),
             pos = -1, end = -1,
         )
+    }
+
+    /**
+     * Checks whether a qualified namespace path (e.g. `Outer.uninstantiated`) refers to a
+     * type-only namespace by traversing the top-level source file namespace hierarchy.
+     */
+    private fun isQualifiedPathTypeOnly(ref: QualifiedName): Boolean {
+        // Flatten the qualified name into a list of identifier strings, e.g. [Outer, uninstantiated]
+        val parts = mutableListOf<String>()
+        var node: Node = ref
+        while (node is QualifiedName) {
+            parts.add(0, node.right.text)
+            node = node.left
+        }
+        if (node !is Identifier) return false
+        parts.add(0, node.text)
+
+        // Navigate the namespace hierarchy starting from top-level statements
+        var stmts: List<Statement> = topLevelStatements
+        for ((i, part) in parts.withIndex()) {
+            val ns = stmts.filterIsInstance<ModuleDeclaration>()
+                .firstOrNull { extractIdentifierName(it.name) == part }
+                ?: return false
+            if (i == parts.size - 1) return isTypeOnlyNamespace(ns)
+            val body = ns.body ?: return true
+            stmts = when (body) {
+                is ModuleBlock -> body.statements
+                is ModuleDeclaration -> listOf(body)
+                else -> return false
+            }
+        }
+        return false
     }
 
     /**
