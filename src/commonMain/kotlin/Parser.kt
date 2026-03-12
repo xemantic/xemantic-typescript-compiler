@@ -1056,7 +1056,12 @@ class Parser(private val source: String, private val fileName: String) {
                 continue
             }
             val member = parseClassMember()
-            if (member != null) members.add(member)
+            if (member != null) {
+                members.add(member)
+            } else {
+                // parseClassMember returned null (e.g. `{` after modifiers) — exit class body
+                break
+            }
         }
         return members
     }
@@ -1109,6 +1114,13 @@ class Parser(private val source: String, private val fileName: String) {
         if (isStatic && token == SyntaxKind.OpenBrace) {
             val body = parseBlock()
             return ClassStaticBlockDeclaration(body = body, pos = pos, end = getEnd())
+        }
+
+        // Error recovery: `{` after access modifiers (non-static) can't be a valid property name.
+        // Return null so the class body exits early and `{}` is parsed as a block statement.
+        // Only applies when modifiers were actually consumed (e.g. `public {`).
+        if (modifiers.isNotEmpty() && !isStatic && token == SyntaxKind.OpenBrace) {
+            return null
         }
 
         // Index signature: [identifier?: type]: type  (parameter may have optional `?`)
