@@ -2643,11 +2643,12 @@ class Parser(private val source: String, private val fileName: String) {
 
                 OpenParen -> {
                     val args = parseArgumentList()
+                    val innerComments = lastCallInnerComments
                     // Only capture trailing comments on the call when the chain continues
                     // (next token is `.` or `[`). Otherwise leave them for the enclosing
                     // statement to capture as preSemicolonComments / trailingComments.
                     val callTrailing = if (token == Dot || token == OpenBracket) trailingComments() else null
-                    CallExpression(expression = result, arguments = args, pos = result.pos, end = getEnd(), trailingComments = callTrailing)
+                    CallExpression(expression = result, arguments = args, innerComments = innerComments, pos = result.pos, end = getEnd(), trailingComments = callTrailing)
                 }
 
                 LessThan -> {
@@ -2662,6 +2663,7 @@ class Parser(private val source: String, private val fileName: String) {
                                     expression = result,
                                     typeArguments = typeArgs,
                                     arguments = args,
+                                    innerComments = lastCallInnerComments,
                                     pos = result.pos,
                                     end = getEnd()
                                 )
@@ -2729,6 +2731,7 @@ class Parser(private val source: String, private val fileName: String) {
                                 expression = result,
                                 arguments = args,
                                 questionDotToken = true,
+                                innerComments = lastCallInnerComments,
                                 pos = result.pos,
                                 end = getEnd()
                             )
@@ -3423,7 +3426,11 @@ class Parser(private val source: String, private val fileName: String) {
         return result
     }
 
+    /** Inner comments captured from an empty argument list `(/*comments*/)`. Reset each call. */
+    private var lastCallInnerComments: List<Comment>? = null
+
     private fun parseArgumentList(): List<Expression> {
+        lastCallInnerComments = null
         parseExpected(SyntaxKind.OpenParen)
         val args = mutableListOf<Expression>()
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
@@ -3450,6 +3457,15 @@ class Parser(private val source: String, private val fileName: String) {
                 args.add(if (argComments != null) expr.withLeadingComments(argComments) else expr)
             }
             if (!parseOptional(SyntaxKind.Comma)) break
+        }
+        // For empty argument lists, capture any comments between `(` and `)`.
+        if (args.isEmpty()) {
+            // Same-line trailing comments (e.g. `a(/*1*/)`) are in trailingComments;
+            // comments with preceding newlines (e.g. `a(\n  /*first*/\n)`) are in leadingComments.
+            val inlineComments = scanner.consumeTrailingComments()
+            val blockComments = leadingComments()
+            val all = (inlineComments ?: emptyList()) + (blockComments ?: emptyList())
+            lastCallInnerComments = all.ifEmpty { null }
         }
         parseExpected(SyntaxKind.CloseParen)
         return args

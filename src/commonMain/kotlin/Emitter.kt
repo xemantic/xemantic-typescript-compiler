@@ -2198,6 +2198,20 @@ class Emitter(
         }
         // type arguments erased
         write("(")
+        // Emit inner comments for empty argument lists, e.g. `a( /*1*/)` or multiline variants
+        if (!options.removeComments && node.innerComments != null && node.arguments.isEmpty()) {
+            var multiline = false
+            for (comment in node.innerComments) {
+                if (comment.hasPrecedingNewLine) {
+                    writeNewLine()
+                    multiline = true
+                } else {
+                    write(" ")
+                }
+                write(comment.text)
+            }
+            if (multiline) writeNewLine()
+        }
         val lastArg = emitCallArguments(node.arguments)
         // If the last argument had a trailing single-line comment, `)` goes on the next line
         if (!options.removeComments && lastArg?.trailingComments?.lastOrNull()?.kind == SyntaxKind.SingleLineComment) {

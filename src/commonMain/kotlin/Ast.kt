@@ -707,6 +707,8 @@ data class CallExpression(
     val typeArguments: List<TypeNode>? = null,
     val arguments: List<Expression>,
     val questionDotToken: Boolean = false,
+    /** Comments inside the `()` when the argument list is empty, e.g. `a(/*1*/)`. */
+    val innerComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
