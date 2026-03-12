@@ -2525,13 +2525,18 @@ class Parser(private val source: String, private val fileName: String) {
                             }
                             // Instantiation expression: expr<Type> followed by a token that
                             // cannot start a binary expression (so it's type args, not comparison).
-                            // Wrap in ParenthesizedExpression to match TypeScript's emit behavior.
+                            // Type arguments are dropped. Wrap in parens only when used as assignment
+                            // target (token == `=`) so TypeScript's `(x<T>) = rhs` emit is preserved.
                             typeArgs != null && canFollowTypeArgumentsInExpression() -> {
-                                ParenthesizedExpression(
-                                    expression = result,
-                                    pos = result.pos,
-                                    end = getEnd()
-                                )
+                                if (token == SyntaxKind.Equals) {
+                                    ParenthesizedExpression(
+                                        expression = result,
+                                        pos = result.pos,
+                                        end = getEnd()
+                                    )
+                                } else {
+                                    result
+                                }
                             }
                             else -> null
                         }
