@@ -318,6 +318,7 @@ data class LabeledStatement(
 data class ThrowStatement(
     val expression: Expression?,
     val afterKeywordComments: List<Comment>? = null,
+    val preSemicolonComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -331,8 +332,10 @@ data class TryStatement(
     val catchClause: CatchClause? = null,
     val finallyBlock: Block? = null,
     val afterTryComments: List<Comment>? = null,
+    val afterTryBlockComments: List<Comment>? = null,
     val afterCatchBlockComments: List<Comment>? = null,
     val afterFinallyComments: List<Comment>? = null,
+    val afterFinallyBlockComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

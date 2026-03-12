@@ -763,7 +763,15 @@ class Emitter(
         if (node.expression != null) {
             emitExpression(node.expression)
         }
+        val blockComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
+        val lineComments = node.preSemicolonComments?.filter { !it.hasPrecedingNewLine && it.text.startsWith("//") }
+        if (!options.removeComments) {
+            blockComments?.forEach { write(" "); write(it.text) }
+        }
         write(";")
+        if (!options.removeComments) {
+            lineComments?.forEach { write(" "); write(it.text) }
+        }
         writeNewLine()
         // trailing comments handled by emitTrailingCommentsBeforeNewline in the outer emitStatements loop
     }
@@ -773,6 +781,7 @@ class Emitter(
         write("try")
         emitInnerComments(node.afterTryComments)
         emitBlockBody(node.tryBlock, emitOpenBraceComments = true)
+        if (!options.removeComments) emitTrailingComments(node.afterTryBlockComments)
         if (node.catchClause != null) {
             writeNewLine()
             writeIndent()
@@ -803,6 +812,7 @@ class Emitter(
             write("finally")
             emitInnerComments(node.afterFinallyComments)
             emitBlockBody(node.finallyBlock, emitOpenBraceComments = true)
+            if (!options.removeComments) emitTrailingComments(node.afterFinallyBlockComments)
         } else {
             // Emit trailing comments after catch block when there's no finally
             emitTrailingComments(node.afterCatchBlockComments)

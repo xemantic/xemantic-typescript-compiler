@@ -851,9 +851,10 @@ class Parser(private val source: String, private val fileName: String) {
         val afterKeyword = trailingComments()
         // Per spec: "No LineTerminator here" — if a line break precedes the expression, parse no expression.
         val expr = if (!scanner.hasPrecedingLineBreak()) parseExpression() else null
+        val preSemi = if (expr != null && !scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments() else null
         parseSemicolon()
         val trailing = trailingComments()
-        return ThrowStatement(expression = expr, afterKeywordComments = afterKeyword, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
+        return ThrowStatement(expression = expr, afterKeywordComments = afterKeyword, preSemicolonComments = preSemi, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
     }
 
     private fun parseTryStatement(): TryStatement {
@@ -862,18 +863,22 @@ class Parser(private val source: String, private val fileName: String) {
         parseExpected(SyntaxKind.TryKeyword)
         val afterTry = trailingComments()
         val tryBlock = parseBlock()
+        val afterTryBlock = scanner.consumeTrailingComments()
         val catchClause = if (token == SyntaxKind.CatchKeyword) parseCatchClause() else null
         val afterCatchBlock = if (catchClause != null) trailingComments() else null
         val hasFinally = parseOptional(SyntaxKind.FinallyKeyword)
         val afterFinally = if (hasFinally) trailingComments() else null
         val finallyBlock = if (hasFinally) parseBlock() else null
+        val afterFinallyBlock = if (hasFinally) scanner.consumeTrailingComments() else null
         return TryStatement(
             tryBlock = tryBlock,
             catchClause = catchClause,
             finallyBlock = finallyBlock,
             afterTryComments = afterTry,
+            afterTryBlockComments = afterTryBlock,
             afterCatchBlockComments = afterCatchBlock,
             afterFinallyComments = afterFinally,
+            afterFinallyBlockComments = afterFinallyBlock,
             pos = pos,
             end = getEnd(),
             leadingComments = comments
