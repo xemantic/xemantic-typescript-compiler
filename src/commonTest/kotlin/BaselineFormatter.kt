@@ -173,26 +173,29 @@ private fun percentEncodeSourceMapUrl(path: String): String = text {
 }
 
 private fun toCRLF(text: String): String {
-    // Convert newlines to CRLF, but preserve LF inside template literals (backtick strings).
-    // Must track comment context so backticks inside comments don't toggle template mode.
+    // Convert newlines to CRLF, but preserve LF inside string literals (single/double/backtick).
+    // Must track comment context so string delimiters inside comments don't toggle string mode.
     val normalized = text.replace("\r\n", "\n")
     val sb = StringBuilder(normalized.length + normalized.length / 10)
     var inTemplate = false
+    var inSingleQuote = false
+    var inDoubleQuote = false
     var inLineComment = false
     var inBlockComment = false
     var i = 0
     while (i < normalized.length) {
+        val inString = inTemplate || inSingleQuote || inDoubleQuote
         when (val ch = normalized[i]) {
-            // Track line comments (// ...)
-            '/' if !inTemplate && !inBlockComment && !inLineComment &&
+            // Track line comments (// ...) — only outside strings
+            '/' if !inString && !inBlockComment && !inLineComment &&
                     i + 1 < normalized.length && normalized[i + 1] == '/' -> {
                 inLineComment = true
                 sb.append("//")
                 i += 2
                 continue
             }
-            // Track block comments (/* ... */)
-            '/' if !inTemplate && !inBlockComment && !inLineComment &&
+            // Track block comments (/* ... */) — only outside strings
+            '/' if !inString && !inBlockComment && !inLineComment &&
                     i + 1 < normalized.length && normalized[i + 1] == '*' -> {
                 inBlockComment = true
                 sb.append("/*")
@@ -206,14 +209,24 @@ private fun toCRLF(text: String): String {
                 i += 2
                 continue
             }
-            // Backtick toggles template only outside comments
-            '`' if !inLineComment && !inBlockComment -> {
+            // Backtick toggles template only outside comments and other strings
+            '`' if !inLineComment && !inBlockComment && !inSingleQuote && !inDoubleQuote -> {
                 inTemplate = !inTemplate
                 sb.append(ch)
             }
+            // Single-quote string toggle — only outside comments and other strings
+            '\'' if !inLineComment && !inBlockComment && !inTemplate && !inDoubleQuote -> {
+                inSingleQuote = !inSingleQuote
+                sb.append(ch)
+            }
+            // Double-quote string toggle — only outside comments and other strings
+            '"' if !inLineComment && !inBlockComment && !inTemplate && !inSingleQuote -> {
+                inDoubleQuote = !inDoubleQuote
+                sb.append(ch)
+            }
 
-            '\\' if inTemplate && i + 1 < normalized.length -> {
-                // Skip escaped characters inside templates
+            '\\' if inString && i + 1 < normalized.length -> {
+                // Skip escaped characters inside strings (so \" or \' doesn't close the string)
                 sb.append(ch)
                 sb.append(normalized[i + 1])
                 i++
@@ -221,7 +234,8 @@ private fun toCRLF(text: String): String {
 
             '\n' -> {
                 inLineComment = false
-                if (inTemplate) {
+                if (inString) {
+                    // Preserve LF as-is inside string literals (TypeScript doesn't CRLF-ify these)
                     sb.append(ch)
                 } else {
                     sb.append("\r\n")

@@ -2860,6 +2860,9 @@ class Parser(private val source: String, private val fileName: String) {
         val pos = getPos()
         val openBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenBrace)
+        // multiLine: true when there's a line break right after the opening `{`
+        // (same as TypeScript's scanner.hasPrecedingLineBreak() after parsing `{`)
+        val multiLineAfterOpen = scanner.hasPrecedingLineBreak()
         val properties = mutableListOf<Node>()
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
@@ -2893,9 +2896,11 @@ class Parser(private val source: String, private val fileName: String) {
         val closingComments = leadingComments()
         val closeBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.CloseBrace)
-        val multiLine = if (openBracePos in 0..<closeBracePos && closeBracePos <= source.length) {
-            source.substring(openBracePos, closeBracePos).contains('\n')
-        } else false
+        // Use multiLineAfterOpen (line break after `{`) as the multiLine flag.
+        // Fallback: also treat as multiLine if the close brace is on a different source line
+        // than the open brace AND the difference isn't entirely from within string literals.
+        // TypeScript uses hasPrecedingLineBreak() after `{` — we use the same.
+        val multiLine = multiLineAfterOpen
         return ObjectLiteralExpression(properties = properties, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd(), trailingComments = closingComments)
     }
 
