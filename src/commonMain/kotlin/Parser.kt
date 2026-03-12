@@ -2452,14 +2452,21 @@ class Parser(private val source: String, private val fileName: String) {
                 val isGenericArrow = scanner.lookAhead {
                     // Skip past <...> type parameter list.
                     // `>>` is treated as two closing `>` to handle nested generics like <A<B>>.
+                    // Track `{}` depth to handle constraints like `<T extends { x: number }>`.
                     scanner.scan() // skip <
                     var depth = 1
+                    var braceDepth = 0
                     while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
                         when (scanner.getToken()) {
-                            SyntaxKind.LessThan -> depth++
-                            SyntaxKind.GreaterThan -> depth--
-                            SyntaxKind.GreaterThanGreaterThan -> { depth--; if (depth > 0) depth-- }
-                            SyntaxKind.Semicolon, SyntaxKind.CloseBrace -> break
+                            SyntaxKind.OpenBrace -> braceDepth++
+                            SyntaxKind.CloseBrace -> {
+                                if (braceDepth == 0) break
+                                braceDepth--
+                            }
+                            SyntaxKind.LessThan -> if (braceDepth == 0) depth++
+                            SyntaxKind.GreaterThan -> if (braceDepth == 0) depth--
+                            SyntaxKind.GreaterThanGreaterThan -> if (braceDepth == 0) { depth--; if (depth > 0) depth-- }
+                            SyntaxKind.Semicolon -> if (braceDepth == 0) break
                             else -> {}
                         }
                         if (depth > 0) scanner.scan()
