@@ -1855,6 +1855,22 @@ class Parser(private val source: String, private val fileName: String) {
                             else -> parseVariableStatement(mods2, comments)
                         }
                     }
+                    // `declare export = x` — export-equals assignment
+                    SyntaxKind.Equals -> {
+                        nextToken() // skip '='
+                        val expr = parseAssignmentExpression()
+                        parseSemicolon()
+                        val trailing = trailingComments()
+                        ExportAssignment(
+                            expression = expr,
+                            isExportEquals = true,
+                            modifiers = mods,
+                            pos = pos,
+                            end = getEnd(),
+                            leadingComments = comments,
+                            trailingComments = trailing,
+                        )
+                    }
                     FunctionKeyword -> parseFunctionDeclarationOrExpression(mods, comments)
                     ClassKeyword -> parseClassDeclaration(mods, comments)
                     InterfaceKeyword -> parseInterfaceDeclaration(mods, comments)
