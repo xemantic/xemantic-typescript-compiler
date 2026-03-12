@@ -665,7 +665,13 @@ class Transformer(private val options: CompilerOptions) {
                 if (!needsKeepDeclaration) {
                     for (decl in stmt.declarationList.declarations) {
                         val n = extractIdentifierName(decl.name)
-                        if (n != null && decl.initializer != null) directExportedVarNames.add(n)
+                        // For `declare` statements (erased, no local binding) also track names without
+                        // initializers for identifier substitution. Exclude CJS reserved names
+                        // (exports/require/module) which must never be rewritten to exports.x.
+                        if (n != null && (decl.initializer != null ||
+                                    (ModifierFlag.Declare in stmt.modifiers && n != "exports" && n != "require" && n != "module"))) {
+                            directExportedVarNames.add(n)
+                        }
                     }
                 }
             }
