@@ -1215,10 +1215,11 @@ class Scanner(private val text: String) {
         }
 
         private fun Char.isUnicodeIdentifierStart(): Boolean =
-            this.code > 127 && this.isLetter()
+            this.code > 127 && (this.isLetter() || this.category == CharCategory.LETTER_NUMBER)
 
         private fun Char.isUnicodeIdentifierPart(): Boolean =
-            this.code > 127 && (this.isLetterOrDigit() || this.category == CharCategory.NON_SPACING_MARK ||
+            this.code > 127 && (this.isLetterOrDigit() || this.category == CharCategory.LETTER_NUMBER ||
+                    this.category == CharCategory.NON_SPACING_MARK ||
                     this.category == CharCategory.COMBINING_SPACING_MARK ||
                     this.category == CharCategory.CONNECTOR_PUNCTUATION)
     }
