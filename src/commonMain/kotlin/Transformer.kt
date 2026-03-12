@@ -8927,10 +8927,25 @@ class Transformer(private val options: CompilerOptions) {
             if (importAlias == null) {
                 // Third: check for type-level declarations (interface, type alias) at last segment
                 if (i == parts.size - 1) {
-                    return stmts.any { stmt ->
+                    val hasInterface = stmts.any { stmt ->
                         (stmt is InterfaceDeclaration && stmt.name.text == part) ||
                         (stmt is TypeAliasDeclaration && stmt.name.text == part)
                     }
+                    if (!hasInterface) return false
+                    // Only type-only if there's no co-existing runtime declaration with the same name
+                    val hasRuntime = stmts.any { stmt ->
+                        when (stmt) {
+                            is VariableStatement -> stmt.declarationList.declarations.any {
+                                extractIdentifierName(it.name) == part
+                            }
+                            is FunctionDeclaration -> stmt.name?.text == part
+                            is ClassDeclaration -> stmt.name?.text == part
+                            is EnumDeclaration -> stmt.name.text == part
+                            is ModuleDeclaration -> extractIdentifierName(stmt.name) == part
+                            else -> false
+                        }
+                    }
+                    return !hasRuntime
                 }
                 return false
             }
