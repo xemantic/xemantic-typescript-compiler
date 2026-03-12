@@ -122,7 +122,8 @@ fun formatMultiFileBaseline(
     +"\r\n"
 
     for ((fileName, content) in sourceEchoes) {
-        val echoBaseName = fileName.substringAfterLast('/')
+        // Handle both Unix '/' and Windows '\' path separators
+        val echoBaseName = fileName.substringAfterLast('/').substringAfterLast('\\')
         +"//// ["
         +echoBaseName
         +"]\r\n"
