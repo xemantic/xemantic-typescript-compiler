@@ -1066,7 +1066,9 @@ class Transformer(private val options: CompilerOptions) {
                         if (iifeNameForExport !in exportedVarNames) exportedVarNames.add(iifeNameForExport)
                         result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
                     } else {
-                        result.add(stmt)
+                        // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
+                        // TypeScript handles this as error recovery (export inside block is invalid JS).
+                        result.add(cjsRewriteNestedExportVars(stmt))
                     }
                 }
             }
@@ -1353,6 +1355,64 @@ class Transformer(private val options: CompilerOptions) {
 
         return result
     }
+
+    /**
+     * Recursively rewrites nested `export var x = v` declarations to `exports.x = v`
+     * assignment expressions. Used for error-recovery cases where TypeScript allows
+     * `export` inside blocks (e.g. `if (false) { export var x = 0; }`).
+     */
+    private fun cjsRewriteNestedExportVars(stmt: Statement): Statement = when (stmt) {
+        is Block -> stmt.copy(statements = cjsRewriteNestedExportVarsInList(stmt.statements))
+        is IfStatement -> stmt.copy(
+            thenStatement = cjsRewriteNestedExportVarsSingle(stmt.thenStatement),
+            elseStatement = stmt.elseStatement?.let { cjsRewriteNestedExportVarsSingle(it) },
+        )
+        is ForStatement -> stmt.copy(statement = cjsRewriteNestedExportVarsSingle(stmt.statement))
+        is ForInStatement -> stmt.copy(statement = cjsRewriteNestedExportVarsSingle(stmt.statement))
+        is ForOfStatement -> stmt.copy(statement = cjsRewriteNestedExportVarsSingle(stmt.statement))
+        is WhileStatement -> stmt.copy(statement = cjsRewriteNestedExportVarsSingle(stmt.statement))
+        is DoStatement -> stmt.copy(statement = cjsRewriteNestedExportVarsSingle(stmt.statement))
+        else -> stmt
+    }
+
+    private fun cjsRewriteNestedExportVarsSingle(stmt: Statement): Statement {
+        val results = cjsRewriteNestedExportVarsInList(listOf(stmt))
+        return if (results.size == 1) results[0]
+        else Block(statements = results, multiLine = true, pos = -1, end = -1)
+    }
+
+    private fun cjsRewriteNestedExportVarsInList(stmts: List<Statement>): List<Statement> =
+        stmts.flatMap { stmt ->
+            if (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) {
+                // export var x = value → exports.x = value
+                val result = mutableListOf<Statement>()
+                for (decl in stmt.declarationList.declarations) {
+                    val name = extractIdentifierName(decl.name)
+                    if (name != null && decl.initializer != null) {
+                        result.add(ExpressionStatement(
+                            expression = BinaryExpression(
+                                left = PropertyAccessExpression(
+                                    expression = syntheticId("exports"),
+                                    name = syntheticId(name),
+                                    pos = -1, end = -1,
+                                ),
+                                operator = Equals,
+                                right = decl.initializer,
+                                pos = -1, end = -1,
+                            ),
+                            leadingComments = if (result.isEmpty()) stmt.leadingComments else null,
+                            pos = -1, end = -1,
+                        ))
+                    } else {
+                        // No initializer or complex pattern: just strip export keyword
+                        result.add(stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Export))
+                    }
+                }
+                result
+            } else {
+                listOf(cjsRewriteNestedExportVars(stmt))
+            }
+        }
 
     // -----------------------------------------------------------------
     // AMD module transform
