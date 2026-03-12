@@ -22,7 +22,7 @@ import com.xemantic.kotlin.test.sameAs
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
-import kotlinx.io.readString
+import kotlinx.io.readByteArray
 
 /** Root of the sparse-cloned TypeScript repository (relative to the test working directory). */
 internal const val typeScriptRepoDir = "typescript-repo"
@@ -33,9 +33,42 @@ internal const val typeScriptCasesDir = "$typeScriptRepoDir/tests/cases/compiler
 /** Directory containing the TypeScript baseline reference files. */
 internal const val typeScriptBaselineDir = "$typeScriptRepoDir/tests/baselines/reference"
 
-/** Reads the full text content of this [Path] using the system filesystem. */
-internal fun Path.readText(): String =
-    SystemFileSystem.source(this).buffered().readString()
+/**
+ * Reads the full text content of this [Path] using the system filesystem.
+ * Detects UTF-16 BE/LE BOMs and decodes accordingly; otherwise reads as UTF-8.
+ */
+internal fun Path.readText(): String {
+    val bytes = SystemFileSystem.source(this).buffered().readByteArray()
+    return when {
+        bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> {
+            // UTF-16 BE BOM: high byte first
+            buildString {
+                var i = 2
+                while (i + 1 < bytes.size) {
+                    val hi = bytes[i].toInt() and 0xFF
+                    val lo = bytes[i + 1].toInt() and 0xFF
+                    val ch = (hi shl 8) or lo
+                    if (ch != 0) append(ch.toChar())
+                    i += 2
+                }
+            }
+        }
+        bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> {
+            // UTF-16 LE BOM: low byte first
+            buildString {
+                var i = 2
+                while (i + 1 < bytes.size) {
+                    val lo = bytes[i].toInt() and 0xFF
+                    val hi = bytes[i + 1].toInt() and 0xFF
+                    val ch = (hi shl 8) or lo
+                    if (ch != 0) append(ch.toChar())
+                    i += 2
+                }
+            }
+        }
+        else -> bytes.decodeToString()
+    }
+}
 
 /**
  * Asserts that this [Path]'s text content is the same as [expected] [Path]'s content.
