@@ -2374,9 +2374,16 @@ class Transformer(private val options: CompilerOptions) {
         )
 
         // Build the define() call args
+        // Module name: explicit <amd-module name='n'/> takes priority;
+        // when outFile is set, derive from source file basename (AMD bundling convention).
+        val amdModuleName = amdDirectives.moduleName ?: if (options.outFile != null) {
+            originalSourceFile.fileName
+                .substringAfterLast('/').substringAfterLast('\\')
+                .substringBeforeLast('.')
+        } else null
         val defineArgs = mutableListOf<Expression>()
-        if (amdDirectives.moduleName != null) {
-            defineArgs.add(StringLiteralNode(text = amdDirectives.moduleName, pos = -1, end = -1))
+        if (amdModuleName != null) {
+            defineArgs.add(StringLiteralNode(text = amdModuleName, pos = -1, end = -1))
         }
         defineArgs.add(depArray)
         defineArgs.add(funcExpr)
