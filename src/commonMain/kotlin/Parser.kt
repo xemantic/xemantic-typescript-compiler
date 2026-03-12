@@ -2450,13 +2450,15 @@ class Parser(private val source: String, private val fileName: String) {
             LessThan -> {
                 // Could be <TypeParams>() => body (generic arrow) or <Type>expr (type assertion)
                 val isGenericArrow = scanner.lookAhead {
-                    // Skip past <...> type parameter list
+                    // Skip past <...> type parameter list.
+                    // `>>` is treated as two closing `>` to handle nested generics like <A<B>>.
                     scanner.scan() // skip <
                     var depth = 1
                     while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
                         when (scanner.getToken()) {
                             SyntaxKind.LessThan -> depth++
                             SyntaxKind.GreaterThan -> depth--
+                            SyntaxKind.GreaterThanGreaterThan -> { depth--; if (depth > 0) depth-- }
                             SyntaxKind.Semicolon, SyntaxKind.CloseBrace -> break
                             else -> {}
                         }
@@ -2485,15 +2487,25 @@ class Parser(private val source: String, private val fileName: String) {
                                         scanner.scan() // skip :
                                         var typeDepth = 0
                                         var foundArrow = false
+                                        // Scan the return type looking for `=>`. Track depth with
+                                        // <>, [], (), and {} (object types like `{ x: K }` are valid
+                                        // return types and must not break the scan prematurely).
+                                        // `>>` counts as two closing angle brackets.
                                         loop@ while (scanner.getToken() != SyntaxKind.EndOfFile) {
                                             when (scanner.getToken()) {
-                                                SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.LessThan -> typeDepth++
-                                                SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> {
+                                                SyntaxKind.OpenParen, SyntaxKind.OpenBracket,
+                                                SyntaxKind.LessThan, SyntaxKind.OpenBrace -> typeDepth++
+                                                SyntaxKind.CloseParen, SyntaxKind.CloseBracket,
+                                                SyntaxKind.CloseBrace -> {
                                                     if (typeDepth == 0) break@loop else typeDepth--
                                                 }
                                                 SyntaxKind.GreaterThan -> if (typeDepth > 0) typeDepth--
+                                                SyntaxKind.GreaterThanGreaterThan -> {
+                                                    if (typeDepth > 0) typeDepth--
+                                                    if (typeDepth > 0) typeDepth--
+                                                }
                                                 SyntaxKind.EqualsGreaterThan -> if (typeDepth == 0) { foundArrow = true; break@loop }
-                                                SyntaxKind.Semicolon, SyntaxKind.OpenBrace, SyntaxKind.CloseBrace -> if (typeDepth == 0) break@loop
+                                                SyntaxKind.Semicolon -> if (typeDepth == 0) break@loop
                                                 else -> {}
                                             }
                                             scanner.scan()
