@@ -3689,7 +3689,11 @@ class Parser(private val source: String, private val fileName: String) {
             val isRest = parseOptional(SyntaxKind.DotDotDot)
             val isLabeledElement = !isRest && isIdentifier() && lookAhead {
                 nextToken()
-                token == SyntaxKind.Colon || token == SyntaxKind.Question
+                when {
+                    token == SyntaxKind.Colon -> true
+                    token == SyntaxKind.Question -> { nextToken(); token == SyntaxKind.Colon }
+                    else -> false
+                }
             }
             if (isLabeledElement) {
                 // Skip label (identifier) and optional `?`
@@ -3698,6 +3702,7 @@ class Parser(private val source: String, private val fileName: String) {
                 parseExpected(SyntaxKind.Colon) // consume `:`
             }
             val elementType = parseType()
+            parseOptional(SyntaxKind.Question) // optional tuple element: string?, number?
             elements.add(if (isRest) RestType(type = elementType, pos = pos, end = getEnd()) else elementType)
             if (!parseOptional(SyntaxKind.Comma)) break
         }
