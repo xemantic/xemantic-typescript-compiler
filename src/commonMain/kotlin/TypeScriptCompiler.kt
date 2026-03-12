@@ -229,7 +229,7 @@ class TypeScriptCompiler {
                 if (file.fileName.endsWith(".json") && options.outDir != null
                     && baseName != "tsconfig.json" && baseName != "package.json"
                     && !file.fileName.contains("/node_modules/")) {
-                    val jsonContent = stripJsonTrailingCommas(file.content).trimEnd()
+                    val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
                     if (options.fullEmitPaths) {
                         val outDir = resolvedOutDir!!.trimEnd('/')
                         val jsonBaseName = file.fileName.substringAfterLast('/')
@@ -451,3 +451,72 @@ private fun stripJsonTrailingCommas(content: String): String =
     content.replace(trailingCommaRegex, "")
         .replace(emptyObjectRegex, "{}")
         .replace(emptyArrayRegex, "[]")
+
+/** Re-emit JSON with 4-space indentation, matching TypeScript's emitter output.
+ *  Returns the original content unchanged if it contains non-standard constructs
+ *  like computed property keys (e.g. `[a]: 10`). */
+private fun reformatJson(content: String): String {
+    // Detect computed property keys: `]:` pattern means a closing bracket before a colon
+    if (content.contains(Regex("\\]\\s*:"))) return content
+    val sb = StringBuilder()
+    var indent = 0
+    var i = 0
+    val len = content.length
+
+    fun addIndent() { repeat(indent * 4) { sb.append(' ') } }
+
+    while (i < len) {
+        when (val ch = content[i]) {
+            '{', '[' -> {
+                sb.append(ch)
+                indent++
+                // peek past whitespace for closing bracket (empty container)
+                var j = i + 1
+                while (j < len && content[j].isWhitespace()) j++
+                if (j < len && (content[j] == '}' || content[j] == ']')) {
+                    sb.append(content[j])
+                    indent--
+                    i = j + 1
+                } else {
+                    sb.append('\n'); addIndent()
+                    i++
+                }
+            }
+            '}', ']' -> {
+                indent--
+                sb.append('\n'); addIndent(); sb.append(ch)
+                i++
+            }
+            ':' -> { sb.append(": "); i++ }
+            ',' -> {
+                sb.append(',')
+                i++
+                while (i < len && content[i].isWhitespace()) i++
+                sb.append('\n'); addIndent()
+            }
+            '"', '\'' -> {
+                val end = ch
+                val start = i++
+                while (i < len) {
+                    when (content[i]) {
+                        '\\' -> i += 2
+                        end -> { i++; break }
+                        else -> i++
+                    }
+                }
+                sb.append(content, start, i)
+            }
+            else -> {
+                if (ch.isWhitespace()) { i++ }
+                else {
+                    // number, boolean, null — copy until delimiter
+                    val start = i
+                    while (i < len && content[i] != ',' && content[i] != '}' &&
+                           content[i] != ']' && !content[i].isWhitespace()) i++
+                    sb.append(content, start, i)
+                }
+            }
+        }
+    }
+    return sb.toString()
+}
