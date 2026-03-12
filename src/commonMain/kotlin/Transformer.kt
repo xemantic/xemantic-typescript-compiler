@@ -144,6 +144,10 @@ class Transformer(private val options: CompilerOptions) {
     // Source file top-level statements, stored for qualified-path type-only namespace checks.
     private var topLevelStatements: List<Statement> = emptyList()
 
+    // Whether the current file is a module (has import/export syntax). In script files,
+    // import aliases to type-only names must be kept (they may be globally referenced).
+    private var isCurrentFileModule: Boolean = false
+
     private fun nextTempVarName(): String {
         val n = tempVarCounter++
         // TypeScript skips both `_i` and `_n` in temp variable names.
@@ -226,6 +230,10 @@ class Transformer(private val options: CompilerOptions) {
         }
         // Remove any type-only names that also have a runtime declaration
         topLevelTypeOnlyNames -= topLevelRuntimeNames
+        // Determine if the current file has module-level syntax.
+        // In script files (no imports/exports), import aliases to type-only names must be kept
+        // since they may be referenced from other script files in the same compilation.
+        isCurrentFileModule = isModuleFile(sourceFile)
         // Pre-pass: collect all exported names for each namespace across merged blocks.
         // This lets later blocks qualify references to members exported from earlier blocks.
         collectMergedNamespaceExports(sourceFile.statements)
@@ -1388,7 +1396,9 @@ class Transformer(private val options: CompilerOptions) {
             .filterIsInstance<ModuleDeclaration>()
             .mapNotNull { (it.name as? Identifier)?.text }
             .toSet()
-        val unusedInternalAliasNames = originalSourceFile.statements
+        // Only erase unused internal aliases in module files (files with static import/export syntax).
+        // In script files (global scope), aliases may be referenced by other files and must be kept.
+        val unusedInternalAliasNames = if (!hasStaticModuleDeclarations) emptySet() else originalSourceFile.statements
             .filterIsInstance<ImportEqualsDeclaration>()
             .filter { !it.isTypeOnly && it.moduleReference !is ExternalModuleReference }
             .filter { decl -> namespaceAliasRoot(decl.moduleReference) in topLevelNsNamesCJS }
@@ -1813,6 +1823,14 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
+        // Internal alias names (from `import X = SomeNamespace`, non-exported, non-external)
+        // Used for post-build elision of unused aliases.
+        val internalAliasNamesAMD = originalSourceFile.statements
+            .filterIsInstance<ImportEqualsDeclaration>()
+            .filter { !it.isTypeOnly && it.moduleReference !is ExternalModuleReference && ModifierFlag.Export !in it.modifiers }
+            .mapNotNull { it.name.text.ifEmpty { null } }
+            .toSet()
+
         // Body statements (non-import content)
         val bodyStatements = mutableListOf<Statement>()
         // Import reassignment statements (ns = __importStar(ns), mod = __importDefault(mod))
@@ -2211,6 +2229,17 @@ class Transformer(private val options: CompilerOptions) {
             paramName in allRefs
         }
 
+        // Elide unused internal alias statements (`import X = N` → `var X = N` where X not referenced)
+        val finalRenamedBody = if (internalAliasNamesAMD.isNotEmpty()) {
+            renamedBody.filter { stmt ->
+                if (stmt is VariableStatement && stmt.declarationList.declarations.size == 1) {
+                    val name = extractIdentifierName(stmt.declarationList.declarations[0].name)
+                    if (name != null && name in internalAliasNamesAMD && name !in allRefs) return@filter false
+                }
+                true
+            }
+        } else renamedBody
+
         // Elide importReassignments for unused imports
         val unusedParamNames = namedModuleImports
             .filter { (_, paramName) -> paramName !in allRefs }
@@ -2287,7 +2316,7 @@ class Transformer(private val options: CompilerOptions) {
         }
 
         // Main body
-        fullBody.addAll(renamedBody)
+        fullBody.addAll(finalRenamedBody)
 
         // Deferred (export =, i.e. return X)
         fullBody.addAll(deferredExportAssignments)
