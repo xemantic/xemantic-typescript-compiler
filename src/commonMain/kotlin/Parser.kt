@@ -220,7 +220,7 @@ class Parser(private val source: String, private val fileName: String) {
                 token != SyntaxKind.Dot && token != SyntaxKind.OpenParen &&
                     token != SyntaxKind.Equals && token != SyntaxKind.Comma &&
                     token != SyntaxKind.CloseParen && token != SyntaxKind.Semicolon &&
-                    token != SyntaxKind.EndOfFile
+                    token != SyntaxKind.EndOfFile && token != SyntaxKind.OpenBrace
             }
             if (isDecl) parseModuleDeclaration() else parseExpressionStatement()
         }
