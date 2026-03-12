@@ -1698,8 +1698,14 @@ class Emitter(
                 val isLast = index == node.elements.size - 1
                 // Split trailing comments: same-line (hasPrecedingNewLine=false) go before comma;
                 // own-line (hasPrecedingNewLine=true) go on their own line before ` ,`
+                // For multiline ObjectLiteralExpression/ArrayLiteralExpression, own-line trailing
+                // comments are internal closing comments already emitted by the element's emitter —
+                // skip them here to avoid double-emission.
+                val elementIsMultilineCompound = element is ObjectLiteralExpression && element.multiLine ||
+                        element is ArrayLiteralExpression && element.multiLine
                 val sameLine = element.trailingComments?.filter { !it.hasPrecedingNewLine }
-                val ownLine = element.trailingComments?.filter { it.hasPrecedingNewLine }
+                val ownLine = if (elementIsMultilineCompound) null
+                              else element.trailingComments?.filter { it.hasPrecedingNewLine }
                 // NumericLiteralNode already emits same-line trailing comments in emitExpression
                 val hasLineComment = !options.removeComments && sameLine?.any { it.text.startsWith("//") } == true
                 if (!options.removeComments && element !is NumericLiteralNode) sameLine?.forEach { write(" "); write(it.text) }
@@ -1778,11 +1784,26 @@ class Emitter(
     private fun emitObjectLiteral(node: ObjectLiteralExpression) {
         // Filter out overload signatures (bodyless methods) — these are error-recovery nodes
         val properties = node.properties.filter { !shouldSkipObjectProperty(it) }
+        val multiline = isObjectLiteralMultiline(node)
         if (properties.isEmpty()) {
-            write("{}")
+            val closingComments = if (!options.removeComments) node.trailingComments else null
+            if (!multiline || closingComments.isNullOrEmpty()) {
+                write("{}")
+                return
+            }
+            // Empty multiline object with internal closing comments: emit them at outer indent level
+            // (TypeScript does not indent the comment inside empty braces)
+            write("{")
+            writeNewLine()
+            for (comment in closingComments) {
+                writeIndent()
+                write(comment.text)
+                writeNewLine()
+            }
+            writeIndent()
+            write("}")
             return
         }
-        val multiline = isObjectLiteralMultiline(node)
         if (multiline) {
             write("{")
             writeNewLine()
