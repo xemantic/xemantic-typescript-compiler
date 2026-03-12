@@ -684,7 +684,10 @@ class Transformer(private val options: CompilerOptions) {
             } else true
         }
 
-        val statementsToProcess = statementsRaw
+        // Extract leading RawStatement helpers (e.g. __awaiter) so they can be placed BEFORE
+        // the __esModule preamble, matching TypeScript's output ordering.
+        val leadingHelpers = statementsRaw.takeWhile { it is RawStatement }
+        val statementsToProcess = statementsRaw.drop(leadingHelpers.size)
 
         for (stmt in statementsToProcess) {
             when (stmt) {
@@ -1502,6 +1505,14 @@ class Transformer(private val options: CompilerOptions) {
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(0, RawStatement(code = helpers))
+        }
+
+        // Insert passed-in leading helpers (e.g. __awaiter, __rest) between import helpers
+        // and "use strict". After "use strict" is prepended below, they end up at position 1
+        // (right after "use strict" and before Object.defineProperty preamble), matching
+        // TypeScript's output ordering.
+        if (leadingHelpers.isNotEmpty()) {
+            result.addAll(0, leadingHelpers)
         }
 
         // Re-insert "use strict" at the very top (before helpers and preamble).
