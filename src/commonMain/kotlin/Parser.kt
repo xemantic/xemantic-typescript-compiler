@@ -2126,7 +2126,8 @@ class Parser(private val source: String, private val fileName: String) {
             return parseArrowFunction(emptySet())
         }
 
-        // Check for `async x => expr`, `async () => expr`, `async (params): Type => expr`
+        // Check for `async x => expr`, `async () => expr`, `async (params): Type => expr`,
+        // and `async <T>(params) => expr` (generic async arrow)
         if (token == SyntaxKind.AsyncKeyword) {
             val isAsyncArrow = scanner.lookAhead {
                 scanner.scan() // skip async
@@ -2155,6 +2156,58 @@ class Parser(private val source: String, private val fileName: String) {
                             val after = scanner.getToken()
                             after == SyntaxKind.EqualsGreaterThan || after == SyntaxKind.Colon
                         } else false
+                    }
+                    // Generic async arrow: async <T>(params) => or async <T>(params): Type =>
+                    t == SyntaxKind.LessThan -> {
+                        scanner.scan() // skip <
+                        var depth = 1
+                        while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
+                            when (scanner.getToken()) {
+                                SyntaxKind.LessThan -> depth++
+                                SyntaxKind.GreaterThan -> depth--
+                                SyntaxKind.Semicolon, SyntaxKind.CloseBrace -> break
+                                else -> {}
+                            }
+                            if (depth > 0) scanner.scan()
+                        }
+                        if (depth != 0) return@lookAhead false
+                        scanner.scan() // skip >
+                        if (scanner.getToken() != SyntaxKind.OpenParen) return@lookAhead false
+                        scanner.scan() // skip (
+                        var parenDepth = 1
+                        while (parenDepth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
+                            when (scanner.getToken()) {
+                                SyntaxKind.OpenParen -> parenDepth++
+                                SyntaxKind.CloseParen -> parenDepth--
+                                else -> {}
+                            }
+                            if (parenDepth > 0) scanner.scan()
+                        }
+                        if (parenDepth != 0) return@lookAhead false
+                        scanner.scan() // skip )
+                        when (scanner.getToken()) {
+                            SyntaxKind.EqualsGreaterThan -> true
+                            SyntaxKind.Colon -> {
+                                scanner.scan()
+                                var typeDepth = 0
+                                var foundArrow = false
+                                loop@ while (scanner.getToken() != SyntaxKind.EndOfFile) {
+                                    when (scanner.getToken()) {
+                                        SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.LessThan -> typeDepth++
+                                        SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> {
+                                            if (typeDepth == 0) break@loop else typeDepth--
+                                        }
+                                        SyntaxKind.GreaterThan -> if (typeDepth > 0) typeDepth--
+                                        SyntaxKind.EqualsGreaterThan -> if (typeDepth == 0) { foundArrow = true; break@loop }
+                                        SyntaxKind.Semicolon, SyntaxKind.OpenBrace, SyntaxKind.CloseBrace -> if (typeDepth == 0) break@loop
+                                        else -> {}
+                                    }
+                                    scanner.scan()
+                                }
+                                foundArrow
+                            }
+                            else -> false
+                        }
                     }
                     else -> false
                 }
