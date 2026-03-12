@@ -115,7 +115,7 @@ class Emitter(
         if (fn.endsWith(".mts") || fn.endsWith(".mjs") || fn.endsWith(".cts") || fn.endsWith(".cjs")) return true
         return sourceFile.statements.any {
             it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
-                    (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference) ||
+                    (it is ImportEqualsDeclaration && (it.moduleReference is ExternalModuleReference || ModifierFlag.Export in it.modifiers)) ||
                     (it is VariableStatement && ModifierFlag.Export in it.modifiers) ||
                     (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
                     (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||

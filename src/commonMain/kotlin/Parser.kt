@@ -1891,6 +1891,7 @@ class Parser(private val source: String, private val fileName: String) {
                     NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration(mods, comments)
                     AbstractKeyword -> { nextToken(); parseClassDeclaration(mods + ModifierFlag.Abstract, comments) }
                     AsyncKeyword -> { nextToken(); parseFunctionDeclarationOrExpression(mods + ModifierFlag.Async, comments) }
+                    ImportKeyword -> parseImportDeclaration(mods, comments)
                     else -> parseVariableStatement(mods, comments)
                 }
             }
