@@ -1976,9 +1976,15 @@ class Emitter(
             write("}")
         } else {
             write("{ ")
+            // Synthetic (Object.assign-created) objects with method properties need an extra indent
+            // level so that the method body indents correctly relative to the outer context.
+            val isSyntheticObject = node.pos < 0
             for ((index, prop) in properties.withIndex()) {
                 if (index > 0) write(", ")
+                val needsExtraIndent = isSyntheticObject && (prop is MethodDeclaration || prop is GetAccessor || prop is SetAccessor)
+                if (needsExtraIndent) indentLevel++
                 emitObjectProperty(prop)
+                if (needsExtraIndent) indentLevel--
             }
             if (node.hasTrailingComma) write(",")
             write(" }")

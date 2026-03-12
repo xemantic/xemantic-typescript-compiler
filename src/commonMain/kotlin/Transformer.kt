@@ -5654,6 +5654,7 @@ class Transformer(private val options: CompilerOptions) {
         var accumulator: Expression = ObjectLiteralExpression(
             properties = leadingProps.toList(),
             multiLine = false,
+            pos = -1, end = -1,
         )
         val pendingProps = mutableListOf<Node>()
         var isFirst = true
@@ -5664,6 +5665,7 @@ class Transformer(private val options: CompilerOptions) {
                 properties = pendingProps.toList(),
                 multiLine = false,
                 hasTrailingComma = trailingComma,
+                pos = -1, end = -1,
             )
             accumulator = makeObjectAssignCall(listOf(accumulator, obj))
             pendingProps.clear()
