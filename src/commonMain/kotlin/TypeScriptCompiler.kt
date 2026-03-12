@@ -263,8 +263,9 @@ class TypeScriptCompiler {
                     val base = jsName.substringAfterLast('/')
                     jsName = "$outDir/$base"
                 } else {
-                    // Strip directory prefix — baseline uses just basenames
-                    jsName = jsName.substringAfterLast('/')
+                    // Strip directory prefix — baseline uses just basenames.
+                    // Handle both Unix '/' and Windows '\' separators.
+                    jsName = jsName.substringAfterLast('/').substringAfterLast('\\')
                 }
                 jsOutputMap[file.fileName] = jsName to javascript
             }
