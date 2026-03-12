@@ -2681,7 +2681,10 @@ class Emitter(
         val colonPos = node.whenTrue.end - 1
         val newlineBeforeQ = hasNewLineInSource(node.condition.pos, questionMarkPos)
         val newlineAfterQ = hasNewLineInSource(node.condition.end, node.whenTrue.pos)
-        val newlineBeforeColon = hasNewLineInSource(node.whenTrue.pos, colonPos)
+        // Check if ':' is actually at the start of a new line (preceded only by whitespace on its line).
+        // We cannot use hasNewLineInSource(whenTrue.pos, colonPos) because whenTrue may itself be a
+        // multiline expression — that would produce a false positive (e.g., `(a\n+ b) : c` on one line).
+        val newlineBeforeColon = isTokenOnNewLine(colonPos)
         val newlineAfterColon = hasNewLineInSource(node.whenTrue.end, node.whenFalse.pos)
 
         val isMultiLine = newlineBeforeQ || newlineAfterQ || newlineBeforeColon || newlineAfterColon
@@ -2723,6 +2726,24 @@ class Emitter(
         val to = endPos.coerceAtMost(sourceText.length)
         if (from >= to) return false
         return sourceText.substring(from, to).contains('\n')
+    }
+
+    /**
+     * Returns true if the token at [tokenPos] starts on a new line — i.e., only whitespace
+     * (spaces and tabs) precede it on the current line. Scanning backwards from [tokenPos],
+     * if a newline (or start of file) is encountered before any non-whitespace character,
+     * the token is on its own line.
+     */
+    private fun isTokenOnNewLine(tokenPos: Int): Boolean {
+        if (tokenPos <= 0) return false
+        var i = tokenPos - 1
+        while (i >= 0) {
+            val c = sourceText[i]
+            if (c == '\n' || c == '\r') return true
+            if (c != ' ' && c != '\t') return false
+            i--
+        }
+        return true // reached start of file — token is on first line with only preceding whitespace
     }
 
     private fun emitYieldExpression(node: YieldExpression) {
