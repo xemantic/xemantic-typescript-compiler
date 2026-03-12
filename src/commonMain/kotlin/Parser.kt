@@ -2421,6 +2421,11 @@ class Parser(private val source: String, private val fileName: String) {
     ): Expression {
         var result = expr
         while (true) {
+            // Arrow functions have lower precedence than calls. When the `(` is on a new
+            // line after an unwrapped arrow function, treat it as a separate statement.
+            // e.g.: `() => {}\n() => {}` → two statements (TypeScript ASI behavior).
+            // Wrapped arrow functions like `(() => {})(x)` are fine (result is Parens).
+            if (result is ArrowFunction && token == OpenParen && scanner.hasPrecedingLineBreak()) break
             result = when (token) {
                 Dot -> {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
@@ -2563,6 +2568,7 @@ class Parser(private val source: String, private val fileName: String) {
                 else -> return result
             }
         }
+        return result
     }
 
     private fun parseNewExpression(): Expression {
