@@ -163,7 +163,13 @@ class Parser(private val source: String, private val fileName: String) {
         ThrowKeyword -> parseThrowStatement()
         TryKeyword -> parseTryStatement()
         DebuggerKeyword -> parseDebuggerStatement()
-        ImportKeyword -> parseImportDeclaration()
+        ImportKeyword -> {
+            // import( = dynamic import call; import. = import.meta — parse as expression
+            val nextIsParen = scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.OpenParen }
+            val nextIsDot = scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Dot }
+            if (nextIsParen || nextIsDot) parseExpressionStatement()
+            else parseImportDeclaration()
+        }
         ExportKeyword -> parseExportDeclaration()
         InterfaceKeyword -> parseInterfaceDeclaration()
         TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
@@ -2394,6 +2400,7 @@ class Parser(private val source: String, private val fileName: String) {
                     nextToken()
                     parseExpected(OpenParen)
                     val arg = parseAssignmentExpression()
+                    parseOptional(Comma) // allow trailing comma: import(spec,)
                     parseExpected(CloseParen)
                     CallExpression(
                         expression = Identifier("import", pos = pos),
