@@ -2500,6 +2500,7 @@ class Emitter(
                 val binNode = chain[i]
                 val op = operatorToString(binNode.operator)
                 val rightNewLine = binNode.left.end > 0 && hasNewLineInSource(binNode.left.end, binNode.right.pos)
+                var rightIndented = false
                 if (binNode.operator == SyntaxKind.InKeyword || binNode.operator == SyntaxKind.InstanceOfKeyword) {
                     write(" $op ")
                 } else if (binNode.operator == SyntaxKind.Comma) {
@@ -2518,8 +2519,10 @@ class Emitter(
                         binNode.operatorTrailingComments?.forEach { write(" "); write(it.text) }
                     }
                     writeNewLine()
-                    repeat(indentLevel + 1) { sb.append("    ") }
+                    indentLevel++
+                    repeat(indentLevel) { sb.append("    ") }
                     isStartOfLine = false
+                    rightIndented = true
                 } else {
                     write(" $op ")
                     // Emit inline trailing comments after operator (e.g. `a + /*e3*/ b`)
@@ -2528,6 +2531,7 @@ class Emitter(
                     }
                 }
                 emitExpression(binNode.right)
+                if (rightIndented) indentLevel--
             }
             return
         }
@@ -2637,8 +2641,11 @@ class Emitter(
                     }
                 }
                 writeNewLine()
-                repeat(indentLevel + 1) { sb.append("    ") }
+                indentLevel++
+                repeat(indentLevel) { sb.append("    ") }
                 isStartOfLine = false
+                emitRight()
+                indentLevel--
             } else {
                 write(" $op ")
                 // Emit inline trailing comments after operator (e.g. `a + /*e3*/ b`)
@@ -2651,8 +2658,8 @@ class Emitter(
                         }
                     }
                 }
+                emitRight()
             }
-            emitRight()
         }
     }
 
