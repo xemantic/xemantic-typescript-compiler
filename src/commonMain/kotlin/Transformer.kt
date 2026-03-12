@@ -861,6 +861,15 @@ class Transformer(private val options: CompilerOptions) {
                         // But erase if the expression refers to a pure type (interface/type alias).
                         val exprName = (stmt.expression as? Identifier)?.text
                         if (exprName == null || exprName !in pureTypeNames) {
+                            // If the expression is an exported var name that has no local binding
+                            // (exported without initializer → only exists as exports.x), use exports.x.
+                            val exportedExpr = if (exprName != null && exprName in exportedVarNames) {
+                                PropertyAccessExpression(
+                                    expression = syntheticId("exports"),
+                                    name = syntheticId(exprName),
+                                    pos = -1, end = -1,
+                                )
+                            } else stmt.expression
                             deferredExportAssignments.add(
                                 ExpressionStatement(
                                     expression = BinaryExpression(
@@ -870,7 +879,7 @@ class Transformer(private val options: CompilerOptions) {
                                             pos = -1, end = -1,
                                         ),
                                         operator = Equals,
-                                        right = stmt.expression,
+                                        right = exportedExpr,
                                         pos = -1, end = -1,
                                     ),
                                     pos = -1, end = -1,
