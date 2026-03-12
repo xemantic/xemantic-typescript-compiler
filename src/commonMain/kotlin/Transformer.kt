@@ -4660,7 +4660,11 @@ class Transformer(private val options: CompilerOptions) {
             options.effectiveTarget < ScriptTarget.ES2020) {
             val leftRef: Expression
             val nullCheck: Expression
-            if (left is Identifier) {
+            // Literals and identifiers are never null/undefined by their nature — no temp var needed
+            val isNeverNullish = left is Identifier ||
+                    left is StringLiteralNode || left is NumericLiteralNode ||
+                    left is BigIntLiteralNode || left is NoSubstitutionTemplateLiteralNode
+            if (isNeverNullish) {
                 leftRef = left
                 nullCheck = left
             } else {
