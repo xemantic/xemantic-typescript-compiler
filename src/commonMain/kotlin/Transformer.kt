@@ -407,7 +407,9 @@ class Transformer(private val options: CompilerOptions) {
         if (fn.endsWith(".mts") || fn.endsWith(".mjs") || fn.endsWith(".cts") || fn.endsWith(".cjs")) return true
         return sourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration ||
-                    (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) || stmt is ExportAssignment ||
+                    (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
+                    (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    stmt is ExportAssignment ||
                     (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
@@ -498,6 +500,7 @@ class Transformer(private val options: CompilerOptions) {
         val hasStaticModuleDeclarations = originalSourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration || stmt is ExportAssignment ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
+                    (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
@@ -4821,7 +4824,103 @@ class Transformer(private val options: CompilerOptions) {
      * Iteratively transforms a left-recursive chain of BinaryExpressions
      * to avoid StackOverflow on deeply nested trees (e.g. binderBinaryExpressionStress).
      */
+    /**
+     * Transforms `{ a, ...rest } = expr` (destructuring assignment with object rest) to
+     * `__rest` form for targets below ES2018.
+     *
+     * Simple (rest-only): `{ ...rest } = expr` → `rest = __rest(expr, [])`
+     * With properties: `{ a, ...rest } = expr` → `({ a } = _a = expr, rest = __rest(_a, ["a"]))`
+     */
+    private fun transformObjectRestDestructuringAssignment(
+        root: BinaryExpression,
+        objLit: ObjectLiteralExpression,
+    ): Expression {
+        val rhs = transformExpression(root.right)
+        val spreadProp = objLit.properties.filterIsInstance<SpreadAssignment>().lastOrNull()
+            ?: return root.copy(left = transformExpression(root.left), right = rhs)
+        val nonSpreadProps = objLit.properties.filter { it !is SpreadAssignment }
+
+        // Collect excluded keys for __rest(expr, ["a", "b"])
+        val excludedKeys = nonSpreadProps.mapNotNull { prop ->
+            val keyName = when (prop) {
+                is ShorthandPropertyAssignment -> prop.name.text
+                is PropertyAssignment -> when (val n = prop.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    is NumericLiteralNode -> n.text
+                    else -> null
+                }
+                else -> null
+            }
+            keyName?.let { StringLiteralNode(text = it, singleQuote = false, pos = -1, end = -1) }
+        }
+
+        val restTarget = transformExpression(spreadProp.expression)
+
+        // Determine source expression (use temp var if rhs is complex and there are non-rest props)
+        val needsTempVar = nonSpreadProps.isNotEmpty() && rhs !is Identifier
+        val sourceExpr: Expression
+        val parts = mutableListOf<Expression>()
+
+        if (needsTempVar) {
+            val tempName = nextTempVarName()
+            hoistedVarScopes.lastOrNull()?.add(tempName)
+            val tempId = syntheticId(tempName)
+            parts.add(BinaryExpression(left = tempId, operator = Equals, right = rhs, pos = -1, end = -1))
+            sourceExpr = tempId
+        } else {
+            sourceExpr = rhs
+        }
+
+        // Emit non-rest destructuring: { a, b } = source
+        if (nonSpreadProps.isNotEmpty()) {
+            val nonSpreadObjLit = ObjectLiteralExpression(
+                properties = nonSpreadProps.map { prop ->
+                    when (prop) {
+                        is ShorthandPropertyAssignment -> prop.copy(
+                            objectAssignmentInitializer = prop.objectAssignmentInitializer?.let { transformExpression(it) }
+                        )
+                        is PropertyAssignment -> prop.copy(initializer = transformExpression(prop.initializer))
+                        else -> prop
+                    }
+                },
+                pos = -1, end = -1,
+            )
+            parts.add(BinaryExpression(left = nonSpreadObjLit, operator = Equals, right = sourceExpr, pos = -1, end = -1))
+        }
+
+        // Emit rest: rest = __rest(source, ["a", "b"])
+        val restCall = CallExpression(
+            expression = syntheticId("__rest"),
+            arguments = listOf(
+                sourceExpr,
+                ArrayLiteralExpression(elements = excludedKeys, pos = -1, end = -1),
+            ),
+            pos = -1, end = -1,
+        )
+        parts.add(BinaryExpression(left = restTarget, operator = Equals, right = restCall, pos = -1, end = -1))
+        needsRestHelper = true
+
+        return when {
+            parts.size == 1 -> parts[0]
+            else -> parts.drop(1).fold(parts[0]) { acc, expr ->
+                BinaryExpression(left = acc, operator = Comma, right = expr, pos = -1, end = -1)
+            }
+        }
+    }
+
     private fun transformBinaryExpression(root: BinaryExpression): Expression {
+        // Handle object destructuring assignment with rest: { a, ...rest } = expr
+        // e.g., ({ ...bar } = {}) → (bar = __rest({}, []))
+        // Only applies when target < ES2018 (ES2018 supports object rest natively)
+        if (root.operator == Equals && options.effectiveTarget < ScriptTarget.ES2018) {
+            val rawLeft = root.left
+            val objLit = rawLeft as? ObjectLiteralExpression
+            if (objLit != null && objLit.properties.any { it is SpreadAssignment }) {
+                return transformObjectRestDestructuringAssignment(root, objLit)
+            }
+        }
+
         // Collect the left-spine: walk down .left while it's a BinaryExpression
         // that doesn't need special downlevel handling (**, **=, ??).
         // For special operators we stop flattening so they get proper treatment.
