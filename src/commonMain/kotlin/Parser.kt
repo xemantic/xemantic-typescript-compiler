@@ -1080,6 +1080,30 @@ class Parser(private val source: String, private val fileName: String) {
             return ClassStaticBlockDeclaration(body = body, pos = pos, end = getEnd())
         }
 
+        // Index signature: [identifier?: type]: type  (parameter may have optional `?`)
+        if (!asterisk && token == SyntaxKind.OpenBracket) {
+            val isIndexSig = scanner.lookAhead {
+                scanner.scan() // skip [
+                if (scanner.getToken() != SyntaxKind.Identifier) return@lookAhead false
+                scanner.scan() // skip parameter name
+                if (scanner.getToken() == SyntaxKind.Question) scanner.scan() // skip optional ?
+                scanner.getToken() == SyntaxKind.Colon
+            }
+            if (isIndexSig) {
+                parseExpected(SyntaxKind.OpenBracket)
+                val paramName = parseIdentifier()
+                parseOptional(SyntaxKind.Question) // optional ? on index parameter (error but valid syntax)
+                parseExpected(SyntaxKind.Colon)
+                val paramType = parseType()
+                parseExpected(SyntaxKind.CloseBracket)
+                val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+                parseSemicolon()
+                return IndexSignature(parameters = listOf(Parameter(name = paramName, type = paramType)),
+                    type = type, modifiers = modifiers, pos = pos, end = getEnd(),
+                    leadingComments = comments)
+            }
+        }
+
         val name = parsePropertyName()
         val question = parseOptional(SyntaxKind.Question)
         val excl = parseOptional(SyntaxKind.Exclamation)

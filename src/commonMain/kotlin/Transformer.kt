@@ -6909,6 +6909,35 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
+        // Computed-key properties with no initializer (!useDefineForClassFields) are dropped from the
+        // class body and not assigned in the constructor, but their key expression must still be
+        // evaluated at class-definition time for side effects (e.g. Symbol() registration).
+        // Emit them as trailing ExpressionStatements after the class declaration.
+        // Skip constant expressions (numeric/string literals) — they have no side effects.
+        if (!useDefineForClassFields) {
+            for (member in members) {
+                if (member is PropertyDeclaration &&
+                    member.name is ComputedPropertyName &&
+                    member.initializer == null &&
+                    ModifierFlag.Declare !in member.modifiers
+                ) {
+                    val keyExpr = (member.name as ComputedPropertyName).expression
+                    // Only emit side effects for non-trivial expressions: skip simple identifiers and literals.
+                    // TypeScript only evaluates computed keys that are more than a bare variable reference.
+                    if (keyExpr !is Identifier &&
+                        keyExpr !is NumericLiteralNode &&
+                        keyExpr !is StringLiteralNode) {
+                        trailingStatements.add(
+                            ExpressionStatement(
+                                expression = transformExpression(keyExpr),
+                                pos = -1, end = -1,
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
         return ClassTransformResult(
             heritageClauses = transformedHeritage,
             members = outputMembers,
