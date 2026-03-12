@@ -3960,7 +3960,7 @@ class Parser(private val source: String, private val fileName: String) {
         while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
             // Labeled tuple elements: `name: Type` or `name?: Type` or `...name: Type`
             val isRest = parseOptional(SyntaxKind.DotDotDot)
-            val isLabeledElement = !isRest && isIdentifier() && lookAhead {
+            val isLabeledElement = isIdentifier() && lookAhead {
                 nextToken()
                 when {
                     token == SyntaxKind.Colon -> true
