@@ -224,9 +224,11 @@ class Parser(private val source: String, private val fileName: String) {
         AsyncKeyword -> parseAsyncOrExpression()
         DeclareKeyword -> {
             // Check if next token could start a declaration. If not, treat 'declare' as an identifier.
+            // Also: if there's a line break between 'declare' and the keyword, ASI applies.
             val isDeclare = lookAhead {
                 nextToken()
-                when (token) {
+                if (scanner.hasPrecedingLineBreak()) false
+                else when (token) {
                     VarKeyword, LetKeyword, ConstKeyword, FunctionKeyword, ClassKeyword,
                     InterfaceKeyword, TypeKeyword, EnumKeyword, NamespaceKeyword, ModuleKeyword,
                     AbstractKeyword, GlobalKeyword, ImportKeyword, ExportKeyword,
@@ -1433,7 +1435,8 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun isStartOfTypeAlias(): Boolean = scanner.lookAhead {
         scanner.scan() // skip 'type'
-        isIdentifier() && scanner.getToken() != SyntaxKind.Dot
+        // If there's a line break between 'type' and the name, ASI applies — not a type alias
+        !scanner.hasPrecedingLineBreak() && isIdentifier() && scanner.getToken() != SyntaxKind.Dot
     }
 
     private fun parseTypeAliasDeclaration(
