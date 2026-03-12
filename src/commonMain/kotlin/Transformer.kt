@@ -414,8 +414,47 @@ class Transformer(private val options: CompilerOptions) {
                     (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is InterfaceDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                     (stmt is TypeAliasDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                    (stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers)
+                    (stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    // dynamic import() calls also make a file an external module
+                    stmtContainsDynamicImport(stmt)
         }
+    }
+
+    /** Returns true if [stmt] contains a dynamic `import(...)` call anywhere in its subtree. */
+    private fun stmtContainsDynamicImport(stmt: Statement): Boolean = when (stmt) {
+        is ExpressionStatement -> exprContainsDynamicImport(stmt.expression)
+        is VariableStatement -> stmt.declarationList.declarations.any {
+            it.initializer?.let { init -> exprContainsDynamicImport(init) } == true
+        }
+        is ReturnStatement -> stmt.expression?.let { exprContainsDynamicImport(it) } == true
+        is Block -> stmt.statements.any { stmtContainsDynamicImport(it) }
+        is IfStatement -> exprContainsDynamicImport(stmt.expression) ||
+                stmtContainsDynamicImport(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { stmtContainsDynamicImport(it) } == true)
+        else -> false
+    }
+
+    private fun exprContainsDynamicImport(expr: Expression): Boolean = when {
+        isDynamicImportCall(expr) -> true
+        expr is CallExpression -> exprContainsDynamicImport(expr.expression) ||
+                expr.arguments.any { exprContainsDynamicImport(it) }
+        expr is ArrowFunction -> when (val body = expr.body) {
+            is Expression -> exprContainsDynamicImport(body)
+            is Block -> body.statements.any { stmtContainsDynamicImport(it) }
+            else -> false
+        }
+        expr is FunctionExpression -> expr.body.statements.any { stmtContainsDynamicImport(it) }
+        expr is ObjectLiteralExpression -> expr.properties.any { prop ->
+            when (prop) {
+                is PropertyAssignment -> exprContainsDynamicImport(prop.initializer)
+                is MethodDeclaration -> prop.body?.statements?.any { stmtContainsDynamicImport(it) } == true
+                else -> false
+            }
+        }
+        expr is AwaitExpression -> exprContainsDynamicImport(expr.expression)
+        expr is ParenthesizedExpression -> exprContainsDynamicImport(expr.expression)
+        expr is BinaryExpression -> exprContainsDynamicImport(expr.left) || exprContainsDynamicImport(expr.right)
+        else -> false
     }
 
     // -----------------------------------------------------------------
@@ -453,9 +492,23 @@ class Transformer(private val options: CompilerOptions) {
             stmt is ExportAssignment && stmt.isExportEquals &&
                 (stmt.expression as? Identifier)?.text?.let { it !in earlyPureTypeNames } != false
         }
+        // Files that only have dynamic import() calls (no static imports/exports) do NOT get
+        // Object.defineProperty(exports, "__esModule"). Only add it when there are actual static
+        // module declarations (import/export keywords).
+        val hasStaticModuleDeclarations = originalSourceFile.statements.any { stmt ->
+            stmt is ImportDeclaration || stmt is ExportDeclaration || stmt is ExportAssignment ||
+                    (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
+                    (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is InterfaceDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is TypeAliasDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                    (stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers)
+        }
 
         // Add Object.defineProperty(exports, "__esModule", { value: true });
-        if (!hasExportEquals) {
+        if (!hasExportEquals && hasStaticModuleDeclarations) {
             result.add(makeEsModulePreamble())
         }
 
@@ -1100,6 +1153,17 @@ class Transformer(private val options: CompilerOptions) {
                     }
                 }
             }
+        }
+
+        // Rewrite dynamic import() calls to CJS Promise.resolve()... form.
+        // This covers all statements including nested expressions in object literals, arrow
+        // functions, async functions, etc. needsImportStar is set to true if any are found.
+        val dynImportFlag = booleanArrayOf(false)
+        val rewritten = result.map { rewriteCjsDynStmt(it, dynImportFlag) }
+        if (dynImportFlag[0]) {
+            needsImportStar = true
+            result.clear()
+            result.addAll(rewritten)
         }
 
         // Insert re-export assignments immediately after their corresponding import statements.
@@ -4036,6 +4100,166 @@ class Transformer(private val options: CompilerOptions) {
             ),
             pos = -1, end = -1,
         )
+    }
+
+    /** Returns true if [expr] is a dynamic `import(spec)` call. */
+    private fun isDynamicImportCall(expr: Expression): Boolean =
+        expr is CallExpression &&
+                (expr.expression as? Identifier)?.text == "import" &&
+                expr.arguments.size == 1
+
+    /**
+     * Builds the CJS replacement for `import(spec)`:
+     * - String literal: `Promise.resolve().then(() => __importStar(require(spec)))`
+     * - Other:          `Promise.resolve(`${spec}`).then(s => __importStar(require(s)))`
+     */
+    private fun buildCjsDynamicImport(spec: Expression): Expression {
+        fun importStarCall(arg: Expression) = CallExpression(
+            expression = syntheticId("__importStar"),
+            arguments = listOf(CallExpression(expression = syntheticId("require"), arguments = listOf(arg), pos = -1, end = -1)),
+            pos = -1, end = -1,
+        )
+        fun promiseResolve(args: List<Expression>) = CallExpression(
+            expression = PropertyAccessExpression(
+                expression = syntheticId("Promise"),
+                name = Identifier("resolve", pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            arguments = args,
+            pos = -1, end = -1,
+        )
+        return if (spec is StringLiteralNode) {
+            // Promise.resolve().then(() => __importStar(require('./path')))
+            val arrow = ArrowFunction(
+                parameters = emptyList(),
+                body = importStarCall(spec),
+                pos = -1, end = -1,
+            )
+            CallExpression(
+                expression = PropertyAccessExpression(
+                    expression = promiseResolve(emptyList()),
+                    name = Identifier("then", pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                arguments = listOf(arrow),
+                pos = -1, end = -1,
+            )
+        } else {
+            // Promise.resolve(`${spec}`).then(s => __importStar(require(s)))
+            val templateExpr = TemplateExpression(
+                head = StringLiteralNode(text = ""),
+                templateSpans = listOf(TemplateSpan(expression = spec, literal = StringLiteralNode(text = ""), pos = -1, end = -1)),
+                pos = -1, end = -1,
+            )
+            val sParam = Parameter(name = Identifier("s", pos = -1, end = -1), pos = -1, end = -1)
+            val arrow = ArrowFunction(
+                parameters = listOf(sParam),
+                body = importStarCall(syntheticId("s")),
+                hasParenthesizedParameters = false,
+                pos = -1, end = -1,
+            )
+            CallExpression(
+                expression = PropertyAccessExpression(
+                    expression = promiseResolve(listOf(templateExpr)),
+                    name = Identifier("then", pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                arguments = listOf(arrow),
+                pos = -1, end = -1,
+            )
+        }
+    }
+
+    /**
+     * Recursively rewrites dynamic `import(spec)` calls in [expr] to CJS Promise.resolve form.
+     * Sets `needImportStar[0] = true` when any dynamic import is found.
+     */
+    private fun rewriteCjsDynExpr(expr: Expression, needImportStar: BooleanArray): Expression {
+        if (isDynamicImportCall(expr)) {
+            needImportStar[0] = true
+            val spec = rewriteCjsDynExpr((expr as CallExpression).arguments[0], needImportStar)
+            return buildCjsDynamicImport(spec)
+        }
+        return when (expr) {
+            is CallExpression -> expr.copy(
+                expression = rewriteCjsDynExpr(expr.expression, needImportStar),
+                arguments = expr.arguments.map { rewriteCjsDynExpr(it, needImportStar) }
+            )
+            is PropertyAccessExpression -> expr.copy(expression = rewriteCjsDynExpr(expr.expression, needImportStar))
+            is ElementAccessExpression -> expr.copy(
+                expression = rewriteCjsDynExpr(expr.expression, needImportStar),
+                argumentExpression = rewriteCjsDynExpr(expr.argumentExpression, needImportStar)
+            )
+            is BinaryExpression -> expr.copy(
+                left = rewriteCjsDynExpr(expr.left, needImportStar),
+                right = rewriteCjsDynExpr(expr.right, needImportStar)
+            )
+            is ConditionalExpression -> expr.copy(
+                condition = rewriteCjsDynExpr(expr.condition, needImportStar),
+                whenTrue = rewriteCjsDynExpr(expr.whenTrue, needImportStar),
+                whenFalse = rewriteCjsDynExpr(expr.whenFalse, needImportStar)
+            )
+            is AwaitExpression -> expr.copy(expression = rewriteCjsDynExpr(expr.expression, needImportStar))
+            is ParenthesizedExpression -> expr.copy(expression = rewriteCjsDynExpr(expr.expression, needImportStar))
+            is PrefixUnaryExpression -> expr.copy(operand = rewriteCjsDynExpr(expr.operand, needImportStar))
+            is PostfixUnaryExpression -> expr.copy(operand = rewriteCjsDynExpr(expr.operand, needImportStar))
+            is NewExpression -> expr.copy(
+                expression = rewriteCjsDynExpr(expr.expression, needImportStar),
+                arguments = expr.arguments?.map { rewriteCjsDynExpr(it, needImportStar) }
+            )
+            is SpreadElement -> expr.copy(expression = rewriteCjsDynExpr(expr.expression, needImportStar))
+            is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteCjsDynExpr(it, needImportStar) })
+            is ObjectLiteralExpression -> expr.copy(properties = expr.properties.map { prop ->
+                when (prop) {
+                    is PropertyAssignment -> prop.copy(initializer = rewriteCjsDynExpr(prop.initializer, needImportStar))
+                    is MethodDeclaration -> prop.copy(body = prop.body?.let { block ->
+                        block.copy(statements = block.statements.map { rewriteCjsDynStmt(it, needImportStar) })
+                    })
+                    else -> prop
+                }
+            })
+            is ArrowFunction -> when (val body = expr.body) {
+                is Expression -> expr.copy(body = rewriteCjsDynExpr(body, needImportStar))
+                is Block -> expr.copy(body = body.copy(statements = body.statements.map { rewriteCjsDynStmt(it, needImportStar) }))
+                else -> expr
+            }
+            is FunctionExpression -> expr.copy(body = expr.body.let { block ->
+                block.copy(statements = block.statements.map { rewriteCjsDynStmt(it, needImportStar) })
+            })
+            else -> expr
+        }
+    }
+
+    /** Recursively rewrites dynamic `import(spec)` calls in [stmt] to CJS Promise.resolve form. */
+    private fun rewriteCjsDynStmt(stmt: Statement, needImportStar: BooleanArray): Statement {
+        return when (stmt) {
+            is ExpressionStatement -> stmt.copy(expression = rewriteCjsDynExpr(stmt.expression, needImportStar))
+            is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteCjsDynExpr(it, needImportStar) })
+            is ThrowStatement -> stmt.copy(expression = stmt.expression?.let { rewriteCjsDynExpr(it, needImportStar) })
+            is VariableStatement -> stmt.copy(declarationList = stmt.declarationList.copy(
+                declarations = stmt.declarationList.declarations.map { decl ->
+                    decl.copy(initializer = decl.initializer?.let { rewriteCjsDynExpr(it, needImportStar) })
+                }
+            ))
+            is Block -> stmt.copy(statements = stmt.statements.map { rewriteCjsDynStmt(it, needImportStar) })
+            is IfStatement -> stmt.copy(
+                expression = rewriteCjsDynExpr(stmt.expression, needImportStar),
+                thenStatement = rewriteCjsDynStmt(stmt.thenStatement, needImportStar),
+                elseStatement = stmt.elseStatement?.let { rewriteCjsDynStmt(it, needImportStar) }
+            )
+            is WhileStatement -> stmt.copy(
+                expression = rewriteCjsDynExpr(stmt.expression, needImportStar),
+                statement = rewriteCjsDynStmt(stmt.statement, needImportStar)
+            )
+            is DoStatement -> stmt.copy(
+                expression = rewriteCjsDynExpr(stmt.expression, needImportStar),
+                statement = rewriteCjsDynStmt(stmt.statement, needImportStar)
+            )
+            is ForStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
+            is ForOfStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
+            is ForInStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
+            else -> stmt
+        }
     }
 
     /** Returns true if the expression is a `require("...")` call. */
