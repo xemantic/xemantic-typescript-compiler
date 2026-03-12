@@ -2015,6 +2015,7 @@ class Parser(private val source: String, private val fileName: String) {
                 isIdentifier() && scanner.getTokenValue() == "accessor" -> ModifierFlag.Accessor
                 else -> break@loop
             }
+            if (mod in mods) break@loop  // duplicate modifier — second occurrence is actually the member name
             mods.add(mod)
             nextToken()
         }
