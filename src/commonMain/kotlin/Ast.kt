@@ -309,6 +309,10 @@ data class SwitchStatement(
 data class LabeledStatement(
     val label: Identifier,
     val statement: Statement,
+    /** Comments between the label identifier and `:` (e.g. `foo /*0*/:`) */
+    val afterLabelComments: List<Comment>? = null,
+    /** Comments between `:` and the labeled statement (e.g. `: /*1*/ switch`) */
+    val afterColonComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

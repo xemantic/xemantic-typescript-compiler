@@ -717,7 +717,9 @@ class Emitter(
                     indentLevel--
                 } else {
                     // Block is inline after `case:` — emit { on same line
+                    emitTrailingComments(node.labelTrailingComments)
                     emitBlockBody(singleBlock, emitOpenBraceComments = true)
+                    emitTrailingComments(singleBlock.trailingComments)
                     writeNewLine()
                 }
             } else {
@@ -774,7 +776,9 @@ class Emitter(
                     writeNewLine()
                     indentLevel--
                 } else {
+                    emitTrailingComments(node.labelTrailingComments)
                     emitBlockBody(singleBlock, emitOpenBraceComments = true)
+                    emitTrailingComments(singleBlock.trailingComments)
                     writeNewLine()
                 }
             } else {
@@ -794,7 +798,10 @@ class Emitter(
         var current: Statement = node
         while (current is LabeledStatement) {
             write(current.label.emitText)
-            write(": ")
+            emitInnerComments(current.afterLabelComments)
+            write(":")
+            emitInnerComments(current.afterColonComments)
+            write(" ")
             current = current.statement
         }
         // Emit the body statement on the same line (suppress its writeIndent call)
