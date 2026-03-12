@@ -690,11 +690,36 @@ class Emitter(
             isStartOfLine = saved
             writeNewLine()
         } else {
-            // When the single statement is a multiLine block, emit { on the same line as default:
             val singleBlock = node.statements.singleOrNull() as? Block
             if (singleBlock != null && singleBlock.multiLine) {
-                emitBlockBody(singleBlock, emitOpenBraceComments = true)
-                writeNewLine()
+                // Check if the block `{` is on the same source line as `case:` or on a new line.
+                val blockOnNewLine = singleBlock.pos > 0 && singleBlock.pos <= sourceText.length
+                    && node.pos >= 0 && node.pos < singleBlock.pos
+                    && sourceText.substring(node.pos, singleBlock.pos).contains('\n')
+                if (blockOnNewLine) {
+                    // Block is on its own line: newline, then block indented at same level as case body
+                    emitTrailingComments(node.labelTrailingComments)
+                    writeNewLine()
+                    indentLevel++
+                    emitLeadingComments(singleBlock)
+                    writeIndent()
+                    write("{")
+                    if (!options.removeComments) emitTrailingComments(singleBlock.openBraceTrailingComments)
+                    writeNewLine()
+                    if (singleBlock.statements.isNotEmpty()) {
+                        indentLevel++
+                        emitBlockStatements(singleBlock.statements)
+                        indentLevel--
+                    }
+                    writeIndent()
+                    write("}")
+                    writeNewLine()
+                    indentLevel--
+                } else {
+                    // Block is inline after `case:` — emit { on same line
+                    emitBlockBody(singleBlock, emitOpenBraceComments = true)
+                    writeNewLine()
+                }
             } else {
                 emitTrailingComments(node.labelTrailingComments)
                 writeNewLine()
@@ -725,11 +750,33 @@ class Emitter(
             isStartOfLine = saved
             writeNewLine()
         } else {
-            // When the single statement is a multiLine block, emit { on the same line as case:
             val singleBlock = node.statements.singleOrNull() as? Block
             if (singleBlock != null && singleBlock.multiLine) {
-                emitBlockBody(singleBlock, emitOpenBraceComments = true)
-                writeNewLine()
+                val blockOnNewLine = singleBlock.pos > 0 && singleBlock.pos <= sourceText.length
+                    && node.pos >= 0 && node.pos < singleBlock.pos
+                    && sourceText.substring(node.pos, singleBlock.pos).contains('\n')
+                if (blockOnNewLine) {
+                    emitTrailingComments(node.labelTrailingComments)
+                    writeNewLine()
+                    indentLevel++
+                    emitLeadingComments(singleBlock)
+                    writeIndent()
+                    write("{")
+                    if (!options.removeComments) emitTrailingComments(singleBlock.openBraceTrailingComments)
+                    writeNewLine()
+                    if (singleBlock.statements.isNotEmpty()) {
+                        indentLevel++
+                        emitBlockStatements(singleBlock.statements)
+                        indentLevel--
+                    }
+                    writeIndent()
+                    write("}")
+                    writeNewLine()
+                    indentLevel--
+                } else {
+                    emitBlockBody(singleBlock, emitOpenBraceComments = true)
+                    writeNewLine()
+                }
             } else {
                 emitTrailingComments(node.labelTrailingComments)
                 writeNewLine()
