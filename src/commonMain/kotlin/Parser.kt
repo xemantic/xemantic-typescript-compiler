@@ -1173,6 +1173,7 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseConstructor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int): Constructor {
         nextToken() // skip 'constructor'
+        parseTypeParametersOpt() // skip type params if present (error recovery for constructor<T>())
         val params = parseParameterList()
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
@@ -3455,10 +3456,12 @@ class Parser(private val source: String, private val fileName: String) {
             if (token != SyntaxKind.LessThan) return@tryScan null
             nextToken()
             val params = mutableListOf<TypeParameter>()
-            do {
+            // Allow empty <> (error recovery: constructor<>() etc.)
+            while (token != SyntaxKind.GreaterThan && token != SyntaxKind.EndOfFile) {
                 val p = parseTypeParameter() ?: return@tryScan null
                 params.add(p)
-            } while (parseOptional(SyntaxKind.Comma))
+                if (!parseOptional(SyntaxKind.Comma)) break
+            }
             if (token != SyntaxKind.GreaterThan) return@tryScan null
             nextToken()
             params
