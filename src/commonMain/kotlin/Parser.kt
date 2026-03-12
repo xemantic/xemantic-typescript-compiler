@@ -3991,10 +3991,18 @@ class Parser(private val source: String, private val fileName: String) {
         val raw = scanner.getTokenText()
         val value = scanner.getTokenValue()
         val singleQuote = raw.startsWith("'")
+        val quote = if (singleQuote) '\'' else '"'
+        // Detect unterminated string: raw token doesn't end with the opening quote char
+        val isUnterminated = raw.isNotEmpty() && raw.last() != quote
         // Store raw content between quotes to preserve escape sequences (e.g. \u2730, \n)
-        val rawContent = if (raw.length >= 2) raw.substring(1, raw.length - 1) else raw
+        val rawContent = when {
+            !isUnterminated && raw.length >= 2 -> raw.substring(1, raw.length - 1)
+            isUnterminated -> if (raw.length >= 1) raw.substring(1) else raw  // content after opening quote
+            else -> raw
+        }
         nextToken()
-        return StringLiteralNode(text = value, singleQuote = singleQuote, rawText = rawContent, pos = pos, end = getEnd())
+        return StringLiteralNode(text = value, singleQuote = singleQuote, rawText = rawContent,
+            isUnterminated = isUnterminated, pos = pos, end = getEnd())
     }
 
     private fun parseNumericLiteral(): NumericLiteralNode {

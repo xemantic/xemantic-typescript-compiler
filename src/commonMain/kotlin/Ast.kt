@@ -567,6 +567,8 @@ data class StringLiteralNode(
     val singleQuote: Boolean = false,
     /** Raw source content between the quotes, preserving escape sequences (e.g. `\u2730`). */
     val rawText: String? = null,
+    /** True if this string literal was unterminated (no closing quote found). */
+    val isUnterminated: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
