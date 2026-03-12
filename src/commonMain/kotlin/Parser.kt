@@ -281,7 +281,7 @@ class Parser(private val source: String, private val fileName: String) {
         } else {
             stmts
         }
-        return Block(statements = allStmts, multiLine = multiLine, openBraceTrailingComments = openBraceTrailingComments, pos = pos, end = getEnd(), leadingComments = comments)
+        return Block(statements = allStmts, multiLine = multiLine, openBraceTrailingComments = openBraceTrailingComments, pos = pos, end = getEnd(), leadingComments = comments, closeBracePos = closeBracePos)
     }
 
     private fun parseEmptyStatement(): EmptyStatement {
@@ -2871,6 +2871,7 @@ class Parser(private val source: String, private val fileName: String) {
             end = getEnd(),
             trailingComments = closingComments,
             openBracketComments = openBracketComments,
+            closeBracketPos = closeBracketPos,
         )
     }
 
@@ -2919,7 +2920,7 @@ class Parser(private val source: String, private val fileName: String) {
         // than the open brace AND the difference isn't entirely from within string literals.
         // TypeScript uses hasPrecedingLineBreak() after `{` — we use the same.
         val multiLine = multiLineAfterOpen
-        return ObjectLiteralExpression(properties = properties, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd(), trailingComments = closingComments)
+        return ObjectLiteralExpression(properties = properties, multiLine = multiLine, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd(), trailingComments = closingComments, closeBracePos = closeBracePos)
     }
 
     private fun parseObjectLiteralElement(): Node {

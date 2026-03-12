@@ -93,6 +93,8 @@ data class Block(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Source position of the closing `}` token. */
+    val closeBracePos: Int = -1,
 ) : Statement {
     override val kind: SyntaxKind = SyntaxKind.Block
 }
@@ -642,6 +644,8 @@ data class ArrayLiteralExpression(
     override val trailingComments: List<Comment>? = null,
     /** Inline comments that appear right after `[` without a preceding newline. */
     val openBracketComments: List<Comment>? = null,
+    /** Source position of the closing `]` token. */
+    val closeBracketPos: Int = -1,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayLiteralExpression
 }
@@ -654,6 +658,8 @@ data class ObjectLiteralExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Source position of the closing `}` token. */
+    val closeBracePos: Int = -1,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.ObjectLiteralExpression
 }

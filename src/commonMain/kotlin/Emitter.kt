@@ -1697,9 +1697,9 @@ class Emitter(
                 firstElemPos <= sourceText.length &&
                 !sourceText.substring(node.pos, firstElemPos).contains('\n')
             write("[")
+            indentLevel++
             if (!firstElemOnSameLine) {
                 writeNewLine()
-                indentLevel++
             }
             // Track whether the previous element ended on the same line as the current one starts.
             // Used to preserve `}, {` inline formatting when the source has adjacent elements on the same line.
@@ -1746,13 +1746,30 @@ class Emitter(
                     // to preserve `}, {` inline formatting when the source has it. Skip for simple elements
                     // (OmittedExpression, literals) since TypeScript always puts those on separate lines.
                     val nextElement = if (!isLast) node.elements[index + 1] else null
-                    val bothAreCompound = element is ObjectLiteralExpression || element is ArrayLiteralExpression
-                    val nextOnSameLine = bothAreCompound && nextElement != null
+                    val isCompound = element is ObjectLiteralExpression || element is ArrayLiteralExpression
+                    val nextOnSameLine = isCompound && nextElement != null
                         && element.end >= 0 && nextElement.pos >= 0
                         && element.end < sourceText.length && nextElement.pos <= sourceText.length
                         && !sourceText.substring(element.end, nextElement.pos).contains('\n')
+                    // When the last element (compound) ends on the same source line as `]`,
+                    // keep `}]` or `}]]` inline. Use the stored closing bracket/brace position
+                    // (not element.end, which points past the next token due to scanner lookahead).
+                    val elementClosingPos = when (element) {
+                        is ObjectLiteralExpression -> element.closeBracePos
+                        is ArrayLiteralExpression -> element.closeBracketPos
+                        is FunctionExpression -> element.body?.let { it as? Block }?.closeBracePos ?: -1
+                        is ArrowFunction -> element.body?.let { it as? Block }?.closeBracePos ?: -1
+                        else -> -1
+                    }
+                    val closeOnSameLine = isLast && (isCompound || element is FunctionExpression || element is ArrowFunction) && !node.hasTrailingComma
+                        && node.trailingComments.isNullOrEmpty()
+                        && elementClosingPos >= 0 && node.closeBracketPos >= 0
+                        && elementClosingPos <= sourceText.length && node.closeBracketPos <= sourceText.length
+                        && !sourceText.substring(elementClosingPos, node.closeBracketPos).contains('\n')
                     if (!isLast && nextOnSameLine) {
                         write(" ")
+                        prevWasSameLine = true
+                    } else if (closeOnSameLine) {
                         prevWasSameLine = true
                     } else {
                         writeNewLine()
@@ -1780,8 +1797,8 @@ class Emitter(
                     }
                 }
             }
-            if (!firstElemOnSameLine) indentLevel--
-            writeIndent()
+            indentLevel--
+            if (!prevWasSameLine) writeIndent()
             write("]")
         } else {
             write("[")
