@@ -128,6 +128,8 @@ data class CompilerOptions(
  * but we don't have that context, so we default to ESM.)
  */
 fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
+    // .cjs/.cts files are always CJS regardless of module setting
+    if (fileName.endsWith(".cjs") || fileName.endsWith(".cts")) return false
     // .mjs/.mts files are always ESM regardless of module setting
     if (fileName.endsWith(".mjs") || fileName.endsWith(".mts")) return true
     return when (module) {

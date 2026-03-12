@@ -287,11 +287,13 @@ class Transformer(private val options: CompilerOptions) {
             }
         } else transformed
 
-        // CommonJS module transform (also for Node16/NodeNext with .ts/.cts files)
+        // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files)
         val effectiveModule = options.effectiveModule
-        val useCJS = !isESModuleFormat(effectiveModule, sourceFile.fileName) &&
+        val fileName = sourceFile.fileName
+        val useCJS = !isESModuleFormat(effectiveModule, fileName) &&
                 (effectiveModule == ModuleKind.CommonJS ||
-                ((effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext)))
+                (effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) ||
+                fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
         if (useCJS && isModuleFile(sourceFile)) {
             val cjsStatements = transformToCommonJS(withHelpers, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
@@ -496,8 +498,12 @@ class Transformer(private val options: CompilerOptions) {
         }
         // Files that only have dynamic import() calls (no static imports/exports) do NOT get
         // Object.defineProperty(exports, "__esModule"). Only add it when there are actual static
-        // module declarations (import/export keywords).
-        val hasStaticModuleDeclarations = originalSourceFile.statements.any { stmt ->
+        // module declarations (import/export keywords) OR when the file extension forces module
+        // treatment (.cts/.cjs) or moduleDetection: "force".
+        val fn = originalSourceFile.fileName
+        val forcedModule = fn.endsWith(".cts") || fn.endsWith(".cjs") ||
+                options.moduleDetection == "force"
+        val hasStaticModuleDeclarations = forcedModule || originalSourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration || stmt is ExportAssignment ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
                     (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers) ||
