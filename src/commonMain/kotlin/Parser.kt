@@ -2155,6 +2155,12 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = parseConditionalExpression()
 
         if (isAssignmentOperator(token)) {
+            // Error recovery: if LHS is a missing identifier (no valid expression start),
+            // skip the assignment operator and return just the RHS (e.g. `= fn()` → `fn()`).
+            if (expr is Identifier && expr.text.isEmpty()) {
+                nextToken() // skip the invalid assignment operator
+                return parseAssignmentExpression()
+            }
             val op = token
             nextToken()
             val right = parseAssignmentExpression()
