@@ -274,8 +274,10 @@ class TypeScriptCompiler {
             val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, importDeps)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
-            // When outFile is set, concatenate all JS outputs into a single file
-            val finalJsOutputs = if (options.outFile != null && jsOutputs.isNotEmpty()) {
+            // When outFile is set, concatenate all JS outputs into a single file.
+            // Exception: isolatedModules is incompatible with outFile — TypeScript ignores outFile
+            // and produces separate output files for each input file.
+            val finalJsOutputs = if (options.outFile != null && !options.isolatedModules && jsOutputs.isNotEmpty()) {
                 val outFileName = options.outFile.substringAfterLast('/')
                 // Concatenate, but only keep the first "use strict"; directive
                 var seenUseStrict = false
