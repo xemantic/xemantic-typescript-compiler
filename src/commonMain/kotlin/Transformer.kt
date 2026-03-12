@@ -2982,8 +2982,13 @@ class Transformer(private val options: CompilerOptions) {
                 }
                 is ImportEqualsDeclaration -> {
                     if (!stmt.isTypeOnly && stmt.moduleReference !is ExternalModuleReference) {
-                        val n = stmt.name.text
-                        if (n.isNotEmpty() && hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                        val ref = stmt.moduleReference
+                        val refIsTypeOnly = (ref is QualifiedName && isQualifiedPathTypeOnly(ref)) ||
+                            (ref is Identifier && ref.text in topLevelTypeOnlyNames)
+                        if (!refIsTypeOnly) {
+                            val n = stmt.name.text
+                            if (n.isNotEmpty() && hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                        }
                     }
                 }
                 else -> {}
@@ -4380,7 +4385,39 @@ class Transformer(private val options: CompilerOptions) {
                 // Insert hoisted vars AFTER any leading NotEmittedStatements (orphaned comments).
                 // This preserves orphaned comment ordering relative to hoisted var declarations.
                 val insertAt = result.indexOfFirst { it !is NotEmittedStatement }.takeIf { it >= 0 } ?: 0
-                result.addAll(insertAt, combined)
+                // At top level: if the first real statement has DETACHED leading comments
+                // (separated by a blank line), transfer them to the hoisted var declaration.
+                // TypeScript's emitter anchors pre-statement comments to the hoisted var when
+                // they are detached (blank line ≥2 newlines between comment end and stmt pos).
+                // Adjacent comments (no blank line) stay with the statement.
+                val firstRealStmt = result.getOrNull(insertAt)
+                val firstRealComments = firstRealStmt?.leadingComments
+                val hasDetachedComment = atTopLevel &&
+                    !firstRealComments.isNullOrEmpty() &&
+                    firstRealStmt.pos >= 0 &&
+                    firstRealComments.any { c ->
+                        c.end >= 0 && sourceText.substring(c.end, firstRealStmt.pos).count { it == '\n' } >= 2
+                    }
+                if (hasDetachedComment) {
+                    val hoisted = combined.single()
+                    val hoistedWithComments = (hoisted as? VariableStatement)
+                        ?.copy(leadingComments = firstRealComments)
+                    val strippedFirst: Statement? = when (firstRealStmt) {
+                        is VariableStatement -> firstRealStmt.copy(leadingComments = null)
+                        is ExpressionStatement -> firstRealStmt.copy(leadingComments = null)
+                        is FunctionDeclaration -> firstRealStmt.copy(leadingComments = null)
+                        is ClassDeclaration -> firstRealStmt.copy(leadingComments = null)
+                        else -> null
+                    }
+                    if (hoistedWithComments != null && strippedFirst != null) {
+                        result[insertAt] = strippedFirst
+                        result.addAll(insertAt, listOf(hoistedWithComments))
+                    } else {
+                        result.addAll(insertAt, combined)
+                    }
+                } else {
+                    result.addAll(insertAt, combined)
+                }
             }
         }
 
@@ -8798,7 +8835,17 @@ class Transformer(private val options: CompilerOptions) {
             }
             // Second: look for an ImportEqualsDeclaration alias with this name
             val importAlias = stmts.filterIsInstance<ImportEqualsDeclaration>()
-                .firstOrNull { it.name.text == part } ?: return false
+                .firstOrNull { it.name.text == part }
+            if (importAlias == null) {
+                // Third: check for type-level declarations (interface, type alias) at last segment
+                if (i == parts.size - 1) {
+                    return stmts.any { stmt ->
+                        (stmt is InterfaceDeclaration && stmt.name.text == part) ||
+                        (stmt is TypeAliasDeclaration && stmt.name.text == part)
+                    }
+                }
+                return false
+            }
             val aliasRef = importAlias.moduleReference
             if (i == parts.size - 1) {
                 // At the last part: check if the alias target is type-only
