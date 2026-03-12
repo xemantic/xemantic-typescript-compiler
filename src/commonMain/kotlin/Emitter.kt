@@ -1702,7 +1702,8 @@ class Emitter(
         // rawText preserves original escape sequences (e.g. \u2730) and is already
         // adjusted for the current quote style (singleQuote flag)
         write(if (node.rawText != null) node.rawText else escapeString(node.text, node.singleQuote))
-        write(quote)
+        // For unterminated strings, don't emit a closing quote (preserves raw source appearance)
+        if (!node.isUnterminated) write(quote)
     }
 
     private fun escapeString(text: String, singleQuote: Boolean): String {

@@ -601,6 +601,24 @@ class Transformer(private val options: CompilerOptions) {
                         ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
                     n?.let { runtimeDeclaredNames.add(it) }
                 }
+                // Imports are runtime values — include them so local `export { name }` can distinguish
+                // imported runtime values from undeclared type-only globals.
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause
+                    if (clause != null && !clause.isTypeOnly) {
+                        clause.name?.text?.let { runtimeDeclaredNames.add(it) }
+                        when (val bindings = clause.namedBindings) {
+                            is NamespaceImport -> runtimeDeclaredNames.add(bindings.name.text)
+                            is NamedImports -> bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
+                                runtimeDeclaredNames.add(spec.name.text)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is ImportEqualsDeclaration -> {
+                    if (!stmt.isTypeOnly) runtimeDeclaredNames.add(stmt.name.text)
+                }
                 else -> {}
             }
         }
@@ -1122,6 +1140,9 @@ class Transformer(private val options: CompilerOptions) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
+                            // Skip if the local name is not declared or imported in this file.
+                            // Undeclared names are type-only globals (e.g. `declare namespace X` in another file).
+                            if (localName != "undefined" && localName !in runtimeDeclaredNames) continue
                             if (localName in functionOnlyNames) {
                                 // Function declaration (JS-hoisted): use stub placed before other code.
                                 // No void0 hoist needed (function is available immediately). Deduplicate.
