@@ -6108,6 +6108,117 @@ class Transformer(private val options: CompilerOptions) {
             else -> element
         }
 
+    /**
+     * Returns true if [expr] contains a `this` expression that refers to the
+     * static initializer context — i.e., `this` not rebounded by a nested
+     * non-arrow function body.  Arrow functions capture `this` lexically,
+     * so we descend into them; regular `function` bodies rebind `this`,
+     * so we stop there.
+     */
+    private fun containsThisInExpr(expr: Expression): Boolean = when (expr) {
+        is Identifier -> expr.text == "this"
+        is ArrowFunction -> when (val b = expr.body) {
+            is Expression -> containsThisInExpr(b)
+            is Block -> b.statements.any { containsThisInStmt(it) }
+            else -> false
+        }
+        is FunctionExpression -> false // rebinds `this`
+        is PropertyAccessExpression -> containsThisInExpr(expr.expression)
+        is ElementAccessExpression -> containsThisInExpr(expr.expression) || containsThisInExpr(expr.argumentExpression)
+        is CallExpression -> containsThisInExpr(expr.expression) || expr.arguments.any { containsThisInExpr(it) }
+        is BinaryExpression -> containsThisInExpr(expr.left) || containsThisInExpr(expr.right)
+        is PrefixUnaryExpression -> containsThisInExpr(expr.operand)
+        is PostfixUnaryExpression -> containsThisInExpr(expr.operand)
+        is ConditionalExpression -> containsThisInExpr(expr.condition) || containsThisInExpr(expr.whenTrue) || containsThisInExpr(expr.whenFalse)
+        is ParenthesizedExpression -> containsThisInExpr(expr.expression)
+        is NewExpression -> containsThisInExpr(expr.expression) || expr.arguments?.any { containsThisInExpr(it) } == true
+        is SpreadElement -> containsThisInExpr(expr.expression)
+        is ArrayLiteralExpression -> expr.elements.any { containsThisInExpr(it) }
+        is ObjectLiteralExpression -> expr.properties.any { prop ->
+            when (prop) {
+                is PropertyAssignment -> prop.initializer?.let { containsThisInExpr(it) } == true
+                is ShorthandPropertyAssignment -> false
+                else -> false
+            }
+        }
+        else -> false
+    }
+
+    private fun containsThisInStmt(stmt: Statement): Boolean = when (stmt) {
+        is ExpressionStatement -> containsThisInExpr(stmt.expression)
+        is ReturnStatement -> stmt.expression?.let { containsThisInExpr(it) } == true
+        is VariableStatement -> stmt.declarationList.declarations.any { it.initializer?.let { i -> containsThisInExpr(i) } == true }
+        is IfStatement -> containsThisInExpr(stmt.expression) ||
+            containsThisInStmt(stmt.thenStatement) ||
+            (stmt.elseStatement?.let { containsThisInStmt(it) } == true)
+        is Block -> stmt.statements.any { containsThisInStmt(it) }
+        else -> false
+    }
+
+    /**
+     * Replaces `this` expressions in [expr] with an identifier [withName].
+     * Descends into arrow functions (which capture `this` lexically) but
+     * stops at non-arrow function bodies (which rebind `this`).
+     */
+    private fun replaceThisInExpr(expr: Expression, withName: String): Expression = when (expr) {
+        is Identifier -> if (expr.text == "this") syntheticId(withName) else expr
+        is ArrowFunction -> expr.copy(
+            body = when (val b = expr.body) {
+                is Expression -> replaceThisInExpr(b, withName)
+                is Block -> b.copy(statements = b.statements.map { replaceThisInStmt(it, withName) })
+                else -> b
+            }
+        )
+        is FunctionExpression -> expr // don't descend — function rebinds `this`
+        is PropertyAccessExpression -> expr.copy(expression = replaceThisInExpr(expr.expression, withName))
+        is ElementAccessExpression -> expr.copy(
+            expression = replaceThisInExpr(expr.expression, withName),
+            argumentExpression = replaceThisInExpr(expr.argumentExpression, withName),
+        )
+        is CallExpression -> expr.copy(
+            expression = replaceThisInExpr(expr.expression, withName),
+            arguments = expr.arguments.map { replaceThisInExpr(it, withName) },
+        )
+        is BinaryExpression -> expr.copy(
+            left = replaceThisInExpr(expr.left, withName),
+            right = replaceThisInExpr(expr.right, withName),
+        )
+        is PrefixUnaryExpression -> expr.copy(operand = replaceThisInExpr(expr.operand, withName))
+        is PostfixUnaryExpression -> expr.copy(operand = replaceThisInExpr(expr.operand, withName))
+        is ConditionalExpression -> expr.copy(
+            condition = replaceThisInExpr(expr.condition, withName),
+            whenTrue = replaceThisInExpr(expr.whenTrue, withName),
+            whenFalse = replaceThisInExpr(expr.whenFalse, withName),
+        )
+        is ParenthesizedExpression -> expr.copy(expression = replaceThisInExpr(expr.expression, withName))
+        is NewExpression -> expr.copy(
+            expression = replaceThisInExpr(expr.expression, withName),
+            arguments = expr.arguments?.map { replaceThisInExpr(it, withName) },
+        )
+        is SpreadElement -> expr.copy(expression = replaceThisInExpr(expr.expression, withName))
+        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { replaceThisInExpr(it, withName) })
+        else -> expr
+    }
+
+    private fun replaceThisInStmt(stmt: Statement, withName: String): Statement = when (stmt) {
+        is ExpressionStatement -> stmt.copy(expression = replaceThisInExpr(stmt.expression, withName))
+        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { replaceThisInExpr(it, withName) })
+        is VariableStatement -> stmt.copy(
+            declarationList = stmt.declarationList.copy(
+                declarations = stmt.declarationList.declarations.map { decl ->
+                    decl.copy(initializer = decl.initializer?.let { replaceThisInExpr(it, withName) })
+                }
+            )
+        )
+        is IfStatement -> stmt.copy(
+            expression = replaceThisInExpr(stmt.expression, withName),
+            thenStatement = replaceThisInStmt(stmt.thenStatement, withName),
+            elseStatement = stmt.elseStatement?.let { replaceThisInStmt(it, withName) },
+        )
+        is Block -> stmt.copy(statements = stmt.statements.map { replaceThisInStmt(it, withName) })
+        else -> stmt
+    }
+
     private data class ClassTransformResult(
         val heritageClauses: List<HeritageClause>?,
         val members: List<ClassElement>,
@@ -6463,6 +6574,34 @@ class Transformer(private val options: CompilerOptions) {
         // Exception: ES2022+ targets use static { this.prop = val } inside the class body (already added above).
         val effectiveName = trailingVarName ?: name?.text
         if (!useDefineForClassFields && effectiveName != null) {
+            // Check if any static property initializer contains `this` (lexically, across arrow fns).
+            // If so, we must capture the class in a temp var before the initializers run.
+            val staticPropsWithThis = staticProperties.filter { prop ->
+                prop.initializer != null &&
+                    options.effectiveTarget < ScriptTarget.ES2022 &&
+                    containsThisInExpr(prop.initializer)
+            }
+            val classTempVar: String? = if (staticPropsWithThis.isNotEmpty()) {
+                val tv = nextTempVarName()
+                hoistedVarScopes.lastOrNull()?.add(tv)
+                tv
+            } else null
+
+            // If we need a class temp var, emit `_a = ClassName` as the first trailing statement.
+            if (classTempVar != null) {
+                trailingStatements.add(
+                    ExpressionStatement(
+                        expression = BinaryExpression(
+                            left = syntheticId(classTempVar),
+                            operator = Equals,
+                            right = syntheticId(effectiveName),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                )
+            }
+
             for (prop in staticProperties) {
                 if (prop.initializer != null && options.effectiveTarget < ScriptTarget.ES2022) {
                     val classId = Identifier(text = effectiveName, pos = -1, end = -1)
@@ -6490,12 +6629,15 @@ class Transformer(private val options: CompilerOptions) {
                         else -> null
                     }
                     if (lhs != null) {
+                        val transformedInit = transformExpression(prop.initializer)
+                        val finalInit = if (classTempVar != null) replaceThisInExpr(transformedInit, classTempVar)
+                                        else transformedInit
                         trailingStatements.add(
                             ExpressionStatement(
                                 expression = BinaryExpression(
                                     left = lhs,
                                     operator = Equals,
-                                    right = transformExpression(prop.initializer),
+                                    right = finalInit,
                                     pos = -1, end = -1,
                                 ),
                                 pos = -1, end = -1,
