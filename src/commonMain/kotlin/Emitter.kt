@@ -2780,6 +2780,18 @@ class Emitter(
                 }
                 emitParameter(param)
             }
+            // If the last parameter has an inline // line comment, it consumed the rest of the
+            // line, so the closing `)` must appear on the next line.
+            if (!options.removeComments) {
+                val lastParam = emittableParams.lastOrNull()
+                val hasInlineLineComment = lastParam?.trailingComments?.any {
+                    !it.hasPrecedingNewLine && it.text.startsWith("//")
+                } == true
+                if (hasInlineLineComment) {
+                    writeNewLine()
+                    writeIndent()
+                }
+            }
         }
     }
 
