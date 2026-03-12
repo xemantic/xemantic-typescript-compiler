@@ -194,6 +194,29 @@ class TypeScriptCompiler {
             // Ordered list of compilable TS file names
             val tsFileNames = mutableListOf<String>()
 
+            // Resolve outDir to an absolute path when fullEmitPaths is set.
+            // When files use absolute paths (e.g. /a.ts) and outDir is relative (e.g. "bin"),
+            // resolve outDir relative to the tsconfig.json directory.
+            val resolvedOutDir: String? = if (options.outDir != null && options.fullEmitPaths) {
+                val outDir = options.outDir.trimEnd('/')
+                if (outDir.startsWith('/')) {
+                    outDir
+                } else {
+                    val tsconfigFile = parsed.files
+                        .find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
+                        ?.fileName
+                    val tsconfigDir = tsconfigFile?.let { tf ->
+                        val dir = tf.substringBeforeLast('/')
+                        // "/tsconfig.json".substringBeforeLast('/') = "" but dir is "/"
+                        if (dir.isEmpty() && tf.startsWith('/')) "/" else dir
+                    }
+                    if (tsconfigDir != null && tsconfigDir.startsWith('/')) {
+                        val root = tsconfigDir.trimEnd('/')
+                        "$root/$outDir"
+                    } else outDir
+                }
+            } else options.outDir
+
             for (file in parsed.files) {
                 // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
                 val baseName = file.fileName.substringAfterLast('/')
@@ -208,7 +231,7 @@ class TypeScriptCompiler {
                     && !file.fileName.contains("/node_modules/")) {
                     val jsonContent = stripJsonTrailingCommas(file.content).trimEnd()
                     if (options.fullEmitPaths) {
-                        val outDir = options.outDir.trimEnd('/')
+                        val outDir = resolvedOutDir!!.trimEnd('/')
                         val jsonBaseName = file.fileName.substringAfterLast('/')
                         jsonOutputs.add("$outDir/$jsonBaseName" to jsonContent)
                     } else {
@@ -258,8 +281,8 @@ class TypeScriptCompiler {
                     .replace(".cts", ".cjs")
                     .replace(".ts", ".js")
                 // When fullEmitPaths + outDir, prepend outDir to basename
-                if (options.fullEmitPaths && options.outDir != null) {
-                    val outDir = options.outDir.trimEnd('/')
+                if (options.fullEmitPaths && resolvedOutDir != null) {
+                    val outDir = resolvedOutDir.trimEnd('/')
                     val base = jsName.substringAfterLast('/')
                     jsName = "$outDir/$base"
                 } else {
