@@ -2198,19 +2198,34 @@ class Emitter(
         }
         // type arguments erased
         write("(")
-        emitCallArguments(node.arguments)
+        val lastArg = emitCallArguments(node.arguments)
+        // If the last argument had a trailing single-line comment, `)` goes on the next line
+        if (!options.removeComments && lastArg?.trailingComments?.lastOrNull()?.kind == SyntaxKind.SingleLineComment) {
+            writeNewLine()
+            writeIndent()
+        }
         write(")")
     }
 
-    private fun emitCallArguments(arguments: List<Expression>) {
+    /** Emits call arguments, returning the last non-omitted argument (or null). */
+    private fun emitCallArguments(arguments: List<Expression>): Expression? {
         var firstArg = true
+        var lastArg: Expression? = null
         for (arg in arguments) {
             if (arg is OmittedExpression) continue // skip missing arguments
             if (!firstArg) write(", ")
             firstArg = false
             emitInlineLeadingComments(arg)
             emitExpression(arg)
+            lastArg = arg
         }
+        // Emit trailing comments of last argument only for types that don't emit them internally.
+        // NumericLiteralNode and StringLiteralNode already emit their own trailing comments in emitExpression.
+        if (!options.removeComments && lastArg != null
+            && lastArg !is NumericLiteralNode && lastArg !is StringLiteralNode) {
+            emitTrailingComments(lastArg.trailingComments)
+        }
+        return lastArg
     }
 
     private fun emitNewExpression(node: NewExpression) {

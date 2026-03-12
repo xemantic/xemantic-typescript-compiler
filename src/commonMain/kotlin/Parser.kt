@@ -3128,7 +3128,9 @@ class Parser(private val source: String, private val fileName: String) {
             val postDotComments = leadingComments() ?: scanner.getTrailingComments()
             var spreadExpr = parseAssignmentExpression()
             if (postDotComments != null) spreadExpr = spreadExpr.withLeadingComments(postDotComments)
-            return SpreadAssignment(expression = spreadExpr, pos = pos, end = getEnd(), leadingComments = comments)
+            // Capture any same-line trailing comment after the spread expression (e.g. `...x // comment`)
+            val spreadTrailing = scanner.consumeTrailingComments()
+            return SpreadAssignment(expression = spreadExpr, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = spreadTrailing)
         }
 
         // In object literals, modifier keywords (public, private, etc.) can also be property

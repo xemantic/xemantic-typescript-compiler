@@ -5608,12 +5608,14 @@ class Transformer(private val options: CompilerOptions) {
         for (prop in remaining) {
             if (prop is SpreadAssignment) {
                 flushPending()
+                // Transfer trailing comment from SpreadAssignment to its expression argument
+                val spreadExpr = prop.expression.withTrailingComments(prop.trailingComments)
                 if (isFirst) {
                     // First spread: start the chain — accumulator already holds leading props (or {})
-                    accumulator = makeObjectAssignCall(listOf(accumulator, prop.expression))
+                    accumulator = makeObjectAssignCall(listOf(accumulator, spreadExpr))
                     isFirst = false
                 } else {
-                    accumulator = makeObjectAssignCall(listOf(accumulator, prop.expression))
+                    accumulator = makeObjectAssignCall(listOf(accumulator, spreadExpr))
                 }
             } else {
                 pendingProps.add(prop)
