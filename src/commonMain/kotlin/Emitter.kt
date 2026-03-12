@@ -2145,9 +2145,14 @@ class Emitter(
         }
         if (node.newLineAfterDot) {
             writeNewLine()
-            indentLevel++
-            writeIndent()
-            indentLevel--
+            if (node.name.text.isNotEmpty()) {
+                indentLevel++
+                writeIndent()
+                indentLevel--
+            } else {
+                // Missing identifier: newline but keep same indent level as the statement
+                writeIndent()
+            }
         }
         write(node.name.emitText)
     }
