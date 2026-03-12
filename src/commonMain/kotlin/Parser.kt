@@ -3489,7 +3489,11 @@ class Parser(private val source: String, private val fileName: String) {
                 args.add(SpreadElement(expression = spreadExpr, pos = pos, end = getEnd()))
             } else {
                 val expr = parseAssignmentExpression()
-                args.add(if (argComments != null) expr.withLeadingComments(argComments) else expr)
+                // Capture trailing same-line comment before comma/close-paren (e.g. `arg // comment`)
+                val argTrailing = scanner.consumeTrailingComments()
+                var argExpr = if (argComments != null) expr.withLeadingComments(argComments) else expr
+                if (argTrailing != null) argExpr = argExpr.withTrailingComments(argTrailing)
+                args.add(argExpr)
             }
             if (!parseOptional(SyntaxKind.Comma)) break
         }
