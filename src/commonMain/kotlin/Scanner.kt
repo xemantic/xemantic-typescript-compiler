@@ -598,8 +598,10 @@ class Scanner(private val text: String) {
             scanDecimalDigits()
         }
 
-        // BigInt suffix
-        if (pos < end && text[pos] == 'n') {
+        // BigInt suffix — only for pure decimal (no legacy octal like 0123n, no float)
+        // Legacy octal: starts with '0' followed by more digits (0123) — not a valid BigInt
+        val isLegacyOctalCandidate = text[start] == '0' && (pos - start) > 1
+        if (!isLegacyOctalCandidate && pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
             return SyntaxKind.BigIntLiteral

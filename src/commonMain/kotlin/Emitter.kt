@@ -1632,11 +1632,18 @@ class Emitter(
                 // and lowercases hex digits (e.g. 0xFFFFn → 0xffffn)
                 val withoutN = text.removeSuffix("n").removeSuffix("N")
                 val converted = when {
-                    withoutN.startsWith("0b", ignoreCase = true) ->
-                        withoutN.substring(2).toLongOrNull(2)?.toString() ?: withoutN
-                    withoutN.startsWith("0o", ignoreCase = true) ->
-                        withoutN.substring(2).toLongOrNull(8)?.toString() ?: withoutN
-                    withoutN.startsWith("0x", ignoreCase = true) -> withoutN.lowercase()
+                    withoutN.startsWith("0b", ignoreCase = true) -> {
+                        val digits = withoutN.substring(2)
+                        digits.toLongOrNull(2)?.toString() ?: if (digits.isEmpty()) "0" else withoutN
+                    }
+                    withoutN.startsWith("0o", ignoreCase = true) -> {
+                        val digits = withoutN.substring(2)
+                        digits.toLongOrNull(8)?.toString() ?: if (digits.isEmpty()) "0" else withoutN
+                    }
+                    withoutN.startsWith("0x", ignoreCase = true) -> {
+                        val lower = withoutN.lowercase()
+                        if (lower == "0x") "0x0" else lower
+                    }
                     else -> withoutN
                 }
                 write("${converted}n")
