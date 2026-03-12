@@ -98,9 +98,11 @@ infix fun String?.sameAs(expected: Path) {
 }
 
 /**
- * Strips `.d.ts` / `.d.mts` / `.d.cts` sections from a baseline string.
+ * Strips `.d.ts` / `.d.mts` / `.d.cts` sections and noCheck diff sections from a baseline string.
  * A dts section starts with a line like `//// [filename.d.ts]` or `//// [filename.d.mts]`
  * and extends to the end of the file (or to the next non-dts `//// [...]` section).
+ * A noCheck diff section starts with `!!!! File ... differs from original emit in noCheck emit`
+ * and extends to the end of the file.
  */
 private fun stripDtsSection(baseline: String): String {
     val lines = baseline.split("\n")
@@ -111,6 +113,10 @@ private fun stripDtsSection(baseline: String): String {
     val sourceBaseNamesSoFar = mutableSetOf<String>()
     for (line in lines) {
         val trimmed = line.trimEnd()
+        // Strip noCheck diff section: everything from "!!!! File ... differs ..." onwards
+        if (trimmed.startsWith("!!!!")) {
+            break
+        }
         if (trimmed.startsWith("//// [") && trimmed.endsWith("]")) {
             val fileName = trimmed.removePrefix("//// [").removeSuffix("]")
             val baseName = fileName.substringAfterLast('/')

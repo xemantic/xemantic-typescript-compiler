@@ -4141,8 +4141,10 @@ class Transformer(private val options: CompilerOptions) {
      * Transforms a single statement, potentially producing 0, 1, or many output statements.
      */
     private fun transformStatement(statement: Statement): List<Statement> {
-        // Declarations with `declare` modifier produce no output
-        if (statement is Declaration && hasDeclareModifier(statement)) {
+        // Declarations with `declare` modifier produce no output.
+        // Exception: ImportEqualsDeclaration is handled by transformImportEqualsDeclaration
+        // which decides whether to emit it (e.g. `declare export import a = X.Y` still emits).
+        if (statement is Declaration && hasDeclareModifier(statement) && statement !is ImportEqualsDeclaration) {
             return orphanedComments(statement)
         }
 
@@ -5545,15 +5547,20 @@ class Transformer(private val options: CompilerOptions) {
         // E.g. `import public = require("1")` in a strict-mode file produces no output.
         if (decl.name.text in strictModeReservedWords) return emptyList()
 
-        // Erase import if the referenced name is type-only (interface, type alias, or type-only namespace)
+        // Erase import if the referenced name is type-only (interface, type alias, or type-only namespace).
+        // Exception: exported import aliases (export import a = X.Y) are always emitted since
+        // they create explicitly exported bindings that other modules may depend on.
         val ref = decl.moduleReference
-        if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
-            return emptyList()
-        }
-        if (ref is QualifiedName) {
-            val rootName = generateSequence(ref) { (it.left as? QualifiedName) }.last().left
-            if (rootName is Identifier && rootName.text in topLevelTypeOnlyNames) {
+        val isExported = ModifierFlag.Export in decl.modifiers
+        if (!isExported) {
+            if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
                 return emptyList()
+            }
+            if (ref is QualifiedName) {
+                val rootName = generateSequence(ref) { (it.left as? QualifiedName) }.last().left
+                if (rootName is Identifier && rootName.text in topLevelTypeOnlyNames) {
+                    return emptyList()
+                }
             }
         }
 
