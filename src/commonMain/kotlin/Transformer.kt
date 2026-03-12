@@ -143,14 +143,19 @@ class Transformer(private val options: CompilerOptions) {
 
     private fun nextTempVarName(): String {
         val n = tempVarCounter++
-        // TypeScript skips `_i` to avoid confusion with `1` (one) in some fonts.
-        // The sequence is: _a, _b, ..., _h, _j, _k, ..., _z, _aa, _ab, ... (skipping 'i' everywhere).
-        fun letterAt(idx: Int): Char = if (idx < 8) 'a' + idx else 'a' + idx + 1  // skip 'i' at position 8
-        return if (n < 25) {  // 25 single-letter names: a-h (8) + j-z (17)
+        // TypeScript skips both `_i` and `_n` in temp variable names.
+        // The sequence is: _a, _b, ..., _h, _j, _k, _l, _m, _o, _p, ..., _z, _aa, _ab, ... (skipping 'i' and 'n').
+        // 24 single-letter names total: a-h (8) + j-m (4) + o-z (12)
+        fun letterAt(idx: Int): Char = when {
+            idx < 8 -> 'a' + idx          // a-h (0-7)
+            idx < 12 -> 'a' + idx + 1     // j-m (8-11), skip 'i'
+            else -> 'a' + idx + 2         // o-z (12-23), skip 'i' and 'n'
+        }
+        return if (n < 24) {  // 24 single-letter names: a-h (8) + j-m (4) + o-z (12)
             "_${letterAt(n)}"
         } else {
-            val m = n - 25  // 0-based index into two-letter names
-            "_${letterAt(m / 25)}${letterAt(m % 25)}"
+            val m = n - 24  // 0-based index into two-letter names
+            "_${letterAt(m / 24)}${letterAt(m % 24)}"
         }
     }
 
