@@ -34,6 +34,7 @@ class Emitter(
     private val sb = StringBuilder()
     private var indentLevel = 0
     private var isStartOfLine = true
+    private var blockDepth = 0  // 0 = top-level file, >0 = inside a block (function body, if, etc.)
     // When true the next writeIndent() call is a no-op (consumed immediately).
     // Used so that labeled-statement chains (target1: target2: while…) can chain
     // all labels on the same line without the body statement re-indenting.
@@ -181,6 +182,7 @@ class Emitter(
     }
 
     private fun emitBlockStatements(statements: List<Statement>) {
+        blockDepth++
         for (statement in statements) {
             if (shouldSkipStatement(statement)) {
                 if (statement is NotEmittedStatement) emitLeadingComments(statement)
@@ -190,6 +192,7 @@ class Emitter(
             emitStatement(statement)
             emitTrailingCommentsBeforeNewline(statement)
         }
+        blockDepth--
     }
 
     private fun shouldSkipStatement(statement: Statement): Boolean = when (statement) {
@@ -1269,7 +1272,9 @@ class Emitter(
                     effectiveModule == ModuleKind.ES2020 ||
                     effectiveModule == ModuleKind.ES2022 ||
                     effectiveModule == ModuleKind.ESNext
-            if (isESModuleFormat) return
+            // At top level of an ES module, `export = X` is invalid — drop it.
+            // Inside a function/block, preserve it as-is (TypeScript emits error-recovery as-is).
+            if (isESModuleFormat && blockDepth == 0) return
             writeIndent()
             write("export = ")
         } else {
