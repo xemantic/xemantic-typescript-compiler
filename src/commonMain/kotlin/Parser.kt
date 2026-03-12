@@ -3608,6 +3608,10 @@ class Parser(private val source: String, private val fileName: String) {
 
     private fun parseNonUnionType(): TypeNode {
         val pos = getPos()
+        // Error recovery: leading ! in type position (e.g. a: !string) — skip it
+        if (token == SyntaxKind.Exclamation) {
+            nextToken()
+        }
         // Type operators
         if (token == SyntaxKind.KeyOfKeyword) {
             nextToken()
@@ -3674,6 +3678,11 @@ class Parser(private val source: String, private val fileName: String) {
                 parseExpected(SyntaxKind.CloseBracket)
                 type = IndexedAccessType(objectType = type, indexType = indexType, pos = pos, end = getEnd())
             }
+        }
+
+        // Error recovery: trailing ! in type position (e.g. string!) — skip it
+        if (token == SyntaxKind.Exclamation) {
+            nextToken()
         }
 
         return type
