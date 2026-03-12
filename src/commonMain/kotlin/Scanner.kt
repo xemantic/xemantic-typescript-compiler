@@ -195,8 +195,11 @@ class Scanner(private val text: String) {
         val ch = text[pos]
 
         token = when {
-            // Identifiers and keywords (including \uXXXX escape sequences at start)
-            isIdentifierStart(ch) || (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' &&
+            // Identifiers and keywords (including \uXXXX escape sequences at start,
+            // and supplementary Unicode plane chars encoded as surrogate pairs)
+            isIdentifierStart(ch) ||
+                    (ch.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) ||
+                    (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' &&
                     pos + 2 < end && (text[pos + 2] == '{' || isHexDigit(text[pos + 2]))) -> scanIdentifierOrKeyword()
 
             // Numeric literals
@@ -484,9 +487,19 @@ class Scanner(private val text: String) {
         if (pos < end && text[pos] == '\\') {
             return scanIdentifierWithEscapes(start)
         }
-        pos++ // consume the first character (already verified as identifier start)
+        // Consume first character — handle surrogate pairs for supplementary Unicode chars
+        if (text[pos].isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) {
+            pos += 2
+        } else {
+            pos++ // consume the first character (already verified as identifier start)
+        }
         while (pos < end) {
             val ch = text[pos]
+            // Handle surrogate pairs for supplementary Unicode plane identifier chars
+            if (ch.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) {
+                pos += 2
+                continue
+            }
             // Only treat \u as mid-identifier escape if followed by hex digit or '{'
             if (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u') {
                 val savedPos = pos
@@ -892,10 +905,20 @@ class Scanner(private val text: String) {
 
             '#' -> {
                 // # can start a private identifier
-                if (pos < end && isIdentifierStart(text[pos])) {
-                    // Scan private identifier as a single token
-                    while (pos < end && isIdentifierPart(text[pos])) {
-                        pos++
+                val nextCh = if (pos < end) text[pos] else '\u0000'
+                val nextIsIdentStart = isIdentifierStart(nextCh) ||
+                        (nextCh.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate())
+                if (nextIsIdentStart) {
+                    // Scan private identifier as a single token — handle surrogate pairs
+                    while (pos < end) {
+                        val c = text[pos]
+                        if (c.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) {
+                            pos += 2
+                        } else if (isIdentifierPart(c)) {
+                            pos++
+                        } else {
+                            break
+                        }
                     }
                     tokenValue = text.substring(tokenPos, pos)
                     SyntaxKind.Identifier
