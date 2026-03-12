@@ -1312,6 +1312,10 @@ class Emitter(
             else -> { /* should not happen */
             }
         }
+        if (node.assertClause != null) {
+            write(" ")
+            write(node.assertClause)
+        }
         write(";")
         writeNewLine()
     }

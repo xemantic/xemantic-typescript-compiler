@@ -472,6 +472,8 @@ data class ImportDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Raw source text of the assert/with clause, e.g. ` assert { type: "json" }`. Null if absent. */
+    val assertClause: String? = null,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportDeclaration
 }
@@ -498,6 +500,8 @@ data class ExportDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Raw source text of the assert/with clause, e.g. ` assert { type: "json" }`. Null if absent. */
+    val assertClause: String? = null,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportDeclaration
 }
