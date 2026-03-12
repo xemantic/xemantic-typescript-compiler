@@ -2530,7 +2530,17 @@ class Parser(private val source: String, private val fileName: String) {
         var expr = when (token) {
             NewKeyword -> parseNewExpression()
             SuperKeyword -> {
-                val pos = getPos(); nextToken(); Identifier(text = "super", pos = pos, end = getEnd())
+                val pos = getPos(); nextToken()
+                val superExpr = Identifier(text = "super", pos = pos, end = getEnd())
+                // TypeScript requires super to be followed by `.`, `[`, `(`, or `<` (type args).
+                // If the next token is none of these, insert a missing property name
+                // for TypeScript-compatible error recovery (emits `super.` in output).
+                if (token != Dot && token != OpenBracket && token != OpenParen && token != LessThan) {
+                    val missingName = Identifier(text = "", pos = getPos(), end = getPos())
+                    PropertyAccessExpression(expression = superExpr, name = missingName, pos = pos, end = getPos())
+                } else {
+                    superExpr
+                }
             }
 
             ImportKeyword -> {
