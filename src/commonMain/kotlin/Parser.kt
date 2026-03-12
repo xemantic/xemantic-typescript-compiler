@@ -3813,6 +3813,11 @@ class Parser(private val source: String, private val fileName: String) {
         }
         if (token == SyntaxKind.TypeOfKeyword) {
             nextToken()
+            // `typeof import(...)` — the import(...) is an ImportType, not a qualified name
+            if (token == SyntaxKind.ImportKeyword) {
+                val importType = parseImportType()
+                return TypeQuery(exprName = importType, typeArguments = null, pos = pos, end = getEnd())
+            }
             val name = parseQualifiedName()
             val typeArgs = parseTypeArgumentsOpt()
             var type: TypeNode = TypeQuery(exprName = name, typeArguments = typeArgs, pos = pos, end = getEnd())

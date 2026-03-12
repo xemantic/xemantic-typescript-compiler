@@ -7337,8 +7337,11 @@ class Transformer(private val options: CompilerOptions) {
                         )
                     } else {
                         // Numeric / expression initializer: E[E["X"] = expr] = "X"
-                        // Try to fold constant expressions (e.g. 1 << 1 → 2)
-                        var foldedValue = evaluateConstantExpression(initExpr, memberValues)
+                        // Try to fold constant expressions (e.g. 1 << 1 → 2).
+                        // Evaluate the ORIGINAL initializer (pre-type-erasure) so that type-only
+                        // operators like `!` (non-null assertion), `satisfies`, and `as` prevent
+                        // constant folding — matching TypeScript's emit behavior.
+                        var foldedValue = evaluateConstantExpression(member.initializer, memberValues)
                         // Forward references to not-yet-defined members resolve to 0
                         // (TypeScript emits 0 for forward enum member references)
                         if (foldedValue == null && isForwardEnumRef(initExpr, enumName, memberName, knownMemberNames, processedMembers)) {
