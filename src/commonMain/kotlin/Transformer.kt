@@ -341,6 +341,8 @@ class Transformer(private val options: CompilerOptions) {
      * Side-effect imports (`import "mod"`) are always kept.
      */
     private fun elideUnusedESModuleImports(statements: List<Statement>): List<Statement> {
+        // verbatimModuleSyntax: imports must be kept as-is, no elision
+        if (options.verbatimModuleSyntax) return statements
         val imports = statements.filterIsInstance<ImportDeclaration>()
         if (imports.isEmpty()) return statements
 
@@ -1268,7 +1270,7 @@ class Transformer(private val options: CompilerOptions) {
             }.toHashSet()
         } else emptySet()
         val importLikeStmts = requireSet + internalAliasStmts
-        if (importLikeStmts.isNotEmpty()) {
+        if (importLikeStmts.isNotEmpty() && !options.verbatimModuleSyntax) {
             // Collect references from all statements (including other import-like stmts so that
             // e.g. `var y = x` counts as a reference to `x` in the require import `const x = require(...)`)
             val referenced = collectValueReferences(result)
