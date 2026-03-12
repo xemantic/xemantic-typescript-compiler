@@ -8783,15 +8783,50 @@ class Transformer(private val options: CompilerOptions) {
         // Navigate the namespace hierarchy starting from top-level statements
         var stmts: List<Statement> = topLevelStatements
         for ((i, part) in parts.withIndex()) {
+            // First: look for a ModuleDeclaration with this name
             val ns = stmts.filterIsInstance<ModuleDeclaration>()
                 .firstOrNull { extractIdentifierName(it.name) == part }
-                ?: return false
-            if (i == parts.size - 1) return isTypeOnlyNamespace(ns)
-            val body = ns.body ?: return true
-            stmts = when (body) {
-                is ModuleBlock -> body.statements
-                is ModuleDeclaration -> listOf(body)
-                else -> return false
+            if (ns != null) {
+                if (i == parts.size - 1) return isTypeOnlyNamespace(ns)
+                val body = ns.body ?: return true
+                stmts = when (body) {
+                    is ModuleBlock -> body.statements
+                    is ModuleDeclaration -> listOf(body)
+                    else -> return false
+                }
+                continue
+            }
+            // Second: look for an ImportEqualsDeclaration alias with this name
+            val importAlias = stmts.filterIsInstance<ImportEqualsDeclaration>()
+                .firstOrNull { it.name.text == part } ?: return false
+            val aliasRef = importAlias.moduleReference
+            if (i == parts.size - 1) {
+                // At the last part: check if the alias target is type-only
+                return when (aliasRef) {
+                    is Identifier -> {
+                        val targetNs = stmts.filterIsInstance<ModuleDeclaration>()
+                            .firstOrNull { extractIdentifierName(it.name) == aliasRef.text }
+                        targetNs != null && isTypeOnlyNamespace(targetNs)
+                    }
+                    is QualifiedName -> isQualifiedPathTypeOnly(aliasRef)
+                    else -> false
+                }
+            } else {
+                // Middle of path: resolve alias to the namespace and continue
+                when (aliasRef) {
+                    is Identifier -> {
+                        val targetNs = stmts.filterIsInstance<ModuleDeclaration>()
+                            .firstOrNull { extractIdentifierName(it.name) == aliasRef.text }
+                            ?: return false
+                        val body = targetNs.body ?: return true
+                        stmts = when (body) {
+                            is ModuleBlock -> body.statements
+                            is ModuleDeclaration -> listOf(body)
+                            else -> return false
+                        }
+                    }
+                    else -> return false
+                }
             }
         }
         return false
