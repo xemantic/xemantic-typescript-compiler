@@ -688,11 +688,16 @@ class Transformer(private val options: CompilerOptions) {
                                 // Direct: emit exports.x = value; for each declarator (no local var kept).
                                 // Record the name so later export-expression references can be rewritten.
                                 var isFirst = true
-                                for (decl in stmt.declarationList.declarations) {
+                                val decls = stmt.declarationList.declarations
+                                for ((dIdx, decl) in decls.withIndex()) {
                                     val name = extractIdentifierName(decl.name)
                                     if (name != null && decl.initializer != null) {
                                         directExportedVarNames.add(name)
                                         val leadingComments = if (isFirst) stmt.leadingComments else null
+                                        val isLastDecl = dIdx == decls.size - 1
+                                        // Preserve trailing comments from the declarator or the statement (for last declarator)
+                                        val trailingComments = decl.trailingComments
+                                            ?: if (isLastDecl) stmt.trailingComments else null
                                         result.add(
                                             ExpressionStatement(
                                                 expression = BinaryExpression(
@@ -706,6 +711,7 @@ class Transformer(private val options: CompilerOptions) {
                                                     pos = -1, end = -1,
                                                 ),
                                                 leadingComments = leadingComments,
+                                                trailingComments = trailingComments,
                                                 pos = -1, end = -1,
                                             )
                                         )
