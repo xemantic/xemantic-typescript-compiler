@@ -200,7 +200,11 @@ class Parser(private val source: String, private val fileName: String) {
             else parseImportDeclaration()
         }
         ExportKeyword -> parseExportDeclaration()
-        InterfaceKeyword -> parseInterfaceDeclaration()
+        InterfaceKeyword -> if (lookAhead { nextToken(); isIdentifier() || isKeyword() }) {
+            parseInterfaceDeclaration()
+        } else {
+            parseExpressionStatement()
+        }
         TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
         EnumKeyword -> parseEnumDeclaration()
         NamespaceKeyword -> parseModuleDeclaration()
