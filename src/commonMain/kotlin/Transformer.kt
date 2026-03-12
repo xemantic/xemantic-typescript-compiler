@@ -259,10 +259,13 @@ class Transformer(private val options: CompilerOptions) {
                     is ExpressionStatement -> firstStmt.copy(leadingComments = null)
                     is FunctionDeclaration -> firstStmt.copy(leadingComments = null)
                     is ClassDeclaration -> firstStmt.copy(leadingComments = null)
+                    // NotEmittedStatement is already a comment holder — lift it whole
+                    is NotEmittedStatement -> firstStmt
                     else -> null
                 }
                 if (firstStripped != null) {
-                    listOf(commentHolder) + helpers + listOf(firstStripped) + transformed.drop(1)
+                    val rest = if (firstStmt is NotEmittedStatement) transformed.drop(1) else listOf(firstStripped) + transformed.drop(1)
+                    listOf(commentHolder) + helpers + rest
                 } else {
                     helpers + transformed
                 }
