@@ -1928,6 +1928,14 @@ class Emitter(
             write("}")
             return
         }
+        // Check for "compact multi-line": multiLine=false but source has newlines between properties.
+        // In this case, first property is on same line as `{`, subsequent properties on new lines.
+        val isCompactMultiLine = !multiline && node.pos >= 0 && properties.size >= 2 && run {
+            val firstEnd = properties[0].end
+            val secondStart = properties[1].pos
+            firstEnd > 0 && secondStart >= firstEnd && secondStart <= sourceText.length &&
+                sourceText.substring(firstEnd, secondStart).contains('\n')
+        }
         if (multiline) {
             write("{")
             writeNewLine()
@@ -1971,6 +1979,26 @@ class Emitter(
                     writeNewLine()
                 }
             }
+            indentLevel--
+            writeIndent()
+            write("}")
+        } else if (isCompactMultiLine) {
+            // Compact multi-line: first property on same line as `{`, rest on new lines.
+            write("{ ")
+            emitObjectProperty(properties[0])
+            write(",")
+            indentLevel++
+            for (i in 1 until properties.size) {
+                val prop = properties[i]
+                val isLast = i == properties.size - 1
+                writeNewLine()
+                emitLeadingComments(prop)
+                writeIndent()
+                emitObjectProperty(prop)
+                if (!isLast || node.hasTrailingComma) write(",")
+                emitTrailingComments(prop)
+            }
+            writeNewLine()
             indentLevel--
             writeIndent()
             write("}")
