@@ -788,6 +788,10 @@ class Transformer(private val options: CompilerOptions) {
                     val isExported = ModifierFlag.Export in stmt.modifiers
                     val isDefault = ModifierFlag.Default in stmt.modifiers
 
+                    // Local function declaration shadows any imported name with the same name.
+                    // Remove it from renameMap so references to this name use the local binding.
+                    stmt.name?.text?.let { renameMap.remove(it) }
+
                     if (isExported) {
                         val strippedModifiers = stmt.modifiers - ModifierFlag.Export - ModifierFlag.Default
                         val name = stmt.name?.text
