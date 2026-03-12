@@ -491,7 +491,13 @@ class Transformer(private val options: CompilerOptions) {
                     collectBoundNames(decl.name).forEach { n -> earlyRuntimeNames.add(n) }
                 }
                 is EnumDeclaration -> earlyRuntimeNames.add(stmt.name.text)
-                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { earlyRuntimeNames.add(it) }
+                is ModuleDeclaration -> {
+                    val n = extractIdentifierName(stmt.name)
+                    if (n != null) {
+                        if (isTypeOnlyNamespace(stmt)) earlyTypeOnlyNames.add(n)
+                        else earlyRuntimeNames.add(n)
+                    }
+                }
                 else -> {}
             }
         }
@@ -599,7 +605,10 @@ class Transformer(private val options: CompilerOptions) {
                 is ModuleDeclaration -> {
                     val n = extractIdentifierName(stmt.name)
                         ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
-                    n?.let { runtimeDeclaredNames.add(it) }
+                    if (n != null) {
+                        if (isTypeOnlyNamespace(stmt)) typeOnlyDeclaredNames.add(n)
+                        else runtimeDeclaredNames.add(n)
+                    }
                 }
                 // Imports are runtime values — include them so local `export { name }` can distinguish
                 // imported runtime values from undeclared type-only globals.
@@ -1683,7 +1692,13 @@ class Transformer(private val options: CompilerOptions) {
                     collectBoundNames(decl.name).forEach { n -> earlyRuntimeNames.add(n) }
                 }
                 is EnumDeclaration -> earlyRuntimeNames.add(stmt.name.text)
-                is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { earlyRuntimeNames.add(it) }
+                is ModuleDeclaration -> {
+                    val n = extractIdentifierName(stmt.name)
+                    if (n != null) {
+                        if (isTypeOnlyNamespace(stmt)) earlyTypeOnlyNames.add(n)
+                        else earlyRuntimeNames.add(n)
+                    }
+                }
                 else -> {}
             }
         }
