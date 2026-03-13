@@ -118,9 +118,17 @@ class Transformer(private val options: CompilerOptions) {
     // __awaiter form. When true, AwaitExpression nodes are converted to YieldExpression.
     private var inAsyncBody = false
 
+    // Whether we are inside an async generator body (async function*) being rewritten to
+    // __asyncGenerator form. When true, await→yield __await(...) and yield→yield yield __await(...).
+    private var inAsyncGeneratorBody = false
+
     // Set to true when any async function/arrow is transformed to __awaiter form.
     // Causes the __awaiter helper to be prepended to the output statements.
     private var needsAwaiterHelper = false
+
+    // Set to true when any async generator (async function*) is transformed.
+    // Causes the __await and __asyncGenerator helpers to be prepended to the output statements.
+    private var needsAsyncGeneratorHelper = false
 
     // Set to true when object destructuring with rest elements is transformed.
     // Causes the __rest helper to be prepended to the output statements.
@@ -185,7 +193,9 @@ class Transformer(private val options: CompilerOptions) {
         hasSeenRuntimeStatement = false
         hasSeenAnyTopLevelStatement = false
         inAsyncBody = false
+        inAsyncGeneratorBody = false
         needsAwaiterHelper = false
+        needsAsyncGeneratorHelper = false
         needsRestHelper = false
         needsDecorateHelper = false
         needsParamHelper = false
@@ -270,7 +280,7 @@ class Transformer(private val options: CompilerOptions) {
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
-        // Collect helpers to inject at top of file (order matters: __makeTemplateObject, __rest, __decorate, __param, __awaiter).
+        // Collect helpers to inject at top of file (order matters: __makeTemplateObject, __rest, __decorate, __param, __awaiter, __await, __asyncGenerator).
         val helpers = mutableListOf<RawStatement>()
         if (needsMakeTemplateObjectHelper) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
         if (needsRestHelper) helpers.add(RawStatement(code = REST_HELPER))
@@ -278,6 +288,10 @@ class Transformer(private val options: CompilerOptions) {
         if (needsMetadataHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
         if (needsParamHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
         if (needsAwaiterHelper && !options.importHelpers) helpers.add(RawStatement(code = AWAITER_HELPER))
+        if (needsAsyncGeneratorHelper) {
+            helpers.add(RawStatement(code = AWAIT_HELPER))
+            helpers.add(RawStatement(code = ASYNC_GENERATOR_HELPER))
+        }
 
         // When helpers are present, lift leading comments from the first transformed statement
         // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
@@ -477,6 +491,7 @@ class Transformer(private val options: CompilerOptions) {
         is IfStatement -> exprContainsDynamicImport(stmt.expression) ||
                 stmtContainsDynamicImport(stmt.thenStatement) ||
                 (stmt.elseStatement?.let { stmtContainsDynamicImport(it) } == true)
+        is FunctionDeclaration -> stmt.body?.statements?.any { stmtContainsDynamicImport(it) } == true
         else -> false
     }
 
@@ -1580,12 +1595,12 @@ class Transformer(private val options: CompilerOptions) {
             result.add(0, RawStatement(code = helpers))
         }
 
-        // Insert passed-in leading helpers (e.g. __awaiter, __rest) between import helpers
-        // and "use strict". After "use strict" is prepended below, they end up at position 1
-        // (right after "use strict" and before Object.defineProperty preamble), matching
-        // TypeScript's output ordering.
+        // Insert passed-in leading helpers (e.g. __awaiter, __rest) after CJS import helpers.
+        // TypeScript's ordering: "use strict" → CJS helpers (__createBinding/__importStar) →
+        // other helpers (__awaiter, __await, __asyncGenerator) → preamble → statements.
         if (leadingHelpers.isNotEmpty()) {
-            result.addAll(0, leadingHelpers)
+            val insertPos = if (needsImportStar || needsImportDefault || needsExportStar) 1 else 0
+            result.addAll(insertPos, leadingHelpers)
         }
 
         // Re-insert "use strict" at the very top (before helpers and preamble).
@@ -4628,6 +4643,7 @@ class Transformer(private val options: CompilerOptions) {
                 whenFalse = rewriteCjsDynExpr(expr.whenFalse, needImportStar)
             )
             is AwaitExpression -> expr.copy(expression = rewriteCjsDynExpr(expr.expression, needImportStar))
+            is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteCjsDynExpr(it, needImportStar) })
             is ParenthesizedExpression -> expr.copy(expression = rewriteCjsDynExpr(expr.expression, needImportStar))
             is PrefixUnaryExpression -> expr.copy(operand = rewriteCjsDynExpr(expr.operand, needImportStar))
             is PostfixUnaryExpression -> expr.copy(operand = rewriteCjsDynExpr(expr.operand, needImportStar))
@@ -4686,6 +4702,9 @@ class Transformer(private val options: CompilerOptions) {
             is ForStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
             is ForOfStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
             is ForInStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
+            is FunctionDeclaration -> stmt.copy(body = stmt.body?.let { block ->
+                block.copy(statements = block.statements.map { rewriteCjsDynStmt(it, needImportStar) })
+            })
             else -> stmt
         }
     }
@@ -4966,13 +4985,38 @@ class Transformer(private val options: CompilerOptions) {
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers)
         val isAsync = ModifierFlag.Async in decl.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+        val isAsyncGenerator = isAsync && decl.asteriskToken
         val prevInAsyncBody = inAsyncBody
-        inAsyncBody = isAsync
+        val prevInAsyncGeneratorBody = inAsyncGeneratorBody
+        inAsyncBody = isAsync && !isAsyncGenerator
+        inAsyncGeneratorBody = isAsyncGenerator
         return withFreshTempVarCounter {
             val transformedBody = transformBlock(decl.body, isFunctionScope = true)
             inAsyncBody = prevInAsyncBody
+            inAsyncGeneratorBody = prevInAsyncGeneratorBody
 
-            if (isAsync) {
+            if (isAsyncGenerator) {
+                needsAsyncGeneratorHelper = true
+                functionScopeDepth++
+                val transformedParams = transformParameters(decl.parameters)
+                functionScopeDepth--
+                val innerName = decl.name?.text?.let { "${it}_1" }
+                val asyncGenBody = Block(
+                    statements = listOf(ReturnStatement(expression = makeAsyncGeneratorCall(
+                        syntheticId("this"), syntheticId("arguments"),
+                        innerName, transformedParams, transformedBody
+                    ))),
+                    multiLine = true,
+                )
+                listOf(decl.copy(
+                    typeParameters = null,
+                    parameters = transformedParams,
+                    type = null,
+                    body = asyncGenBody,
+                    modifiers = strippedModifiers - ModifierFlag.Async,
+                    asteriskToken = false,
+                ))
+            } else if (isAsync) {
                 needsAwaiterHelper = true
                 // Transform parameters inside the function scope so async arrows in
                 // default parameters see the correct functionScopeDepth for `this` binding.
@@ -5049,6 +5093,36 @@ class Transformer(private val options: CompilerOptions) {
             pos = -1, end = -1,
         )
     }
+
+    /** Builds `__asyncGenerator(thisArg, arguments, function* name_1(params) { body })`. */
+    private fun makeAsyncGeneratorCall(
+        thisArg: Expression,
+        argumentsArg: Expression,
+        innerName: String?,
+        innerParams: List<Parameter>,
+        body: Block,
+    ): CallExpression {
+        val generatorFn = FunctionExpression(
+            name = innerName?.let { Identifier(text = it, pos = -1, end = -1) },
+            parameters = innerParams,
+            body = body,
+            asteriskToken = true,
+            pos = -1, end = -1,
+        )
+        return CallExpression(
+            expression = syntheticId("__asyncGenerator"),
+            arguments = listOf(thisArg, argumentsArg, generatorFn),
+            pos = -1, end = -1,
+        )
+    }
+
+    /** Builds `__await(expr)`. */
+    private fun makeAwaitCall(expr: Expression): CallExpression =
+        CallExpression(
+            expression = syntheticId("__await"),
+            arguments = listOf(expr),
+            pos = -1, end = -1,
+        )
 
     // -----------------------------------------------------------------
     // Variable statement transform
@@ -5786,11 +5860,34 @@ class Transformer(private val options: CompilerOptions) {
             is FunctionExpression -> withFreshTempVarCounter {
                 val strippedModifiers = stripTypeScriptModifiers(expr.modifiers)
                 val isAsync = ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+                val isAsyncGenerator = isAsync && expr.asteriskToken
                 val prevInAsyncBody = inAsyncBody
-                inAsyncBody = isAsync
+                val prevInAsyncGenBody = inAsyncGeneratorBody
+                inAsyncBody = isAsync && !isAsyncGenerator
+                inAsyncGeneratorBody = isAsyncGenerator
                 val transformedBody = transformBlock(expr.body, isFunctionScope = true)
                 inAsyncBody = prevInAsyncBody
-                if (isAsync) {
+                inAsyncGeneratorBody = prevInAsyncGenBody
+                if (isAsyncGenerator) {
+                    needsAsyncGeneratorHelper = true
+                    val innerName = expr.name?.text?.let { "${it}_1" }
+                    val transformedParams = transformParameters(expr.parameters)
+                    val asyncGenBody = Block(
+                        statements = listOf(ReturnStatement(expression = makeAsyncGeneratorCall(
+                            syntheticId("this"), syntheticId("arguments"),
+                            innerName, transformedParams, transformedBody
+                        ))),
+                        multiLine = true,
+                    )
+                    expr.copy(
+                        typeParameters = null,
+                        parameters = transformedParams,
+                        type = null,
+                        body = asyncGenBody,
+                        modifiers = strippedModifiers - ModifierFlag.Async,
+                        asteriskToken = false,
+                    )
+                } else if (isAsync) {
                     needsAwaiterHelper = true
                     val awaiterBody = Block(
                         statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), body = transformedBody))),
@@ -5850,10 +5947,24 @@ class Transformer(private val options: CompilerOptions) {
             // Tagged template
             is TaggedTemplateExpression -> transformTaggedTemplate(expr)
 
-            // Yield
-            is YieldExpression -> expr.copy(
-                expression = expr.expression?.let { transformExpression(it) }
-            )
+            // Yield: in async generator body, `yield expr` → `yield yield __await(expr)`
+            is YieldExpression -> {
+                if (inAsyncGeneratorBody && !expr.asteriskToken) {
+                    val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+                    val innerExpr = expr.expression?.let { transformExpression(it) } ?: void0
+                    YieldExpression(
+                        expression = YieldExpression(
+                            expression = makeAwaitCall(innerExpr),
+                            pos = -1, end = -1,
+                        ),
+                        leadingComments = expr.leadingComments,
+                        trailingComments = expr.trailingComments,
+                        pos = -1, end = -1,
+                    )
+                } else {
+                    expr.copy(expression = expr.expression?.let { transformExpression(it) })
+                }
+            }
 
             // Delete
             is DeleteExpression -> expr.copy(
@@ -5870,12 +5981,20 @@ class Transformer(private val options: CompilerOptions) {
                 expression = transformExpression(expr.expression),
             )
 
-            // Await: convert to yield when inside a downleveled async body,
-            // or when await is used outside an async context at an older target
-            // (TypeScript emits yield for non-async-context await at targets < ES2017)
+            // Await: in async generator body → yield __await(expr);
+            // in regular async body → yield expr;
+            // outside async at old target → yield expr.
             is AwaitExpression -> {
                 val transformedInner = transformExpression(expr.expression)
-                if (inAsyncBody || (!expr.inAsyncContext && options.effectiveTarget < ScriptTarget.ES2017)) {
+                if (inAsyncGeneratorBody) {
+                    // async function* context: await expr → yield __await(expr)
+                    YieldExpression(
+                        expression = makeAwaitCall(transformedInner),
+                        leadingComments = expr.leadingComments,
+                        trailingComments = expr.trailingComments,
+                        pos = -1, end = -1,
+                    )
+                } else if (inAsyncBody || (!expr.inAsyncContext && options.effectiveTarget < ScriptTarget.ES2017)) {
                     YieldExpression(
                         expression = transformedInner,
                         leadingComments = expr.leadingComments,
@@ -6038,10 +6157,35 @@ class Transformer(private val options: CompilerOptions) {
     private fun transformMethodDeclarationElement(method: MethodDeclaration): MethodDeclaration {
         val strippedModifiers = stripMemberModifiers(method.modifiers)
         val isAsync = ModifierFlag.Async in method.modifiers && options.effectiveTarget < ScriptTarget.ES2017
+        val isAsyncGenerator = isAsync && method.asteriskToken
         val prevInAsyncBody = inAsyncBody
-        inAsyncBody = isAsync
+        val prevInAsyncGenBody = inAsyncGeneratorBody
+        inAsyncBody = isAsync && !isAsyncGenerator
+        inAsyncGeneratorBody = isAsyncGenerator
         val transformedBody = method.body?.let { transformBlock(it, isFunctionScope = true) }
         inAsyncBody = prevInAsyncBody
+        inAsyncGeneratorBody = prevInAsyncGenBody
+        if (isAsyncGenerator && transformedBody != null) {
+            needsAsyncGeneratorHelper = true
+            val methodName = (method.name as? Identifier)?.text
+            val innerName = methodName?.let { "${it}_1" }
+            val transformedParams = transformParameters(method.parameters)
+            val asyncGenBody = Block(
+                statements = listOf(ReturnStatement(expression = makeAsyncGeneratorCall(
+                    syntheticId("this"), syntheticId("arguments"),
+                    innerName, transformedParams, transformedBody
+                ))),
+                multiLine = true,
+            )
+            return method.copy(
+                typeParameters = null,
+                parameters = transformedParams,
+                type = null,
+                body = asyncGenBody,
+                modifiers = strippedModifiers - ModifierFlag.Async,
+                asteriskToken = false,
+            )
+        }
         if (isAsync && transformedBody != null) {
             needsAwaiterHelper = true
             val awaiterBody = Block(
@@ -10816,6 +10960,25 @@ class Transformer(private val options: CompilerOptions) {
 
         val EXPORT_STAR_HELPER = """var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+"""
+
+        /** TypeScript `__await` helper — emitted for async generators (`async function*`). */
+        val AWAIT_HELPER = """var __await = (this && this.__await) || function (v) { return this instanceof __await ? (this.v = v, this) : new __await(v); }
+"""
+
+        /** TypeScript `__asyncGenerator` helper — emitted for async generators (`async function*`). */
+        val ASYNC_GENERATOR_HELPER = """var __asyncGenerator = (this && this.__asyncGenerator) || function (thisArg, _arguments, generator) {
+    if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+    var g = generator.apply(thisArg, _arguments || []), i, q = [];
+    return i = Object.create((typeof AsyncIterator === "function" ? AsyncIterator : Object).prototype), verb("next"), verb("throw"), verb("return", awaitReturn), i[Symbol.asyncIterator] = function () { return this; }, i;
+    function awaitReturn(f) { return function (v) { return Promise.resolve(v).then(f, reject); }; }
+    function verb(n, f) { if (g[n]) { i[n] = function (v) { return new Promise(function (a, b) { q.push([n, v, a, b]) > 1 || resume(n, v); }); }; if (f) i[n] = f(i[n]); } }
+    function resume(n, v) { try { step(g[n](v)); } catch (e) { settle(q[0][3], e); } }
+    function step(r) { r.value instanceof __await ? Promise.resolve(r.value.v).then(fulfill, reject) : settle(q[0][2], r); }
+    function fulfill(value) { resume("next", value); }
+    function reject(value) { resume("throw", value); }
+    function settle(f, v) { if (f(v), q.shift(), q.length) resume(q[0][0], q[0][1]); }
 };
 """
     }
