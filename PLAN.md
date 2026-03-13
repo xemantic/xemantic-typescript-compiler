@@ -23,7 +23,7 @@
 
 ## NEW QUEUE — Wave 2 (execute top-to-bottom)
 
-- [ ] **15. `__makeTemplateObject` helper** (~2 tests: `templateLiteralEscapeSequence`, `templateLiteralIntersection4`) — **File:** `Transformer.kt` + `Emitter.kt` — **Fix:** implement `__makeTemplateObject` helper; transform tagged template expressions with invalid escape sequences (`tag\`...\`` → `tag(__makeTemplateObject([cooked], [raw]))`). See `typescript-repo/src/compiler/factory/emitHelpers.ts` for helper text.
+- [x] **15. `__makeTemplateObject` helper** (~2 tests: `templateLiteralEscapeSequence`, `templateLiteralIntersection4`) — **File:** `Transformer.kt` — **Fix:** implement `__makeTemplateObject` helper; transform tagged template expressions with invalid escape sequences. Fixed `templateLiteralEscapeSequence` (+1). `templateLiteralIntersection4` is a separate parser bug (mapped type `as` clause with template literal type misparses the `{[K in keyof Store as \`use${...}\`]` member).
 
 - [ ] **16. `noEmitOnError` option** (~2 tests: `isolatedModulesNoEmitOnError`, `jsFileCompilationEmitBlockedCorrectly`) — **File:** `TypeScriptCompiler.kt` — **Fix:** when `noEmitOnError: true` and the program has diagnostics, skip emitting JS output entirely.
 
