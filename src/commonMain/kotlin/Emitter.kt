@@ -1904,7 +1904,12 @@ class Emitter(
             for ((index, element) in node.elements.withIndex()) {
                 if (index > 0) write(", ")
                 emitInlineLeadingComments(element)
+                // ClassExpression bodies are always multiline; indent so the closing `}` aligns
+                // at +1 relative to the array context (mirrors TypeScript emitter behavior).
+                val classInArray = element is ClassExpression
+                if (classInArray) indentLevel++
                 emitExpression(element)
+                if (classInArray) indentLevel--
                 // NumericLiteralNode already emits same-line trailing comments in emitExpression
                 if (element !is NumericLiteralNode) emitTrailingComments(element)
             }
