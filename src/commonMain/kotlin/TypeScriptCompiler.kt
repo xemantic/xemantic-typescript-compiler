@@ -265,7 +265,7 @@ class TypeScriptCompiler {
                 diagnostics.addAll(parser.getDiagnostics())
 
                 // Extract relative imports for dependency ordering
-                importDeps[file.fileName] = extractRelativeImports(sourceFile, file.fileName, parsed.files)
+                importDeps[file.fileName] = extractRelativeImports(sourceFile, file.fileName, parsed.files, options.moduleSuffixes)
 
                 val transformer = Transformer(options)
                 val transformed = transformer.transform(sourceFile)
@@ -341,6 +341,7 @@ private fun extractRelativeImports(
     sourceFile: SourceFile,
     currentFileName: String,
     allFiles: List<SourceFileEntry>,
+    moduleSuffixes: List<String>? = null,
 ): List<String> {
     val allTsFileNames = allFiles.map { it.fileName }.toSet()
     val deps = mutableListOf<String>()
@@ -372,12 +373,35 @@ private fun extractRelativeImports(
             specifier
         }
 
-        // Try with .ts and .tsx extensions, and also /index.ts for directory imports (e.g. "./")
+        // Build candidate list respecting moduleSuffixes.
+        // When moduleSuffixes is set, ONLY try suffixed variants (no fallback to un-suffixed).
+        // An empty-string suffix "" means "also try without suffix" (TypeScript convention).
+        // If specifier has an extension (e.g. "./foo.js"), insert suffix before it.
+        // If no extension (e.g. "./foo"), append suffix then try .ts/.tsx/etc.
         val sep = if (resolved.isEmpty() || resolved.endsWith("/")) "" else "/"
-        for (candidate in listOf(
-            "$resolved.ts", "$resolved.tsx", resolved,
-            "${resolved}${sep}index.ts", "${resolved}${sep}index.tsx"
-        )) {
+        val knownExtensions = listOf(".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+        val resolvedExt = knownExtensions.firstOrNull { resolved.endsWith(it) }
+        val resolvedBase = if (resolvedExt != null) resolved.dropLast(resolvedExt.length) else resolved
+        val candidates: List<String> = if (!moduleSuffixes.isNullOrEmpty()) {
+            // Only try suffixed variants
+            moduleSuffixes.flatMap { suffix ->
+                if (resolvedExt != null) {
+                    listOf("$resolvedBase$suffix$resolvedExt")
+                } else {
+                    listOf("$resolvedBase$suffix.ts", "$resolvedBase$suffix.tsx",
+                        "$resolvedBase$suffix.mts", "$resolvedBase$suffix.cts")
+                }
+            }
+        } else if (resolvedExt != null) {
+            listOf(resolved)
+        } else {
+            listOf(
+                "$resolved.ts", "$resolved.tsx", "$resolved.mts", "$resolved.cts",
+                resolved,
+                "${resolved}${sep}index.ts", "${resolved}${sep}index.tsx"
+            )
+        }
+        for (candidate in candidates) {
             if (candidate in allTsFileNames) {
                 deps.add(candidate)
                 break

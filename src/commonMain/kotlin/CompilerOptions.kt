@@ -107,6 +107,7 @@ data class CompilerOptions(
     val fullEmitPaths: Boolean = false,
     val noResolve: Boolean = false,
     val moduleDetection: String? = null,
+    val moduleSuffixes: List<String>? = null,
 ) {
     val effectiveAlwaysStrict: Boolean
         get() = alwaysStrict ?: strict
@@ -392,6 +393,16 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
         kvPairs.add(key to value)
     }
 
+    // Parse array-valued options (e.g. moduleSuffixes: [".ios", ""])
+    val arrayPattern = Regex(""""(\w+)"\s*:\s*\[([^\]]*)]""")
+    val arrayPairs = mutableListOf<Pair<String, List<String>>>()
+    for (match in arrayPattern.findAll(compilerOptionsBlock)) {
+        val key = match.groupValues[1].lowercase()
+        val items = Regex(""""([^"]*)"""").findAll(match.groupValues[2])
+            .map { it.groupValues[1] }.toList()
+        arrayPairs.add(key to items)
+    }
+
     // Only apply a safe subset of tsconfig options that our transpiler handles correctly.
     // Options like outDir, rootDir, paths, etc. affect module resolution in complex ways
     // that we don't fully support — skip them to avoid regressions.
@@ -410,6 +421,13 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
     for ((key, value) in kvPairs) {
         if (key !in allowedTsconfigOptions) continue
         result = applyDirective(result, key, value)
+    }
+    // Apply array options
+    for ((key, values) in arrayPairs) {
+        result = when (key) {
+            "modulesuffixes" -> result.copy(moduleSuffixes = values)
+            else -> result
+        }
     }
     return result
 }
