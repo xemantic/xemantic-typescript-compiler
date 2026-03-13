@@ -485,6 +485,7 @@ class Parser(private val source: String, private val fileName: String) {
             nextToken()
             val name = parseBindingNameOrPattern()
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+            val elemTrailing = if (init != null) scanner.getTrailingComments() else null
             BindingElement(
                 propertyName = nameOrProp,
                 name = name,
@@ -493,9 +494,11 @@ class Parser(private val source: String, private val fileName: String) {
                 pos = pos,
                 end = getEnd(),
                 leadingComments = elemComments,
+                trailingComments = elemTrailing,
             )
         } else {
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+            val elemTrailing = if (init != null) scanner.getTrailingComments() else null
             BindingElement(
                 name = nameOrProp,
                 initializer = init,
@@ -503,6 +506,7 @@ class Parser(private val source: String, private val fileName: String) {
                 pos = pos,
                 end = getEnd(),
                 leadingComments = elemComments,
+                trailingComments = elemTrailing,
             )
         }
     }
