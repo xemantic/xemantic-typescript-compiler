@@ -727,6 +727,9 @@ data class NewExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Type arguments that appear BEFORE the constructor expression (e.g. `new <T>Expr`).
+     *  TypeScript keeps these in JS output (unlike trailing type args which are erased). */
+    val leadingTypeArguments: List<TypeNode>? = null,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.NewExpression
 }

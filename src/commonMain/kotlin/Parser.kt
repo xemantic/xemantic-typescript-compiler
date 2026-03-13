@@ -2815,15 +2815,19 @@ class Parser(private val source: String, private val fileName: String) {
             val name = parseIdentifier()
             return MetaProperty(keywordToken = NewKeyword, name = name, pos = pos, end = getEnd())
         }
+        // `new <T>Expr` — TypeScript parses `<T>` as leading type arguments (not a type assertion)
+        // and keeps them in JS output. Try to parse them before the constructor expression.
+        val leadingTypeArgs = if (token == LessThan) tryParseTypeArguments() else null
         // For `new`, the constructor expression allows member access (. and []) and nested `new`,
         // but NOT function calls. parseCallAndAccess would greedily consume `()` and turn
         // `new Foo()` into `new (Foo())` — use parseMemberAccessOnly instead.
         // Handle nested `new` (e.g. `new new Date`) by recursing.
         val baseExpr = if (token == NewKeyword) parseNewExpression() else parsePrimaryExpression()
         val expr = parseMemberAccessOnly(baseExpr)
-        val typeArgs = tryParseTypeArguments()
+        // Only parse trailing type args if we didn't find leading ones (e.g. `new Foo<T>()`)
+        val typeArgs = if (leadingTypeArgs == null) tryParseTypeArguments() else null
         val args = if (token == OpenParen) parseArgumentList() else null
-        return NewExpression(expression = expr, typeArguments = typeArgs, arguments = args, pos = pos, end = getEnd())
+        return NewExpression(expression = expr, typeArguments = typeArgs, leadingTypeArguments = leadingTypeArgs, arguments = args, pos = pos, end = getEnd())
     }
 
     /** Like [parseCallAndAccess] but only handles `.` and `[` member access, not function calls. */
