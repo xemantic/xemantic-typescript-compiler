@@ -9794,9 +9794,20 @@ class Transformer(private val options: CompilerOptions) {
             is Expression -> rewriteId(b, map, wrapCallsWithZero)
             else -> b
         })
-        is FunctionExpression -> expr.copy(
-            body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
-        )
+        is FunctionExpression -> {
+            // Don't rewrite names that are locally declared as functions or variables in this scope —
+            // they shadow any outer binding with the same name. This prevents namespace-IIFE-local
+            // function declarations from being incorrectly rewritten to exports.X.
+            val localNames = expr.body.statements.flatMapTo(mutableSetOf()) { stmt ->
+                when (stmt) {
+                    is FunctionDeclaration -> listOfNotNull(stmt.name?.text)
+                    is VariableStatement -> stmt.declarationList.declarations.flatMap { collectBoundNames(it.name) }
+                    else -> emptyList()
+                }
+            }
+            val localMap = if (localNames.isEmpty()) map else map - localNames
+            expr.copy(body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, localMap, wrapCallsWithZero) }))
+        }
         is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
         is ClassExpression -> expr.copy(
             heritageClauses = expr.heritageClauses?.map { hc ->
