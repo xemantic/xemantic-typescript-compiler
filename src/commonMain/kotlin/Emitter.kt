@@ -2329,6 +2329,19 @@ class Emitter(
         // trailing type arguments erased
         if (node.arguments != null) {
             write("(")
+            if (!options.removeComments && node.innerComments != null && node.arguments.isEmpty()) {
+                var multiline = false
+                for (comment in node.innerComments) {
+                    if (comment.hasPrecedingNewLine) {
+                        writeNewLine()
+                        multiline = true
+                    } else {
+                        write(" ")
+                    }
+                    write(comment.text)
+                }
+                if (multiline) writeNewLine()
+            }
             var firstArg = true
             for (arg in node.arguments) {
                 if (arg is OmittedExpression) continue // skip missing arguments
@@ -2386,22 +2399,27 @@ class Emitter(
             val leftmost = leftmostExpressionDeep(node.expression)
             val comments = leftmost.leadingComments
             if (!comments.isNullOrEmpty()) {
+                // Use onNewLine to avoid double-newlines when a line comment's trailing newline
+                // is followed by another comment with hasPrecedingNewLine=true.
+                var onNewLine = false
                 for (comment in comments) {
                     if (comment.hasPrecedingNewLine) {
-                        writeNewLine()
+                        if (!onNewLine) writeNewLine()
                         writeIndent()
-                        write(reindentComment(comment))
-                        if (comment.hasTrailingNewLine) {
-                            writeNewLine()
-                            writeIndent()
-                        } else {
-                            write(" ")
-                        }
+                        onNewLine = false
                     } else {
                         write(" ")
-                        write(comment.text)
+                    }
+                    write(reindentComment(comment))
+                    if (comment.hasTrailingNewLine) {
+                        writeNewLine()
+                        onNewLine = true
+                    } else {
+                        if (comment.hasPrecedingNewLine) write(" ")
+                        onNewLine = false
                     }
                 }
+                if (onNewLine) writeIndent()
             }
         }
         emitExpression(node.expression)
@@ -2412,7 +2430,34 @@ class Emitter(
                 write(" "); write(it.text)
             }
         }
+        // Emit comments on new lines before ')' (e.g. `//close`, `/*3*/`)
+        if (!options.removeComments && !node.beforeCloseParenComments.isNullOrEmpty()) {
+            var onNewLine = false
+            for (comment in node.beforeCloseParenComments) {
+                if (comment.hasPrecedingNewLine) {
+                    if (!onNewLine) writeNewLine()
+                    writeIndent()
+                    onNewLine = false
+                } else {
+                    write(" ")
+                }
+                write(reindentComment(comment))
+                if (comment.hasTrailingNewLine) {
+                    writeNewLine()
+                    onNewLine = true
+                } else {
+                    onNewLine = false
+                }
+            }
+            if (!onNewLine) write(" ")
+        }
         write(")")
+        // Emit same-line trailing comments after ')' (e.g. `/*4*/` in `(expr)/*4*/`)
+        if (!options.removeComments) {
+            node.afterCloseParenComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                write(" "); write(it.text)
+            }
+        }
     }
 
     private fun emitFunctionExpression(node: FunctionExpression) {

@@ -528,7 +528,8 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = parseExpression()
         // Capture same-line trailing comments between expression and `;`
         // (e.g. the `/*3*/` in `new Array /*3*/;`) before parseSemicolon advances past them.
-        val semiInline = if (!scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments() else null
+        // Only when no preceding line break — comments on a new line belong to the next statement.
+        val semiInline = if (!scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments()?.ifEmpty { null } else null
         parseSemicolon()
         val trailing = trailingComments()
         return ExpressionStatement(
@@ -2835,7 +2836,8 @@ class Parser(private val source: String, private val fileName: String) {
         // Only parse trailing type args if we didn't find leading ones (e.g. `new Foo<T>()`)
         val typeArgs = if (leadingTypeArgs == null) tryParseTypeArguments() else null
         val args = if (token == OpenParen) parseArgumentList() else null
-        return NewExpression(expression = expr, typeArguments = typeArgs, leadingTypeArguments = leadingTypeArgs, arguments = args, pos = pos, end = getEnd())
+        val innerComments = if (args != null) lastCallInnerComments else null
+        return NewExpression(expression = expr, typeArguments = typeArgs, leadingTypeArguments = leadingTypeArgs, arguments = args, innerComments = innerComments, pos = pos, end = getEnd())
     }
 
     /** Like [parseCallAndAccess] but only handles `.` and `[` member access, not function calls. */
@@ -3028,9 +3030,19 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = parseExpression()
         // Capture same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`).
         val innerTrailing = scanner.getTrailingComments()
+        // Capture comments on new lines before ')' (e.g. `//close`, `/*3*/` in multi-line paren).
+        val beforeCloseParen = leadingComments()
         parseExpected(SyntaxKind.CloseParen)
+        // Capture same-line trailing comments after ')' (e.g. `/*4*/` in `(expr)/*4*/`).
+        val afterCloseParen = scanner.consumeTrailingComments()?.ifEmpty { null }
         val exprWithComments = if (!innerTrailing.isNullOrEmpty()) expr.withTrailingComments(innerTrailing) else expr
-        return ParenthesizedExpression(expression = exprWithComments, pos = pos, end = getEnd())
+        return ParenthesizedExpression(
+            expression = exprWithComments,
+            beforeCloseParenComments = beforeCloseParen,
+            afterCloseParenComments = afterCloseParen,
+            pos = pos,
+            end = getEnd(),
+        )
     }
 
     private fun parseArrowFunction(modifiers: Set<ModifierFlag>): ArrowFunction {

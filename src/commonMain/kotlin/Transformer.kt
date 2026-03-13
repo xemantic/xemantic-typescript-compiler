@@ -5538,7 +5538,7 @@ class Transformer(private val options: CompilerOptions) {
                         val tempName = nextTempVarName()
                         hoistedVarScopes.lastOrNull()?.add(tempName)
                         val tempId = syntheticId(tempName)
-                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = Equals, right = transformedExpr, pos = -1, end = -1), pos = -1, end = -1)
+                        nullCheck = ParenthesizedExpression(expression = BinaryExpression(left = tempId, operator = Equals, right = transformedExpr, pos = -1, end = -1), pos = -1, end = -1)
                         objRef = tempId
                     }
                     val isNull = BinaryExpression(left = nullCheck, operator = EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
@@ -5658,7 +5658,7 @@ class Transformer(private val options: CompilerOptions) {
                         val tempName = nextTempVarName()
                         hoistedVarScopes.lastOrNull()?.add(tempName)
                         val tempId = syntheticId(tempName)
-                        nullCheck = ParenthesizedExpression(BinaryExpression(left = tempId, operator = Equals, right = obj, pos = -1, end = -1), pos = -1, end = -1)
+                        nullCheck = ParenthesizedExpression(expression = BinaryExpression(left = tempId, operator = Equals, right = obj, pos = -1, end = -1), pos = -1, end = -1)
                         objRef = tempId
                     }
                     val isNull = BinaryExpression(left = nullCheck, operator = EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
