@@ -723,6 +723,7 @@ data class NewExpression(
     val expression: Expression,
     val typeArguments: List<TypeNode>? = null,
     val arguments: List<Expression>? = null,
+    val innerComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
@@ -759,6 +760,11 @@ data class TypeAssertionExpression(
 
 data class ParenthesizedExpression(
     val expression: Expression,
+    /** Comments on new lines before `)` (e.g. `//close`, `/*3*/` in `(\n  "foo"\n  //close\n  /*3*/ )`). */
+    val beforeCloseParenComments: List<Comment>? = null,
+    /** Comments immediately after `)` on the same line (e.g. `/*4*/` in `(expr)/*4*/`).
+     *  Stored separately from [trailingComments] to avoid double-emit by outer context emitters. */
+    val afterCloseParenComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
