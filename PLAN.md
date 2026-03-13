@@ -1,6 +1,6 @@
 # Test Fix Plan
 
-**Current State:** 4508 tests, ~200-203 failing (95.5–95.6% passing)
+**Current State:** 4508 tests, 200 failing (95.6% passing) — confirmed deterministic (5-run study)
 
 ## QUEUE (execute top-to-bottom, do NOT re-order or skip ahead)
 
