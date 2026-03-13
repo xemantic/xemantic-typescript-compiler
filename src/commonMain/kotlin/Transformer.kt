@@ -734,6 +734,12 @@ class Transformer(private val options: CompilerOptions) {
                     val isExported = ModifierFlag.Export in stmt.modifiers
                     val strippedModifiers = stmt.modifiers - ModifierFlag.Export
 
+                    // Local variable declaration shadows any imported name with the same name.
+                    // Remove shadowed names from renameMap so references use the local binding.
+                    for (decl in stmt.declarationList.declarations) {
+                        for (n in collectBoundNames(decl.name)) renameMap.remove(n)
+                    }
+
                     if (isExported) {
                         // Check if it's a require() call (from import = require transform)
                         val isRequire = stmt.declarationList.declarations.size == 1 &&
