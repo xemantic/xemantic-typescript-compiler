@@ -260,9 +260,9 @@ class TypeScriptCompiler {
                 if (!isTsFile && !isJsFile) {
                     continue
                 }
-                // Plain .js/.mjs/.cjs: only when outDir is set (avoids overwriting sources)
-                // .jsx: always compile (TypeScript compiles .jsx regardless of outDir)
-                if (isPureJsFile && options.outDir == null && options.outFile == null) {
+                // Plain .js/.mjs/.cjs/.jsx: only when outDir/outFile is set (avoids overwriting sources)
+                // .jsx is JavaScript+JSX (requires allowJs); without outDir/outFile, TypeScript skips it
+                if ((isPureJsFile || isJsxFile) && options.outDir == null && options.outFile == null) {
                     continue
                 }
                 // Skip .d.ts/.d.mts/.d.cts files (they don't produce JS output)
@@ -309,6 +309,9 @@ class TypeScriptCompiler {
 
                 val emitter = Emitter(options)
                 val javascript = emitter.emit(transformed, sourceFile)
+
+                // Skip files that produce no meaningful output (e.g. empty .tsx/.ts files)
+                if (javascript.isBlank()) continue
 
                 // .tsx/.jsx → .jsx only when jsx=preserve; all other modes produce .js
                 val isJsxPreserveMulti = options.jsx?.lowercase() == "preserve"
