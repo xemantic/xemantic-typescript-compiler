@@ -6226,7 +6226,9 @@ class Transformer(private val options: CompilerOptions) {
                         else -> null
                     }
                 }
-                ObjectLiteralExpression(properties = props, pos = -1, end = -1)
+                val objLit = ObjectLiteralExpression(properties = props, pos = -1, end = -1)
+                // Convert spread attributes to Object.assign() for targets below ES2018
+                transformObjectLiteral(objLit)
             }
         }
 
