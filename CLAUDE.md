@@ -32,6 +32,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Numeric literal property access**: `1.foo` is ambiguous in JS (the `.` is a decimal point). Emit `1..foo` when the numeric literal has no decimal point, exponent, or `0x`/`0b`/`0o` prefix.
 - **Labeled statement chaining**: TypeScript emits `target1: target2: stmt` all on one line. Use a `skipNextIndent` flag to suppress the body statement's `writeIndent()` call after writing all labels inline.
 - **`emitPropertyAssignment` comment tracking**: After emitting `": "`, track `onNewLine` (bool). For each comment: if `hasPrecedingNewLine && !onNewLine` emit newline+indent first; then write comment; if `hasTrailingNewLine` emit newline+indent and set `onNewLine=true`, else write space and `onNewLine=false`. Never double-newline by emitting newline when already at line start.
+- **JSX self-closing `/>` spacing**: TypeScript emits a space before `/>` only when there are NO attributes (`<Foo />`) but NOT when attributes are present (`<Foo bar="x"/>`).
 
 ### Transformer gotchas
 
