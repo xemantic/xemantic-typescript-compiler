@@ -2926,6 +2926,12 @@ class Emitter(
         if (node.initializer != null) {
             write(" = ")
             emitExpression(node.initializer)
+            if (!options.removeComments) {
+                node.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                    write(" ")
+                    write(it.text)
+                }
+            }
         }
     }
 
