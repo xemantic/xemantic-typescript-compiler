@@ -280,11 +280,14 @@ class TypeScriptCompiler {
                     .replace(".mts", ".mjs")
                     .replace(".cts", ".cjs")
                     .replace(".ts", ".js")
-                // When fullEmitPaths + outDir, prepend outDir to basename
-                if (options.fullEmitPaths && resolvedOutDir != null) {
-                    val outDir = resolvedOutDir.trimEnd('/')
-                    val base = jsName.substringAfterLast('/')
-                    jsName = "$outDir/$base"
+                // When fullEmitPaths: keep full path; when outDir is also set, prepend it
+                if (options.fullEmitPaths) {
+                    if (resolvedOutDir != null) {
+                        val outDir = resolvedOutDir.trimEnd('/')
+                        val base = jsName.substringAfterLast('/')
+                        jsName = "$outDir/$base"
+                    }
+                    // else: keep jsName as full path (just extension replaced)
                 } else {
                     // Strip directory prefix — baseline uses just basenames.
                     // Handle both Unix '/' and Windows '\' separators.
