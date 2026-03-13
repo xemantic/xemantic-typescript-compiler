@@ -3084,7 +3084,16 @@ class Transformer(private val options: CompilerOptions) {
             when (stmt) {
                 is VariableStatement -> {
                     if (ModifierFlag.Declare !in stmt.modifiers) {
+                        val isExported = ModifierFlag.Export in stmt.modifiers
                         for (d in stmt.declarationList.declarations) {
+                            // Exported destructuring bindings with >1 element or object binding need temp vars;
+                            // they are added to hoisted vars in Pass 2 (temp var first, then bound names).
+                            val skipForExportedDestructuring = isExported && when (val pat = d.name) {
+                                is ObjectBindingPattern -> true
+                                is ArrayBindingPattern -> pat.elements.size > 1
+                                else -> false
+                            }
+                            if (skipForExportedDestructuring) continue
                             for (n in collectBoundNames(d.name)) {
                                 if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
                             }
@@ -3303,18 +3312,105 @@ class Transformer(private val options: CompilerOptions) {
                                     pendingLeadingComments.addAll(stmt.leadingComments)
                                 }
                             } else {
-                                // Destructuring — try to flatten to individual hoisted var assignments
-                                val pairs = tryExpandObjectBinding(d)
-                                if (pairs != null && pairs.all { (n, _) -> n in hoistedVarNamesSet }) {
-                                    for ((localName, valueExpr) in pairs) {
-                                        executeStatements.add(ExpressionStatement(
-                                            expression = makeSystemExportInlineAssign(localName, valueExpr),
-                                            leadingComments = stmt.leadingComments,
-                                            pos = -1, end = -1,
-                                        ))
+                                // Destructuring export — unroll to temp var + exports_1 calls
+                                val init = d.initializer
+                                when (val pat = d.name) {
+                                    is ArrayBindingPattern -> {
+                                        val names = pat.elements.filterIsInstance<BindingElement>()
+                                            .map { (it.name as? Identifier)?.text }
+                                        if (names.all { it != null } && init != null) {
+                                            val nameList = names.filterNotNull()
+                                            if (nameList.size == 1) {
+                                                // Single element: exports_1("y", y = init[0]) — no temp var
+                                                val localName = nameList[0]
+                                                if (hoistedVarNamesSet.add(localName)) hoistedVarNames.add(localName)
+                                                val accessExpr = ElementAccessExpression(
+                                                    expression = init,
+                                                    argumentExpression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                                                    pos = -1, end = -1,
+                                                )
+                                                executeStatements.add(ExpressionStatement(
+                                                    expression = makeSystemExportInlineAssign(localName, accessExpr),
+                                                    leadingComments = stmt.leadingComments,
+                                                    pos = -1, end = -1,
+                                                ))
+                                            } else {
+                                                // Multiple elements: _a = init, exports_1("x", x = _a[0]), ...
+                                                val tempVar = nextTempVarName()
+                                                if (hoistedVarNamesSet.add(tempVar)) hoistedVarNames.add(tempVar)
+                                                for (n in nameList) {
+                                                    if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
+                                                }
+                                                val tempId = syntheticId(tempVar)
+                                                // Build comma expression: _a = init, exports_1("x", x = _a[0]), ...
+                                                var commaExpr: Expression = BinaryExpression(
+                                                    left = syntheticId(tempVar),
+                                                    operator = Equals,
+                                                    right = init,
+                                                    pos = -1, end = -1,
+                                                )
+                                                for ((i, localName) in nameList.withIndex()) {
+                                                    val accessExpr = ElementAccessExpression(
+                                                        expression = tempId,
+                                                        argumentExpression = NumericLiteralNode(text = i.toString(), pos = -1, end = -1),
+                                                        pos = -1, end = -1,
+                                                    )
+                                                    commaExpr = BinaryExpression(
+                                                        left = commaExpr,
+                                                        operator = SyntaxKind.Comma,
+                                                        right = makeSystemExportInlineAssign(localName, accessExpr),
+                                                        pos = -1, end = -1,
+                                                    )
+                                                }
+                                                executeStatements.add(ExpressionStatement(
+                                                    expression = commaExpr,
+                                                    leadingComments = stmt.leadingComments,
+                                                    pos = -1, end = -1,
+                                                ))
+                                            }
+                                        } else {
+                                            executeStatements.add(stripped)
+                                        }
                                     }
-                                } else {
-                                    executeStatements.add(stripped)
+                                    is ObjectBindingPattern -> {
+                                        val propChains = flattenObjectBindingPropChains(pat)
+                                        if (propChains != null && init != null) {
+                                            // Always use a temp var for object bindings
+                                            val tempVar = nextTempVarName()
+                                            if (hoistedVarNamesSet.add(tempVar)) hoistedVarNames.add(tempVar)
+                                            for ((localName, _) in propChains) {
+                                                if (hoistedVarNamesSet.add(localName)) hoistedVarNames.add(localName)
+                                            }
+                                            val tempId = syntheticId(tempVar)
+                                            // Build comma expression: _a = init, exports_1("z0", z0 = _a.a), ...
+                                            var commaExpr: Expression = BinaryExpression(
+                                                left = syntheticId(tempVar),
+                                                operator = Equals,
+                                                right = init,
+                                                pos = -1, end = -1,
+                                            )
+                                            for ((localName, propChain) in propChains) {
+                                                val accessExpr = buildPropertyAccessChain(tempId, propChain)
+                                                commaExpr = BinaryExpression(
+                                                    left = commaExpr,
+                                                    operator = SyntaxKind.Comma,
+                                                    right = makeSystemExportInlineAssign(localName, accessExpr),
+                                                    pos = -1, end = -1,
+                                                )
+                                            }
+                                            executeStatements.add(ExpressionStatement(
+                                                expression = commaExpr,
+                                                leadingComments = stmt.leadingComments,
+                                                pos = -1, end = -1,
+                                            ))
+                                        } else {
+                                            executeStatements.add(stripped)
+                                        }
+                                    }
+                                    else -> {
+                                        // Simple identifier or unknown — fall through (already handled above)
+                                        executeStatements.add(stripped)
+                                    }
                                 }
                             }
                         }
@@ -3485,6 +3581,18 @@ class Transformer(private val options: CompilerOptions) {
             val rewritten = functionHoists.map { rewriteIdInStatement(it, renameMap, wrapCallsWithZero = false) }
             functionHoists.clear()
             functionHoists.addAll(rewritten)
+        }
+
+        // Apply live binding export substitution: wrap assignments to exported vars in exports_1 calls.
+        // Only needed when there are exported vars that could be assigned to after declaration.
+        val exportedVarNamesForSubst = localExportNames.filter { it in hoistedVarNamesSet }.toSet()
+        val finalExecute = if (exportedVarNamesForSubst.isNotEmpty()) {
+            substituteSystemExportAssignments(renamedExecute, exportedVarNamesForSubst)
+        } else renamedExecute
+        if (exportedVarNamesForSubst.isNotEmpty() && functionHoists.isNotEmpty()) {
+            val substituted = substituteSystemExportAssignments(functionHoists, exportedVarNamesForSubst)
+            functionHoists.clear()
+            functionHoists.addAll(substituted)
         }
 
         // Build setters array — one setter per unique module path (in order of first appearance)
@@ -3726,7 +3834,7 @@ class Transformer(private val options: CompilerOptions) {
         val executeFn = FunctionExpression(
             parameters = emptyList(),
             body = Block(
-                statements = renamedExecute,
+                statements = finalExecute,
                 multiLine = true,
                 pos = -1, end = -1,
             ),
@@ -3876,6 +3984,144 @@ class Transformer(private val options: CompilerOptions) {
             pos = -1, end = -1,
         )
         return stmt.copy(expression = call.copy(arguments = listOf(newArg)))
+    }
+
+    /**
+     * Flattens an [ObjectBindingPattern] into a list of (localName, propChain) pairs for System module export.
+     * Returns null if the pattern can't be expanded (rest elements, initializers, computed props, etc.).
+     * propChain is the list of property names to access from the root (e.g. ["b", "c"] for `_a.b.c`).
+     */
+    private fun flattenObjectBindingPropChains(
+        pat: ObjectBindingPattern,
+        prefix: List<String> = emptyList(),
+        result: MutableList<Pair<String, List<String>>> = mutableListOf(),
+    ): List<Pair<String, List<String>>>? {
+        for (elem in pat.elements) {
+            if (elem.dotDotDotToken || elem.initializer != null) return null
+            val propName = when {
+                elem.propertyName != null -> when (val pn = elem.propertyName) {
+                    is Identifier -> pn.text
+                    is StringLiteralNode -> pn.text
+                    else -> return null
+                }
+                elem.name is Identifier -> (elem.name as Identifier).text
+                else -> return null
+            }
+            val propChain = prefix + propName
+            when (val name = elem.name) {
+                is Identifier -> result.add(name.text to propChain)
+                is ObjectBindingPattern -> flattenObjectBindingPropChains(name, propChain, result) ?: return null
+                else -> return null
+            }
+        }
+        return result
+    }
+
+    /** Builds `base.prop1.prop2...` property access chain. */
+    private fun buildPropertyAccessChain(base: Expression, chain: List<String>): Expression {
+        var expr = base
+        for (prop in chain) {
+            expr = PropertyAccessExpression(
+                expression = expr,
+                name = Identifier(text = prop, pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+        }
+        return expr
+    }
+
+    /**
+     * Applies System module live binding substitution to a list of statements:
+     * assignments to exported variables are wrapped in `exports_1("name", assignment)`.
+     * Handles: `x = val` → `exports_1("x", x = val)`, `++x`/`--x` → `exports_1("x", ++x)`,
+     * `x++`/`x--` → `exports_1("x", (x++, x))`, compound assignments `x += val` → `exports_1("x", x += val)`.
+     * Applied to ExpressionStatement, ForStatement init/incrementor, and function bodies.
+     */
+    private fun substituteSystemExportAssignments(
+        stmts: List<Statement>,
+        exported: Set<String>,
+    ): List<Statement> = stmts.map { substituteSystemInStmt(it, exported) }
+
+    private fun substituteSystemInStmt(stmt: Statement, exported: Set<String>): Statement = when (stmt) {
+        is ExpressionStatement -> stmt.copy(expression = substituteSystemInExpr(stmt.expression, exported))
+        is ForStatement -> {
+            val init = stmt.initializer
+            val newInit = if (init is Expression) substituteSystemInExpr(init, exported) else init
+            stmt.copy(
+                initializer = newInit,
+                incrementor = stmt.incrementor?.let { substituteSystemInExpr(it, exported) },
+                statement = substituteSystemInStmt(stmt.statement, exported),
+            )
+        }
+        is Block -> stmt.copy(statements = stmt.statements.map { substituteSystemInStmt(it, exported) })
+        is FunctionDeclaration -> stmt.copy(
+            body = stmt.body?.let { b -> b.copy(statements = b.statements.map { substituteSystemInStmt(it, exported) }) }
+        )
+        is IfStatement -> stmt.copy(
+            thenStatement = substituteSystemInStmt(stmt.thenStatement, exported),
+            elseStatement = stmt.elseStatement?.let { substituteSystemInStmt(it, exported) },
+        )
+        is WhileStatement -> stmt.copy(statement = substituteSystemInStmt(stmt.statement, exported))
+        is DoStatement -> stmt.copy(statement = substituteSystemInStmt(stmt.statement, exported))
+        else -> stmt
+    }
+
+    private fun substituteSystemInExpr(expr: Expression, exported: Set<String>): Expression = when (expr) {
+        is BinaryExpression -> {
+            val lhsIdent = if (isAssignmentOperator(expr.operator)) expr.left as? Identifier else null
+            val exportName = lhsIdent?.text?.takeIf { it in exported }
+            if (exportName != null) {
+                val newExpr = expr.copy(right = substituteSystemInExpr(expr.right, exported))
+                CallExpression(
+                    expression = syntheticId("exports_1"),
+                    arguments = listOf(StringLiteralNode(text = exportName, pos = -1, end = -1), newExpr),
+                    pos = -1, end = -1,
+                )
+            } else {
+                expr.copy(
+                    left = substituteSystemInExpr(expr.left, exported),
+                    right = substituteSystemInExpr(expr.right, exported),
+                )
+            }
+        }
+        is PrefixUnaryExpression -> {
+            val isIncrDecr = expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus
+            val exportName = if (isIncrDecr) (expr.operand as? Identifier)?.text?.takeIf { it in exported } else null
+            if (exportName != null) {
+                // exports_1("x", ++x) or exports_1("x", --x)
+                CallExpression(
+                    expression = syntheticId("exports_1"),
+                    arguments = listOf(StringLiteralNode(text = exportName, pos = -1, end = -1), expr),
+                    pos = -1, end = -1,
+                )
+            } else {
+                expr
+            }
+        }
+        is PostfixUnaryExpression -> {
+            val isIncrDecr = expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus
+            val exportName = if (isIncrDecr) (expr.operand as? Identifier)?.text?.takeIf { it in exported } else null
+            if (exportName != null) {
+                // exports_1("x", (x++, x)) or exports_1("x", (x--, x))
+                val commaExpr = BinaryExpression(
+                    left = expr,
+                    operator = SyntaxKind.Comma,
+                    right = syntheticId(exportName),
+                    pos = -1, end = -1,
+                )
+                CallExpression(
+                    expression = syntheticId("exports_1"),
+                    arguments = listOf(
+                        StringLiteralNode(text = exportName, pos = -1, end = -1),
+                        ParenthesizedExpression(expression = commaExpr, pos = -1, end = -1),
+                    ),
+                    pos = -1, end = -1,
+                )
+            } else {
+                expr
+            }
+        }
+        else -> expr
     }
 
     /**
