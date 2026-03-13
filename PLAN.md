@@ -25,9 +25,9 @@
 
 - [x] **15. `__makeTemplateObject` helper** (~2 tests: `templateLiteralEscapeSequence`, `templateLiteralIntersection4`) — **File:** `Transformer.kt` — **Fix:** implement `__makeTemplateObject` helper; transform tagged template expressions with invalid escape sequences. Fixed `templateLiteralEscapeSequence` (+1). `templateLiteralIntersection4` is a separate parser bug (mapped type `as` clause with template literal type misparses the `{[K in keyof Store as \`use${...}\`]` member).
 
-- [ ] **16. `noEmitOnError` option** (~2 tests: `isolatedModulesNoEmitOnError`, `jsFileCompilationEmitBlockedCorrectly`) — **File:** `TypeScriptCompiler.kt` — **Fix:** when `noEmitOnError: true` and the program has diagnostics, skip emitting JS output entirely.
+- [S] **16. `noEmitOnError` option** (~2 tests: `isolatedModulesNoEmitOnError`, `jsFileCompilationEmitBlockedCorrectly`) — `isolatedModulesNoEmitOnError` needs type checker to detect type errors. `jsFileCompilationEmitBlockedCorrectly` needs JS file conflict detection (a.ts shouldn't emit to a.js when a.js source exists).
 
-- [ ] **17. Trailing comment on destructuring binding element** (~1 test: `unusedLocalsAndObjectSpread2`) — **File:** `Emitter.kt` — **Fix:** trailing comment after `,` in destructuring pattern (e.g. `const { children, // here!\n active } = ...`) is dropped. Comments on binding elements in object/array destructuring patterns need to be emitted on the same line.
+- [x] **17. Trailing comment on destructuring binding element** (~1 test: `unusedLocalsAndObjectSpread2`) — **Fix:** (1) Parser: after consuming `,` in `parseObjectBindingPattern`, capture `scanner.getTrailingComments()` and attach to preceding element. (2) Transformer: promote trailing comment of last non-rest element to the `VariableDeclaration`. (3) Emitter: in `emitObjectBindingPattern`, emit trailing line comment after `,` separator for non-last elements; in `emitVariableDeclarationList`, emit trailing line comment between declarators. +2 tests.
 
 - [ ] **18. SystemJS live export bindings** (~3 tests: `systemModule8`, `systemModule13`, `systemModule17`) — **File:** `Transformer.kt` — **Fix:** in `system` module format, assignments to exported variables must be wrapped: `x = 100` → `exports_1("x", x = 100)`. Currently the wrapping is absent, and the `_a` destructuring temp var for `exports_1` is not emitted.
 

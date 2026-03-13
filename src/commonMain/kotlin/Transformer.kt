@@ -4863,8 +4863,20 @@ class Transformer(private val options: CompilerOptions) {
                     sourceExpr = initExpr ?: syntheticId("undefined")
                     // Emit non-rest part (if there are non-rest elements)
                     if (nonRestElements.isNotEmpty()) {
+                        // Promote trailing comment of last non-rest element to VariableDeclaration
+                        // so it appears between the destructuring decl and the __rest decl.
+                        val lastIdx = nonRestElements.size - 1
+                        val lastElem = nonRestElements[lastIdx]
+                        val promotedComments = lastElem.trailingComments
+                        val elementsForPattern = if (promotedComments != null) {
+                            nonRestElements.mapIndexed { i, elem ->
+                                if (i == lastIdx) elem.copy(trailingComments = null) else elem
+                            }
+                        } else {
+                            nonRestElements
+                        }
                         val newPattern = ObjectBindingPattern(
-                            elements = nonRestElements.map { transformBindingElement(it) },
+                            elements = elementsForPattern.map { transformBindingElement(it) },
                             pos = -1, end = -1,
                         )
                         newDecls.add(VariableDeclaration(
@@ -4872,6 +4884,7 @@ class Transformer(private val options: CompilerOptions) {
                             initializer = sourceExpr,
                             pos = -1, end = -1,
                             leadingComments = decl.leadingComments,
+                            trailingComments = promotedComments,
                         ))
                     }
                 }
