@@ -8550,6 +8550,13 @@ class Transformer(private val options: CompilerOptions) {
             when (stmt) {
                 is ImportEqualsDeclaration -> {
                     if (stmt.isTypeOnly) continue
+                    // Skip duplicate import alias: if the same alias name was already declared by
+                    // a prior import in this namespace body, TypeScript skips emitting the second.
+                    val aliasNameDup = stmt.name.text
+                    val isDuplicate = statements.takeWhile { it !== stmt }.any {
+                        it is ImportEqualsDeclaration && it.name.text == aliasNameDup
+                    }
+                    if (isDuplicate) continue
                     // Skip aliases to type-only namespaces (they have no runtime value)
                     val ref = stmt.moduleReference
                     if (ref is Identifier) {
