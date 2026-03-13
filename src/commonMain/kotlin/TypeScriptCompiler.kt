@@ -269,6 +269,24 @@ class TypeScriptCompiler {
                 if (file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")) {
                     continue
                 }
+                // allowJs: skip a .ts/.tsx file if a .js/.jsx file with the same full path (minus extension) exists.
+                // TypeScript "blocks" TS emit when a JS file of the same name is present (avoids conflict).
+                if (options.allowJs && isTsFile) {
+                    val tsPathWithoutExt = file.fileName
+                        .replace(".tsx", "")
+                        .replace(".mts", "")
+                        .replace(".cts", "")
+                        .replace(".ts", "")
+                    val jsEquivalentPath1 = "$tsPathWithoutExt.js"
+                    val jsEquivalentPath2 = "$tsPathWithoutExt.jsx"
+                    val jsEquivalentPath3 = "$tsPathWithoutExt.mjs"
+                    val jsEquivalentPath4 = "$tsPathWithoutExt.cjs"
+                    val hasConflictingJs = parsed.files.any { other ->
+                        other.fileName == jsEquivalentPath1 || other.fileName == jsEquivalentPath2 ||
+                        other.fileName == jsEquivalentPath3 || other.fileName == jsEquivalentPath4
+                    }
+                    if (hasConflictingJs) continue
+                }
 
                 // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
                 // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
