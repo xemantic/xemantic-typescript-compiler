@@ -258,14 +258,14 @@ class TypeScriptCompiler {
                     continue
                 }
 
-                tsFileNames.add(file.fileName)
-
                 val parser = Parser(file.content, file.fileName)
                 val sourceFile = parser.parse()
                 diagnostics.addAll(parser.getDiagnostics())
 
                 // Extract relative imports for dependency ordering
                 importDeps[file.fileName] = extractRelativeImports(sourceFile, file.fileName, parsed.files, options.moduleSuffixes)
+
+                tsFileNames.add(file.fileName)
 
                 val transformer = Transformer(options)
                 val transformed = transformer.transform(sourceFile)
