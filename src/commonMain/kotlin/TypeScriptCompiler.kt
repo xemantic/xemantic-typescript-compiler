@@ -297,7 +297,10 @@ class TypeScriptCompiler {
                 diagnostics.addAll(parser.getDiagnostics())
 
                 // Extract relative imports for dependency ordering
-                importDeps[file.fileName] = extractRelativeImports(sourceFile, file.fileName, parsed.files, options.moduleSuffixes)
+                importDeps[file.fileName] = extractRelativeImports(
+                    sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
+                    includeReferencePathDeps = options.outFile != null,
+                )
 
                 tsFileNames.add(file.fileName)
 
@@ -343,18 +346,19 @@ class TypeScriptCompiler {
             // and produces separate output files for each input file.
             val finalJsOutputs = if (options.outFile != null && !options.isolatedModules && jsOutputs.isNotEmpty()) {
                 val outFileName = options.outFile.substringAfterLast('/')
-                // Concatenate, but only keep the first "use strict"; directive
-                var seenUseStrict = false
+                // Concatenate, hoisting a single "use strict"; to the very top.
+                // In outFile bundles, TypeScript places "use strict" at the global scope
+                // before all file content (including AMD define() wrappers).
+                // Strip it from each file's output, then prepend once if any file had it.
+                var anyUseStrict = false
                 val parts = jsOutputs.map { (_, js) ->
-                    if (!seenUseStrict) {
-                        seenUseStrict = js.trimStart().startsWith("\"use strict\"")
-                        js
-                    } else {
-                        // Remove leading "use strict"; from subsequent files
+                    if (js.trimStart().startsWith("\"use strict\"")) {
+                        anyUseStrict = true
                         js.replace(Regex("""^\s*"use strict";\n?"""), "")
-                    }
+                    } else js
                 }
-                val concatenated = parts.joinToString("\n")
+                val body = parts.joinToString("\n")
+                val concatenated = if (anyUseStrict) "\"use strict\";\n$body" else body
                 listOf(outFileName to concatenated)
             } else {
                 jsonOutputs + jsOutputs
@@ -382,6 +386,7 @@ private fun extractRelativeImports(
     currentFileName: String,
     allFiles: List<SourceFileEntry>,
     moduleSuffixes: List<String>? = null,
+    includeReferencePathDeps: Boolean = false,
 ): List<String> {
     val allTsFileNames = allFiles.map { it.fileName }.toSet()
     val deps = mutableListOf<String>()
@@ -390,6 +395,27 @@ private fun extractRelativeImports(
         lastSlash > 0 -> currentFileName.substring(0, lastSlash)
         lastSlash == 0 -> "/" // absolute root path like /index.ts
         else -> ""
+    }
+
+    // Extract /// <reference path="..."/> directives from the raw source text.
+    // These create ordering dependencies (referenced file must be emitted first in outFile bundles).
+    // Only used when outFile is set — for separate-file output TypeScript uses original order.
+    if (includeReferencePathDeps) {
+        val referencePathRegex = Regex("""///\s*<reference\s+path\s*=\s*["']([^"']+)["']""")
+        for (line in sourceFile.text.lineSequence()) {
+            val trimmed = line.trimStart()
+            if (!trimmed.startsWith("///")) break  // stop at first non-triple-slash line
+            val match = referencePathRegex.find(trimmed) ?: continue
+            val refPath = match.groupValues[1]
+            val resolved = if (refPath.startsWith("./") || refPath.startsWith("../")) {
+                resolveRelativePath(dir, refPath)
+            } else if (dir.isNotEmpty()) {
+                "$dir/$refPath"
+            } else {
+                refPath
+            }
+            if (resolved in allTsFileNames) deps.add(resolved)
+        }
     }
 
     for (stmt in sourceFile.statements) {
