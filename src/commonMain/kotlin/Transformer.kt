@@ -130,6 +130,8 @@ class Transformer(private val options: CompilerOptions) {
     private var needsDecorateHelper = false
     // Set to true when any parameter decorator emits __param calls.
     private var needsParamHelper = false
+    // Set to true when decorator metadata (`emitDecoratorMetadata`) emits __metadata calls.
+    private var needsMetadataHelper = false
 
     // Counter for anonymous export default classes/functions (default_1, default_2, ...)
     private var anonDefaultCounter = 0
@@ -183,6 +185,7 @@ class Transformer(private val options: CompilerOptions) {
         needsRestHelper = false
         needsDecorateHelper = false
         needsParamHelper = false
+        needsMetadataHelper = false
         topLevelStatements = sourceFile.statements
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
@@ -212,16 +215,31 @@ class Transformer(private val options: CompilerOptions) {
                     // even if the same name is declared as an interface/type in this file.
                     // E.g.: `export default interface Foo {}; import Foo from "./b"` — Foo is runtime.
                     val clause = stmt.importClause
-                    if (clause != null && !clause.isTypeOnly) {
-                        clause.name?.text?.let { topLevelRuntimeNames.add(it) }
-                        val bindings = clause.namedBindings
-                        when (bindings) {
-                            is NamespaceImport -> topLevelRuntimeNames.add(bindings.name.text)
-                            is NamedImports -> bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
-                                topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
-                                topLevelRuntimeNames.add(spec.name.text)
+                    if (clause != null) {
+                        if (clause.isTypeOnly) {
+                            // Entire import clause is type-only: add all bindings to type-only names
+                            clause.name?.text?.let { topLevelTypeOnlyNames.add(it) }
+                            when (val bindings = clause.namedBindings) {
+                                is NamedImports -> bindings.elements.forEach { spec ->
+                                    topLevelTypeOnlyNames.add(spec.name.text)
+                                }
+                                else -> {}
                             }
-                            else -> {}
+                        } else {
+                            clause.name?.text?.let { topLevelRuntimeNames.add(it) }
+                            val bindings = clause.namedBindings
+                            when (bindings) {
+                                is NamespaceImport -> topLevelRuntimeNames.add(bindings.name.text)
+                                is NamedImports -> bindings.elements.forEach { spec ->
+                                    if (spec.isTypeOnly) {
+                                        topLevelTypeOnlyNames.add(spec.name.text)
+                                    } else {
+                                        topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
+                                        topLevelRuntimeNames.add(spec.name.text)
+                                    }
+                                }
+                                else -> {}
+                            }
                         }
                     }
                 }
@@ -251,6 +269,7 @@ class Transformer(private val options: CompilerOptions) {
         val helpers = mutableListOf<RawStatement>()
         if (needsRestHelper) helpers.add(RawStatement(code = REST_HELPER))
         if (needsDecorateHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
+        if (needsMetadataHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
         if (needsParamHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
         if (needsAwaiterHelper) helpers.add(RawStatement(code = AWAITER_HELPER))
 
@@ -6264,7 +6283,8 @@ class Transformer(private val options: CompilerOptions) {
         statements.addAll(result.trailingStatements)
 
         // Emit __decorate calls for decorated members
-        statements.addAll(generateMemberDecorateStatements(className, decl.members))
+        val classTypeParams = decl.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+        statements.addAll(generateMemberDecorateStatements(className, decl.members, classTypeParams))
 
         // Emit class-level __decorate call
         if (hasClassDecorators) {
@@ -6290,7 +6310,7 @@ class Transformer(private val options: CompilerOptions) {
     }
 
     /** Generate `__decorate([...], ClassName.prototype, "memberName", null/void 0)` for each decorated member. */
-    private fun generateMemberDecorateStatements(className: String, members: List<ClassElement>): List<Statement> {
+    private fun generateMemberDecorateStatements(className: String, members: List<ClassElement>, classTypeParams: Set<String> = emptySet()): List<Statement> {
         val stmts = mutableListOf<Statement>()
         for (member in members) {
             val decorators: List<Decorator>?
@@ -6298,6 +6318,11 @@ class Transformer(private val options: CompilerOptions) {
             val isStatic: Boolean
             val isProperty: Boolean
             val paramDecorators: List<Pair<Int, List<Decorator>>>
+            // Type info for emitDecoratorMetadata
+            val propertyTypeNode: TypeNode?       // for properties
+            val methodReturnTypeNode: TypeNode?   // for methods
+            val methodParamTypeNodes: List<TypeNode?> // for methods
+            val methodIsAsync: Boolean            // for inferring Promise return type
 
             when (member) {
                 is PropertyDeclaration -> {
@@ -6306,6 +6331,10 @@ class Transformer(private val options: CompilerOptions) {
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = true
                     paramDecorators = emptyList()
+                    propertyTypeNode = member.type
+                    methodReturnTypeNode = null
+                    methodParamTypeNodes = emptyList()
+                    methodIsAsync = false
                 }
                 is MethodDeclaration -> {
                     decorators = member.decorators
@@ -6315,6 +6344,10 @@ class Transformer(private val options: CompilerOptions) {
                     paramDecorators = member.parameters.mapIndexedNotNull { idx, param ->
                         if (!param.decorators.isNullOrEmpty()) idx to param.decorators else null
                     }
+                    propertyTypeNode = null
+                    methodReturnTypeNode = member.type
+                    methodParamTypeNodes = member.parameters.map { it.type }
+                    methodIsAsync = ModifierFlag.Async in member.modifiers
                 }
                 is GetAccessor -> {
                     decorators = member.decorators
@@ -6322,6 +6355,10 @@ class Transformer(private val options: CompilerOptions) {
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = false
                     paramDecorators = emptyList()
+                    propertyTypeNode = null
+                    methodReturnTypeNode = member.type
+                    methodParamTypeNodes = emptyList()
+                    methodIsAsync = false
                 }
                 is SetAccessor -> {
                     decorators = member.decorators
@@ -6329,6 +6366,10 @@ class Transformer(private val options: CompilerOptions) {
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = false
                     paramDecorators = emptyList()
+                    propertyTypeNode = null
+                    methodReturnTypeNode = null
+                    methodParamTypeNodes = member.parameters.map { it.type }
+                    methodIsAsync = false
                 }
                 is Constructor -> {
                     // Constructor parameter decorators
@@ -6386,6 +6427,37 @@ class Transformer(private val options: CompilerOptions) {
                 }
             }
 
+            // Add __metadata entries for emitDecoratorMetadata
+            if (options.emitDecoratorMetadata && hasMethodDecorators) {
+                needsMetadataHelper = true
+                if (isProperty) {
+                    // design:type for properties
+                    decoratorExprs.add(makeMetadataCall("design:type",
+                        serializeTypeNode(propertyTypeNode, classTypeParams)))
+                } else {
+                    // design:type = Function for methods/accessors
+                    decoratorExprs.add(makeMetadataCall("design:type", syntheticId("Function")))
+                    // design:paramtypes
+                    val paramTypes = ArrayLiteralExpression(
+                        elements = methodParamTypeNodes.map { serializeTypeNode(it, classTypeParams) },
+                        multiLine = false,
+                        pos = -1, end = -1,
+                    )
+                    decoratorExprs.add(makeMetadataCall("design:paramtypes", paramTypes))
+                    // design:returntype (only if non-void; async with no annotation → Promise)
+                    val retNode = methodReturnTypeNode
+                    when {
+                        retNode != null && !isVoidTypeNode(retNode) ->
+                            decoratorExprs.add(makeMetadataCall("design:returntype",
+                                serializeTypeNode(retNode, classTypeParams)))
+                        retNode == null && methodIsAsync ->
+                            // async methods implicitly return Promise<T>
+                            decoratorExprs.add(makeMetadataCall("design:returntype",
+                                syntheticId("Promise")))
+                    }
+                }
+            }
+
             // Build: __decorate([...decorators], ClassName.prototype, "memberName", null/void 0)
             val target = if (isStatic) {
                 syntheticId(className)
@@ -6424,6 +6496,136 @@ class Transformer(private val options: CompilerOptions) {
             stmts.add(ExpressionStatement(expression = call, pos = -1, end = -1))
         }
         return stmts
+    }
+
+    /** Build `__metadata("key", value)` call expression. */
+    private fun makeMetadataCall(key: String, value: Expression): Expression =
+        CallExpression(
+            expression = syntheticId("__metadata"),
+            arguments = listOf(StringLiteralNode(text = key, pos = -1, end = -1), value),
+            pos = -1, end = -1,
+        )
+
+    /**
+     * Serialize a TypeNode to a runtime type expression for `emitDecoratorMetadata`.
+     *
+     * Rules (syntactic, no type checker):
+     * - null (no annotation) → Object
+     * - string/number/boolean/symbol → String/Number/Boolean/Symbol
+     * - string/number/boolean literal type → String/Number/Boolean
+     * - Template literal type → String
+     * - any/unknown/object/void/never/undefined/null keyword → Object
+     * - Union/intersection: filter out null/undefined, normalize; if all same → that, else Object
+     * - TypeReference: if name is a type parameter → Object, else use base name identifier
+     * - ImportType → Object (type-only import, no runtime value)
+     * - ArrayType/TupleType → Array
+     * - FunctionType/ConstructorType → Function
+     * - TypeLiteral/TypeQuery/MappedType/IndexedAccessType/TypeOperator → Object
+     * - ConditionalType → check both branches; if both same → that, else Object
+     * - InferType → Object
+     * - TypePredicate → Boolean
+     * - ParenthesizedType → recurse
+     */
+    private fun serializeTypeNode(typeNode: TypeNode?, typeParams: Set<String>): Expression {
+        if (typeNode == null) return syntheticId("Object")
+        return when (typeNode) {
+            is KeywordTypeNode -> when (typeNode.kind) {
+                SyntaxKind.StringKeyword -> syntheticId("String")
+                SyntaxKind.NumberKeyword -> syntheticId("Number")
+                SyntaxKind.BooleanKeyword -> syntheticId("Boolean")
+                SyntaxKind.SymbolKeyword -> syntheticId("Symbol")
+                SyntaxKind.BigIntKeyword -> syntheticId("BigInt")
+                else -> syntheticId("Object") // any, unknown, void, undefined, never, object, etc.
+            }
+            is LiteralType -> when (typeNode.literal) {
+                is StringLiteralNode -> syntheticId("String")
+                is NoSubstitutionTemplateLiteralNode -> syntheticId("String")
+                is NumericLiteralNode -> syntheticId("Number")
+                is Identifier -> when ((typeNode.literal as Identifier).text) {
+                    "true", "false" -> syntheticId("Boolean")
+                    "null" -> syntheticId("Object")
+                    else -> syntheticId("Object")
+                }
+                else -> syntheticId("Object")
+            }
+            is TemplateLiteralType -> syntheticId("String") // template literal types → String
+            is TypeReference -> {
+                val name = extractTypeRefName(typeNode.typeName)
+                when {
+                    name != null && name in typeParams -> syntheticId("Object")
+                    name != null && name in topLevelTypeOnlyNames -> syntheticId("Object")
+                    name != null -> syntheticId(name)
+                    else -> syntheticId("Object")
+                }
+            }
+            is ImportType -> syntheticId("Object")
+            is ArrayType, is TupleType -> syntheticId("Array")
+            is FunctionType, is ConstructorType -> syntheticId("Function")
+            is TypeLiteral, is TypeQuery, is MappedType, is IndexedAccessType, is TypeOperator,
+            is InferType, is RestType, is OptionalType, is ThisType -> syntheticId("Object")
+            is TypePredicate -> syntheticId("Boolean")
+            is ParenthesizedType -> serializeTypeNode(typeNode.type, typeParams)
+            is UnionType -> {
+                // Filter out null/undefined from union, then unify
+                val filtered = typeNode.types.filter { !isNullishTypeNode(it) }
+                when {
+                    filtered.isEmpty() -> syntheticId("Object")
+                    filtered.size == 1 -> serializeTypeNode(filtered[0], typeParams)
+                    else -> unifyTypeSerializations(filtered, typeParams)
+                }
+            }
+            is IntersectionType -> {
+                val filtered = typeNode.types.filter { !isNullishTypeNode(it) }
+                when {
+                    filtered.isEmpty() -> syntheticId("Object")
+                    filtered.size == 1 -> serializeTypeNode(filtered[0], typeParams)
+                    else -> unifyTypeSerializations(filtered, typeParams)
+                }
+            }
+            is ConditionalType -> {
+                // Heuristic: check if both branches serialize to the same type
+                val trueType = serializeTypeNode(typeNode.trueType, typeParams)
+                val falseType = serializeTypeNode(typeNode.falseType, typeParams)
+                val trueId = (trueType as? Identifier)?.text
+                val falseId = (falseType as? Identifier)?.text
+                if (trueId != null && trueId == falseId) syntheticId(trueId)
+                else syntheticId("Object")
+            }
+            is NamedTupleMember -> serializeTypeNode(typeNode.type, typeParams)
+            else -> syntheticId("Object")
+        }
+    }
+
+    /** Get the simple name from a TypeReference's typeName (Identifier or first part of QualifiedName). */
+    private fun extractTypeRefName(typeName: Node): String? = when (typeName) {
+        is Identifier -> typeName.text
+        is QualifiedName -> null // qualified names like E.A — can't serialize without type checker
+        else -> null
+    }
+
+    /** Return true if a type node represents null or undefined (so it's stripped from unions). */
+    private fun isNullishTypeNode(typeNode: TypeNode): Boolean = when (typeNode) {
+        is KeywordTypeNode -> typeNode.kind == SyntaxKind.NullKeyword ||
+            typeNode.kind == SyntaxKind.UndefinedKeyword
+        is LiteralType -> typeNode.literal is Identifier &&
+            (typeNode.literal as Identifier).text == "null"
+        else -> false
+    }
+
+    /** Try to unify multiple TypeNode serializations to a single identifier; returns Object if mixed. */
+    private fun unifyTypeSerializations(types: List<TypeNode>, typeParams: Set<String>): Expression {
+        val serialized = types.map { (serializeTypeNode(it, typeParams) as? Identifier)?.text }
+        val first = serialized.first()
+        return if (first != null && serialized.all { it == first }) syntheticId(first)
+        else syntheticId("Object")
+    }
+
+    /** Return true if the TypeNode represents a void/undefined return type (for suppressing design:returntype). */
+    private fun isVoidTypeNode(typeNode: TypeNode): Boolean = when (typeNode) {
+        is KeywordTypeNode -> typeNode.kind == SyntaxKind.VoidKeyword ||
+            typeNode.kind == SyntaxKind.UndefinedKeyword ||
+            typeNode.kind == SyntaxKind.NeverKeyword
+        else -> false
     }
 
     /** Generate `ClassName = __decorate([...], ClassName)` for class-level decorators. */
@@ -10010,6 +10212,12 @@ class Transformer(private val options: CompilerOptions) {
     if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+"""
+
+        /** TypeScript `__metadata` helper — emitted when `emitDecoratorMetadata` is true. */
+        val METADATA_HELPER = """var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 """
 
