@@ -3380,34 +3380,48 @@ class Transformer(private val options: CompilerOptions) {
                                     is ObjectBindingPattern -> {
                                         val propChains = flattenObjectBindingPropChains(pat)
                                         if (propChains != null && init != null) {
-                                            // Always use a temp var for object bindings
-                                            val tempVar = nextTempVarName()
-                                            if (hoistedVarNamesSet.add(tempVar)) hoistedVarNames.add(tempVar)
-                                            for ((localName, _) in propChains) {
+                                            // Single binding: access property directly without a temp var
+                                            // (init only evaluated once since we only access one property)
+                                            if (propChains.size == 1) {
+                                                val (localName, propChain) = propChains[0]
                                                 if (hoistedVarNamesSet.add(localName)) hoistedVarNames.add(localName)
-                                            }
-                                            val tempId = syntheticId(tempVar)
-                                            // Build comma expression: _a = init, exports_1("z0", z0 = _a.a), ...
-                                            var commaExpr: Expression = BinaryExpression(
-                                                left = syntheticId(tempVar),
-                                                operator = Equals,
-                                                right = init,
-                                                pos = -1, end = -1,
-                                            )
-                                            for ((localName, propChain) in propChains) {
-                                                val accessExpr = buildPropertyAccessChain(tempId, propChain)
-                                                commaExpr = BinaryExpression(
-                                                    left = commaExpr,
-                                                    operator = SyntaxKind.Comma,
-                                                    right = makeSystemExportInlineAssign(localName, accessExpr),
+                                                val accessExpr = buildPropertyAccessChain(init, propChain)
+                                                executeStatements.add(ExpressionStatement(
+                                                    expression = makeSystemExportInlineAssign(localName, accessExpr),
+                                                    leadingComments = stmt.leadingComments,
+                                                    pos = -1, end = -1,
+                                                ))
+                                            } else {
+                                                // Multiple bindings: use a temp var to avoid re-evaluating init.
+                                                // Allocate temp var FIRST (before binding names) to preserve hoisted var order.
+                                                val tempVar = nextTempVarName()
+                                                if (hoistedVarNamesSet.add(tempVar)) hoistedVarNames.add(tempVar)
+                                                for ((localName, _) in propChains) {
+                                                    if (hoistedVarNamesSet.add(localName)) hoistedVarNames.add(localName)
+                                                }
+                                                val tempId = syntheticId(tempVar)
+                                                // Build comma expression: _a = init, exports_1("z0", z0 = _a.a), ...
+                                                var commaExpr: Expression = BinaryExpression(
+                                                    left = syntheticId(tempVar),
+                                                    operator = Equals,
+                                                    right = init,
                                                     pos = -1, end = -1,
                                                 )
+                                                for ((localName, propChain) in propChains) {
+                                                    val accessExpr = buildPropertyAccessChain(tempId, propChain)
+                                                    commaExpr = BinaryExpression(
+                                                        left = commaExpr,
+                                                        operator = SyntaxKind.Comma,
+                                                        right = makeSystemExportInlineAssign(localName, accessExpr),
+                                                        pos = -1, end = -1,
+                                                    )
+                                                }
+                                                executeStatements.add(ExpressionStatement(
+                                                    expression = commaExpr,
+                                                    leadingComments = stmt.leadingComments,
+                                                    pos = -1, end = -1,
+                                                ))
                                             }
-                                            executeStatements.add(ExpressionStatement(
-                                                expression = commaExpr,
-                                                leadingComments = stmt.leadingComments,
-                                                pos = -1, end = -1,
-                                            ))
                                         } else {
                                             executeStatements.add(stripped)
                                         }
