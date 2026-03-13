@@ -173,7 +173,7 @@ class Scanner(private val text: String) {
         val savedTrailingComments = trailingComments
         val savedPrevTokenEnd = prevTokenEnd
         val result = callback()
-        if (result == null || result == false) {
+        if (result == null) {
             pos = savedPos
             token = savedToken
             tokenPos = savedTokenPos
