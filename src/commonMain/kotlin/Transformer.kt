@@ -664,7 +664,7 @@ class Transformer(private val options: CompilerOptions) {
                 is EnumDeclaration -> runtimeDeclaredNames.add(stmt.name.text)
                 is ModuleDeclaration -> {
                     val n = extractIdentifierName(stmt.name)
-                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                        ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
                     if (n != null) {
                         if (isTypeOnlyNamespace(stmt)) typeOnlyDeclaredNames.add(n)
                         else runtimeDeclaredNames.add(n)
@@ -710,7 +710,7 @@ class Transformer(private val options: CompilerOptions) {
                 stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
                     val n = extractIdentifierName(stmt.name)
-                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                        ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
                     n?.let { exportedNsEnumNames.add(it) }
                 }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
@@ -1230,7 +1230,7 @@ class Transformer(private val options: CompilerOptions) {
                         // export { x, y } — emit exports.x = x
                         // For function/class declarations (JS-hoisted), use a function export stub
                         // (placed before other code). For variables, add void0 hoist via exportedVarNames.
-                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                        for (spec in stmt.exportClause.elements) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
@@ -1332,11 +1332,11 @@ class Transformer(private val options: CompilerOptions) {
                 if (defaultTarget != null && defaultTarget in defaultExportedClassNames) {
                     pendingDefaultExport = stmt
                     pendingClassName = defaultTarget
-                } else if (pendingClassName != null && isClassStaticInit(stmt, pendingClassName!!)) {
+                } else if (pendingClassName != null && isClassStaticInit(stmt, pendingClassName)) {
                     adjusted.add(stmt)
                 } else {
                     if (pendingDefaultExport != null) {
-                        adjusted.add(pendingDefaultExport!!)
+                        adjusted.add(pendingDefaultExport)
                         pendingDefaultExport = null
                         pendingClassName = null
                     }
@@ -1793,7 +1793,7 @@ class Transformer(private val options: CompilerOptions) {
         val statementsWithoutStrict = statements.filter { stmt ->
             !(stmt is ExpressionStatement &&
                 stmt.expression is StringLiteralNode &&
-                (stmt.expression as StringLiteralNode).text == "use strict")
+                stmt.expression.text == "use strict")
         }
 
         // Dependency and parameter lists
@@ -2210,7 +2210,7 @@ class Transformer(private val options: CompilerOptions) {
                         // Type-only: erased
                     } else if (stmt.exportClause is NamedExports) {
                         // export { x, y }
-                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                        for (spec in stmt.exportClause.elements) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
@@ -2307,7 +2307,7 @@ class Transformer(private val options: CompilerOptions) {
             .toSet()
         val filteredReassignments = importReassignments.filter { stmt ->
             if (stmt is ExpressionStatement && stmt.expression is BinaryExpression) {
-                val paramName = ((stmt.expression as BinaryExpression).left as? Identifier)?.text
+                val paramName = (stmt.expression.left as? Identifier)?.text
                 if (paramName != null && paramName in unusedParamNames) return@filter false
             }
             true
@@ -2315,7 +2315,7 @@ class Transformer(private val options: CompilerOptions) {
         // Recheck: if we elided ALL importStar reassignments, don't need the star helper
         if (filteredReassignments.none { s ->
             s is ExpressionStatement && s.expression is BinaryExpression &&
-                ((s.expression as BinaryExpression).right as? CallExpression)?.let {
+                (s.expression.right as? CallExpression)?.let {
                     (it.expression as? Identifier)?.text == "__importStar"
                 } == true
         }) {
@@ -2324,7 +2324,7 @@ class Transformer(private val options: CompilerOptions) {
         // Recheck: if we elided all importDefault reassignments, don't need the helper
         if (filteredReassignments.none { s ->
             s is ExpressionStatement && s.expression is BinaryExpression &&
-                ((s.expression as BinaryExpression).right as? CallExpression)?.let {
+                (s.expression.right as? CallExpression)?.let {
                     (it.expression as? Identifier)?.text == "__importDefault"
                 } == true
         }) {
@@ -2711,7 +2711,7 @@ class Transformer(private val options: CompilerOptions) {
         val statementsWithoutStrict = statements.filter { stmt ->
             !(stmt is ExpressionStatement &&
                 stmt.expression is StringLiteralNode &&
-                (stmt.expression as StringLiteralNode).text == "use strict")
+                stmt.expression.text == "use strict")
         }
 
         // Counter for generating unique temp names
@@ -2736,8 +2736,6 @@ class Transformer(private val options: CompilerOptions) {
         val pathToSetterParam = mutableMapOf<String, String>()
         // Map from path → list of (tempVar) that get assigned in this setter
         val pathToTempVars = mutableMapOf<String, MutableList<String>>()
-        // Map from path → module-level temp var name (for named/default imports, one per path)
-        val pathToModuleTempVar = mutableMapOf<String, String>()
         // Map from path → namespace import var names (assigned FIRST in setter, before exportStar)
         val pathToNamespaceVars = mutableMapOf<String, MutableList<String>>()
         // Side-effect imports (no bindings) — just added as deps with empty setter
@@ -2778,7 +2776,7 @@ class Transformer(private val options: CompilerOptions) {
             when {
                 stmt is ModuleDeclaration && !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
                     val n = extractIdentifierName(stmt.name)
-                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                        ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
                     n?.let { localNsEnumNames.add(it) }
                 }
                 stmt is EnumDeclaration && !hasDeclareModifier(stmt) &&
@@ -2792,7 +2790,7 @@ class Transformer(private val options: CompilerOptions) {
         val iifeExportAliases = mutableMapOf<String, MutableList<String>>() // localName → [exportNames]
         for (stmt in originalSourceFile.statements) {
             if (stmt is ExportDeclaration && stmt.exportClause is NamedExports && stmt.moduleSpecifier == null) {
-                for (spec in (stmt.exportClause as NamedExports).elements) {
+                for (spec in (stmt.exportClause).elements) {
                     if (spec.isTypeOnly) continue
                     val localName = (spec.propertyName ?: spec.name).text
                     val exportName = spec.name.text
@@ -2811,7 +2809,7 @@ class Transformer(private val options: CompilerOptions) {
                 stmt is ModuleDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
                     val n = extractIdentifierName(stmt.name)
-                        ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                        ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
                     n?.let { exportedNsEnumNames.add(it) }
                 }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
@@ -2832,7 +2830,7 @@ class Transformer(private val options: CompilerOptions) {
         for (stmt in originalSourceFile.statements) {
             when {
                 stmt is ExportDeclaration && !stmt.isTypeOnly && stmt.exportClause is NamedExports -> {
-                    for (spec in (stmt.exportClause as NamedExports).elements) {
+                    for (spec in stmt.exportClause.elements) {
                         // Skip "default" — already excluded by n !== "default" check in exportStar
                         if (!spec.isTypeOnly && spec.name.text != "default") localExportNames.add(spec.name.text)
                     }
@@ -3038,7 +3036,7 @@ class Transformer(private val options: CompilerOptions) {
                             pathToTempVars[specStr] = mutableListOf()
                         }
                         // Collect named re-exports for this path's setter
-                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                        for (spec in stmt.exportClause.elements) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val importedName = (spec.propertyName ?: spec.name).text
@@ -3130,7 +3128,7 @@ class Transformer(private val options: CompilerOptions) {
                 is ModuleDeclaration -> {
                     if (!hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt)) {
                         val n = extractIdentifierName(stmt.name)
-                            ?: (stmt.name as? Expression)?.let { flattenDottedNamespaceName(it).firstOrNull() }
+                            ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
                         n?.let { if (it !in functionDeclNames && hoistedVarNamesSet.add(it)) hoistedVarNames.add(it) }
                     }
                 }
@@ -3488,7 +3486,7 @@ class Transformer(private val options: CompilerOptions) {
                             }
                             // If name != null and no initializer: already hoisted, nothing to emit.
                             // Transfer leading comments to the next statement (typically the IIFE).
-                            else if (name != null && !stmt.leadingComments.isNullOrEmpty()) {
+                            else if (!stmt.leadingComments.isNullOrEmpty()) {
                                 pendingLeadingComments.addAll(stmt.leadingComments)
                             }
                         }
@@ -3512,7 +3510,7 @@ class Transformer(private val options: CompilerOptions) {
                         // Type-only: erased
                     } else if (stmt.exportClause is NamedExports && stmt.moduleSpecifier == null) {
                         // export { x, y as z } (local re-exports — no module specifier)
-                        for (spec in (stmt.exportClause as NamedExports).elements) {
+                        for (spec in stmt.exportClause.elements) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
@@ -3666,8 +3664,7 @@ class Transformer(private val options: CompilerOptions) {
                 )
             } else {
                 val setterParam = pathToSetterParam[path] ?: continue
-                val nsVars = pathToNamespaceVars[path] ?: emptyList<String>()
-                val moduleTempVar = pathToModuleTempVar[path]
+                val nsVars = pathToNamespaceVars[path] ?: emptyList()
                 val setterBodyStmts = mutableListOf<Statement>()
 
                 // 1. Assign namespace import vars FIRST: nsVar = setterParam
@@ -4038,7 +4035,7 @@ class Transformer(private val options: CompilerOptions) {
                     is StringLiteralNode -> pn.text
                     else -> return null
                 }
-                elem.name is Identifier -> (elem.name as Identifier).text
+                elem.name is Identifier -> elem.name.text
                 else -> return null
             }
             val propChain = prefix + propName
@@ -4278,7 +4275,7 @@ class Transformer(private val options: CompilerOptions) {
         val call = stmt.expression as? CallExpression ?: return null
         val parenFn = call.expression as? ParenthesizedExpression ?: return null
         if (parenFn.expression !is FunctionExpression) return null
-        val fn = parenFn.expression as FunctionExpression
+        val fn = parenFn.expression
         if (fn.parameters.size != 1) return null
         val paramName = (fn.parameters[0].name as? Identifier)?.text ?: return null
         if (call.arguments.size != 1) return null
@@ -5171,7 +5168,7 @@ class Transformer(private val options: CompilerOptions) {
                         elem.propertyName is Identifier -> elem.propertyName.text
                         elem.propertyName is StringLiteralNode -> elem.propertyName.text
                         elem.propertyName is NumericLiteralNode -> elem.propertyName.text
-                        elem.name is Identifier -> (elem.name as Identifier).text
+                        elem.name is Identifier -> elem.name.text
                         else -> return@map null
                     }
                     StringLiteralNode(text = keyName, singleQuote = false, pos = -1, end = -1)
@@ -5187,7 +5184,7 @@ class Transformer(private val options: CompilerOptions) {
                 val originalIsTypeAssertion = decl.initializer is AsExpression || decl.initializer is TypeAssertionExpression
                 val sourceExpr: Expression
                 val needsTempVar = initExpr != null && nonRestElements.isNotEmpty() &&
-                    (initExpr !is Identifier || (initExpr as Identifier).text == "this" || originalIsTypeAssertion)
+                    (initExpr !is Identifier || initExpr.text == "this" || originalIsTypeAssertion)
                 if (needsTempVar) {
                     val tempName = nextTempVarName()
                     // Don't hoist — the temp var is declared inline in the same declaration list
@@ -5257,7 +5254,7 @@ class Transformer(private val options: CompilerOptions) {
                 needsRestHelper = true
             } else if (name is ObjectBindingPattern && options.effectiveTarget < ScriptTarget.ES2018 &&
                 name.elements.any { elem -> !elem.dotDotDotToken && elem.name is ObjectBindingPattern &&
-                    (elem.name as ObjectBindingPattern).elements.any { it.dotDotDotToken } }) {
+                    elem.name.elements.any { it.dotDotDotToken } }) {
                 // Nested object binding with rest: `const { f: { a, ...spread } } = value`
                 // → `const _a = value.f, { a } = _a, spread = __rest(_a, ["a"])`
                 val initExpr = decl.initializer?.let { transformExpression(it) }
@@ -5269,9 +5266,8 @@ class Transformer(private val options: CompilerOptions) {
                         elemName.elements.any { it.dotDotDotToken }) {
                         // Compute property access: value.f (or value["key"])
                         val keyStr = when {
-                            elem.propertyName is Identifier -> (elem.propertyName as Identifier).text
+                            elem.propertyName is Identifier -> elem.propertyName.text
                             elem.propertyName is StringLiteralNode -> null // use bracket access
-                            elem.name is Identifier -> (elem.name as Identifier).text
                             else -> null
                         }
                         val propAccess: Expression = if (elem.propertyName is StringLiteralNode) {
@@ -5686,7 +5682,6 @@ class Transformer(private val options: CompilerOptions) {
                 // Downlevel `?.` optional chaining for targets below ES2020
                 if (expr.questionDotToken && options.effectiveTarget < ScriptTarget.ES2020) {
                     val obj = transformExpression(expr.expression)
-                    val memberName = expr.name
                     // For simple identifier: `a?.b` → `a === null || a === void 0 ? void 0 : a.b`
                     // For complex LHS: use temp var
                     val objRef: Expression
@@ -5828,7 +5823,7 @@ class Transformer(private val options: CompilerOptions) {
                     )
                 } else {
                     val hasRestParam = options.effectiveTarget < ScriptTarget.ES2018 &&
-                        expr.parameters.any { p -> p.name is ObjectBindingPattern && (p.name as ObjectBindingPattern).elements.any { it.dotDotDotToken } }
+                        expr.parameters.any { p -> p.name is ObjectBindingPattern && p.name.elements.any { it.dotDotDotToken } }
                     if (hasRestParam) {
                         val blockBody: Block = when (transformedBody) {
                             is Block -> transformedBody
@@ -6621,7 +6616,6 @@ class Transformer(private val options: CompilerOptions) {
                             }
                         )
                     )
-                else -> expr.copy(tag = transformExpression(expr.tag), typeArguments = null)
             }
         }
 
@@ -6949,7 +6943,7 @@ class Transformer(private val options: CompilerOptions) {
         if (ref is Identifier) {
             val isLiteralRef = ref.text == "null" ||
                     (ref.text.isNotEmpty() && ref.text[0].isDigit()) ||
-                    (ref.rawText != null && (ref.rawText!!.startsWith("\"") || ref.rawText!!.startsWith("'")))
+                    (ref.rawText != null && (ref.rawText.startsWith("\"") || ref.rawText.startsWith("'")))
             if (isLiteralRef) {
                 return listOf(
                     ExpressionStatement(
@@ -7136,7 +7130,7 @@ class Transformer(private val options: CompilerOptions) {
 
         // Emit class-level __decorate call
         if (hasClassDecorators) {
-            statements.add(generateClassDecorateStatement(className, decl.decorators!!))
+            statements.add(generateClassDecorateStatement(className, decl.decorators))
         }
 
         return statements
@@ -7245,7 +7239,7 @@ class Transformer(private val options: CompilerOptions) {
 
             // Add method/property decorators first
             if (hasMethodDecorators) {
-                for (dec in decorators!!) {
+                for (dec in decorators) {
                     val transformed = transformExpression(dec.expression)
                     // Preserve trailing comments from the Decorator node (e.g. // comment after @dec(expr))
                     val withComments = if (!dec.trailingComments.isNullOrEmpty()) {
@@ -7389,7 +7383,7 @@ class Transformer(private val options: CompilerOptions) {
                 is StringLiteralNode -> syntheticId("String")
                 is NoSubstitutionTemplateLiteralNode -> syntheticId("String")
                 is NumericLiteralNode -> syntheticId("Number")
-                is Identifier -> when ((typeNode.literal as Identifier).text) {
+                is Identifier -> when ((typeNode.literal).text) {
                     "true", "false" -> syntheticId("Boolean")
                     "null" -> syntheticId("Object")
                     else -> syntheticId("Object")
@@ -7456,7 +7450,7 @@ class Transformer(private val options: CompilerOptions) {
         is KeywordTypeNode -> typeNode.kind == SyntaxKind.NullKeyword ||
             typeNode.kind == SyntaxKind.UndefinedKeyword
         is LiteralType -> typeNode.literal is Identifier &&
-            (typeNode.literal as Identifier).text == "null"
+            (typeNode.literal).text == "null"
         else -> false
     }
 
@@ -7706,7 +7700,7 @@ class Transformer(private val options: CompilerOptions) {
         is ArrayLiteralExpression -> expr.elements.any { containsThisInExpr(it) }
         is ObjectLiteralExpression -> expr.properties.any { prop ->
             when (prop) {
-                is PropertyAssignment -> prop.initializer?.let { containsThisInExpr(it) } == true
+                is PropertyAssignment -> prop.initializer.let { containsThisInExpr(it) } == true
                 is ShorthandPropertyAssignment -> false
                 else -> false
             }
@@ -8257,7 +8251,7 @@ class Transformer(private val options: CompilerOptions) {
                     member.initializer == null &&
                     ModifierFlag.Declare !in member.modifiers
                 ) {
-                    val keyExpr = (member.name as ComputedPropertyName).expression
+                    val keyExpr = (member.name).expression
                     // Only emit side effects for non-trivial expressions: skip simple identifiers and literals.
                     // TypeScript only evaluates computed keys that are more than a bare variable reference.
                     if (keyExpr !is Identifier &&
@@ -8706,12 +8700,12 @@ class Transformer(private val options: CompilerOptions) {
         if (expr is Identifier && isForwardRef(expr.text)) return true
         // E.Y property access
         if (expr is PropertyAccessExpression && expr.expression is Identifier) {
-            val obj = expr.expression as Identifier
+            val obj = expr.expression
             if (obj.text == enumName && isForwardRefOnCurrentEnum(expr.name.text)) return true
         }
         // E["Y"] element access
         if (expr is ElementAccessExpression && expr.expression is Identifier) {
-            val obj = expr.expression as Identifier
+            val obj = expr.expression
             val arg = expr.argumentExpression
             if (obj.text == enumName && arg is StringLiteralNode && isForwardRefOnCurrentEnum(arg.text)) return true
         }
@@ -10442,7 +10436,7 @@ class Transformer(private val options: CompilerOptions) {
                 if (init is VariableDeclarationList && init.flags == VarKeyword) {
                     for (d in init.declarations) for (n in collectBoundNames(d.name)) if (resultSet.add(n)) result.add(n)
                 }
-                stmt.statement?.let { collectVarNamesFromStmt(it, result, resultSet) }
+                stmt.statement.let { collectVarNamesFromStmt(it, result, resultSet) }
             }
             is ForOfStatement -> {
                 val init = stmt.initializer

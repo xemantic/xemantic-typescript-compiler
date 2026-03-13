@@ -112,8 +112,6 @@ data class CompilerOptions(
     val moduleDetection: String? = null,
     val moduleSuffixes: List<String>? = null,
 ) {
-    val effectiveAlwaysStrict: Boolean
-        get() = alwaysStrict ?: strict
 
     val effectiveTarget: ScriptTarget
         get() = target
