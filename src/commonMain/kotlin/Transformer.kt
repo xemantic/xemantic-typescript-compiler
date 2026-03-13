@@ -946,7 +946,8 @@ class Transformer(private val options: CompilerOptions) {
                             result.add(emitted)
                         }
                     } else {
-                        result.add(stmt)
+                        // Drop Default modifier for non-exported functions (default without export is a TypeScript error)
+                        result.add(if (isDefault) stmt.copy(modifiers = stmt.modifiers - ModifierFlag.Default) else stmt)
                     }
                 }
 
@@ -4869,7 +4870,14 @@ class Transformer(private val options: CompilerOptions) {
             is ClassDeclaration -> transformClassDeclaration(statement)
 
             // --- Function declaration ---
-            is FunctionDeclaration -> transformFunctionDeclaration(statement)
+            is FunctionDeclaration -> {
+                // `default function` without `export` is a TypeScript error; strip the
+                // stray `default` modifier so the emitter doesn't emit `default function`.
+                val decl = if (ModifierFlag.Default in statement.modifiers && ModifierFlag.Export !in statement.modifiers) {
+                    statement.copy(modifiers = statement.modifiers - ModifierFlag.Default)
+                } else statement
+                transformFunctionDeclaration(decl)
+            }
 
             // --- Variable statement ---
             is VariableStatement -> transformVariableStatement(statement)
@@ -9783,6 +9791,11 @@ class Transformer(private val options: CompilerOptions) {
 
                     if (isExported && stmt.name != null && stmt.body != null) {
                         result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
+                    } else if (isExported && ModifierFlag.Default in stmt.modifiers && stmt.name == null && stmt.body != null) {
+                        // export default function () {} inside namespace: anonymous, add export assignment
+                        // with synthetic name (TypeScript's error recovery behavior for TS1113)
+                        val anonName = "default_${++anonDefaultCounter}"
+                        result.add(makeNamespaceExportAssignment(nsName, anonName))
                     }
                 }
 

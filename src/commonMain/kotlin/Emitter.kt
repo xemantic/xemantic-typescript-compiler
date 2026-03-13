@@ -922,9 +922,9 @@ class Emitter(
         writeIndent()
         if (ModifierFlag.Export in node.modifiers) {
             write("export ")
-            if (ModifierFlag.Default in node.modifiers) {
-                write("default ")
-            }
+        }
+        if (ModifierFlag.Default in node.modifiers) {
+            write("default ")
         }
         if (ModifierFlag.Async in node.modifiers) {
             write("async ")
