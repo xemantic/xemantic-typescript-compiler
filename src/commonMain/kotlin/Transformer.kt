@@ -133,6 +133,10 @@ class Transformer(private val options: CompilerOptions) {
     // Set to true when decorator metadata (`emitDecoratorMetadata`) emits __metadata calls.
     private var needsMetadataHelper = false
 
+    // Set to true when a tagged template with invalid escape sequences is transformed.
+    // Causes the __makeTemplateObject helper to be prepended to the output statements.
+    private var needsMakeTemplateObjectHelper = false
+
     // Counter for anonymous export default classes/functions (default_1, default_2, ...)
     private var anonDefaultCounter = 0
 
@@ -186,6 +190,7 @@ class Transformer(private val options: CompilerOptions) {
         needsDecorateHelper = false
         needsParamHelper = false
         needsMetadataHelper = false
+        needsMakeTemplateObjectHelper = false
         topLevelStatements = sourceFile.statements
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
@@ -265,8 +270,9 @@ class Transformer(private val options: CompilerOptions) {
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
-        // Collect helpers to inject at top of file (order matters: __rest, __decorate, __param, __awaiter).
+        // Collect helpers to inject at top of file (order matters: __makeTemplateObject, __rest, __decorate, __param, __awaiter).
         val helpers = mutableListOf<RawStatement>()
+        if (needsMakeTemplateObjectHelper) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
         if (needsRestHelper) helpers.add(RawStatement(code = REST_HELPER))
         if (needsDecorateHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
         if (needsMetadataHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
@@ -5555,10 +5561,7 @@ class Transformer(private val options: CompilerOptions) {
             )
 
             // Tagged template
-            is TaggedTemplateExpression -> expr.copy(
-                tag = transformExpression(expr.tag),
-                typeArguments = null,
-            )
+            is TaggedTemplateExpression -> transformTaggedTemplate(expr)
 
             // Yield
             is YieldExpression -> expr.copy(
@@ -5815,6 +5818,188 @@ class Transformer(private val options: CompilerOptions) {
                 modifiers = emptySet(),
             )
         }
+    }
+
+    /**
+     * Checks if a template span raw text contains an invalid escape sequence
+     * (ES2018 template literal cooked value = undefined).
+     */
+    private fun hasInvalidTemplateEscape(raw: String): Boolean {
+        var i = 0
+        while (i < raw.length) {
+            if (raw[i] != '\\') { i++; continue }
+            i++ // past backslash
+            if (i >= raw.length) return false
+            when (raw[i]) {
+                'u' -> {
+                    i++
+                    if (i < raw.length && raw[i] == '{') {
+                        i++ // past {
+                        val hexStart = i
+                        while (i < raw.length && raw[i] != '}') i++
+                        if (i >= raw.length) return true // no closing }
+                        val hexStr = raw.substring(hexStart, i)
+                        if (hexStr.isEmpty()) return true // \u{}
+                        for (c in hexStr) if (c !in '0'..'9' && c !in 'a'..'f' && c !in 'A'..'F') return true
+                        if (hexStr.toLong(16) > 0x10FFFFL) return true
+                        i++ // past }
+                    } else {
+                        // Need exactly 4 hex digits
+                        var count = 0
+                        while (count < 4 && i < raw.length &&
+                            (raw[i] in '0'..'9' || raw[i] in 'a'..'f' || raw[i] in 'A'..'F')
+                        ) { i++; count++ }
+                        if (count < 4) return true
+                    }
+                }
+                'x' -> {
+                    i++
+                    var count = 0
+                    while (count < 2 && i < raw.length &&
+                        (raw[i] in '0'..'9' || raw[i] in 'a'..'f' || raw[i] in 'A'..'F')
+                    ) { i++; count++ }
+                    if (count < 2) return true
+                }
+                '0' -> {
+                    i++ // past '0'
+                    if (i < raw.length && raw[i].isDigit()) return true // \0 followed by digit
+                }
+                in '1'..'9' -> return true // legacy octal / non-octal decimal escape
+                else -> i++ // valid simple escape (\n, \t, \\, \`, etc.)
+            }
+        }
+        return false
+    }
+
+    /**
+     * Decodes a valid template span raw text to its cooked string value.
+     * Call only when hasInvalidTemplateEscape returned false.
+     */
+    private fun cookTemplateSpanText(raw: String): String {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < raw.length) {
+            if (raw[i] != '\\') { sb.append(raw[i]); i++; continue }
+            i++ // past backslash
+            if (i >= raw.length) break
+            when (val esc = raw[i]) {
+                'n' -> { sb.append('\n'); i++ }
+                'r' -> { sb.append('\r'); i++ }
+                't' -> { sb.append('\t'); i++ }
+                'b' -> { sb.append('\b'); i++ }
+                'f' -> { sb.append('\u000C'); i++ }
+                'v' -> { sb.append('\u000B'); i++ }
+                '0' -> { sb.append('\u0000'); i++ }
+                'u' -> {
+                    i++
+                    if (i < raw.length && raw[i] == '{') {
+                        i++
+                        val hexStart = i
+                        while (i < raw.length && raw[i] != '}') i++
+                        val codePoint = raw.substring(hexStart, i).toLong(16)
+                        sb.appendCodePoint(codePoint.toInt())
+                        i++ // past }
+                    } else {
+                        val hex = raw.substring(i, i + 4)
+                        sb.append(hex.toInt(16).toChar())
+                        i += 4
+                    }
+                }
+                'x' -> {
+                    i++
+                    val hex = raw.substring(i, i + 2)
+                    sb.append(hex.toInt(16).toChar())
+                    i += 2
+                }
+                '\r' -> { i++; if (i < raw.length && raw[i] == '\n') i++ }
+                '\n' -> i++
+                else -> { sb.append(esc); i++ }
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Transforms a tagged template expression with invalid escape sequences to use __makeTemplateObject.
+     * Tagged templates with invalid escapes must pass raw strings to the tag function since the
+     * cooked value would be undefined.
+     */
+    private fun transformTaggedTemplate(expr: TaggedTemplateExpression): Expression {
+        val template = expr.template
+        // Get the raw text of each template span (as stored by scanner, backslashes preserved)
+        val rawTexts: List<String> = when (template) {
+            is NoSubstitutionTemplateLiteralNode -> listOf(template.text)
+            is TemplateExpression -> {
+                val raws = mutableListOf(template.head.text)
+                template.templateSpans.forEach { raws.add((it.literal as? StringLiteralNode)?.text ?: "") }
+                raws
+            }
+            else -> return expr.copy(tag = transformExpression(expr.tag), typeArguments = null)
+        }
+
+        val hasInvalid = rawTexts.any { hasInvalidTemplateEscape(it) }
+        if (!hasInvalid) {
+            // All spans valid: transform expressions inside but keep the tagged template form
+            return when (template) {
+                is NoSubstitutionTemplateLiteralNode ->
+                    expr.copy(tag = transformExpression(expr.tag), typeArguments = null)
+                is TemplateExpression ->
+                    expr.copy(
+                        tag = transformExpression(expr.tag),
+                        typeArguments = null,
+                        template = template.copy(
+                            templateSpans = template.templateSpans.map { span ->
+                                span.copy(expression = transformExpression(span.expression))
+                            }
+                        )
+                    )
+                else -> expr.copy(tag = transformExpression(expr.tag), typeArguments = null)
+            }
+        }
+
+        // Has invalid escapes: transform to tag(__makeTemplateObject([cooked...], [raw...]), ...exprs)
+        needsMakeTemplateObjectHelper = true
+
+        val void0 = VoidExpression(
+            expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1
+        )
+
+        // Build cooked array: void 0 for invalid spans, string literal for valid spans
+        val cookedElements: List<Expression> = rawTexts.map { raw ->
+            if (hasInvalidTemplateEscape(raw)) {
+                void0
+            } else {
+                StringLiteralNode(text = cookTemplateSpanText(raw), pos = -1, end = -1)
+            }
+        }
+
+        // Build raw array: the raw source text of each span (escapeString will double backslashes)
+        val rawElements: List<Expression> = rawTexts.map { raw ->
+            StringLiteralNode(text = raw, pos = -1, end = -1)
+        }
+
+        val makeTemplateCall = CallExpression(
+            expression = syntheticId("__makeTemplateObject"),
+            arguments = listOf(
+                ArrayLiteralExpression(elements = cookedElements, pos = -1, end = -1),
+                ArrayLiteralExpression(elements = rawElements, pos = -1, end = -1)
+            ),
+            pos = -1, end = -1
+        )
+
+        val expressions: List<Expression> = when (template) {
+            is TemplateExpression -> template.templateSpans.map { transformExpression(it.expression) }
+            else -> emptyList()
+        }
+
+        return CallExpression(
+            expression = transformExpression(expr.tag),
+            typeArguments = null,
+            arguments = listOf(makeTemplateCall) + expressions,
+            pos = expr.pos, end = expr.end,
+            leadingComments = expr.leadingComments,
+            trailingComments = expr.trailingComments
+        )
     }
 
     /**
@@ -10186,6 +10371,13 @@ class Transformer(private val options: CompilerOptions) {
             "implements", "interface", "let", "package",
             "private", "protected", "public", "static", "yield",
         )
+
+        /** TypeScript `__makeTemplateObject` helper — emitted for tagged templates with invalid escape sequences. */
+        val MAKE_TEMPLATE_OBJECT_HELPER = """var __makeTemplateObject = (this && this.__makeTemplateObject) || function (cooked, raw) {
+    if (Object.defineProperty) { Object.defineProperty(cooked, "raw", { value: raw }); } else { cooked.raw = raw; }
+    return cooked;
+};
+"""
 
         /** TypeScript `__rest` helper — emitted when object destructuring uses rest elements. */
         val REST_HELPER = """var __rest = (this && this.__rest) || function (s, e) {
