@@ -6328,7 +6328,14 @@ class Transformer(private val options: CompilerOptions) {
                         val hexStart = i
                         while (i < raw.length && raw[i] != '}') i++
                         val codePoint = raw.substring(hexStart, i).toLong(16)
-                        sb.appendCodePoint(codePoint.toInt())
+                        val cp = codePoint.toInt()
+                        if (cp <= 0xFFFF) {
+                            sb.append(cp.toChar())
+                        } else {
+                            // Supplementary code point → surrogate pair
+                            sb.append(Char.MIN_HIGH_SURROGATE + ((cp - 0x10000) shr 10))
+                            sb.append(Char.MIN_LOW_SURROGATE + ((cp - 0x10000) and 0x3FF))
+                        }
                         i++ // past }
                     } else {
                         val hex = raw.substring(i, i + 4)
@@ -10823,13 +10830,50 @@ class Transformer(private val options: CompilerOptions) {
                 // Integer value — use long representation (strips trailing .0)
                 value.toLong().toString()
             } else {
-                // Fractional or exponential — normalize via toDouble/toString
-                val s = value.toBigDecimal().stripTrailingZeros().toPlainString()
-                // Remove leading zero for numbers like "0.5" → keep as "0.5"
-                s
+                // Fractional or exponential — normalize via Double.toString()
+                // Double.toString() produces shortest representation (e.g. "0.5", "1.5E7")
+                val s = value.toString()
+                // Convert scientific notation to plain form if needed
+                if ('E' in s || 'e' in s) {
+                    formatDoublePlain(value)
+                } else {
+                    s
+                }
             }
         } catch (_: NumberFormatException) {
             text
+        }
+    }
+
+    /**
+     * Formats a [Double] value as a plain decimal string without scientific notation.
+     * Kotlin multiplatform replacement for `toBigDecimal().stripTrailingZeros().toPlainString()`.
+     */
+    private fun formatDoublePlain(value: Double): String {
+        val s = value.toString()
+        val eIdx = s.indexOfFirst { it == 'E' || it == 'e' }
+        if (eIdx == -1) return s
+
+        val mantissa = s.substring(0, eIdx)
+        val exponent = s.substring(eIdx + 1).toInt()
+        val dotIdx = mantissa.indexOf('.')
+        val digits = mantissa.replace(".", "")
+        // Position of decimal point in digits array
+        val intDigits = if (dotIdx == -1) digits.length else dotIdx
+        val newDotPos = intDigits + exponent
+
+        return when {
+            newDotPos >= digits.length -> {
+                // All integer, pad with zeros
+                digits + "0".repeat(newDotPos - digits.length)
+            }
+            newDotPos <= 0 -> {
+                // All fractional, prepend zeros
+                "0." + "0".repeat(-newDotPos) + digits
+            }
+            else -> {
+                digits.substring(0, newDotPos) + "." + digits.substring(newDotPos)
+            }
         }
     }
 
