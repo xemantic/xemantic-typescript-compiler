@@ -1,137 +1,116 @@
-# Test Fix Plan
+# Test Fix Plan — Phase 1 Remaining Work
 
-**Current State:** 4508 tests, 200 failing (95.6% passing) — confirmed deterministic (5-run study)
+**Current State:** 4509 tests, 151 failing (96.6% passing)
 
-## QUEUE (execute top-to-bottom, do NOT re-order or skip ahead)
-
-- [x] **1. parseCommaSeparatedNewline formatting** (3 tests) — already fixed
-- [x] **2. Inline/trailing comments after type erasure** — fixed most: `promiseChaining`, `promiseChaining1` (preSemicolonComments on VariableStatement), `genericObjectSpreadResultInSwitch` (binding element leading comments). Remaining: `crashInGetTextOfComputedPropertyName` (2 sub-issues: trailing comment on binding element initializer + export {} ordering) — complex, skip.
-- [x] **3. Parens + comments on type assertions** — already fixed
-- [x] **4. Extra blank line fix** — already fixed
-- [x] **5. `moduleProperty1` private keyword leak** — already fixed
-- [x] **6. Single-line if/else not collapsed** (3 tests: `conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`) — FIXED: semi-inline function body format with `isFunctionBody` flag and `forceBlocksMultiLine` context.
-- [x] **7. Detached arrow function comments** (2 tests: `detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`) — **File:** `Emitter.kt` — **Fix:** triple-slash XML doc comments before arrow function body not preserved.
-- [x] **8. `__rest` in assignment patterns** (~15 tests) — **File:** `Transformer.kt` — **Fix:** extend destructuring rest to handle assignment form (`[{ ...x }] = expr`), not just declarations. Fixed: for-of with object rest var, parameter rest destructuring, nested object binding rest. Also added withFreshTempVarCounter for per-function temp var naming.
-- [x] **9. CommonJS `exports.default = void 0` + re-export** (~19 tests) — **File:** `Transformer.kt` — **Fix:** Track import stmts by local name; defer re-export assignments to insert right after their import. Also added ImportDeclaration to topLevelRuntimeNames pre-scan. +2 tests.
-- [x] **10. Static class fields** (~5 tests) — **File:** `Transformer.kt` — **Fix:** emit static blocks for ES2022+ with useDefineForClassFields=false. Other "static field" failures are parser error recovery issues. +1 test.
-- [x] **11. Computed property name hoisting (partial)** — Fixed 3 tests: emit computed key (non-identifier/non-literal PropertyAccessExpression) as trailing statement when !useDefineForClassFields and no initializer. Also fixed index signature detection in parseClassMember using scanner.getToken(). Full temp-var hoisting is out of scope.
-- [S] **12. Parser error recovery (wave 1)** — Attempted; most patterns require exact TypeScript recovery heuristics that are deeply intertwined. Skipped.
-- [S] **13. Additional CommonJS fixes** — No safe fixes found without type checker.
-- [S] **14. Look for more wins** — Exhaustively scanned all ~200 failing tests across two sessions. Found and committed small wins: `__metadata` helper, type-only empty namespace detection, `new <T>Expr` type-arg leading parse, class expression indent in non-multiLine arrays.
+This document covers what remains before **Phase 2: type checker implementation**.
+All history of completed fixes lives in the git log. Only actionable or blocked items are tracked here.
 
 ---
 
-## NEW QUEUE — Wave 2 (execute top-to-bottom)
+## QUEUE (execute top-to-bottom)
 
-- [x] **15. `__makeTemplateObject` helper** (~2 tests: `templateLiteralEscapeSequence`, `templateLiteralIntersection4`) — **File:** `Transformer.kt` — **Fix:** implement `__makeTemplateObject` helper; transform tagged template expressions with invalid escape sequences. Fixed `templateLiteralEscapeSequence` (+1). `templateLiteralIntersection4` is a separate parser bug (mapped type `as` clause with template literal type misparses the `{[K in keyof Store as \`use${...}\`]` member).
+### Parser fixes (no type checker needed)
 
-- [S] **16. `noEmitOnError` option** (~2 tests: `isolatedModulesNoEmitOnError`, `jsFileCompilationEmitBlockedCorrectly`) — `isolatedModulesNoEmitOnError` needs type checker to detect type errors. `jsFileCompilationEmitBlockedCorrectly` needs JS file conflict detection (a.ts shouldn't emit to a.js when a.js source exists).
+- [ ] **1. `instanceof` on instantiation expression** (1 test: `instanceofOnInstantiationExpression`) — **File:** `Parser.kt` — **Fix:** add `InstanceOfKeyword` to `canFollowTypeArgumentsInExpression` so `Box<number> instanceof Object` parses as `(Box<number>) instanceof Object`, not as comparison `Box < number > instanceof`. Also handle `InstantiationExpression` erasure in `transformExpression` — in `instanceof` position, the erased inner expression must NOT be re-wrapped in parens (TypeScript emits `(Box) instanceof Object` → strip to `Box instanceof Object`).
 
-- [x] **17. Trailing comment on destructuring binding element** (~1 test: `unusedLocalsAndObjectSpread2`) — **Fix:** (1) Parser: after consuming `,` in `parseObjectBindingPattern`, capture `scanner.getTrailingComments()` and attach to preceding element. (2) Transformer: promote trailing comment of last non-rest element to the `VariableDeclaration`. (3) Emitter: in `emitObjectBindingPattern`, emit trailing line comment after `,` separator for non-last elements; in `emitVariableDeclarationList`, emit trailing line comment between declarators. +2 tests.
+- [ ] **2. Internal comments on member access / element access** (2 tests: `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments`) — **File:** `Parser.kt` + `Emitter.kt` — **Fix:** add `beforeDotComments`/`afterDotComments` fields to `PropertyAccessExpression` (for `obj/*a*/./*b*/prop`), and `beforeBracketComments`/`afterBracketComments` to `ElementAccessExpression`. Parse them in the parser; emit them in the Emitter.
 
-- [x] **18. SystemJS live export bindings** (~3 tests: `systemModule8`, `systemModule13`, `systemModule17`) — **File:** `Transformer.kt` — **Fix:** in `system` module format, assignments to exported variables must be wrapped: `x = 100` → `exports_1("x", x = 100)`. Currently the wrapping is absent, and the `_a` destructuring temp var for `exports_1` is not emitted. Fixed `systemModule8` and `systemModule13` (+2). `systemModule17` still fails: needs type checker (exported interface re-exports EI/EI1) and more complex var ordering logic.
+- [ ] **3. Enum non-literal initializers** (2 tests: `enumNoInitializerFollowsNonLiteralInitializer`, `enumWithNonLiteralStringInitializer`) — **File:** `Transformer.kt` — **Fix:** when an enum member has a non-literal initializer (runtime expression), the subsequent member's auto-increment value cannot be computed at compile time. Emit the next member as `E[E["next"] = E["prev"] + 1] = "next"` or stop folding and carry the runtime value through subsequent members.
 
-- [x] **19. Class expression with decorator — hoisted temp var form** (~3 tests: `classExpressionWithDecorator1`, `decoratorsOnComputedProperties` + others) — **File:** `Parser.kt` + `Ast.kt` — **Fix:** parse `@decorator class C {}` as ClassExpression in expression position (added `At` case to `parsePrimaryExpression`, added `decorators` field to `ClassExpression`). The transformer already handles static field hoisting correctly; decorators on class expressions are silently dropped (TypeScript reports TS1206 for them). Fixed `classExpressionWithDecorator1` (+1). `decoratorsOnComputedProperties` still fails: needs 52 temp vars hoisted for computed property keys — out of scope.
+- [ ] **4. `objectRestSpread` async destructuring** (1 test) — **File:** `Transformer.kt` — **Fix:** `async function` with destructuring parameter `{ ...rest }` needs temp var for the spread — the existing `__rest` logic must handle async function parameters with object rest.
 
-- [x] **20. Internal / inline comments** (~4 tests: `elementAccessExpressionInternalComments`, `parenthesizedExpressionInternalComments`, `propertyAccessExpressionInnerComments`, `lambdaParameterWithTupleArgsHasCorrectAssignability`) — Fixed `lambdaParameterWithTupleArgsHasCorrectAssignability` (NewExpression.innerComments) and `parenthesizedExpressionInternalComments` (ParenthesizedExpression.beforeCloseParenComments + afterCloseParenComments). `elementAccessExpressionInternalComments` and `propertyAccessExpressionInnerComments` still fail — need more per-token comment fields. Net +2 tests.
+- [ ] **5. Static class fields edge cases** (~5 tests: `staticClassProps`, `staticFieldWithInterfaceContext`, `staticsInAFunction`, `staticsInConstructorBodies`, `classUpdateTests`) — **File:** `Transformer.kt` — **Fix:** various edge cases in static field hoisting (fields inside function bodies, interface-typed fields, constructor body interaction).
 
-- [x] **21. `importHelpers`/tslib support** (~1 test: `ctsFileInEsnextHelpers`) — **File:** `Transformer.kt` — **Fix:** when `importHelpers: true` + CJS, suppress inline `__awaiter` and inject `const tslib_1 = require("tslib")` instead; use `tslib_1.__awaiter(...)` in async transforms. Net +1 test.
+- [ ] **6. `nestedObjectRest`** (1 test) — **File:** `Transformer.kt` — **Fix:** nested object destructuring with rest at multiple levels needs `__rest` applied at each nesting level.
 
-- [S] **22. Parser error recovery — incremental** (~40 tests) — All sub-items 2-8 are complex TypeScript error recovery patterns requiring exact replication of TypeScript's parser recovery heuristics. Skipped.
+- [ ] **7. `dynamicImportWithNestedThis_es2015`** (1 test) — check diff, likely a `this` capture issue in dynamic import inside arrow functions.
 
-- [S] **23. Private field WeakMap transform** (~4 tests) — `propertyWrappedInTry` is parser error recovery; others need complex WeakMap/WeakSet + `__classPrivateFieldGet/__classPrivateFieldSet` helpers + function-scope var hoisting. Skipped.
+- [ ] **8. `moduleExportsUnaryExpression`** (1 test) — check diff, likely CommonJS `module.exports = ~expr` or similar unary on exports.
 
-- [x] **24. Multi-file output ordering** (~20 tests) — **Fixed:** added `moduleSuffixes` support to `extractRelativeImports` (+5 tests: `moduleResolutionWithSuffixes_one`, `threeLastIsBlank1/2`, `oneNotFound`, `one_jsModule`). Fixed `fullEmitPaths` without outDir to preserve full path. Remaining: `pathMappingBasedModuleResolution*` (needs paths/baseUrl resolution), `requireOfJsonFile*` (file naming), `moduleResolutionWithSymlinks*` (symlink+outDir interaction).
+- [ ] **9. `superAccess2`** (1 test) — check diff, likely a `super.prop` access inside a specific expression context.
 
-- [x] **25. `__asyncGenerator` / `__await` helpers** (~2+ tests: `objectRestSpread`, `asyncImportNestedYield`) — **File:** `Transformer.kt` — **Fix:** implement `__await` and `__asyncGenerator` emit helpers for async generator functions (`async function*`). `async function*` → `__asyncGenerator(this, arguments, function* name_1() { ... })`. `await expr` → `yield __await(expr)`. `yield expr` → `yield yield __await(expr)`. Also fixed: `stmtContainsDynamicImport` for FunctionDeclaration, `rewriteCjsDynStmt` for FunctionDeclaration, `leadingHelpers` ordering after CJS import helpers. Fixed `asyncImportNestedYield` (+1). `objectRestSpread` still fails: separate destructuring with temp vars issue.
+- [ ] **10. `nestedGlobalNamespaceInClass`** (1 test) — check diff, likely a namespace declared inside a class body.
 
-- [x] **26. JSX parser + emit** (~23 tests; fixed +38) — **Files:** `Transformer.kt`, `Emitter.kt` — **Fix:** (1) `rewriteId` and `collectRefsFromNode` in Transformer.kt didn't handle JSX nodes — added cases for `JsxSelfClosingElement`, `JsxElement`, `JsxFragment`, `JsxExpressionContainer`, `JsxSpreadAttribute` with helper functions `rewriteIdInJsxAttr`, `rewriteIdInJsxChild`, `collectRefsFromJsxAttr`. (2) Emitter: JSX self-closing elements emit a space before `/>` only when no attributes (`<Foo />` vs `<Foo bar="x"/>`). Remaining failures: `parseJsxElementInUnaryExpressionNoCrash1/2/3`, `parseUnaryExpressionNoTypeAssertionInJsx4` (parser error recovery — `~<expr>` treated as JSX), `reactReduxLikeDeferredInferenceAllowsAssignment` (async destructuring parameter transform), `templateLiteralIntersection4` (separate parser issue).
+- [ ] **11. `destructuringAssignmentWithExportedName`** (1 test) — check diff.
 
-- [S] **27. `outFile` bundling** — `filesEmittingIntoSameOutputWithOutOption` and `jsFileCompilationNoError*` already pass. Remaining: `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile` (AMD JSON module in outFile with path prefix), `noBundledEmitFromNodeModules` (AMD module naming + node_modules exclusion), `useBeforeDeclaration` (namespace qualification in outFile bundle), `commonSourceDir6` (AMD module naming with rootDir path stripping), `requireOfJsonFileWithoutExtensionResolvesToTs` (JSON ordering + unreferenced JSON filtering). All require complex infrastructure. Skipped.
+- [ ] **12. `destructuringControlFlowNoCrash`** (1 test) — check diff.
 
-- [x] **28. `.jsx`/`.tsx` skip + empty-output skip** (~39 tests total) — **Files:** `TypeScriptCompiler.kt`, `Emitter.kt` — **Fix:** (1) Treat `.jsx` like `.js` — skip unless `outDir`/`outFile` is set. (2) Skip `jsOutputMap` when `javascript.isBlank()`. (3) Skip `.tsx` files when `options.jsx == null` (TypeScript requires `--jsx` for `.tsx` files). Net +39 tests from original 200.
+- [ ] **13. `parameterDecoratorsEmitCrash`** (1 test) — check diff, likely a crash-recovery decorator emission case.
 
-### Blocked / out of scope (do NOT attempt)
-- `const enum` cross-file inlining — type checker needed (~15 tests: `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, `amdModuleConstEnumUsage`, etc.)
-- Import alias elision for non-instantiated modules — type checker needed (~10 tests: `typeUsedAsValueError2`, `aliasOnMergedModuleInterface`, `importedAliasesInTypePositions`, etc.)
-- Declaration emit (804 tests) — type analysis needed
-- Inline sourcemaps (~4 tests: `jsFileCompilationWithMapFileAsJsWithInlineSourceMap`, `optionsInlineSourceMapMapRoot/SourceRoot/Sourcemap`) — sourcemap infrastructure not implemented
-- `module: "preserve"` (~1 test: `modulePreserve1`) — not implemented
-- `__generator` state machine — complex coroutine transform needed for `async/await` downlevel
+- [ ] **14. `importInsideModule`** (1 test) — check diff, likely an import-equals inside a module block.
 
-## Completed Fixes (chronological)
+- [ ] **15. `namespaceMergedWithImportAliasNoCrash`** (1 test) — check diff.
 
-- [x] Deduplicate consecutive identical `@filename` directives in multi-file parser
-- [x] `removeComments` pinned comments
-- [x] `export {}` for type-only exports
-- [x] Binary operator trailing comments
-- [x] Yield expression trailing comments
-- [x] AMD module format support (+241 tests)
-- [x] CommonJS export ordering
-- [x] System module + optional chaining + nullish coalescing + ternary formatting (+129 tests)
-- [x] Enum folding (+9 tests)
-- [x] JSDoc-in-args, param block comments, trailing expr comments (+8 tests)
-- [x] Object.assign nested form, destructuring keys, namespace qualification, const spacing (+49 tests)
-- [x] ClassExpression parens in extends clause
-- [x] Operator trailing comments in inline binary expressions
-- [x] Parameter trailing comments before type annotation erasure
-- [x] Catch block multiline forcing
-- [x] Iterative binary expression chain operator trailing comments
-- [x] JSON file trailing comma stripping
-- [x] `moduleDetection: force` support for `export {}` and `use strict`
-- [x] `.mts/.mjs/.cts/.cjs` file extension module detection
-- [x] BigInt binary/octal to decimal conversion
-- [x] Correctness: triple-slash directives not preserved from elided import prePreambleStatements; `__metadata` for methods with only parameter decorators
-- [x] `__metadata` helper implementation for `emitDecoratorMetadata` option
-- [x] Correct type-only detection for empty namespaces and parameter-only decorator metadata
-- [x] Parse and emit leading type args on `new` expressions (`new <T>Expr`)
-- [x] Class expression closing brace indent in non-multiLine array literals (`isolatedDeclarationErrorsClassesExpressions`)
+- [ ] **16. `emitMemberAccessExpression`** (1 test) — multi-file output ordering: `emitMemberAccessExpression_file1.js` is being emitted when it should not appear (it's a declaration-only file). Likely a file-skip condition in `TypeScriptCompiler.kt`.
 
-## Analysis Reference (for context only — DO NOT re-analyze, everything actionable is in QUEUE above)
+- [ ] **17. `ambiguousGenericAssertion1`** (1 test) — check diff, likely a type-assertion-vs-generic ambiguity.
 
-### 1-line diff failures (21 tests)
+- [ ] **18. `assertInWrapSomeTypeParameter`** (1 test) — check diff.
 
-**Import alias for non-instantiated modules (5 tests):**
-`acceptableAlias1`, `duplicateVarsAcrossFileBoundaries`, `exportImportNonInstantiatedModule`, `moduleSharesNameWithImportDeclarationInsideIt3`, `typeofInternalModules`
-— Requires type checker knowledge — **BLOCKED**.
+- [ ] **19. `extendedUnicodePlaneIdentifiers`** (1 test) — check diff, likely extended Unicode chars in identifiers emit wrong.
 
-**Inline sourcemap (3 tests):**
-`jsFileCompilationWithMapFileAsJsWithInlineSourceMap`, `optionsInlineSourceMapMapRoot`, `optionsInlineSourceMapSourceRoot`
-— Out of scope.
+- [ ] **20. `reactReduxLikeDeferredInferenceAllowsAssignment`** (1 test) — async function with destructuring parameter (separate from `objectRestSpread`).
 
-**Parser error recovery (4 tests):**
-`classMemberWithMissingIdentifier`, `restParamModifier`, `unexpectedStatementBlockTerminator`, `importTypeWithUnparenthesizedGenericFunctionParsed`
+- [ ] **21. `TransportStream`** (1 test) — check diff, likely a complex multi-file or async issue.
 
-**Extra blank line (1 test):**
-`isolatedModules_resolveJsonModule_strict_outDir_commonJs`
+- [ ] **22. `exportDefaultAsyncFunction2`** (1 test) — check diff.
 
-**Access modifier leaking (1 test):**
-`moduleProperty1` — `private;` emitted as identifier instead of being erased.
+- [ ] **23. `externalModuleAssignToVar`, `externalModuleRefernceResolutionOrderInImportDeclaration`, `externModule`** (3 tests) — check diffs, likely CommonJS/module edge cases.
 
-### Small-diff groups by root cause
+- [ ] **24. `exportAssignmentImportMergeNoCrash`, `exportAssignmentOfDeclaredExternalModule`** (2 tests) — check diffs.
 
-**Inline/trailing comments dropped after type erasure (~10 tests):**
-`commentsArgumentsOfCallExpression2`, `chainedSpecializationToObjectTypeLiteral`, `promiseChaining`, `promiseChaining1`, `overEagerReturnTypeSpecialization`, `narrowedConstInMethod`, `genericChainedCalls`, `privateName`, `genericObjectSpreadResultInSwitch`, `crashInGetTextOfComputedPropertyName`
-— Comments survive in source but lost during emit.
+- [ ] **25. `emitClassExpressionInDeclarationFile2`** (1 test) — check diff.
 
-**parseCommaSeparatedNewline (3 tests):**
-`parseCommaSeparatedNewlineString`, `parseCommaSeparatedNewlineNew`, `parseCommaSeparatedNewlineNumber`
-— `(a,\n    '')` should be `(a, '')`.
+### Module resolution (infrastructure work)
 
-**Single-line if/else not collapsed (3 tests):**
-`conditionalExpressions2`, `recursiveClassReferenceTest`, `functionOverloads12`
+- [ ] **26. `paths`/`baseUrl` resolution** (~9 tests: `pathMappingBasedModuleResolution3/4/5/8_classic`, `pathMappingBasedModuleResolution8_node`, `pathMappingBasedModuleResolution_rootImport_*`, `pathMappingBasedModuleResolution_withExtension_*`) — **File:** `TypeScriptCompiler.kt` — **Fix:** implement `compilerOptions.paths` and `baseUrl` when resolving relative imports for output path computation.
 
-**Parens + comments on type assertions (2 tests):**
-`commentEmitOnParenthesizedAssertionInReturnStatement`, `commentEmitOnParenthesizedAssertionInReturnStatement2`
+- [ ] **27. Symlink resolution** (3 tests: `moduleResolutionWithSymlinks`, `moduleResolutionWithSymlinks_notInNodeModules`, `moduleResolutionWithSymlinks_withOutDir`) — **File:** `TypeScriptCompiler.kt` — needs symlink-aware path resolution.
 
-**Detached arrow function comments (2 tests):**
-`detachedCommentAtStartOfLambdaFunction1`, `detachedCommentAtStartOfLambdaFunction2`
+- [ ] **28. `moduleResolutionWithRequire`** (1 test) — check diff.
 
-### Remaining failure categories
+- [ ] **29. `requireOfJson*` remaining** (4 tests: `requireOfJsonFileNonRelativeWithoutExtensionResolvesToTs`, `requireOfJsonFileWithoutExtensionResolvesToTs`, `requireOfJsonFileWithoutResolveJsonModule`) — JSON file naming / ordering edge cases.
 
-- Missing/incomplete emit helpers (~60 tests) — `__rest` assignments, `__generator`, `__decorate` metadata, `__importDefault`/`__importStar` edge cases
-- Parser error recovery (~50 tests) — yield in type assertion, numeric trailing decimals, arrow misparse, tagged templates
-- Module transform edge cases (~30 tests) — `outFile` bundling, CommonJS init, module ordering
-- Type-checker-driven transforms (~30 tests) — **BLOCKED**
-- Internal comments (~15 tests) — per-token comment tracking
-- Other (~50+ tests) — static fields, comment preservation, Unicode/BOM, multi-file ordering, SystemJS, computed property hoisting
+- [ ] **30. `commonSourceDir6`** (1 test) — AMD module naming with rootDir path stripping.
+
+- [ ] **31. `moduleResolutionWithSuffixes` remaining** (3 tests: `dirModuleWithIndex`, `externalTSModule`, `jsonModule`) — module suffix resolution for directory index / external TS modules.
+
+---
+
+## BLOCKED — do NOT attempt
+
+These require infrastructure not present in Phase 1:
+
+### Needs type checker
+- **Import alias elision for non-instantiated modules** (~7 tests): `aliasOnMergedModuleInterface`, `duplicateVarsAcrossFileBoundaries`, `importedAliasesInTypePositions`, `importElisionEnum`, `typeUsedAsValueError2`, `exportDefaultImportedType`, `visibilityOfCrossModuleTypeUsage`, `importedEnumMemberMergedWithExportedAliasIsError`, `isolatedModulesExportImportUninstantiatedNamespace`
+- **Const enum cross-file inlining** (~6 tests): `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, `constEnumNamespaceReferenceCausesNoImport2`, `amdModuleConstEnumUsage`, `isolatedDeclarationErrorsEnums`, `isolatedModulesGlobalNamespacesAndEnums`
+- **Decorator metadata with type info** (~3 tests): `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`, `metadataOfUnion`
+- **Unused import detection** (~2 tests): `unusedImports_entireImportDeclaration`, `unusedLocalsAndParameters`
+- **`isolatedModules` emit blocking** (~2 tests): `isolatedModulesExportDeclarationType`, `isolatedModulesNoEmitOnError`
+
+### Needs `__generator` state machine (complex coroutine transform)
+- `classDeclarationShouldBeOutOfScopeInComputedNames`, `classNameReferencesInStaticElements`, `es6ClassTest9` *(if async)*, and other tests requiring async-to-generator downlevel below ES2017
+
+### Needs private field WeakMap transform
+- (~4 tests): `constructorWithParameterPropertiesAndPrivateFields_es2015`, `privateFieldsInClassExpressionDeclaration`, `privateNameWeakMapCollision`, `propertyWrappedInTry`
+
+### Parser error recovery — exact TypeScript heuristics required (~45 tests)
+`arrowFunctionErrorSpan`, `arrowFunctionsMissingTokens`, `classMemberWithMissingIdentifier2`, `constructorWithIncompleteTypeAnnotation`, `errorRecoveryInClassDeclaration`, `errorRecoveryWithDotFollowedByNamespaceKeyword`, `es6ImportNamedImportParsingError`, `es6ImportParseErrors`, `fatarrowfunctionsErrors`, `fatarrowfunctionsOptionalArgs`, `fatarrowfunctionsOptionalArgsErrors2`, `for`, `genericsManyTypeParameters`, `importTypeWithUnparenthesizedGenericFunctionParsed`, `interfaceDeclaration4`, `invalidLetInForOfAndForIn_ES5/ES6`, `invalidUnicodeEscapeSequance/2/4`, `manyCompilerErrorsInTheTwoFiles`, `moduleElementsInWrongContext/2/3`, `numericLiteralsWithTrailingDecimalPoints01/02`, `overloadConsecutiveness`, `overloadingStaticFunctionsInFunctions`, `parseErrorIncorrectReturnToken`, `parseGenericArrowRatherThanLeftShift`, `parseInvalidNames`, `parseInvalidNullableTypes`, `parseJsxElementInUnaryExpressionNoCrash1/2/3`, `parseUnaryExpressionNoTypeAssertionInJsx4`, `parserPrivateIdentifierInArrayAssignment`, `parserUnparsedTokenCrash2`, `privacyImportParseErrors`, `reachabilityChecksNoCrash1`, `reservedWords2/3`, `restParamModifier`, `strictModeReservedWord`, `unclosedExportClause01/02`, `validRegexp`, `expressionsForbiddenInParameterInitializers`, `expressionWithJSDocTypeArguments`, `dontShowCompilerGeneratedMembers`, `bigintArbirtraryIdentifier`, `parseBigInt`, `jsFileCompilationTypeArgumentSyntaxOfCall`
+
+### Out of scope
+- **Declaration emit** (804 additional tests waiting) — requires type analysis; re-enable by removing `hasDtsSection` guard in `build.gradle.kts`
+- **Inline sourcemaps** (~4 tests): `jsFileCompilationWithMapFileAsJsWithInlineSourceMap`, `optionsInlineSourceMapMapRoot/SourceRoot/Sourcemap`
+- **`module: "preserve"`** (1 test): `modulePreserve1`
+- **`outFile` AMD bundling** (~3 tests): `noBundledEmitFromNodeModules`, `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile`, `useBeforeDeclaration`
+- **Computed property name full hoisting** (1 test: `decoratorsOnComputedProperties` — 52 temp vars) — out of scope
+- **SystemJS with type-re-export** (1 test: `systemModule17`) — needs type checker for interface re-exports
+
+---
+
+## Phase 2 enablers (after type checker)
+
+Once a type checker is available, re-enable and fix:
+1. Uncomment `.errors.txt` tests in `build.gradle.kts` — search `TODO: Re-enable when type checker is implemented`
+2. Uncomment `.d.ts` declaration emit tests — search `hasDtsSection`
+3. Fix all "Needs type checker" blocked items above
+4. Re-enable `__generator` downlevel async transform

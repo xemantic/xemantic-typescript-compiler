@@ -63,6 +63,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Kotlin idioms
 
+- **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`). The `feat/kt-changes` branch removed the last BigDecimal usage specifically to enable Native compilation.
 - **Enum context resolution** (Kotlin 2.1+): When the expected type is an enum, use unqualified entry names — write `Equals`, not `SyntaxKind.Equals`. This applies to `when` branch conditions, named arguments (`operator = Equals`), comparisons (`flags == VarKeyword`), and any other position where the enum type is inferred. Caveat: if a data class has the same name as an enum entry (e.g. `LabeledStatement`), keep the `SyntaxKind.` prefix to avoid ambiguity.
 - **`in 0..<x` range checks**: Prefer `pos in 0..<end` over `pos >= 0 && end > pos` for range validation — uses Kotlin's `rangeUntil` (`..<`) operator for exclusive upper bound.
 - **No JVM-only APIs in `commonMain`**: `Map.putIfAbsent` → use `getOrPut`; `Math.pow` → use `kotlin.math.pow` extension. Always use Kotlin stdlib equivalents for multiplatform compatibility.
@@ -150,7 +151,7 @@ rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "te
 rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest --tests '*.<TestName>*' 2>&1 | grep -a -A 40 "message" | head -50
 ```
 
-**Note:** All 200 failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability.
+**Note:** All failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability.
 
 ## Anti-patterns to avoid
 
