@@ -7593,22 +7593,26 @@ class Transformer(private val options: CompilerOptions) {
                     // Insert after super() call
                     bodyStatements.addAll(superIndex + 1, propInitStatements)
                 } else {
-                    // Find insertion point: after prologue directives, before first statement
-                    // whose first-statement has a leading comment (comment-aware insertion).
-                    // When insertAt=0 and the first statement has a leading comment, TypeScript
-                    // actually places property inits BEFORE the last "real" statement block.
-                    // Simplest correct rule: find the last prologue directive and insert after it,
-                    // but if the first real statement has a leading comment, append to end.
+                    // Find insertion point: after prologue directives (= after "use strict" etc.)
                     val firstRealIdx = bodyStatements.indexOfFirst { stmt ->
                         !(stmt is ExpressionStatement && stmt.expression is StringLiteralNode)
                     }.let { if (it < 0) bodyStatements.size else it }
-                    val insertAt = if (firstRealIdx < bodyStatements.size &&
-                            bodyStatements[firstRealIdx].leadingComments?.isNotEmpty() == true) {
-                        // First real statement has a leading comment: append to end
-                        bodyStatements.size
-                    } else {
-                        firstRealIdx
+                    // If the first real statement has leading comments AND the constructor
+                    // body also assigns to one of the same properties as the prop inits,
+                    // insert prop inits at END to avoid displacing those comments.
+                    val propInitPropNames = propInitStatements.mapNotNull { stmt ->
+                        val binExpr = (stmt as? ExpressionStatement)?.expression as? BinaryExpression
+                        (binExpr?.left as? PropertyAccessExpression)?.name?.text
+                    }.toSet()
+                    val firstHasComments = firstRealIdx < bodyStatements.size &&
+                        bodyStatements[firstRealIdx].leadingComments?.isNotEmpty() == true
+                    val bodyAssignsSameProp = bodyStatements.drop(firstRealIdx).any { stmt ->
+                        val binExpr = (stmt as? ExpressionStatement)?.expression as? BinaryExpression
+                        val lhsProp = binExpr?.left as? PropertyAccessExpression
+                        lhsProp != null && (lhsProp.expression as? Identifier)?.text == "this" &&
+                            lhsProp.name.text in propInitPropNames
                     }
+                    val insertAt = if (firstHasComments && bodyAssignsSameProp) bodyStatements.size else firstRealIdx
                     bodyStatements.addAll(insertAt, propInitStatements)
                 }
 
