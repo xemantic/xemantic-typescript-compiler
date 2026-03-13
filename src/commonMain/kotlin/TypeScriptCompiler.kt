@@ -140,9 +140,10 @@ class TypeScriptCompiler {
                 )
             }
 
-            // Force JSX mode for .js files when jsx option is set (allowJs + jsx)
-            val forceJsxForJs = options.jsx != null &&
-                (file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs"))
+            // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
+            // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
+            val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
+            val forceJsxForJs = isPlainJsFile && (options.jsx != null || options.allowJs)
             val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
@@ -269,9 +270,10 @@ class TypeScriptCompiler {
                     continue
                 }
 
-                // Force JSX mode for .js files when jsx option is set (allowJs + jsx)
-                val forceJsxForJsMulti = options.jsx != null &&
-                    (file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs"))
+                // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
+                // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
+                val isPlainJsFileMulti = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
+                val forceJsxForJsMulti = isPlainJsFileMulti && (options.jsx != null || options.allowJs)
                 val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti)
                 val sourceFile = parser.parse()
                 diagnostics.addAll(parser.getDiagnostics())
