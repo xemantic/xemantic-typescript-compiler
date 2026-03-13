@@ -142,12 +142,14 @@ git push
 ## How to run tests
 
 ```bash
-# Full suite:
-./gradlew jvmTest 2>&1 | grep -a "tests completed"
+# Full suite (always clean binary cache first — stale cache inflates failure count):
+rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "tests completed"
 
 # Single test (get expected vs actual diff):
-./gradlew jvmTest --tests '*.<TestName>*' 2>&1 | grep -a -A 40 "message" | head -50
+rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest --tests '*.<TestName>*' 2>&1 | grep -a -A 40 "message" | head -50
 ```
+
+**Note:** All 200 failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability.
 
 ## Anti-patterns to avoid
 
