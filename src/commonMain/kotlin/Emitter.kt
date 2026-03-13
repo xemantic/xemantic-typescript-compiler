@@ -361,8 +361,8 @@ class Emitter(
 
     /**
      * Finds an inline (same-line) comment attached to the leftmost part of an initializer
-     * expression. For a simple expression like [comment] `{}`, the comment is on the object literal
-     * itself. For [comment] `d(e)`, it's on the identifier `d` inside the call expression.
+     * expression. For a simple expression like `comment` `{}`, the comment is on the object literal
+     * itself. For `comment` `d(e)`, it's on the identifier `d` inside the call expression.
      */
     private fun findInlineInitializerComment(expr: Expression): Comment? {
         val own = expr.leadingComments?.firstOrNull { !it.hasPrecedingNewLine }
@@ -1970,8 +1970,8 @@ class Emitter(
                     val elementClosingPos = when (element) {
                         is ObjectLiteralExpression -> element.closeBracePos
                         is ArrayLiteralExpression -> element.closeBracketPos
-                        is FunctionExpression -> element.body?.let { it as? Block }?.closeBracePos ?: -1
-                        is ArrowFunction -> element.body?.let { it as? Block }?.closeBracePos ?: -1
+                        is FunctionExpression -> element.body.closeBracePos
+                        is ArrowFunction -> element.body.let { it as? Block }?.closeBracePos ?: -1
                         else -> -1
                     }
                     val closeOnSameLine = isLast && (isCompound || element is FunctionExpression || element is ArrowFunction) && !node.hasTrailingComma
@@ -2363,11 +2363,11 @@ class Emitter(
     private fun jsNumberString(d: Double): String {
         if (d.isNaN() || d.isInfinite()) return d.toString()
         // Integer values below 1e21: emit without decimal point.
-        // Use toLong() for values in Long range; BigDecimal for larger integers.
+        // Use toLong() for values in Long range; manual formatting for larger integers.
         // IMPORTANT: do NOT use trimEnd('0') here — trailing zeros are significant in integers.
         if (d == kotlin.math.floor(d) && kotlin.math.abs(d) < 1e21) {
             return if (kotlin.math.abs(d) < 9.2e18) d.toLong().toString()
-                   else d.toBigDecimal().toPlainString()
+                   else formatLargeIntegerDouble(d)
         }
         val s = d.toString() // Kotlin: "8.55", "8.0E55", "5.5E54", etc.
         val eIdx = s.indexOf('E')
@@ -2377,6 +2377,26 @@ class Emitter(
         val expStr = if (exp >= 0) "e+$exp" else "e$exp"
         val cleanMantissa = mantissa.trimEnd('0').trimEnd('.')
         return "$cleanMantissa$expStr"
+    }
+
+    /** Formats a large integer Double (between 9.2e18 and 1e21) as a plain string
+     *  without scientific notation, multiplatform replacement for toBigDecimal().toPlainString(). */
+    private fun formatLargeIntegerDouble(d: Double): String {
+        val s = d.toString() // e.g. "1.234E19"
+        val eIdx = s.indexOfFirst { it == 'E' || it == 'e' }
+        if (eIdx == -1) return s.removeSuffix(".0")
+        val mantissa = s.substring(0, eIdx)
+        val exponent = s.substring(eIdx + 1).toInt()
+        val digits = mantissa.replace(".", "").replace("-", "")
+        val dotIdx = mantissa.replace("-", "").indexOf('.')
+        val intDigits = if (dotIdx == -1) digits.length else dotIdx
+        val newDotPos = intDigits + exponent
+        val prefix = if (d < 0) "-" else ""
+        return if (newDotPos >= digits.length) {
+            prefix + digits + "0".repeat(newDotPos - digits.length)
+        } else {
+            prefix + digits.substring(0, newDotPos) + "." + digits.substring(newDotPos)
+        }
     }
 
     /** True if a numeric literal text needs an extra '.' before property access
@@ -2587,7 +2607,6 @@ class Emitter(
                     if (comment.hasPrecedingNewLine) {
                         if (!onNewLine) writeNewLine()
                         writeIndent()
-                        onNewLine = false
                     } else {
                         write(" ")
                     }
@@ -2625,7 +2644,6 @@ class Emitter(
                 if (comment.hasPrecedingNewLine) {
                     if (!onNewLine) writeNewLine()
                     writeIndent()
-                    onNewLine = false
                 } else {
                     write(" ")
                 }
@@ -2837,7 +2855,7 @@ class Emitter(
                     write(" $op ")
                 } else if (binNode.operator == SyntaxKind.Comma) {
                     if (rightNewLine) {
-                        write("$op")
+                        write(op)
                         writeNewLine()
                         repeat(indentLevel + 1) { sb.append("    ") }
                         isStartOfLine = false
@@ -2895,7 +2913,7 @@ class Emitter(
         } else if (node.operator == SyntaxKind.Comma) {
             val commaNewLine = node.left.end > 0 && hasNewLineInSource(node.left.end, node.right.pos)
             if (commaNewLine) {
-                write("$op")
+                write(op)
                 writeNewLine()
                 repeat(indentLevel + 1) { sb.append("    ") }
                 isStartOfLine = false
@@ -3160,7 +3178,7 @@ class Emitter(
             val isLast = index == node.elements.size - 1
             if (element === firstNonRest && multiLine) {
                 // Emit the line comments before the element, each on its own line at current indent
-                for (comment in firstLineComments!!) {
+                for (comment in firstLineComments) {
                     writeNewLine()
                     writeIndent()
                     write(comment.text)
@@ -3515,7 +3533,7 @@ class Emitter(
      */
     private fun emitInnerComments(comments: List<Comment>?, trailingSpace: Boolean = true) {
         if (options.removeComments || comments.isNullOrEmpty()) return
-        for ((index, comment) in comments.withIndex()) {
+        for (comment in comments) {
             if (comment.hasPrecedingNewLine) {
                 writeNewLine()
                 writeIndent()

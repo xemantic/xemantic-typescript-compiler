@@ -1123,7 +1123,6 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val asterisk = parseOptional(SyntaxKind.Asterisk)
 
         if (!asterisk && (token == SyntaxKind.GetKeyword || (isIdentifier() && scanner.getTokenValue() == "get"))) {
-            val savedToken = token
             val result = scanner.lookAhead {
                 scanner.scan()
                 scanner.getToken() != SyntaxKind.OpenParen && scanner.getToken() != SyntaxKind.Colon &&
@@ -1971,7 +1970,6 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     }
 
     private fun parseAsyncOrExpression(): Statement {
-        val pos = getPos()
         val comments = leadingComments()
         val isAsync = scanner.lookAhead {
             scanner.scan()
@@ -2796,7 +2794,6 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     /**
      * Parses JSX children content until the matching closing tag.
      * [contentStartPos] is the position in source right after the opening `>`.
-     * [parentTagName] is the tag name string for matching the closing tag (null for fragments).
      */
     private fun parseJsxChildren(contentStartPos: Int, parentTagName: String?): List<Node> {
         val children = mutableListOf<Node>()
@@ -2868,7 +2865,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     }
 
     private fun parseLeftHandSideExpression(): Expression {
-        var expr = when (token) {
+        val expr = when (token) {
             NewKeyword -> parseNewExpression()
             SuperKeyword -> {
                 val pos = getPos(); nextToken()
@@ -3421,7 +3418,6 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseObjectLiteral(): ObjectLiteralExpression {
         val pos = getPos()
-        val openBracePos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenBrace)
         // multiLine: true when there's a line break right after the opening `{`
         // (same as TypeScript's scanner.hasPrecedingLineBreak() after parsing `{`)
@@ -3845,7 +3841,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             var param = parseParameter()
             // Prepend any comments collected from before the previous comma into this param's leadingComments.
             if (pendingLeadingComments != null) {
-                val merged = pendingLeadingComments!! + (param.leadingComments ?: emptyList())
+                val merged = pendingLeadingComments + (param.leadingComments ?: emptyList())
                 param = param.copy(leadingComments = merged.ifEmpty { null })
                 pendingLeadingComments = null
             }
