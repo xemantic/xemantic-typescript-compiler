@@ -6033,6 +6033,11 @@ class Transformer(private val options: CompilerOptions) {
                 }
             )
 
+            // JSX: transform to factory calls (jsx: react) or pass through (jsx: preserve)
+            is JsxElement -> transformJsxOrPreserve(expr) { transformJsxElement(expr) }
+            is JsxSelfClosingElement -> transformJsxOrPreserve(expr) { transformJsxSelfClosingElement(expr) }
+            is JsxFragment -> transformJsxOrPreserve(expr) { transformJsxFragment(expr) }
+
             // Leaf expressions: pass through
             is Identifier -> expr
             is StringLiteralNode -> expr
@@ -6044,6 +6049,209 @@ class Transformer(private val options: CompilerOptions) {
             is MetaProperty -> expr
             is CommaListExpression -> expr.copy(elements = expr.elements.map { transformExpression(it) })
         }
+    }
+
+    // ── JSX Transform ────────────────────────────────────────────────────────
+
+    /**
+     * Either preserve JSX structure (jsx: preserve, react-native, or null) or apply the transformer.
+     * When preserving, sub-expressions (identifiers, attribute values) are still transformed.
+     */
+    private inline fun transformJsxOrPreserve(expr: Expression, transform: () -> Expression): Expression {
+        return if (options.jsx == null || options.jsx == "preserve" || options.jsx == "react-native") {
+            transformJsxPreserve(expr)
+        } else {
+            transform()
+        }
+    }
+
+    /**
+     * Preserves JSX structure while transforming sub-expressions (identifiers, attribute values, children).
+     * This handles cases like module-qualified names (Foo → foo_1.default) and type-stripped expressions.
+     */
+    private fun transformJsxPreserve(expr: Expression): Expression = when (expr) {
+        is JsxElement -> {
+            val openTransformed = JsxOpeningElement(
+                tagName = transformExpression(expr.openingElement.tagName),
+                attributes = transformJsxAttributeList(expr.openingElement.attributes),
+                pos = expr.openingElement.pos,
+                end = expr.openingElement.end,
+            )
+            val closingTransformed = JsxClosingElement(
+                tagName = transformExpression(expr.closingElement.tagName),
+                pos = expr.closingElement.pos,
+                end = expr.closingElement.end,
+            )
+            expr.copy(
+                openingElement = openTransformed,
+                children = transformJsxChildren(expr.children),
+                closingElement = closingTransformed,
+            )
+        }
+        is JsxSelfClosingElement -> expr.copy(
+            tagName = transformExpression(expr.tagName),
+            attributes = transformJsxAttributeList(expr.attributes),
+        )
+        is JsxFragment -> expr.copy(
+            children = transformJsxChildren(expr.children),
+        )
+        else -> expr
+    }
+
+    private fun transformJsxAttributeList(attrs: List<Node>): List<Node> = attrs.map { attr ->
+        when (attr) {
+            is JsxAttribute -> {
+                val newValue = when (val v = attr.value) {
+                    is JsxExpressionContainer -> JsxExpressionContainer(
+                        expression = v.expression?.let { transformExpression(it) },
+                        pos = v.pos, end = v.end,
+                    )
+                    is Expression -> transformExpression(v)
+                    else -> v
+                }
+                attr.copy(value = newValue)
+            }
+            is JsxSpreadAttribute -> attr.copy(expression = transformExpression(attr.expression))
+            else -> attr
+        }
+    }
+
+    private fun transformJsxChildren(children: List<Node>): List<Node> = children.map { child ->
+        when (child) {
+            is JsxText -> child
+            is JsxExpressionContainer -> JsxExpressionContainer(
+                expression = child.expression?.let { transformExpression(it) },
+                pos = child.pos, end = child.end,
+            )
+            is JsxElement -> transformJsxPreserve(child)
+            is JsxSelfClosingElement -> transformJsxPreserve(child)
+            is JsxFragment -> transformJsxPreserve(child)
+            else -> child
+        }
+    }
+
+    /**
+     * Returns the JSX factory expression (e.g. `React.createElement` or a custom factory).
+     * Reads from `jsxFactory` option, then `reactNamespace` option, then defaults to `React.createElement`.
+     * If the factory name is invalid (not an identifier or dotted name), falls back to `React.createElement`.
+     */
+    private fun getJsxFactory(): Expression {
+        val raw = options.jsxFactory
+            ?: options.reactNamespace?.let { "$it.createElement" }
+            ?: "React.createElement"
+        // Validate: must be identifier chars and dots only (e.g. "React.createElement", "h")
+        val factory = if (isValidJsxFactory(raw)) raw else "React.createElement"
+        return buildQualifiedId(factory)
+    }
+
+    /** Checks if a jsxFactory string is a valid identifier or dotted qualified name. */
+    private fun isValidJsxFactory(name: String): Boolean {
+        if (name.isEmpty()) return false
+        val parts = name.split('.')
+        return parts.all { part -> part.isNotEmpty() && part.all { c -> c.isLetterOrDigit() || c == '_' || c == '$' } &&
+                !part[0].isDigit() }
+    }
+
+    /**
+     * Returns the JSX fragment factory expression (e.g. `React.Fragment`).
+     */
+    private fun getJsxFragmentFactory(): Expression {
+        val raw = options.jsxFragmentFactory
+            ?: options.reactNamespace?.let { "$it.Fragment" }
+            ?: "React.Fragment"
+        val factory = if (isValidJsxFactory(raw)) raw else "React.Fragment"
+        return buildQualifiedId(factory)
+    }
+
+    /** Builds an Expression from a dotted name like "React.createElement". */
+    private fun buildQualifiedId(name: String): Expression {
+        val parts = name.split('.')
+        var expr: Expression = syntheticId(parts[0])
+        for (i in 1 until parts.size) {
+            expr = PropertyAccessExpression(expression = expr, name = syntheticId(parts[i]), pos = -1, end = -1)
+        }
+        return expr
+    }
+
+    private fun transformJsxElement(node: JsxElement): Expression =
+        buildJsxCall(node.openingElement.tagName, node.openingElement.attributes, node.children)
+
+    private fun transformJsxSelfClosingElement(node: JsxSelfClosingElement): Expression =
+        buildJsxCall(node.tagName, node.attributes, emptyList())
+
+    private fun transformJsxFragment(node: JsxFragment): Expression =
+        buildJsxCall(getJsxFragmentFactory(), emptyList(), node.children, tagIsExpr = true)
+
+    private fun buildJsxCall(
+        tagName: Expression,
+        attributes: List<Node>,
+        children: List<Node>,
+        tagIsExpr: Boolean = false,
+    ): Expression {
+        val factory = getJsxFactory()
+
+        // Tag: lowercase = string literal (intrinsic element), uppercase/qualified = identifier
+        val tagExpr: Expression = when {
+            tagIsExpr -> tagName
+            tagName is Identifier && tagName.text[0].isLowerCase() ->
+                StringLiteralNode(text = tagName.text, pos = -1, end = -1)
+            else -> transformExpression(tagName)
+        }
+
+        // Props: null if no attributes, else object literal
+        val propsExpr: Expression = when {
+            attributes.isEmpty() -> Identifier(text = "null", pos = -1, end = -1)
+            else -> {
+                val props = attributes.mapNotNull { attr ->
+                    when (attr) {
+                        is JsxAttribute -> {
+                            val attrValue = attr.value
+                            val value: Expression = when {
+                                attrValue == null -> Identifier(text = "true", pos = -1, end = -1)
+                                attrValue is JsxExpressionContainer -> attrValue.expression?.let { transformExpression(it) }
+                                    ?: Identifier(text = "undefined", pos = -1, end = -1)
+                                attrValue is Expression -> transformExpression(attrValue)
+                                else -> Identifier(text = "undefined", pos = -1, end = -1)
+                            }
+                            PropertyAssignment(
+                                name = Identifier(text = attr.name, pos = -1, end = -1),
+                                initializer = value,
+                                pos = -1, end = -1,
+                            )
+                        }
+                        is JsxSpreadAttribute -> SpreadAssignment(
+                            expression = transformExpression(attr.expression),
+                            pos = -1, end = -1,
+                        )
+                        else -> null
+                    }
+                }
+                ObjectLiteralExpression(properties = props, pos = -1, end = -1)
+            }
+        }
+
+        // Children: filter out empty-ish JSX text, transform remaining
+        val childArgs: List<Expression> = children.mapNotNull { child ->
+            when (child) {
+                is JsxText -> {
+                    // Trim and check: TypeScript trims JSX text and discards blank lines
+                    val trimmed = child.text.trim()
+                    if (trimmed.isEmpty()) null
+                    else StringLiteralNode(text = trimmed, pos = -1, end = -1)
+                }
+                is JsxExpressionContainer -> child.expression?.let { transformExpression(it) }
+                is JsxElement -> transformJsxElement(child)
+                is JsxSelfClosingElement -> transformJsxSelfClosingElement(child)
+                is JsxFragment -> transformJsxFragment(child)
+                else -> null
+            }
+        }
+
+        return CallExpression(
+            expression = factory,
+            arguments = listOf(tagExpr, propsExpr) + childArgs,
+            pos = -1, end = -1,
+        )
     }
 
     /**

@@ -326,6 +326,20 @@ enum class SyntaxKind {
     MetaProperty,
     MissingDeclaration,
 
+    // JSX
+    JsxElement,
+    JsxSelfClosingElement,
+    JsxOpeningElement,
+    JsxClosingElement,
+    JsxFragment,
+    JsxOpeningFragment,
+    JsxClosingFragment,
+    JsxAttribute,
+    JsxAttributes,
+    JsxSpreadAttribute,
+    JsxExpression,
+    JsxText,
+
     // JSDoc (minimal)
     JSDocComment,
     JSDocTag,
