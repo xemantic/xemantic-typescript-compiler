@@ -78,7 +78,7 @@ PLAN.md contains a **QUEUE** — a numbered list of fixes in strict order. Execu
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
 2. Implement it — the item already names the test(s), file, and fix area
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. If net-positive: check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit
+4. If net-positive: check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 5. If net-negative after **2 attempts**: mark the item `- [S]` (skipped), commit nothing, move to the next item
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
