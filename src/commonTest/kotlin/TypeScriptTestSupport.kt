@@ -91,9 +91,11 @@ infix fun Path.sameAs(expected: Path) {
  */
 infix fun String?.sameAs(expected: Path) {
     val stripped = stripDtsSection(expected.readText())
-    // Normalize trailing whitespace so dts stripping doesn't cause trailing-newline mismatches
-    val normalizedExpected = stripped.trimEnd() + "\r\n"
-    val normalizedActual = (this ?: "").trimEnd() + "\r\n"
+    // Normalize line endings to CRLF and trailing whitespace so dts stripping and
+    // baseline files with mixed LF/CRLF don't cause spurious line-ending failures.
+    fun String.normalizeCrlf() = replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").trimEnd() + "\r\n"
+    val normalizedExpected = stripped.normalizeCrlf()
+    val normalizedActual = (this ?: "").normalizeCrlf()
     normalizedActual sameAs normalizedExpected
 }
 
