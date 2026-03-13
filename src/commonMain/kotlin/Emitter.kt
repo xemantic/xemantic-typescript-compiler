@@ -635,7 +635,13 @@ class Emitter(
         if (node.expression != null) {
             write(" ")
             emitInlineLeadingComments(node.expression)
-            emitExpression(node.expression)
+            val expr = node.expression
+            if (expr is CommaListExpression) {
+                // Comma expressions in return position don't need outer parens
+                emitCommaListExpression(expr, withParens = false)
+            } else {
+                emitExpression(expr)
+            }
         }
         write(";")
         writeNewLine()
@@ -2846,8 +2852,8 @@ class Emitter(
      * Increases indent so the class body closes at the right level, then each
      * subsequent element gets its own line at the same indent.
      */
-    private fun emitCommaListExpression(node: CommaListExpression) {
-        write("(")
+    private fun emitCommaListExpression(node: CommaListExpression, withParens: Boolean = true) {
+        if (withParens) write("(")
         indentLevel++
         for ((i, elem) in node.elements.withIndex()) {
             emitExpression(elem)
@@ -2859,7 +2865,7 @@ class Emitter(
             }
         }
         indentLevel--
-        write(")")
+        if (withParens) write(")")
     }
 
     private fun emitConditionalExpression(node: ConditionalExpression) {
