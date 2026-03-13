@@ -1,6 +1,6 @@
 # Test Fix Plan — Phase 1 Remaining Work
 
-**Current State:** 4509 tests, 151 failing (96.6% passing)
+**Current State:** 4509 tests, 150 failing (96.7% passing)
 
 This document covers what remains before **Phase 2: type checker implementation**.
 All history of completed fixes lives in the git log. Only actionable or blocked items are tracked here.
@@ -11,7 +11,7 @@ All history of completed fixes lives in the git log. Only actionable or blocked 
 
 ### Parser fixes (no type checker needed)
 
-- [ ] **1. `instanceof` on instantiation expression** (1 test: `instanceofOnInstantiationExpression`) — **File:** `Parser.kt` — **Fix:** add `InstanceOfKeyword` to `canFollowTypeArgumentsInExpression` so `Box<number> instanceof Object` parses as `(Box<number>) instanceof Object`, not as comparison `Box < number > instanceof`. Also handle `InstantiationExpression` erasure in `transformExpression` — in `instanceof` position, the erased inner expression must NOT be re-wrapped in parens (TypeScript emits `(Box) instanceof Object` → strip to `Box instanceof Object`).
+- [x] **1. `instanceof` on instantiation expression** (1 test: `instanceofOnInstantiationExpression`) — **File:** `Parser.kt` — **Fix:** added `InstanceOfKeyword` and `InKeyword` to `canFollowTypeArgumentsInExpression`; wrap erased instantiation expressions in `ParenthesizedExpression` except when followed by continuation tokens (`.`, `?.`, `)`, `]`).
 
 - [ ] **2. Internal comments on member access / element access** (2 tests: `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments`) — **File:** `Parser.kt` + `Emitter.kt` — **Fix:** add `beforeDotComments`/`afterDotComments` fields to `PropertyAccessExpression` (for `obj/*a*/./*b*/prop`), and `beforeBracketComments`/`afterBracketComments` to `ElementAccessExpression`. Parse them in the parser; emit them in the Emitter.
 

@@ -2999,17 +2999,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                             }
                             // Instantiation expression: expr<Type> followed by a token that
                             // cannot start a binary expression (so it's type args, not comparison).
-                            // Type arguments are dropped. Wrap in parens only when used as assignment
-                            // target (token == `=`) so TypeScript's `(x<T>) = rhs` emit is preserved.
+                            // Type arguments are dropped. Wrap in parens (TypeScript emits (expr))
+                            // UNLESS the next token continues the expression (., ?., ), ]) — those
+                            // either provide their own grouping or feed into a member access.
                             typeArgs != null && canFollowTypeArgumentsInExpression() -> {
-                                if (token == SyntaxKind.Equals) {
-                                    ParenthesizedExpression(
+                                when (token) {
+                                    SyntaxKind.CloseParen, SyntaxKind.CloseBracket,
+                                    SyntaxKind.Dot, SyntaxKind.QuestionDot -> result
+                                    else -> ParenthesizedExpression(
                                         expression = result,
                                         pos = result.pos,
                                         end = getEnd()
                                     )
-                                } else {
-                                    result
                                 }
                             }
                             else -> null
@@ -3974,7 +3975,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         SyntaxKind.QuestionQuestion, SyntaxKind.Caret,
         SyntaxKind.Ampersand, SyntaxKind.Bar,
         SyntaxKind.CloseBrace, SyntaxKind.EndOfFile,
-        SyntaxKind.Equals -> true
+        SyntaxKind.Equals,
+        // Binary keyword operators: Box<number> instanceof Object, key<T> in obj
+        SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> true
         else -> false
     }
 
