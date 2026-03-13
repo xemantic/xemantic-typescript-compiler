@@ -7571,10 +7571,22 @@ class Transformer(private val options: CompilerOptions) {
                     // Insert after super() call
                     bodyStatements.addAll(superIndex + 1, propInitStatements)
                 } else {
-                    // Insert after any prologue directives ("use strict", "ngInject", etc.)
-                    val insertAt = bodyStatements.indexOfFirst { stmt ->
+                    // Find insertion point: after prologue directives, before first statement
+                    // whose first-statement has a leading comment (comment-aware insertion).
+                    // When insertAt=0 and the first statement has a leading comment, TypeScript
+                    // actually places property inits BEFORE the last "real" statement block.
+                    // Simplest correct rule: find the last prologue directive and insert after it,
+                    // but if the first real statement has a leading comment, append to end.
+                    val firstRealIdx = bodyStatements.indexOfFirst { stmt ->
                         !(stmt is ExpressionStatement && stmt.expression is StringLiteralNode)
                     }.let { if (it < 0) bodyStatements.size else it }
+                    val insertAt = if (firstRealIdx < bodyStatements.size &&
+                            bodyStatements[firstRealIdx].leadingComments?.isNotEmpty() == true) {
+                        // First real statement has a leading comment: append to end
+                        bodyStatements.size
+                    } else {
+                        firstRealIdx
+                    }
                     bodyStatements.addAll(insertAt, propInitStatements)
                 }
 

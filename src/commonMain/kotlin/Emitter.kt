@@ -2254,9 +2254,12 @@ class Emitter(
      *  integers without '.0', floats as-is, large numbers with lowercase 'e+'. */
     private fun jsNumberString(d: Double): String {
         if (d.isNaN() || d.isInfinite()) return d.toString()
-        // Integer values below 1e21: emit without decimal point
+        // Integer values below 1e21: emit without decimal point.
+        // Use toLong() for values in Long range; BigDecimal for larger integers.
+        // IMPORTANT: do NOT use trimEnd('0') here — trailing zeros are significant in integers.
         if (d == kotlin.math.floor(d) && kotlin.math.abs(d) < 1e21) {
-            return d.toBigDecimal().toPlainString().trimEnd('0').trimEnd('.')
+            return if (kotlin.math.abs(d) < 9.2e18) d.toLong().toString()
+                   else d.toBigDecimal().toPlainString()
         }
         val s = d.toString() // Kotlin: "8.55", "8.0E55", "5.5E54", etc.
         val eIdx = s.indexOf('E')
