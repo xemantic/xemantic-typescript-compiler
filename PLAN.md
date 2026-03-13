@@ -13,67 +13,67 @@ All history of completed fixes lives in the git log. Only actionable or blocked 
 
 - [x] **1. `instanceof` on instantiation expression** (1 test: `instanceofOnInstantiationExpression`) — **File:** `Parser.kt` — **Fix:** added `InstanceOfKeyword` and `InKeyword` to `canFollowTypeArgumentsInExpression`; wrap erased instantiation expressions in `ParenthesizedExpression` except when followed by continuation tokens (`.`, `?.`, `)`, `]`).
 
-- [ ] **2. Internal comments on member access / element access** (2 tests: `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments`) — **File:** `Parser.kt` + `Emitter.kt` — **Fix:** add `beforeDotComments`/`afterDotComments` fields to `PropertyAccessExpression` (for `obj/*a*/./*b*/prop`), and `beforeBracketComments`/`afterBracketComments` to `ElementAccessExpression`. Parse them in the parser; emit them in the Emitter.
+- [S] **2. Internal comments on member access / element access** (2 tests: `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments`) — **File:** `Parser.kt` + `Emitter.kt` — **Fix:** add `beforeDotComments`/`afterDotComments` fields to `PropertyAccessExpression` (for `obj/*a*/./*b*/prop`), and `beforeBracketComments`/`afterBracketComments` to `ElementAccessExpression`. Parse them in the parser; emit them in the Emitter.
 
-- [ ] **3. Enum non-literal initializers** (2 tests: `enumNoInitializerFollowsNonLiteralInitializer`, `enumWithNonLiteralStringInitializer`) — **File:** `Transformer.kt` — **Fix:** when an enum member has a non-literal initializer (runtime expression), the subsequent member's auto-increment value cannot be computed at compile time. Emit the next member as `E[E["next"] = E["prev"] + 1] = "next"` or stop folding and carry the runtime value through subsequent members.
+- [S] **3. Enum non-literal initializers** (2 tests: `enumNoInitializerFollowsNonLiteralInitializer`, `enumWithNonLiteralStringInitializer`) — **File:** `Transformer.kt` — **Fix:** when an enum member has a non-literal initializer (runtime expression), the subsequent member's auto-increment value cannot be computed at compile time. Emit the next member as `E[E["next"] = E["prev"] + 1] = "next"` or stop folding and carry the runtime value through subsequent members.
 
-- [ ] **4. `objectRestSpread` async destructuring** (1 test) — **File:** `Transformer.kt` — **Fix:** `async function` with destructuring parameter `{ ...rest }` needs temp var for the spread — the existing `__rest` logic must handle async function parameters with object rest.
+- [S] **4. `objectRestSpread` async destructuring** (1 test) — **File:** `Transformer.kt` — **Fix:** `async function` with destructuring parameter `{ ...rest }` needs temp var for the spread — the existing `__rest` logic must handle async function parameters with object rest.
 
-- [ ] **5. Static class fields edge cases** (~5 tests: `staticClassProps`, `staticFieldWithInterfaceContext`, `staticsInAFunction`, `staticsInConstructorBodies`, `classUpdateTests`) — **File:** `Transformer.kt` — **Fix:** various edge cases in static field hoisting (fields inside function bodies, interface-typed fields, constructor body interaction).
+- [S] **5. Static class fields edge cases** (~5 tests: `staticClassProps`, `staticFieldWithInterfaceContext`, `staticsInAFunction`, `staticsInConstructorBodies`, `classUpdateTests`) — **File:** `Transformer.kt` — **Fix:** various edge cases in static field hoisting (fields inside function bodies, interface-typed fields, constructor body interaction).
 
-- [ ] **6. `nestedObjectRest`** (1 test) — **File:** `Transformer.kt` — **Fix:** nested object destructuring with rest at multiple levels needs `__rest` applied at each nesting level.
+- [S] **6. `nestedObjectRest`** (1 test) — **File:** `Transformer.kt` — **Fix:** nested object destructuring with rest at multiple levels needs `__rest` applied at each nesting level.
 
-- [ ] **7. `dynamicImportWithNestedThis_es2015`** (1 test) — check diff, likely a `this` capture issue in dynamic import inside arrow functions.
+- [S] **7. `dynamicImportWithNestedThis_es2015`** — needs `__createBinding`/`__importStar` helpers + CommonJS dynamic import transform.
 
-- [ ] **8. `moduleExportsUnaryExpression`** (1 test) — check diff, likely CommonJS `module.exports = ~expr` or similar unary on exports.
+- [S] **8. `moduleExportsUnaryExpression`** — complex CommonJS post-increment/decrement export tracking with temp vars.
 
-- [ ] **9. `superAccess2`** (1 test) — check diff, likely a `super.prop` access inside a specific expression context.
+- [S] **9. `superAccess2`** — needs temp var wrapping of extends expression for super access in constructor args.
 
-- [ ] **10. `nestedGlobalNamespaceInClass`** (1 test) — check diff, likely a namespace declared inside a class body.
+- [S] **10. `nestedGlobalNamespaceInClass`** — parser error recovery (`global x` in class body).
 
-- [ ] **11. `destructuringAssignmentWithExportedName`** (1 test) — check diff.
+- [S] **11. `destructuringAssignmentWithExportedName`** — complex CommonJS destructuring with exported name aliasing.
 
-- [ ] **12. `destructuringControlFlowNoCrash`** (1 test) — check diff.
+- [S] **12. `destructuringControlFlowNoCrash`** — parser error recovery (type annotation leaking into output).
 
-- [ ] **13. `parameterDecoratorsEmitCrash`** (1 test) — check diff, likely a crash-recovery decorator emission case.
+- [S] **13. `parameterDecoratorsEmitCrash`** — needs `__esDecorate`/`__runInitializers` helpers.
 
-- [ ] **14. `importInsideModule`** (1 test) — check diff, likely an import-equals inside a module block.
+- [S] **14. `importInsideModule`** — file ordering + import-equals inside module block needs type-checker-driven elision.
 
-- [ ] **15. `namespaceMergedWithImportAliasNoCrash`** (1 test) — check diff.
+- [S] **15. `namespaceMergedWithImportAliasNoCrash`** — spurious `__importStar` helper emission on import alias.
 
-- [ ] **16. `emitMemberAccessExpression`** (1 test) — multi-file output ordering: `emitMemberAccessExpression_file1.js` is being emitted when it should not appear (it's a declaration-only file). Likely a file-skip condition in `TypeScriptCompiler.kt`.
+- [S] **16. `emitMemberAccessExpression`** — multi-file output ordering (reference resolution order).
 
-- [ ] **17. `ambiguousGenericAssertion1`** (1 test) — check diff, likely a type-assertion-vs-generic ambiguity.
+- [S] **17. `ambiguousGenericAssertion1`** — parser error recovery (generic-vs-assertion ambiguity).
 
-- [ ] **18. `assertInWrapSomeTypeParameter`** (1 test) — check diff.
+- [S] **18. `assertInWrapSomeTypeParameter`** — blocked by `reScanGreaterToken` regression (method name becomes `>>`).
 
-- [ ] **19. `extendedUnicodePlaneIdentifiers`** (1 test) — check diff, likely extended Unicode chars in identifiers emit wrong.
+- [S] **19. `extendedUnicodePlaneIdentifiers`** — needs private field WeakMap transform (blocked).
 
-- [ ] **20. `reactReduxLikeDeferredInferenceAllowsAssignment`** (1 test) — async function with destructuring parameter (separate from `objectRestSpread`).
+- [S] **20. `reactReduxLikeDeferredInferenceAllowsAssignment`** — async function destructuring parameter transform.
 
-- [ ] **21. `TransportStream`** (1 test) — check diff, likely a complex multi-file or async issue.
+- [S] **21. `TransportStream`** — scanner control character handling (binary input splitting into multiple statements).
 
-- [ ] **22. `exportDefaultAsyncFunction2`** (1 test) — check diff.
+- [S] **22. `exportDefaultAsyncFunction2`** — `async` parsed as keyword instead of imported identifier + missing `__awaiter`.
 
-- [ ] **23. `externalModuleAssignToVar`, `externalModuleRefernceResolutionOrderInImportDeclaration`, `externModule`** (3 tests) — check diffs, likely CommonJS/module edge cases.
+- [S] **23. `externalModuleAssignToVar`, `externalModuleRefernceResolutionOrderInImportDeclaration`, `externModule`** — file ordering + parser error recovery.
 
-- [ ] **24. `exportAssignmentImportMergeNoCrash`, `exportAssignmentOfDeclaredExternalModule`** (2 tests) — check diffs.
+- [S] **24. `exportAssignmentImportMergeNoCrash`, `exportAssignmentOfDeclaredExternalModule`** — type-checker-driven import elision.
 
-- [ ] **25. `emitClassExpressionInDeclarationFile2`** (1 test) — check diff.
+- [S] **25. `emitClassExpressionInDeclarationFile2`** — needs `__setFunctionName` helper.
 
 ### Module resolution (infrastructure work)
 
-- [ ] **26. `paths`/`baseUrl` resolution** (~9 tests: `pathMappingBasedModuleResolution3/4/5/8_classic`, `pathMappingBasedModuleResolution8_node`, `pathMappingBasedModuleResolution_rootImport_*`, `pathMappingBasedModuleResolution_withExtension_*`) — **File:** `TypeScriptCompiler.kt` — **Fix:** implement `compilerOptions.paths` and `baseUrl` when resolving relative imports for output path computation.
+- [S] **26. `paths`/`baseUrl` resolution** (~9 tests) — requires implementing `compilerOptions.paths` and `baseUrl` in `TypeScriptCompiler.kt`.
 
-- [ ] **27. Symlink resolution** (3 tests: `moduleResolutionWithSymlinks`, `moduleResolutionWithSymlinks_notInNodeModules`, `moduleResolutionWithSymlinks_withOutDir`) — **File:** `TypeScriptCompiler.kt` — needs symlink-aware path resolution.
+- [S] **27. Symlink resolution** (3 tests) — needs symlink-aware path resolution infrastructure.
 
-- [ ] **28. `moduleResolutionWithRequire`** (1 test) — check diff.
+- [S] **28. `moduleResolutionWithRequire`** (1 test) — module resolution infrastructure.
 
-- [ ] **29. `requireOfJson*` remaining** (4 tests: `requireOfJsonFileNonRelativeWithoutExtensionResolvesToTs`, `requireOfJsonFileWithoutExtensionResolvesToTs`, `requireOfJsonFileWithoutResolveJsonModule`) — JSON file naming / ordering edge cases.
+- [S] **29. `requireOfJson*` remaining** (4 tests) — JSON file naming / ordering edge cases.
 
-- [ ] **30. `commonSourceDir6`** (1 test) — AMD module naming with rootDir path stripping.
+- [S] **30. `commonSourceDir6`** (1 test) — AMD module naming with rootDir path stripping.
 
-- [ ] **31. `moduleResolutionWithSuffixes` remaining** (3 tests: `dirModuleWithIndex`, `externalTSModule`, `jsonModule`) — module suffix resolution for directory index / external TS modules.
+- [S] **31. `moduleResolutionWithSuffixes` remaining** (3 tests) — module suffix resolution infrastructure.
 
 ---
 
