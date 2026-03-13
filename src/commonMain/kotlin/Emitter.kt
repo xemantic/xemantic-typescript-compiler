@@ -2295,9 +2295,18 @@ class Emitter(
 
     private fun emitNewExpression(node: NewExpression) {
         write("new ")
+        // Leading type arguments (e.g., `new <T>Expr`) are kept in JS output by TypeScript
+        if (node.leadingTypeArguments != null) {
+            write(" < ")
+            for ((i, typeArg) in node.leadingTypeArguments.withIndex()) {
+                if (i > 0) write(", ")
+                write(typeNodeToText(typeArg))
+            }
+            write(" > ")
+        }
         emitInlineLeadingComments(leftmostExpression(node.expression))
         emitExpression(node.expression)
-        // type arguments erased
+        // trailing type arguments erased
         if (node.arguments != null) {
             write("(")
             var firstArg = true
@@ -2309,6 +2318,33 @@ class Emitter(
             }
             write(")")
         }
+    }
+
+    /** Converts a TypeNode to its source text string (for leading type args on new expressions). */
+    private fun typeNodeToText(typeNode: TypeNode): String = when (typeNode) {
+        is KeywordTypeNode -> when (typeNode.kind) {
+            SyntaxKind.AnyKeyword -> "any"
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            SyntaxKind.SymbolKeyword -> "symbol"
+            SyntaxKind.VoidKeyword -> "void"
+            SyntaxKind.NeverKeyword -> "never"
+            SyntaxKind.ObjectKeyword -> "object"
+            SyntaxKind.UnknownKeyword -> "unknown"
+            SyntaxKind.UndefinedKeyword -> "undefined"
+            SyntaxKind.NullKeyword -> "null"
+            else -> ""
+        }
+        is TypeReference -> nodeToNameText(typeNode.typeName)
+        else -> ""
+    }
+
+    private fun nodeToNameText(name: Node): String = when (name) {
+        is Identifier -> name.text
+        is QualifiedName -> "${nodeToNameText(name.left)}.${name.right.text}"
+        else -> ""
     }
 
     private fun emitTaggedTemplateExpression(node: TaggedTemplateExpression) {
