@@ -260,9 +260,14 @@ class TypeScriptCompiler {
                 if (!isTsFile && !isJsFile) {
                     continue
                 }
-                // Plain .js/.mjs/.cjs/.jsx: only when outDir/outFile is set (avoids overwriting sources)
-                // .jsx is JavaScript+JSX (requires allowJs); without outDir/outFile, TypeScript skips it
-                if ((isPureJsFile || isJsxFile) && options.outDir == null && options.outFile == null) {
+                // Plain .js/.mjs/.cjs: only when outDir/outFile is set (avoids overwriting sources)
+                if (isPureJsFile && options.outDir == null && options.outFile == null) {
+                    continue
+                }
+                // .jsx (JavaScript+JSX): without outDir/outFile, skip if no allowJs OR source is empty
+                // (empty .jsx files have no TypeScript content to transform)
+                if (isJsxFile && options.outDir == null && options.outFile == null &&
+                    (!options.allowJs || file.content.isBlank())) {
                     continue
                 }
                 // Skip .d.ts/.d.mts/.d.cts files (they don't produce JS output)
