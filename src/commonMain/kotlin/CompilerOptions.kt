@@ -80,6 +80,9 @@ data class CompilerOptions(
     val experimentalDecorators: Boolean = false,
     val emitDecoratorMetadata: Boolean = false,
     val jsx: String? = null,
+    val jsxFactory: String? = null,
+    val jsxFragmentFactory: String? = null,
+    val reactNamespace: String? = null,
     val lib: List<String> = emptyList(),
     val outDir: String? = null,
     val rootDir: String? = null,
@@ -325,6 +328,9 @@ private fun applyDirective(options: CompilerOptions, key: String, value: String)
         "experimentaldecorators" -> options.copy(experimentalDecorators = boolValue)
         "emitdecoratormetadata" -> options.copy(emitDecoratorMetadata = boolValue)
         "jsx" -> options.copy(jsx = value.trim())
+        "jsxfactory" -> options.copy(jsxFactory = value.trim())
+        "jsxfragmentfactory" -> options.copy(jsxFragmentFactory = value.trim())
+        "reactnamespace" -> options.copy(reactNamespace = value.trim())
         "lib" -> options.copy(lib = value.split(",").map { it.trim() })
         "outdir" -> options.copy(outDir = value.trim())
         "rootdir" -> options.copy(rootDir = value.trim())
@@ -409,7 +415,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
     val allowedTsconfigOptions = setOf(
         "target", "module", "strict", "noemit", "noemithelpers",
         "declaration", "removecomments", "preserveconstenums", "sourcemap",
-        "experimentaldecorators", "emitdecoratormetadata", "jsx",
+        "experimentaldecorators", "emitdecoratormetadata", "jsx", "jsxfactory", "jsxfragmentfactory", "reactnamespace",
         "esmoduleinterop", "isolatedmodules", "downleveliteration",
         "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
         "verbatimmodulesyntax", "emitdeclarationonly", "outfile",

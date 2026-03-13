@@ -1732,6 +1732,101 @@ class Emitter(
             is ComputedPropertyName -> emitComputedPropertyName(node)
             is ObjectBindingPattern -> emitObjectBindingPattern(node)
             is ArrayBindingPattern -> emitArrayBindingPattern(node)
+
+            // JSX nodes (emitted as-is for jsx: preserve mode)
+            is JsxElement -> emitJsxElement(node)
+            is JsxSelfClosingElement -> emitJsxSelfClosingElement(node)
+            is JsxFragment -> emitJsxFragment(node)
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // JSX emit (for jsx: preserve mode)
+    // ---------------------------------------------------------------------------
+
+    private fun emitJsxElement(node: JsxElement) {
+        emitJsxOpeningLike(node.openingElement.tagName, node.openingElement.attributes, selfClose = false)
+        node.children.forEach { child -> emitJsxChild(child) }
+        write("</")
+        emitJsxTagName(node.closingElement.tagName)
+        write(">")
+    }
+
+    private fun emitJsxSelfClosingElement(node: JsxSelfClosingElement) {
+        emitJsxOpeningLike(node.tagName, node.attributes, selfClose = true)
+    }
+
+    private fun emitJsxFragment(node: JsxFragment) {
+        write("<>")
+        node.children.forEach { child -> emitJsxChild(child) }
+        write("</>")
+    }
+
+    private fun emitJsxOpeningLike(tagName: Expression, attributes: List<Node>, selfClose: Boolean) {
+        write("<")
+        emitJsxTagName(tagName)
+        for (attr in attributes) {
+            write(" ")
+            emitJsxAttributeNode(attr)
+        }
+        if (selfClose) write("/>") else write(">")
+    }
+
+    private fun emitJsxTagName(tagName: Expression) {
+        when (tagName) {
+            is Identifier -> write(tagName.text)
+            is PropertyAccessExpression -> {
+                emitJsxTagName(tagName.expression)
+                write(".")
+                write(tagName.name.text)
+            }
+            else -> emitExpression(tagName)
+        }
+    }
+
+    private fun emitJsxAttributeNode(attr: Node) {
+        when (attr) {
+            is JsxAttribute -> {
+                write(attr.name)
+                val value = attr.value
+                if (value != null) {
+                    write("=")
+                    when (value) {
+                        is StringLiteralNode -> {
+                            write("\"")
+                            write(if (value.rawText != null) value.rawText else value.text)
+                            write("\"")
+                        }
+                        is JsxExpressionContainer -> {
+                            write("{")
+                            if (value.expression != null) emitExpression(value.expression)
+                            write("}")
+                        }
+                        else -> if (value is Expression) emitExpression(value)
+                    }
+                }
+            }
+            is JsxSpreadAttribute -> {
+                write("{...")
+                emitExpression(attr.expression)
+                write("}")
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitJsxChild(child: Node) {
+        when (child) {
+            is JsxText -> write(child.text)
+            is JsxExpressionContainer -> {
+                write("{")
+                if (child.expression != null) emitExpression(child.expression)
+                write("}")
+            }
+            is JsxElement -> emitJsxElement(child)
+            is JsxSelfClosingElement -> emitJsxSelfClosingElement(child)
+            is JsxFragment -> emitJsxFragment(child)
+            else -> {}
         }
     }
 
