@@ -6058,11 +6058,19 @@ class Transformer(private val options: CompilerOptions) {
      * When preserving, sub-expressions (identifiers, attribute values) are still transformed.
      */
     private inline fun transformJsxOrPreserve(expr: Expression, transform: () -> Expression): Expression {
-        return if (options.jsx == null || options.jsx == "preserve" || options.jsx == "react-native") {
+        val result = if (options.jsx == null || options.jsx == "preserve" || options.jsx == "react-native") {
             transformJsxPreserve(expr)
         } else {
             transform()
         }
+        // Transfer leading/trailing comments from original JSX node to the transformed result.
+        // This preserves comments like `// note` that appear after JSX elements.
+        val withLeading = if (!expr.leadingComments.isNullOrEmpty() && result.leadingComments.isNullOrEmpty()) {
+            copyExpressionWithLeadingComments(result, expr.leadingComments!!)
+        } else result
+        return if (!expr.trailingComments.isNullOrEmpty() && withLeading.trailingComments.isNullOrEmpty()) {
+            copyExpressionWithTrailingComments(withLeading, expr.trailingComments)
+        } else withLeading
     }
 
     /**
@@ -6174,19 +6182,22 @@ class Transformer(private val options: CompilerOptions) {
     }
 
     private fun transformJsxElement(node: JsxElement): Expression =
-        buildJsxCall(node.openingElement.tagName, node.openingElement.attributes, node.children)
+        buildJsxCall(node.openingElement.tagName, node.openingElement.attributes, node.children,
+            openingEnd = node.openingElement.end)
 
     private fun transformJsxSelfClosingElement(node: JsxSelfClosingElement): Expression =
         buildJsxCall(node.tagName, node.attributes, emptyList())
 
     private fun transformJsxFragment(node: JsxFragment): Expression =
-        buildJsxCall(getJsxFragmentFactory(), emptyList(), node.children, tagIsExpr = true)
+        buildJsxCall(getJsxFragmentFactory(), emptyList(), node.children, tagIsExpr = true,
+            openingEnd = node.pos)
 
     private fun buildJsxCall(
         tagName: Expression,
         attributes: List<Node>,
         children: List<Node>,
         tagIsExpr: Boolean = false,
+        openingEnd: Int = -1,
     ): Expression {
         val factory = getJsxFactory()
 
@@ -6249,9 +6260,18 @@ class Transformer(private val options: CompilerOptions) {
             }
         }
 
+        // Detect if the JSX element spans multiple lines — if so, emit createElement multi-line.
+        // Check if any non-trivial child's source position comes after a newline relative
+        // to the opening element end.
+        // Detect if the JSX element spans multiple lines.
+        // If any JsxText child contains a newline, the element is multi-line.
+        val isMultiLine = childArgs.isNotEmpty() &&
+            children.any { it is JsxText && it.text.contains('\n') }
+
         return CallExpression(
             expression = factory,
             arguments = listOf(tagExpr, propsExpr) + childArgs,
+            multiLine = isMultiLine,
             pos = -1, end = -1,
         )
     }

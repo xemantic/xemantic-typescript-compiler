@@ -711,6 +711,8 @@ data class CallExpression(
     val questionDotToken: Boolean = false,
     /** Comments inside the `()` when the argument list is empty, e.g. `a(/*1*/)`. */
     val innerComments: List<Comment>? = null,
+    /** When true, emit arguments on separate lines (used for multiline JSX createElement calls). */
+    val multiLine: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

@@ -2772,9 +2772,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
         while (true) {
             // Scan raw JSX text content until < or {
+            val textStart = scanner.getPos()
             val rawText = scanner.scanJsxText()
             if (rawText.isNotEmpty()) {
-                children.add(JsxText(text = rawText, pos = 0, end = 0))
+                children.add(JsxText(text = rawText, pos = textStart, end = textStart + rawText.length))
             }
             // Now the scanner is positioned at < or { (or EOF).
             // Call nextToken() to actually consume that character as a token.
