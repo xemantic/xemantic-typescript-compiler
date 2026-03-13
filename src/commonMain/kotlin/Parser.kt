@@ -420,13 +420,21 @@ class Parser(private val source: String, private val fileName: String) {
         val elements = mutableListOf<BindingElement>()
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
-            elements.add(parseBindingElement())
+            var element = parseBindingElement()
             if (parseOptional(SyntaxKind.Comma)) {
+                // After consuming the comma, the scanner has advanced to the next token.
+                // Trailing comments on the same line as the comma belong to the preceding element.
+                val afterCommaTrailing = scanner.getTrailingComments()
+                if (afterCommaTrailing != null && element.trailingComments == null) {
+                    element = element.copy(trailingComments = afterCommaTrailing)
+                }
                 hasTrailingComma = (token == SyntaxKind.CloseBrace)
             } else {
                 hasTrailingComma = false
+                elements.add(element)
                 break
             }
+            elements.add(element)
         }
         parseExpected(SyntaxKind.CloseBrace)
         return ObjectBindingPattern(elements = elements, hasTrailingComma = hasTrailingComma, pos = pos, end = getEnd())

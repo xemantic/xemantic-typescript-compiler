@@ -309,8 +309,23 @@ class Emitter(
         // TypeScript always writes a space after var/const, but not after let when declarations are empty
         if (node.declarations.isNotEmpty() || keyword != "let") write(" ")
         for ((index, decl) in node.declarations.withIndex()) {
-            if (index > 0) write(", ")
+            val isLast = index == node.declarations.size - 1
             emitVariableDeclaration(decl)
+            if (!isLast) {
+                // Check for trailing line comment (e.g. from __rest transform promoting last element's comment)
+                val trailingLineComment = if (!options.removeComments)
+                    decl.trailingComments?.firstOrNull { !it.hasPrecedingNewLine && it.text.startsWith("//") }
+                else null
+                if (trailingLineComment != null) {
+                    write(",")
+                    write(" ")
+                    write(trailingLineComment.text)
+                    writeNewLine()
+                    writeIndent()
+                } else {
+                    write(", ")
+                }
+            }
         }
     }
 
@@ -2909,7 +2924,7 @@ class Emitter(
         else null
         val multiLine = !firstLineComments.isNullOrEmpty()
         for ((index, element) in node.elements.withIndex()) {
-            if (index > 0) write(", ")
+            val isLast = index == node.elements.size - 1
             if (element === firstNonRest && multiLine) {
                 // Emit the line comments before the element, each on its own line at current indent
                 for (comment in firstLineComments!!) {
@@ -2922,6 +2937,22 @@ class Emitter(
                 emitBindingElement(element, skipLeadingLineComments = true)
             } else {
                 emitBindingElement(element)
+            }
+            if (!isLast) {
+                // Check for a trailing line comment on this element (only when no initializer,
+                // since emitBindingElement already emits trailing comments for elements with initializers)
+                val trailingLineComment = if (!options.removeComments && element.initializer == null)
+                    element.trailingComments?.firstOrNull { !it.hasPrecedingNewLine && it.text.startsWith("//") }
+                else null
+                if (trailingLineComment != null) {
+                    write(",")
+                    write(" ")
+                    write(trailingLineComment.text)
+                    writeNewLine()
+                    writeIndent()
+                } else {
+                    write(", ")
+                }
             }
         }
         if (node.hasTrailingComma) write(",")
