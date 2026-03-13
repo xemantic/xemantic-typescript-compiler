@@ -1648,6 +1648,13 @@ class Emitter(
                     }
                     val longVal = numVal.toULongOrNull(base)
                     longVal?.toString() ?: numText
+                } else if (hasSeparators) {
+                    // Decimal with separators: evaluate numerically (e.g. ".5_5" → "0.55", ".5_5e5_5" → "5.5e+54")
+                    jsNumberString(numText.toDouble())
+                } else if (numText.length >= 2 && numText[0] == '0' && numText[1].isDigit()) {
+                    // Leading-zero decimal (invalid legacy octal like "08", "08.5", "08e5"):
+                    // evaluate as double and emit in JavaScript canonical form.
+                    jsNumberString(numText.toDouble())
                 } else {
                     numText
                 }
@@ -2241,6 +2248,24 @@ class Emitter(
             }
         }
         write(node.name.emitText)
+    }
+
+    /** Format a Double as JavaScript's Number.prototype.toString() would:
+     *  integers without '.0', floats as-is, large numbers with lowercase 'e+'. */
+    private fun jsNumberString(d: Double): String {
+        if (d.isNaN() || d.isInfinite()) return d.toString()
+        // Integer values below 1e21: emit without decimal point
+        if (d == kotlin.math.floor(d) && kotlin.math.abs(d) < 1e21) {
+            return d.toBigDecimal().toPlainString().trimEnd('0').trimEnd('.')
+        }
+        val s = d.toString() // Kotlin: "8.55", "8.0E55", "5.5E54", etc.
+        val eIdx = s.indexOf('E')
+        if (eIdx < 0) return s // no scientific notation needed
+        val mantissa = s.substring(0, eIdx)
+        val exp = s.substring(eIdx + 1).toInt()
+        val expStr = if (exp >= 0) "e+$exp" else "e$exp"
+        val cleanMantissa = mantissa.trimEnd('0').trimEnd('.')
+        return "$cleanMantissa$expStr"
     }
 
     /** True if a numeric literal text needs an extra '.' before property access

@@ -601,21 +601,31 @@ class Scanner(private val text: String) {
         }
 
         // Decimal literal
+        val digitStart = pos
         scanDecimalDigits()
+        val scannedDigits = text.substring(digitStart, pos)
 
-        // Fractional part
-        if (pos < end && text[pos] == '.') {
-            pos++
-            scanDecimalDigits()
-        }
+        // Check if this is a legacy octal (starts with '0', ≥2 chars, only octal digits 0-7, no separators).
+        // Legacy octals must NOT consume a trailing '.' or 'e' — "00.5" splits into "00" + ".5" tokens.
+        val isLegacyOctalLiteral = scannedDigits.length >= 2 &&
+                scannedDigits[0] == '0' &&
+                scannedDigits.all { it in '0'..'7' }
 
-        // Exponent part
-        if (pos < end && (text[pos] == 'e' || text[pos] == 'E')) {
-            pos++
-            if (pos < end && (text[pos] == '+' || text[pos] == '-')) {
+        if (!isLegacyOctalLiteral) {
+            // Fractional part
+            if (pos < end && text[pos] == '.') {
                 pos++
+                scanDecimalDigits()
             }
-            scanDecimalDigits()
+
+            // Exponent part
+            if (pos < end && (text[pos] == 'e' || text[pos] == 'E')) {
+                pos++
+                if (pos < end && (text[pos] == '+' || text[pos] == '-')) {
+                    pos++
+                }
+                scanDecimalDigits()
+            }
         }
 
         // BigInt suffix — only for pure decimal (no legacy octal like 0123n, no float)
