@@ -49,7 +49,7 @@
 
 - [S] **27. `outFile` bundling** — `filesEmittingIntoSameOutputWithOutOption` and `jsFileCompilationNoError*` already pass. Remaining: `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile` (AMD JSON module in outFile with path prefix), `noBundledEmitFromNodeModules` (AMD module naming + node_modules exclusion), `useBeforeDeclaration` (namespace qualification in outFile bundle), `commonSourceDir6` (AMD module naming with rootDir path stripping), `requireOfJsonFileWithoutExtensionResolvesToTs` (JSON ordering + unreferenced JSON filtering). All require complex infrastructure. Skipped.
 
-- [x] **28. `.jsx` skip + empty-output skip** (~25 tests: `moduleResolutionWithExtensions_notSupported*` + many others) — **Files:** `TypeScriptCompiler.kt`, `Emitter.kt` — **Fix:** (1) Treat `.jsx` like `.js` — skip unless `outDir`/`outFile` is set (`.jsx` requires `allowJs`, just like plain `.js`). (2) Skip adding to `jsOutputMap` when `javascript.isBlank()` (empty-output files). (3) In `emitUseStrict`, return early for empty source files (`statements.isEmpty()`). Net +25 tests.
+- [x] **28. `.jsx`/`.tsx` skip + empty-output skip** (~39 tests total) — **Files:** `TypeScriptCompiler.kt`, `Emitter.kt` — **Fix:** (1) Treat `.jsx` like `.js` — skip unless `outDir`/`outFile` is set. (2) Skip `jsOutputMap` when `javascript.isBlank()`. (3) Skip `.tsx` files when `options.jsx == null` (TypeScript requires `--jsx` for `.tsx` files). Net +39 tests from original 200.
 
 ### Blocked / out of scope (do NOT attempt)
 - `const enum` cross-file inlining — type checker needed (~15 tests: `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, `amdModuleConstEnumUsage`, etc.)
