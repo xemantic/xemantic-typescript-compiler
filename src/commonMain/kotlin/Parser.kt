@@ -1441,12 +1441,45 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     }
 
     private fun parseIndexSignatureOrProperty(modifiers: Set<ModifierFlag>, pos: Int): ClassElement {
-        // Could be [key: type]: type  or [computed]: type
+        // Could be [key: type]: type  or [K in T (as N)?]: type  or [computed]: type
         val isIndex = scanner.lookAhead {
             scanner.scan() // skip [
             if (!isIdentifier()) return@lookAhead false
             scanner.scan() // skip name
             scanner.getToken() == SyntaxKind.Colon
+        }
+        // Detect mapped type: [K in T ...] — completely skip it (pure type construct)
+        val isMappedType = scanner.lookAhead {
+            scanner.scan() // skip [
+            if (scanner.getToken() != SyntaxKind.Identifier) return@lookAhead false
+            scanner.scan() // skip identifier (type parameter name)
+            scanner.getToken() == SyntaxKind.InKeyword
+        }
+        if (isMappedType) {
+            parseExpected(SyntaxKind.OpenBracket)
+            nextToken() // consume type parameter name
+            parseExpected(SyntaxKind.InKeyword) // consume 'in'
+            parseType() // constraint type (e.g., keyof T)
+            if (parseOptional(SyntaxKind.AsKeyword)) {
+                parseType() // name type (e.g., `${K}Suffix` template literal type)
+            }
+            parseExpected(SyntaxKind.CloseBracket)
+            // Handle optional modifiers after ]: ?, +?, -?
+            when (token) {
+                SyntaxKind.Question -> nextToken()
+                SyntaxKind.Plus, SyntaxKind.Minus -> {
+                    nextToken()
+                    parseOptional(SyntaxKind.Question)
+                }
+                else -> {}
+            }
+            if (parseOptional(SyntaxKind.Colon)) parseType() // value type
+            return PropertyDeclaration(
+                name = Identifier(text = "", pos = pos, end = pos),
+                modifiers = modifiers,
+                pos = pos,
+                end = getEnd()
+            )
         }
         if (isIndex) {
             parseExpected(SyntaxKind.OpenBracket)
