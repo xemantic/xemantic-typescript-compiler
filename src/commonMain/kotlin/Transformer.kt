@@ -1486,20 +1486,15 @@ class Transformer(private val options: CompilerOptions) {
                 // Preserve detached (blank-line-separated) leading comments from elided imports.
                 // TypeScript keeps copyright/header blocks before Object.defineProperty even
                 // when the import they preceded is erased.
-                // Also always preserve triple-slash directives (/// <reference>, etc.).
+                // Note: triple-slash directives (/// <reference>, etc.) are NEVER emitted in JS output.
                 val source = originalSourceFile.text
                 for (stmt in toElide) {
                     val allComments = stmt.leadingComments
                     if (!allComments.isNullOrEmpty()) {
-                        // Always preserve triple-slash directives
-                        val tripleSlash = allComments.filter { it.text.startsWith("/// <") }
-                        if (tripleSlash.isNotEmpty()) {
-                            prePreambleStatements.addAll(tripleSlash.map { NotEmittedStatement(leadingComments = listOf(it)) })
-                        }
-                        // Preserve detached (blank-line-separated) comments when pos is valid
+                        // Preserve detached (blank-line-separated) non-triple-slash comments when pos is valid
                         if (stmt.pos >= 0) {
-                            val remaining = allComments - tripleSlash.toSet()
-                            val detached = remaining.filter { c ->
+                            val detached = allComments.filter { c ->
+                                !c.text.startsWith("/// <") &&
                                 c.pos >= 0 && source.substring(c.end, stmt.pos).count { it == '\n' } >= 2
                             }
                             if (detached.isNotEmpty()) {
@@ -6428,7 +6423,7 @@ class Transformer(private val options: CompilerOptions) {
             }
 
             // Add __metadata entries for emitDecoratorMetadata
-            if (options.emitDecoratorMetadata && hasMethodDecorators) {
+            if (options.emitDecoratorMetadata && (hasMethodDecorators || hasParamDecorators)) {
                 needsMetadataHelper = true
                 if (isProperty) {
                     // design:type for properties
