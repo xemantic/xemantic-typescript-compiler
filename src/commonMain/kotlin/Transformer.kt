@@ -7132,9 +7132,11 @@ class Transformer(private val options: CompilerOptions) {
     }
 
     private fun transformClassExpression(expr: ClassExpression): Expression {
-        // Check if there are static properties that would need a temp var.
-        val hasStaticInitializers = !useDefineForClassFields &&
-            expr.members.any { it is PropertyDeclaration && ModifierFlag.Static in it.modifiers && it.initializer != null }
+        // Check if there are static properties/blocks that would need a temp var.
+        val hasStaticInitializers = !useDefineForClassFields && (
+            expr.members.any { it is PropertyDeclaration && ModifierFlag.Static in it.modifiers && it.initializer != null } ||
+            (options.effectiveTarget < ScriptTarget.ES2022 && expr.members.any { it is ClassStaticBlockDeclaration })
+        )
 
         if (!hasStaticInitializers) {
             val result = transformClassBody(
@@ -7440,6 +7442,7 @@ class Transformer(private val options: CompilerOptions) {
         // Separate members by category
         val instanceProperties = mutableListOf<PropertyDeclaration>()
         val staticProperties = mutableListOf<PropertyDeclaration>()
+        val staticBlocks = mutableListOf<ClassStaticBlockDeclaration>()
         val otherMembers = mutableListOf<ClassElement>()
         var existingConstructor: Constructor? = null
 
@@ -7468,6 +7471,11 @@ class Transformer(private val options: CompilerOptions) {
 
                 member is IndexSignature -> {
                     // Index signatures are type-only, remove
+                }
+
+                // Static blocks below ES2022 target: lower to IIFE trailing statements
+                member is ClassStaticBlockDeclaration && options.effectiveTarget < ScriptTarget.ES2022 -> {
+                    staticBlocks.add(member)
                 }
 
                 else -> otherMembers.add(member)
@@ -7740,6 +7748,9 @@ class Transformer(private val options: CompilerOptions) {
                 member is IndexSignature -> {
                     // index signatures are type-only — erase
                 }
+                member is ClassStaticBlockDeclaration && options.effectiveTarget < ScriptTarget.ES2022 -> {
+                    // Skip — collected in staticBlocks, emitted as IIFE trailing statements
+                }
                 else -> {
                     val transformed = transformClassElement(member)
                     if (transformed != null) outputMembers.add(transformed)
@@ -7862,6 +7873,28 @@ class Transformer(private val options: CompilerOptions) {
                     }
                 }
             }
+        }
+
+        // Static blocks below ES2022 target: emit as IIFE trailing statements
+        for (block in staticBlocks) {
+            val transformedBlock = transformBlock(block.body, isFunctionScope = true)
+            trailingStatements.add(
+                ExpressionStatement(
+                    expression = CallExpression(
+                        expression = ParenthesizedExpression(
+                            expression = ArrowFunction(
+                                parameters = emptyList(),
+                                body = transformedBlock,
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        ),
+                        arguments = emptyList(),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+            )
         }
 
         return ClassTransformResult(
