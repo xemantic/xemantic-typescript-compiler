@@ -141,9 +141,6 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitUseStrict(sourceFile: SourceFile) {
-        // Empty files produce no output — no "use strict" needed
-        if (sourceFile.statements.isEmpty()) return
-
         // Check if the file is an ES module format — ESM files are inherently strict,
         // no explicit "use strict" needed. But for .mts/.mjs under CommonJS module setting,
         // TypeScript still emits "use strict".

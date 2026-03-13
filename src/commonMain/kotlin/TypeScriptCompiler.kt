@@ -269,6 +269,10 @@ class TypeScriptCompiler {
                 if (file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")) {
                     continue
                 }
+                // .tsx files require --jsx option; without it TypeScript skips them (JSX mode unknown)
+                if (file.fileName.endsWith(".tsx") && options.jsx == null) {
+                    continue
+                }
                 // allowJs: skip a .ts/.tsx file if a .js/.jsx file with the same full path (minus extension) exists.
                 // TypeScript "blocks" TS emit when a JS file of the same name is present (avoids conflict).
                 if (options.allowJs && isTsFile) {
