@@ -277,7 +277,7 @@ class Transformer(private val options: CompilerOptions) {
         if (needsDecorateHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
         if (needsMetadataHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
         if (needsParamHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
-        if (needsAwaiterHelper) helpers.add(RawStatement(code = AWAITER_HELPER))
+        if (needsAwaiterHelper && !options.importHelpers) helpers.add(RawStatement(code = AWAITER_HELPER))
 
         // When helpers are present, lift leading comments from the first transformed statement
         // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
@@ -332,7 +332,12 @@ class Transformer(private val options: CompilerOptions) {
                 (effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) ||
                 fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
         if (useCJS && isModuleFile(sourceFile)) {
-            val cjsStatements = transformToCommonJS(withHelpers, sourceFile)
+            // When importHelpers: true, inject `const tslib_1 = require("tslib")` instead of inlining helpers.
+            val statementsForCJS = if (options.importHelpers && needsAwaiterHelper) {
+                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
+                listOf(tslibStmt) + withHelpers
+            } else withHelpers
+            val cjsStatements = transformToCommonJS(statementsForCJS, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
         }
 
@@ -5015,8 +5020,17 @@ class Transformer(private val options: CompilerOptions) {
             asteriskToken = true,
             pos = -1, end = -1,
         )
+        val awaiterExpr: Expression = if (options.importHelpers) {
+            PropertyAccessExpression(
+                expression = syntheticId("tslib_1"),
+                name = syntheticId("__awaiter"),
+                pos = -1, end = -1,
+            )
+        } else {
+            syntheticId("__awaiter")
+        }
         return CallExpression(
-            expression = syntheticId("__awaiter"),
+            expression = awaiterExpr,
             arguments = listOf(thisArg, secondArg ?: void0, void0, generatorFn),
             pos = -1, end = -1,
         )
