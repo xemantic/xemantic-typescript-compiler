@@ -1772,8 +1772,8 @@ class Emitter(
             emitJsxAttributeNode(attr)
         }
         if (selfClose) {
-            // TypeScript always emits a space before `/>` in self-closing elements
-            write(" />")
+            // TypeScript emits a space before `/>` only when there are no attributes
+            if (attributes.isEmpty()) write(" />") else write("/>")
         } else {
             write(">")
         }
