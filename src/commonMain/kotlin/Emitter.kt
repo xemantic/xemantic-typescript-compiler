@@ -2412,13 +2412,58 @@ class Emitter(
             }
             if (multiline) writeNewLine()
         }
-        val lastArg = emitCallArguments(node.arguments)
+        // Multiline JSX createElement: emit first two args (tag, props) on the opening line,
+        // then each child argument on its own indented line.
+        val lastArg = if (node.multiLine && node.arguments.size > 2) {
+            emitMultilineJsxCallArguments(node.arguments)
+        } else {
+            emitCallArguments(node.arguments)
+        }
         // If the last argument had a trailing single-line comment, `)` goes on the next line
         if (!options.removeComments && lastArg?.trailingComments?.lastOrNull()?.kind == SyntaxKind.SingleLineComment) {
             writeNewLine()
             writeIndent()
         }
         write(")")
+    }
+
+    /** Emits JSX createElement arguments in multiline format:
+     *  first two args (tag, props) on the same line, each child on its own indented line. */
+    private fun emitMultilineJsxCallArguments(arguments: List<Expression>): Expression? {
+        var lastArg: Expression? = null
+        for ((i, arg) in arguments.withIndex()) {
+            if (arg is OmittedExpression) continue
+            when {
+                i < 2 -> {
+                    // Tag and props on first line
+                    if (i > 0) write(", ")
+                    emitInlineLeadingComments(arg)
+                    emitExpression(arg)
+                }
+                i == 2 -> {
+                    // First child: comma after props, newline, indent+4, then child
+                    write(",")
+                    writeNewLine()
+                    indentLevel++
+                    writeIndent()
+                    emitInlineLeadingComments(arg)
+                    emitExpression(arg)
+                    if (!options.removeComments) emitTrailingComments(arg.trailingComments)
+                }
+                else -> {
+                    // Subsequent children: comma, newline, indent, then child
+                    write(",")
+                    writeNewLine()
+                    writeIndent()
+                    emitInlineLeadingComments(arg)
+                    emitExpression(arg)
+                    if (!options.removeComments) emitTrailingComments(arg.trailingComments)
+                }
+            }
+            lastArg = arg
+        }
+        if (arguments.size > 2) indentLevel--
+        return lastArg
     }
 
     /** Emits call arguments, returning the last non-omitted argument (or null). */
@@ -2554,10 +2599,17 @@ class Emitter(
         emitExpression(node.expression)
         // Emit same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`)
         // Skip StringLiteralNode/NumericLiteralNode — they emit their own trailing comments in emitExpression.
+        var innerExprHasTrailingLineComment = false
         if (!options.removeComments && node.expression !is StringLiteralNode && node.expression !is NumericLiteralNode) {
             node.expression.trailingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
                 write(" "); write(it.text)
+                if (it.hasTrailingNewLine) innerExprHasTrailingLineComment = true
             }
+        }
+        // If the inner expression ended with a line comment, put ')' on the next indented line
+        if (innerExprHasTrailingLineComment) {
+            writeNewLine()
+            writeIndent()
         }
         // Emit comments on new lines before ')' (e.g. `//close`, `/*3*/`)
         if (!options.removeComments && !node.beforeCloseParenComments.isNullOrEmpty()) {
