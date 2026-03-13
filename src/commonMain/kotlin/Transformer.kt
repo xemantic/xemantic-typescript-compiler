@@ -7075,13 +7075,17 @@ class Transformer(private val options: CompilerOptions) {
 
         // --- Legacy decorator transform ---
         needsDecorateHelper = true
-        val className = decl.name?.text ?: return listOf(decl.copy(
+        val isDefault = ModifierFlag.Default in decl.modifiers
+        val className = decl.name?.text
+            ?: if (isDefault) "default_${++anonDefaultCounter}" else null
+        if (className == null) return listOf(decl.copy(
             typeParameters = null,
             heritageClauses = result.heritageClauses,
             members = result.members,
             modifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract,
             decorators = null,
         )) + result.trailingStatements
+        val syntheticName = if (decl.name == null) syntheticId(className) else null
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract
 
