@@ -10691,7 +10691,28 @@ class Transformer(private val options: CompilerOptions) {
             is ClassStaticBlockDeclaration -> node.body.statements.forEach { collectRefsFromNode(it, refs) }
             // Variable declaration list (for `for` initializer)
             is VariableDeclarationList -> node.declarations.forEach { collectRefsFromNode(it.initializer, refs) }
+            // JSX nodes — traverse tag names and expression containers for identifier references
+            is JsxSelfClosingElement -> {
+                collectRefsFromNode(node.tagName, refs)
+                node.attributes.forEach { collectRefsFromJsxAttr(it, refs) }
+            }
+            is JsxElement -> {
+                collectRefsFromNode(node.openingElement.tagName, refs)
+                node.openingElement.attributes.forEach { collectRefsFromJsxAttr(it, refs) }
+                node.children.forEach { collectRefsFromNode(it, refs) }
+            }
+            is JsxFragment -> node.children.forEach { collectRefsFromNode(it, refs) }
+            is JsxExpressionContainer -> node.expression?.let { collectRefsFromNode(it, refs) }
+            is JsxSpreadAttribute -> collectRefsFromNode(node.expression, refs)
             else -> {} // literals, type nodes, etc. — no identifiers to collect
+        }
+    }
+
+    private fun collectRefsFromJsxAttr(attr: Node, refs: MutableSet<String>) {
+        when (attr) {
+            is JsxAttribute -> collectRefsFromNode(attr.value, refs)
+            is JsxSpreadAttribute -> collectRefsFromNode(attr.expression, refs)
+            else -> {}
         }
     }
 
@@ -10927,8 +10948,42 @@ class Transformer(private val options: CompilerOptions) {
             },
             members = expr.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
         )
+        // JSX nodes — rewrite identifiers in tag names and expression containers
+        is JsxSelfClosingElement -> expr.copy(
+            tagName = rewriteId(expr.tagName, map, wrapCallsWithZero),
+            attributes = expr.attributes.map { rewriteIdInJsxAttr(it, map, wrapCallsWithZero) },
+        )
+        is JsxElement -> expr.copy(
+            openingElement = expr.openingElement.copy(
+                tagName = rewriteId(expr.openingElement.tagName, map, wrapCallsWithZero),
+                attributes = expr.openingElement.attributes.map { rewriteIdInJsxAttr(it, map, wrapCallsWithZero) },
+            ),
+            children = expr.children.map { rewriteIdInJsxChild(it, map, wrapCallsWithZero) },
+        )
+        is JsxFragment -> expr.copy(
+            children = expr.children.map { rewriteIdInJsxChild(it, map, wrapCallsWithZero) },
+        )
         else -> expr
     }
+
+    private fun rewriteIdInJsxAttr(attr: Node, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Node =
+        when (attr) {
+            is JsxAttribute -> when (val v = attr.value) {
+                is JsxExpressionContainer -> attr.copy(value = v.copy(expression = v.expression?.let { rewriteId(it, map, wrapCallsWithZero) }))
+                else -> attr
+            }
+            is JsxSpreadAttribute -> attr.copy(expression = rewriteId(attr.expression, map, wrapCallsWithZero))
+            else -> attr
+        }
+
+    private fun rewriteIdInJsxChild(child: Node, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Node =
+        when (child) {
+            is JsxExpressionContainer -> child.copy(expression = child.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
+            is JsxElement -> rewriteId(child, map, wrapCallsWithZero) as Node
+            is JsxSelfClosingElement -> rewriteId(child, map, wrapCallsWithZero) as Node
+            is JsxFragment -> rewriteId(child, map, wrapCallsWithZero) as Node
+            else -> child
+        }
 
     private fun isTypeErasureNode(expr: Expression): Boolean =
         expr is TypeAssertionExpression || expr is AsExpression
