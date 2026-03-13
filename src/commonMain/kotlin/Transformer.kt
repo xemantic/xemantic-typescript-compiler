@@ -7194,7 +7194,11 @@ class Transformer(private val options: CompilerOptions) {
                     }
                     propertyTypeNode = null
                     methodReturnTypeNode = member.type
-                    methodParamTypeNodes = member.parameters.map { it.type }
+                    methodParamTypeNodes = member.parameters.map { param ->
+                        // For rest parameters (...x: T[]), serialize element type T not Array
+                        if (param.dotDotDotToken) (param.type as? ArrayType)?.elementType ?: param.type
+                        else param.type
+                    }
                     methodIsAsync = ModifierFlag.Async in member.modifiers
                 }
                 is GetAccessor -> {
@@ -7292,7 +7296,7 @@ class Transformer(private val options: CompilerOptions) {
                         pos = -1, end = -1,
                     )
                     decoratorExprs.add(makeMetadataCall("design:paramtypes", paramTypes))
-                    // design:returntype (only if non-void; async with no annotation → Promise)
+                    // design:returntype: emit for non-void annotated types, Promise for async, void 0 otherwise
                     val retNode = methodReturnTypeNode
                     when {
                         retNode != null && !isVoidTypeNode(retNode) ->
@@ -7302,6 +7306,10 @@ class Transformer(private val options: CompilerOptions) {
                             // async methods implicitly return Promise<T>
                             decoratorExprs.add(makeMetadataCall("design:returntype",
                                 syntheticId("Promise")))
+                        else ->
+                            // no annotation or void annotation → emit void 0
+                            decoratorExprs.add(makeMetadataCall("design:returntype",
+                                VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)))
                     }
                 }
             }
