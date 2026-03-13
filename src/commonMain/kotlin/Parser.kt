@@ -2917,6 +2917,15 @@ class Parser(private val source: String, private val fileName: String) {
             OpenBrace -> parseObjectLiteral()
             FunctionKeyword -> parseFunctionExpression()
             ClassKeyword -> parseClassExpression()
+            At -> {
+                // @decorator class C {} in expression position (TypeScript reports TS1206 but still parses/emits)
+                val decorators = parseDecorators()
+                if (token == SyntaxKind.ClassKeyword) {
+                    parseClassExpression().copy(decorators = decorators)
+                } else {
+                    parseIdentifier()
+                }
+            }
             TrueKeyword -> {
                 nextToken(); Identifier(text = "true", pos = pos, end = getEnd())
             }
