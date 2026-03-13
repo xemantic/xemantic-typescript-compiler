@@ -62,6 +62,13 @@ class Scanner(private val text: String) {
     /** Whether any token has been scanned yet (to handle leading comments at start of file). */
     private var hasScannedToken: Boolean = false
 
+    /**
+     * Position right after the end of the PREVIOUS token (before leading trivia of current token).
+     * This is the raw source position at the start of [scan] before trivia is skipped.
+     * Used by the JSX parser to know where to resume raw text scanning.
+     */
+    private var prevTokenEnd: Int = 0
+
     /** Whether the last scanned token had an invalid unicode escape sequence. */
     private var hasInvalidUnicodeEscape: Boolean = false
 
@@ -114,6 +121,13 @@ class Scanner(private val text: String) {
     /** Returns the full source text being scanned. */
     fun getSourceText(): String = text
 
+    /**
+     * Returns the source position right after the END of the previous token,
+     * before any trivia (whitespace, comments) of the current token was skipped.
+     * Used by the JSX parser to resume raw text scanning after parsing a child element.
+     */
+    fun getPrevTokenEnd(): Int = prevTokenEnd
+
     // -- Look-ahead -----------------------------------------------------------
 
     /**
@@ -129,6 +143,7 @@ class Scanner(private val text: String) {
         val savedLeadingComments = leadingComments
         val savedTrailingComments = trailingComments
         val savedHasScannedToken = hasScannedToken
+        val savedPrevTokenEnd = prevTokenEnd
         try {
             return callback()
         } finally {
@@ -140,6 +155,7 @@ class Scanner(private val text: String) {
             leadingComments = savedLeadingComments
             trailingComments = savedTrailingComments
             hasScannedToken = savedHasScannedToken
+            prevTokenEnd = savedPrevTokenEnd
         }
     }
 
@@ -155,6 +171,7 @@ class Scanner(private val text: String) {
         val savedPrecedingLineBreak = precedingLineBreak
         val savedLeadingComments = leadingComments
         val savedTrailingComments = trailingComments
+        val savedPrevTokenEnd = prevTokenEnd
         val result = callback()
         if (result == null || result == false) {
             pos = savedPos
@@ -164,6 +181,7 @@ class Scanner(private val text: String) {
             precedingLineBreak = savedPrecedingLineBreak
             leadingComments = savedLeadingComments
             trailingComments = savedTrailingComments
+            prevTokenEnd = savedPrevTokenEnd
         }
         return result
     }
@@ -179,6 +197,9 @@ class Scanner(private val text: String) {
         trailingComments = null
         precedingLineBreak = false
         tokenIsUnterminated = false
+
+        // Track position right after previous token (before any trivia)
+        prevTokenEnd = pos
 
         // Skip whitespace and collect leading comments/trivia
         scanLeadingTrivia()
@@ -310,6 +331,49 @@ class Scanner(private val text: String) {
             return token
         }
         return token
+    }
+
+    /**
+     * Resets the scanner to a specific position in the source text without scanning any token.
+     * After this call, [getToken] returns [SyntaxKind.Unknown] and [getPos]/[getTokenPos] return [newPos].
+     * Typically followed by a call to [scanJsxText] or [scan].
+     */
+    fun resetToPosition(newPos: Int) {
+        pos = newPos
+        tokenPos = newPos
+        token = SyntaxKind.Unknown
+        tokenValue = ""
+    }
+
+    /**
+     * Scans JSX text content starting from the current [pos] until `<`, `{`, or EOF.
+     * After this call, [getToken] returns the delimiter token (LessThan, OpenBrace, or EndOfFile)
+     * and [tokenValue]/[getTokenText] contain the raw text found.
+     * Returns the raw text scanned.
+     */
+    fun scanJsxText(): String {
+        tokenPos = pos
+        val start = pos
+        while (pos < end) {
+            val ch = text[pos]
+            if (ch == '<' || ch == '{') break
+            pos++
+        }
+        val result = text.substring(start, pos)
+        tokenValue = result
+        // Now scan the delimiter as the current token
+        if (pos >= end) {
+            token = SyntaxKind.EndOfFile
+        } else {
+            // We don't advance past the delimiter — just set token kind
+            // so the caller can call scan() to actually consume it.
+            // But to keep state consistent with the rest of the parser
+            // (which uses nextToken() → scanner.scan()), we need to set
+            // token to something meaningful without consuming the delimiter.
+            // Leave token as Unknown so the parser will call scan() next.
+            token = SyntaxKind.Unknown
+        }
+        return result
     }
 
     // -- Private scanning methods ---------------------------------------------

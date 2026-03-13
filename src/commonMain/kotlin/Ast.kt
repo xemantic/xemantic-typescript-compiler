@@ -1051,6 +1051,9 @@ fun Expression.withLeadingComments(comments: List<Comment>?): Expression {
         is ComputedPropertyName -> copy(leadingComments = comments)
         is ObjectBindingPattern -> copy(leadingComments = comments)
         is ArrayBindingPattern -> copy(leadingComments = comments)
+        is JsxElement -> copy(leadingComments = comments)
+        is JsxSelfClosingElement -> copy(leadingComments = comments)
+        is JsxFragment -> copy(leadingComments = comments)
     }
 }
 
@@ -1095,6 +1098,9 @@ fun Expression.withTrailingComments(comments: List<Comment>?): Expression {
         is ComputedPropertyName -> copy(trailingComments = comments)
         is ObjectBindingPattern -> copy(trailingComments = comments)
         is ArrayBindingPattern -> copy(trailingComments = comments)
+        is JsxElement -> copy(trailingComments = comments)
+        is JsxSelfClosingElement -> copy(trailingComments = comments)
+        is JsxFragment -> copy(trailingComments = comments)
     }
 }
 
@@ -1791,4 +1797,103 @@ data class ExternalModuleReference(
     override val trailingComments: List<Comment>? = null,
 ) : Node {
     override val kind: SyntaxKind = SyntaxKind.ExternalModuleReference
+}
+
+// ===========================================================================
+// JSX nodes
+// ===========================================================================
+
+data class JsxAttribute(
+    val name: String,
+    val value: Node?,  // null = boolean true; StringLiteralNode or JsxExpressionContainer
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Node {
+    override val kind: SyntaxKind = SyntaxKind.JsxAttribute
+}
+
+data class JsxSpreadAttribute(
+    val expression: Expression,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Node {
+    override val kind: SyntaxKind = SyntaxKind.JsxSpreadAttribute
+}
+
+data class JsxOpeningElement(
+    val tagName: Expression,
+    val attributes: List<Node>,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Node {
+    override val kind: SyntaxKind = SyntaxKind.JsxOpeningElement
+}
+
+data class JsxClosingElement(
+    val tagName: Expression,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Node {
+    override val kind: SyntaxKind = SyntaxKind.JsxClosingElement
+}
+
+data class JsxElement(
+    val openingElement: JsxOpeningElement,
+    val children: List<Node>,
+    val closingElement: JsxClosingElement,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Expression {
+    override val kind: SyntaxKind = SyntaxKind.JsxElement
+}
+
+data class JsxSelfClosingElement(
+    val tagName: Expression,
+    val attributes: List<Node>,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Expression {
+    override val kind: SyntaxKind = SyntaxKind.JsxSelfClosingElement
+}
+
+data class JsxText(
+    val text: String,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Node {
+    override val kind: SyntaxKind = SyntaxKind.JsxText
+}
+
+data class JsxExpressionContainer(
+    val expression: Expression?,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Node {
+    override val kind: SyntaxKind = SyntaxKind.JsxExpression
+}
+
+data class JsxFragment(
+    val children: List<Node>,
+    override val pos: Int = 0,
+    override val end: Int = 0,
+    override val leadingComments: List<Comment>? = null,
+    override val trailingComments: List<Comment>? = null,
+) : Expression {
+    override val kind: SyntaxKind = SyntaxKind.JsxFragment
 }

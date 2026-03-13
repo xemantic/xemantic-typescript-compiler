@@ -140,7 +140,10 @@ class TypeScriptCompiler {
                 )
             }
 
-            val parser = Parser(file.content, file.fileName)
+            // Force JSX mode for .js files when jsx option is set (allowJs + jsx)
+            val forceJsxForJs = options.jsx != null &&
+                (file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs"))
+            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
 
@@ -150,10 +153,13 @@ class TypeScriptCompiler {
             val emitter = Emitter(options)
             val javascript = emitter.emit(transformed, sourceFile)
 
-            val tsxExtension = if (options.jsx?.lowercase() == "preserve") ".jsx" else ".js"
+            val isJsxPreserve = options.jsx?.lowercase() == "preserve"
+            val tsxExtension = if (isJsxPreserve) ".jsx" else ".js"
+            val jsxExtension = if (isJsxPreserve) ".jsx" else ".js"
             val jsName = options.outFile?.substringAfterLast('/')
                 ?: file.fileName.substringAfterLast('/')
                     .replace(".tsx", tsxExtension)
+                    .replace(".jsx", jsxExtension)
                     .replace(".mts", ".mjs")
                     .replace(".cts", ".cjs")
                     .replace(".ts", ".js")
@@ -241,16 +247,21 @@ class TypeScriptCompiler {
                     continue
                 }
 
-                // Skip non-TS files; include .js/.jsx/.mjs/.cjs only when outDir is set
+                // Skip non-TS files; include .js/.mjs/.cjs only when outDir is set
                 // (without outDir, TypeScript skips re-emitting JS files to avoid overwriting sources)
-                val isJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".jsx") ||
+                // .jsx files are always compiled (they are TS-like files requiring JSX stripping)
+                val isPureJsFile = file.fileName.endsWith(".js") ||
                         file.fileName.endsWith(".mjs") || file.fileName.endsWith(".cjs")
+                val isJsxFile = file.fileName.endsWith(".jsx")
+                val isJsFile = isPureJsFile || isJsxFile
                 val isTsFile = file.fileName.endsWith(".ts") || file.fileName.endsWith(".tsx") ||
                         file.fileName.endsWith(".mts") || file.fileName.endsWith(".cts")
                 if (!isTsFile && !isJsFile) {
                     continue
                 }
-                if (isJsFile && options.outDir == null && options.outFile == null) {
+                // Plain .js/.mjs/.cjs: only when outDir is set (avoids overwriting sources)
+                // .jsx: always compile (TypeScript compiles .jsx regardless of outDir)
+                if (isPureJsFile && options.outDir == null && options.outFile == null) {
                     continue
                 }
                 // Skip .d.ts/.d.mts/.d.cts files (they don't produce JS output)
@@ -258,7 +269,10 @@ class TypeScriptCompiler {
                     continue
                 }
 
-                val parser = Parser(file.content, file.fileName)
+                // Force JSX mode for .js files when jsx option is set (allowJs + jsx)
+                val forceJsxForJsMulti = options.jsx != null &&
+                    (file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs"))
+                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti)
                 val sourceFile = parser.parse()
                 diagnostics.addAll(parser.getDiagnostics())
 
@@ -273,10 +287,13 @@ class TypeScriptCompiler {
                 val emitter = Emitter(options)
                 val javascript = emitter.emit(transformed, sourceFile)
 
-                // .tsx → .jsx only when jsx=preserve; all other modes (react, react-jsx, etc.) produce .js
-                val tsxExtension = if (options.jsx?.lowercase() == "preserve") ".jsx" else ".js"
+                // .tsx/.jsx → .jsx only when jsx=preserve; all other modes produce .js
+                val isJsxPreserveMulti = options.jsx?.lowercase() == "preserve"
+                val tsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
+                val jsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
                 var jsName = file.fileName
-                    .replace(".tsx", tsxExtension)
+                    .replace(".tsx", tsxExtensionMulti)
+                    .replace(".jsx", jsxExtensionMulti)
                     .replace(".mts", ".mjs")
                     .replace(".cts", ".cjs")
                     .replace(".ts", ".js")

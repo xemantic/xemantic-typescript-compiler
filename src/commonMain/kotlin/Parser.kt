@@ -18,13 +18,16 @@
 
 package com.xemantic.typescript.compiler
 
-class Parser(private val source: String, private val fileName: String) {
+class Parser(private val source: String, private val fileName: String, forceJsx: Boolean = false) {
 
     private val scanner = Scanner(source)
     private var token: SyntaxKind = SyntaxKind.Unknown
     private val diagnostics = mutableListOf<Diagnostic>()
     private var inAsyncContext = false
     private var disallowIn = false
+
+    /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
+    private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
 
     fun parse(): SourceFile {
         nextToken()
@@ -2477,6 +2480,10 @@ class Parser(private val source: String, private val fileName: String) {
             }
 
             LessThan -> {
+                // In JSX files, <...> is a JSX element, NOT a type assertion.
+                if (isJsxFile) {
+                    return parseJsxElementOrFragment()
+                }
                 // Could be <TypeParams>() => body (generic arrow) or <Type>expr (type assertion)
                 val isGenericArrow = scanner.lookAhead {
                     // Skip past <...> type parameter list.
@@ -2576,6 +2583,239 @@ class Parser(private val source: String, private val fileName: String) {
         val expr = if (token == SyntaxKind.YieldKeyword) OmittedExpression(pos = pos, end = pos)
                    else parseUnaryExpression()
         return TypeAssertionExpression(type = type, expression = expr, pos = pos, end = getEnd())
+    }
+
+    // ── JSX Parsing ─────────────────────────────────────────────────────────
+
+    /**
+     * Parses a JSX element, self-closing element, or fragment starting at `<`.
+     * Called when `isJsxFile` is true and the current token is LessThan.
+     */
+    private fun parseJsxElementOrFragment(): Expression {
+        val pos = getPos()
+        nextToken() // consume <
+
+        // JSX fragment: <> ... </>
+        if (token == SyntaxKind.GreaterThan) {
+            // Save the position right after the > (before scanner advances)
+            val afterGtPos = scanner.getPos()
+            nextToken() // consume >
+            val children = parseJsxChildren(afterGtPos, null)
+            parseExpected(SyntaxKind.LessThan)
+            parseExpected(SyntaxKind.Slash)
+            parseExpected(SyntaxKind.GreaterThan)
+            return JsxFragment(children = children, pos = pos, end = getEnd())
+        }
+
+        // Parse tag name
+        val tagName = parseJsxTagName()
+
+        // Parse attributes
+        val attributes = parseJsxAttributes()
+
+        return if (token == SyntaxKind.Slash) {
+            // Self-closing: <Tag attrs/>
+            nextToken() // consume /
+            parseExpected(SyntaxKind.GreaterThan)
+            JsxSelfClosingElement(tagName = tagName, attributes = attributes, pos = pos, end = getEnd())
+        } else {
+            // Opening tag: <Tag attrs>
+            // Save position right after > before scanner advances past it
+            val afterGtPos = scanner.getPos()
+            parseExpected(SyntaxKind.GreaterThan)
+            val openingElement = JsxOpeningElement(tagName = tagName, attributes = attributes, pos = pos, end = getEnd())
+            val children = parseJsxChildren(afterGtPos, jsxTagNameToString(tagName))
+            val closingPos = getPos()
+            // Parse </tagname>
+            parseExpected(SyntaxKind.LessThan)
+            parseExpected(SyntaxKind.Slash)
+            val closingTagName = parseJsxTagName()
+            parseExpected(SyntaxKind.GreaterThan)
+            val closingElement = JsxClosingElement(tagName = closingTagName, pos = closingPos, end = getEnd())
+            JsxElement(openingElement = openingElement, children = children, closingElement = closingElement, pos = pos, end = getEnd())
+        }
+    }
+
+    /**
+     * Parses a JSX tag name. In JSX, even keywords like `const`, `extends`, etc. are valid tag names.
+     * Also handles qualified names like `Foo.Bar` and skips optional type arguments `<T>`.
+     */
+    private fun parseJsxTagName(): Expression {
+        val pos = getPos()
+        // Any identifier or keyword is valid as a JSX tag name
+        val text = scanner.getTokenValue()
+        val id = Identifier(text = text, pos = pos, end = getEnd())
+        nextToken()
+        // Handle qualified name: Foo.Bar.Baz
+        val tagName: Expression = if (token == SyntaxKind.Dot) {
+            var expr: Expression = id
+            while (token == SyntaxKind.Dot) {
+                nextToken() // consume .
+                val rightPos = getPos()
+                val rightText = scanner.getTokenValue()
+                val right = Identifier(text = rightText, pos = rightPos, end = getEnd())
+                nextToken()
+                expr = PropertyAccessExpression(expression = expr, name = right, pos = pos, end = getEnd())
+            }
+            expr
+        } else {
+            id
+        }
+        // Skip optional type arguments: <T>, <'bar'>, <T extends X>, etc.
+        // These are TypeScript-specific and get stripped during transformation.
+        if (token == SyntaxKind.LessThan) {
+            // Try to skip the type argument list
+            val skipped = scanner.tryScan {
+                scanner.scan() // consume <
+                var depth = 1
+                while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
+                    when (scanner.getToken()) {
+                        SyntaxKind.LessThan -> depth++
+                        SyntaxKind.GreaterThan -> depth--
+                        SyntaxKind.GreaterThanGreaterThan -> { depth--; if (depth > 0) depth-- }
+                        else -> {}
+                    }
+                    if (depth > 0) scanner.scan()
+                }
+                if (depth == 0) {
+                    scanner.scan() // consume >
+                    true
+                } else null
+            }
+            if (skipped == true) {
+                // Update our parser token to what the scanner now has
+                token = scanner.getToken()
+            }
+        }
+        return tagName
+    }
+
+    private fun jsxTagNameToString(tagName: Expression): String = when (tagName) {
+        is Identifier -> tagName.text
+        is PropertyAccessExpression -> "${jsxTagNameToString(tagName.expression)}.${tagName.name.text}"
+        else -> ""
+    }
+
+    /**
+     * Parses JSX attributes until `/>` or `>`.
+     */
+    private fun parseJsxAttributes(): List<Node> {
+        val attributes = mutableListOf<Node>()
+        while (token != SyntaxKind.Slash && token != SyntaxKind.GreaterThan &&
+               token != SyntaxKind.EndOfFile) {
+            val attr = parseJsxAttribute()
+            if (attr != null) attributes.add(attr)
+        }
+        return attributes
+    }
+
+    /**
+     * Parses a single JSX attribute: `name="value"`, `name={expr}`, `name`, or `{...spread}`.
+     */
+    private fun parseJsxAttribute(): Node? {
+        val pos = getPos()
+        // Spread attribute: {...expr}
+        if (token == SyntaxKind.OpenBrace) {
+            nextToken() // consume {
+            parseExpected(SyntaxKind.DotDotDot)
+            val expr = parseAssignmentExpression()
+            parseExpected(SyntaxKind.CloseBrace)
+            return JsxSpreadAttribute(expression = expr, pos = pos, end = getEnd())
+        }
+        // Named attribute
+        val name = scanner.getTokenValue()
+        nextToken() // consume attribute name/keyword
+
+        return if (token == SyntaxKind.Equals) {
+            nextToken() // consume =
+            val value: Node = when (token) {
+                SyntaxKind.StringLiteral -> {
+                    val strPos = getPos()
+                    val strText = scanner.getTokenValue()
+                    val rawText = scanner.getTokenText().let {
+                        if (it.length >= 2) it.substring(1, it.length - 1) else it
+                    }
+                    val str = StringLiteralNode(text = strText, rawText = rawText, pos = strPos, end = getEnd())
+                    nextToken()
+                    str
+                }
+                SyntaxKind.OpenBrace -> {
+                    val bracePos = getPos()
+                    nextToken() // consume {
+                    val expr = if (token == SyntaxKind.CloseBrace) null else parseAssignmentExpression()
+                    parseExpected(SyntaxKind.CloseBrace)
+                    JsxExpressionContainer(expression = expr, pos = bracePos, end = getEnd())
+                }
+                else -> {
+                    // error recovery — skip token
+                    val dummyPos = getPos()
+                    nextToken()
+                    StringLiteralNode(text = "", pos = dummyPos, end = getEnd())
+                }
+            }
+            JsxAttribute(name = name, value = value, pos = pos, end = getEnd())
+        } else {
+            // Boolean attribute (no = value)
+            JsxAttribute(name = name, value = null, pos = pos, end = getEnd())
+        }
+    }
+
+    /**
+     * Parses JSX children content until the matching closing tag.
+     * [contentStartPos] is the position in source right after the opening `>`.
+     * [parentTagName] is the tag name string for matching the closing tag (null for fragments).
+     */
+    private fun parseJsxChildren(contentStartPos: Int, parentTagName: String?): List<Node> {
+        val children = mutableListOf<Node>()
+        // Reset scanner to the position right after the opening >, then enter JSX text mode
+        scanner.resetToPosition(contentStartPos)
+
+        while (true) {
+            // Scan raw JSX text content until < or {
+            val rawText = scanner.scanJsxText()
+            if (rawText.isNotEmpty()) {
+                children.add(JsxText(text = rawText, pos = 0, end = 0))
+            }
+            // Now the scanner is positioned at < or { (or EOF).
+            // Call nextToken() to actually consume that character as a token.
+            nextToken()
+
+            when (token) {
+                SyntaxKind.LessThan -> {
+                    // Look ahead: is it </tag> (closing tag) or <tag> (child element)?
+                    val isClosing = lookAhead {
+                        scanner.scan()
+                        scanner.getToken() == SyntaxKind.Slash
+                    }
+                    if (isClosing) {
+                        // Closing tag — stop parsing children; caller will parse </tag>
+                        break
+                    }
+                    // Child JSX element or fragment
+                    val child = parseJsxElementOrFragment()
+                    children.add(child as Node)
+                    // After parsing a child, the scanner scanned one token past the closing >.
+                    // We need to resume JSX text scanning from right after that closing >.
+                    // scanner.getPrevTokenEnd() gives the position right after the > before the
+                    // scanner scanned the NEXT token.
+                    scanner.resetToPosition(scanner.getPrevTokenEnd())
+                }
+                SyntaxKind.OpenBrace -> {
+                    // JSX expression container: {expr}
+                    val exprPos = getPos()
+                    nextToken() // consume content of {
+                    val expr = if (token == SyntaxKind.CloseBrace) null else parseAssignmentExpression()
+                    parseExpected(SyntaxKind.CloseBrace)
+                    children.add(JsxExpressionContainer(expression = expr, pos = exprPos, end = getEnd()))
+                    // Re-enter JSX text mode from right after the closing }
+                    // getPrevTokenEnd() gives position right after } before next token was scanned
+                    scanner.resetToPosition(scanner.getPrevTokenEnd())
+                }
+                SyntaxKind.EndOfFile -> break
+                else -> break
+            }
+        }
+        return children
     }
 
     private fun parsePostfixExpression(): Expression {
