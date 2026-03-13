@@ -73,7 +73,8 @@ class Emitter(
         emitEmptyExportIfNeeded(originalSourceFile ?: sourceFile, sourceFile)
         // Emit EOF trailing comments AFTER export {}
         if (eofNes != null) emitLeadingComments(eofNes)
-        return sb.toString().trimEnd('\n')
+        val result = sb.toString().trimEnd('\n')
+        return result
     }
 
     private fun emitEmptyExportIfNeeded(originalSourceFile: SourceFile, transformedSourceFile: SourceFile) {
@@ -178,7 +179,8 @@ class Emitter(
 
     private fun emitStatements(statements: List<Statement>) {
         for (statement in statements) {
-            if (shouldSkipStatement(statement)) {
+            val skip = shouldSkipStatement(statement)
+            if (skip) {
                 // NotEmittedStatement carries orphaned comments from erased declarations
                 if (statement is NotEmittedStatement) emitLeadingComments(statement)
                 continue
@@ -1769,7 +1771,12 @@ class Emitter(
             write(" ")
             emitJsxAttributeNode(attr)
         }
-        if (selfClose) write("/>") else write(">")
+        if (selfClose) {
+            // TypeScript always emits a space before `/>` in self-closing elements
+            write(" />")
+        } else {
+            write(">")
+        }
     }
 
     private fun emitJsxTagName(tagName: Expression) {
