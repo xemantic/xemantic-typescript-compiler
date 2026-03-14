@@ -86,6 +86,14 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 - Avoid partial `assert("x" in result)` — always assert the full expected output.
 
+### TS2304 unresolved name checking gotchas
+
+- **Kotlin property initialization order**: Properties declared after `init {}` have default values (0 for Int) during init execution. The `maxCheckDepth` and `checkDepth` variables MUST be declared BEFORE the `init` block, not after, or the depth limit will be 0 and all checking will be skipped.
+- **KNOWN_GLOBALS coverage**: ~400 lib.d.ts names in the companion object. Missing a global causes false positive TS2304. When adding new globals, check both value and type positions.
+- **KEYWORD_IDENTIFIERS**: Our parser produces `Identifier` nodes for `this`, `super`, `true`, `false`, `null`, TypeScript type keywords (`any`, `number`, `string`, etc.), and access modifiers (`public`, `private`, etc.). These must be excluded from TS2304 checking.
+- **Binder scope model**: The binder only creates file-level symbol tables. Function parameters, catch variables, and block-scoped declarations are NOT in the binder's symbol table. The TS2304 checker maintains its own scope chain.
+- **Test generator only processes `.ts`**: `.tsx` files are excluded from test generation (`f.extension == "ts"` in build.gradle.kts). This means JSX-related diagnostics (TS7026) are untestable.
+
 ### Kotlin idioms
 
 - **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`). The `feat/kt-changes` branch removed the last BigDecimal usage specifically to enable Native compilation.
@@ -96,7 +104,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), plus TS5101/TS5102/TS5107 (deprecation). **6,508 / 10,595 tests passing (61.4%)**, up from 6,219. Key remaining work: type inference diagnostics (TS2322, TS2304, TS2339).
+**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,561 / 10,595 tests passing (61.9%)**, up from 6,508. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -114,7 +122,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 6,508 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,561 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
