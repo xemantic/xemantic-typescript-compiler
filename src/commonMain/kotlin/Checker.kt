@@ -5095,15 +5095,48 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        if (params.size < 2) return
-        val seen = mutableSetOf<String>()
+        val seen = mutableMapOf<String, Node>() // name → first occurrence
+        val duplicates = mutableListOf<Pair<String, Node>>()
         for (param in params) {
-            val name = param.name
-            if (name is Identifier) {
-                if (!seen.add(name.text)) {
-                    emitDuplicate2300(name.text, name, source, fileName)
+            collectBindingNames(param.name, seen, duplicates)
+        }
+        // Report duplicates
+        for ((name, node) in duplicates) {
+            emitDuplicate2300(name, node, source, fileName)
+        }
+    }
+
+    private fun collectBindingNames(
+        name: Node,
+        seen: MutableMap<String, Node>,
+        duplicates: MutableList<Pair<String, Node>>,
+    ) {
+        when (name) {
+            is Identifier -> {
+                val prev = seen[name.text]
+                if (prev != null) {
+                    // Report both the first occurrence and this one
+                    if (prev !== name) {
+                        duplicates.add(name.text to prev)
+                    }
+                    duplicates.add(name.text to name)
+                } else {
+                    seen[name.text] = name
                 }
             }
+            is ObjectBindingPattern -> {
+                for (element in name.elements) {
+                    collectBindingNames(element.name, seen, duplicates)
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (element in name.elements) {
+                    if (element is BindingElement) {
+                        collectBindingNames(element.name, seen, duplicates)
+                    }
+                }
+            }
+            else -> {}
         }
     }
 
