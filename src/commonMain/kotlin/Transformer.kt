@@ -8414,24 +8414,29 @@ class Transformer(
             }
 
             is GetAccessor -> {
+                // Abstract accessors and overload signatures (no body) are removed
+                if (element.body == null || ModifierFlag.Abstract in element.modifiers) return null
                 element.copy(
                     parameters = transformParameters(element.parameters),
                     type = null,
-                    body = element.body?.let { transformBlock(it, isFunctionScope = true) },
+                    body = transformBlock(element.body, isFunctionScope = true),
                     modifiers = stripMemberModifiers(element.modifiers),
                 )
             }
 
             is SetAccessor -> {
+                // Abstract accessors and overload signatures (no body) are removed
+                if (element.body == null || ModifierFlag.Abstract in element.modifiers) return null
                 element.copy(
                     parameters = transformParameters(element.parameters),
-                    body = element.body?.let { transformBlock(it, isFunctionScope = true) },
+                    body = transformBlock(element.body, isFunctionScope = true),
                     modifiers = stripMemberModifiers(element.modifiers),
                 )
             }
 
             is PropertyDeclaration -> {
-                // Remaining property declarations (e.g. kept by useDefineForClassFields)
+                // Abstract/ambient property declarations (no initializer, type-only) are removed
+                if (element.initializer == null && ModifierFlag.Abstract in element.modifiers) return null
                 element.copy(
                     type = null,
                     initializer = element.initializer?.let { transformExpression(it) },
