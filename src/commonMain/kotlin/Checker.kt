@@ -845,21 +845,59 @@ class Checker(
                 when (decl) {
                     is ImportEqualsDeclaration -> {
                         val ref = decl.moduleReference
-                        if (ref is QualifiedName) {
-                            val target = resolveQualifiedName(ref) ?: continue
-                            symbol.target = target
-                            return resolveAlias(target, visited)
-                        } else if (ref is Identifier) {
-                            val target = globals[ref.text] ?: continue
-                            symbol.target = target
-                            return resolveAlias(target, visited)
+                        when (ref) {
+                            is QualifiedName -> {
+                                val target = resolveQualifiedName(ref) ?: continue
+                                symbol.target = target
+                                return resolveAlias(target, visited)
+                            }
+                            is Identifier -> {
+                                val target = globals[ref.text] ?: continue
+                                symbol.target = target
+                                return resolveAlias(target, visited)
+                            }
+                            is ExternalModuleReference -> {
+                                // import A = require("mod") — resolve module then its export
+                                val specifier = (ref.expression as? StringLiteralNode)?.text ?: continue
+                                val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
+                                val targetResult = fileResults[targetFile] ?: continue
+                                // Look for export = X in the target module
+                                val exportTarget = resolveModuleExportAssignment(targetResult)
+                                if (exportTarget != null) {
+                                    symbol.target = exportTarget
+                                    return resolveAlias(exportTarget, visited)
+                                }
+                                // No export = found — create module symbol
+                                val moduleSymbol = createModuleSymbol(symbol.name, targetResult)
+                                symbol.target = moduleSymbol
+                                return moduleSymbol
+                            }
+                            else -> {}
                         }
                     }
                     is ImportDeclaration -> {
-                        // import { X } from "mod" — look up X in the target module
                         val specifier = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
                         val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
                         val targetResult = fileResults[targetFile] ?: continue
+
+                        // Namespace import: import * as Foo from "mod"
+                        val namedBindings = decl.importClause?.namedBindings
+                        if (namedBindings is NamespaceImport) {
+                            val moduleSymbol = createModuleSymbol(symbol.name, targetResult)
+                            symbol.target = moduleSymbol
+                            return moduleSymbol
+                        }
+
+                        // Default import: import Foo from "mod"
+                        if (decl.importClause?.name != null &&
+                            symbol.name == decl.importClause?.name?.text) {
+                            // Look for "default" export in target
+                            val target = targetResult.locals["default"] ?: continue
+                            symbol.target = target
+                            return resolveAlias(target, visited)
+                        }
+
+                        // Named import: import { X } from "mod"
                         val target = targetResult.locals[symbol.name] ?: continue
                         symbol.target = target
                         return resolveAlias(target, visited)
@@ -891,6 +929,50 @@ class Checker(
             }
         }
         return symbol
+    }
+
+    /**
+     * Resolve a module's export assignment (`export = expr`) to a symbol.
+     * Returns null if no export assignment exists.
+     */
+    private fun resolveModuleExportAssignment(result: BinderResult): Symbol? {
+        for (stmt in result.sourceFile.statements) {
+            if (stmt is ExportAssignment && stmt.isExportEquals) {
+                return resolveExpressionToSymbol(stmt.expression, result)
+            }
+        }
+        return null
+    }
+
+    /**
+     * Resolve an expression to a symbol (for export assignment resolution).
+     */
+    private fun resolveExpressionToSymbol(expr: Expression, result: BinderResult): Symbol? {
+        return when (expr) {
+            is Identifier -> {
+                val symbol = result.locals[expr.text] ?: globals[expr.text] ?: return null
+                resolveAlias(symbol)
+            }
+            is PropertyAccessExpression -> {
+                val parent = resolveExpressionToSymbol(expr.expression, result) ?: return null
+                val child = parent.exports?.get(expr.name.text) ?: return null
+                resolveAlias(child)
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Create a synthetic module symbol whose exports are the target file's locals.
+     * Used for namespace imports (`import * as Foo from "mod"`).
+     */
+    private fun createModuleSymbol(name: String, targetResult: BinderResult): Symbol {
+        val moduleSymbol = Symbol(
+            name = name,
+            flags = SymbolFlags.Module,
+        )
+        moduleSymbol.exports = targetResult.locals
+        return moduleSymbol
     }
 
     /**
