@@ -47,6 +47,9 @@ class Checker(
     /** Computed enum member values: enum symbol ID → (member name → value). */
     private val enumValues: MutableMap<Int, MutableMap<String, ConstantValue>> = mutableMapOf()
 
+    /** Checker-produced diagnostics. */
+    private val diagnostics: MutableList<Diagnostic> = mutableListOf()
+
     init {
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
@@ -57,6 +60,13 @@ class Checker(
         // 3. Track import references across all files
         trackAllImportReferences()
     }
+
+    // -----------------------------------------------------------------------
+    // Public API
+    // -----------------------------------------------------------------------
+
+    /** Returns all diagnostics produced by the checker. */
+    fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
 
     // -----------------------------------------------------------------------
     // Public API — called by Transformer
