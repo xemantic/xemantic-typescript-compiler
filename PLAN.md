@@ -27,7 +27,7 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
 
 ### 0. Analysis — understand current failures and type checker scope
 
-- [ ] **0a. Categorize all 323 failures** — Run the full test suite, collect all failing test names, and categorize them by root cause:
+- [x] **0a. Categorize all 323 failures** — Run the full test suite, collect all failing test names, and categorize them by root cause:
   - (A) Parser error recovery (~50) — tests expecting TypeScript's exact error recovery output
   - (B) Type-checker-driven transforms (~30) — import elision, const enum inlining, decorator metadata
   - (C) Missing helpers (~15) — `__esDecorate`, `__setFunctionName`, `__generator`, WeakMap
