@@ -10727,7 +10727,16 @@ class Transformer(
                 }
             }
             is ExportAssignment -> collectRefsFromNode(node.expression, refs)
-            is FunctionDeclaration -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is FunctionDeclaration -> {
+                // Traverse parameters for computed names in binding patterns and default values
+                node.parameters.forEach { param ->
+                    collectRefsFromNode(param.initializer, refs)
+                    if (param.name is ComputedPropertyName) collectRefsFromNode(param.name, refs)
+                    if (param.name is ObjectBindingPattern) collectBindingPatternRefs(param.name as ObjectBindingPattern, refs)
+                    if (param.name is ArrayBindingPattern) collectArrayBindingPatternRefs(param.name as ArrayBindingPattern, refs)
+                }
+                node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            }
             is ClassDeclaration -> {
                 // Only `extends` clauses are value positions; `implements` clauses are type-only
                 node.heritageClauses?.forEach { hc ->
@@ -10829,6 +10838,34 @@ class Transformer(
             is JsxExpressionContainer -> node.expression?.let { collectRefsFromNode(it, refs) }
             is JsxSpreadAttribute -> collectRefsFromNode(node.expression, refs)
             else -> {} // literals, type nodes, etc. — no identifiers to collect
+        }
+    }
+
+    private fun collectBindingPatternRefs(pattern: ObjectBindingPattern, refs: MutableSet<String>) {
+        for (element in pattern.elements) {
+            if (element is BindingElement) {
+                if (element.propertyName is ComputedPropertyName)
+                    collectRefsFromNode(element.propertyName, refs)
+                collectRefsFromNode(element.initializer, refs)
+                when (val name = element.name) {
+                    is ObjectBindingPattern -> collectBindingPatternRefs(name, refs)
+                    is ArrayBindingPattern -> collectArrayBindingPatternRefs(name, refs)
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun collectArrayBindingPatternRefs(pattern: ArrayBindingPattern, refs: MutableSet<String>) {
+        for (element in pattern.elements) {
+            if (element is BindingElement) {
+                collectRefsFromNode(element.initializer, refs)
+                when (val name = element.name) {
+                    is ObjectBindingPattern -> collectBindingPatternRefs(name, refs)
+                    is ArrayBindingPattern -> collectArrayBindingPatternRefs(name, refs)
+                    else -> {}
+                }
+            }
         }
     }
 
