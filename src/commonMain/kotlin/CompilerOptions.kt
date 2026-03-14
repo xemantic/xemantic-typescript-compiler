@@ -119,6 +119,8 @@ data class CompilerOptions(
     val suppressExcessPropertyErrors: Boolean = false,
     val suppressImplicitAnyIndexErrors: Boolean = false,
     val out: String? = null, // distinct from outFile for diagnostic purposes
+    val importsNotUsedAsValues: String? = null, // removed in TS 5.5
+    val preserveValueImports: Boolean = false, // removed in TS 5.5
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -370,6 +372,8 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "nostrictgenericchecks" -> options.copy(noStrictGenericChecks = boolValue)
         "suppressexcesspropertyerrors" -> options.copy(suppressExcessPropertyErrors = boolValue)
         "suppressimplicitanyindexerrors" -> options.copy(suppressImplicitAnyIndexErrors = boolValue)
+        "importsnotusedasvalues" -> options.copy(importsNotUsedAsValues = value.trim())
+        "preservevalueimports" -> options.copy(preserveValueImports = boolValue)
         else -> options
     }
 }
