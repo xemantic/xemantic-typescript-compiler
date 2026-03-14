@@ -29,6 +29,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
     private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
 
+    /** Pre-computed line start positions for fast line/character lookup. */
+    private val lineStarts: IntArray = computeLineStarts(source)
+
     fun parse(): SourceFile {
         nextToken()
         val statements = parseStatements()
@@ -113,15 +116,37 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 token == SyntaxKind.EndOfFile ||
                 scanner.hasPrecedingLineBreak()
 
-    private fun reportError(message: String) {
+    private fun reportError(message: String, code: Int = 1005) {
+        val start = scanner.getTokenPos()
+        val length = (scanner.getPos() - start).coerceAtLeast(0)
+        val (line, character) = getLineAndCharacterOfPosition(start)
         diagnostics.add(
             Diagnostic(
                 message = message,
                 category = DiagnosticCategory.Error,
-                code = 1005,
+                code = code,
                 fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
             )
         )
+    }
+
+    /**
+     * Compute 1-based line and character for a position in the source.
+     */
+    private fun getLineAndCharacterOfPosition(position: Int): Pair<Int, Int> {
+        var low = 0
+        var high = lineStarts.size - 1
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            if (lineStarts[mid] <= position) low = mid + 1
+            else high = mid - 1
+        }
+        val lineIndex = low - 1 // 0-based line index
+        return (lineIndex + 1) to (position - lineStarts[lineIndex] + 1)
     }
 
     private fun getPos(): Int = scanner.getTokenPos()
@@ -4501,4 +4526,26 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         else -> kind.name
     }
 
+}
+
+/**
+ * Compute an array of line start positions (0-based byte offsets where each line begins).
+ * The first entry is always 0 (start of the first line).
+ */
+private fun computeLineStarts(text: String): IntArray {
+    val starts = mutableListOf(0)
+    var i = 0
+    while (i < text.length) {
+        val ch = text[i]
+        if (ch == '\r') {
+            if (i + 1 < text.length && text[i + 1] == '\n') {
+                i++ // skip \r in \r\n
+            }
+            starts.add(i + 1)
+        } else if (ch == '\n') {
+            starts.add(i + 1)
+        }
+        i++
+    }
+    return starts.toIntArray()
 }

@@ -251,30 +251,30 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key test: `computedPropertyNameWithImportedKey`
   - Fix area: `Transformer.kt: transformToCommonJS()`
 
-- [ ] **3e. CommonJS export alias qualification** (Phase 2 item 8b)
+- [ ] **3e. CommonJS export alias qualification** (Phase 2 item 8b) — *deferred: 2 tests, complex CJS transform*
 
   Self-referencing exported names need `(0, exports.X)` form.
   - Key tests: `conflictingDeclarationsImportFromNamespace1/2`
   - Fix area: `Transformer.kt: transformToCommonJS()`
 
-- [ ] **3f. Class static property parsing** (Phase 2 item 9a)
+- [ ] **3f. Class static property parsing** (Phase 2 item 9a) — *deferred: 1 test, parser recovery*
 
   `static f = 3;` is misparsed as two expression statements.
   - Key test: `class2`
   - Fix area: `Parser.kt: parseClassElement()`
 
-- [ ] **3g. Non-`this`-prefixed property initializers** (Phase 2 item 9b)
+- [ ] **3g. Non-`this`-prefixed property initializers** (Phase 2 item 9b) — *deferred: 1 test*
 
   `p1 = 0;` in constructor instead of `this.p1 = 0;`.
   - Key test: `classUpdateTests`
   - Fix area: `Transformer.kt`
 
-- [ ] **3h. Parser error recovery** (Phase 2 items 10a-10b, ~45 tests)
+- [ ] **3h. Parser error recovery** (Phase 2 items 10a-10b, ~45 tests) — *deferred to after 4a-4b*
 
   Audit and implement the top error recovery patterns to match TypeScript's output.
   - Fix area: `Parser.kt`
 
-- [ ] **3i. Enum non-literal cross-file initializers** (Phase 2 item 11b)
+- [ ] **3i. Enum non-literal cross-file initializers** (Phase 2 item 11b) — *deferred: 2 tests*
 
   `MyEnum { a = MyEnumFromModule.a }` should resolve to `MyEnum { a = 0 }`.
   - Key test: `importElisionEnum`
@@ -285,7 +285,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
 The Parser currently emits all diagnostics with `code = 1005` and no line/character
 information. This must be fixed for `.errors.txt` tests to match baselines.
 
-- [ ] **4a. Add line/character computation to Parser diagnostics**
+- [x] **4a. Add line/character computation to Parser diagnostics**
 
   Implement `getLineAndCharacterOfPosition(source: String, pos: Int): Pair<Int, Int>`
   utility (1-based line and character). Use it in `reportError()` to populate the
