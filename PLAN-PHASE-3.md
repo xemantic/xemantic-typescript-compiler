@@ -263,7 +263,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key test: `class2`
   - Fix area: `Parser.kt: parseClassElement()`
 
-- [ ] **3g. Non-`this`-prefixed property initializers** (Phase 2 item 9b) — *deferred: 1 test*
+- [x] **3g. Non-`this`-prefixed property initializers** (Phase 2 item 9b) — *deferred: 1 test*
 
   `p1 = 0;` in constructor instead of `this.p1 = 0;`.
   - Key test: `classUpdateTests`
