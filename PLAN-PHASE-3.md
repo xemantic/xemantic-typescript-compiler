@@ -239,7 +239,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   `import Foo from "./mod"` — resolve default binding to the target module's default export.
   - Fix area: `Checker.kt: resolveAlias()`
 
-- [ ] **3c. Export re-export type elision** (Phase 2 item 7c)
+- [x] **3c. Export re-export type elision** (Phase 2 item 7c)
 
   `export { i } from "./server"` where `i` is an interface should be elided.
   - Key test: `es6ExportClauseWithoutModuleSpecifier`
