@@ -9310,6 +9310,8 @@ class Transformer(
                 val memberName = expr.name.text
                 when {
                     obj is Identifier -> allEnumMemberValues[obj.text]?.get(memberName)
+                        // Fall back to Checker for cross-file enum references through import aliases
+                        ?: checker?.resolveEnumMemberValue(obj.text, memberName, currentFileName)
                     obj is PropertyAccessExpression -> allEnumMemberValues[obj.name.text]?.get(memberName)
                     else -> null
                 }
