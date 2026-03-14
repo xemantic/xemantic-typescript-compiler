@@ -174,6 +174,7 @@ class TypeScriptCompiler {
             val binder = Binder(options)
             val binderResult = binder.bind(sourceFile)
             val checker = Checker(options, listOf(binderResult))
+            diagnostics.addAll(checker.getDiagnostics())
 
             val transformer = Transformer(options, checker)
             val transformed = transformer.transform(sourceFile)
@@ -349,6 +350,7 @@ class TypeScriptCompiler {
             val binder = Binder(options)
             val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
             val checker = Checker(options, binderResults)
+            diagnostics.addAll(checker.getDiagnostics())
 
             // Phase 3: Transform and emit each file
             for ((tsFileName, sourceFile) in parsedSourceFiles) {

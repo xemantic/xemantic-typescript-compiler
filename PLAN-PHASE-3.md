@@ -324,7 +324,7 @@ information. This must be fixed for `.errors.txt` tests to match baselines.
 This is the core of Phase 3 — teaching the Checker to emit diagnostics that make
 `.errors.txt` tests pass. Prioritize by frequency in the baseline corpus.
 
-- [ ] **5a. Add diagnostic infrastructure to Checker**
+- [x] **5a. Add diagnostic infrastructure to Checker**
 
   Add a `diagnostics: MutableList<Diagnostic>` to `Checker.kt` and a public
   `getDiagnostics(): List<Diagnostic>` method. Wire it into `TypeScriptCompiler.kt`
