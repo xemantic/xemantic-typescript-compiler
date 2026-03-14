@@ -13,10 +13,10 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 5,939 passing (56.0%), 4,653 failing
-- **JS emit bare-name:** 5,413 tests, 5,122 passing (94.6%)
-- **JS emit parameterized:** 1,114 tests, 498 passing (44.7%)
-- **Error baselines:** 4,035 tests, 91 passing (2.3%)
+- **10,595 tests**, 5,959 passing (56.2%), 4,633 failing
+- **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
+- **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
+- **Error baselines:** 4,035 tests, ~310 passing (~7.7%)
 - **Missing from test suite:**
   - ~2,848 parameterized `.js` baselines from non-compiler test dirs — **not in sparse clone**
   - 14,015 `.symbols` baselines — deferred (requires full type inference)
