@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,219 passing (58.7%), 4,373 failing
+- **10,595 tests**, 6,381 passing (60.2%), 4,211 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
 - **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
@@ -387,7 +387,7 @@ This is the core of Phase 3 — teaching the Checker to emit diagnostics that ma
 Implement type checker diagnostics that unlock `.errors.txt` test passes. Prioritized
 by test count and implementation tractability.
 
-- [ ] **7a. TS6133 — "'X' is declared but its value is never read"** (~106 pure tests)
+- [x] **7a. TS6133 — "'X' is declared but its value is never read"** (+57 tests)
 
   Gated by `noUnusedLocals: true` and `noUnusedParameters: true` compiler options.
   No risk of false positives on tests without these options.
@@ -403,7 +403,7 @@ by test count and implementation tractability.
 
   **Files:** `Checker.kt`
 
-- [ ] **7b. TS2454 — "Variable 'X' is used before being assigned"** (~281 pure tests)
+- [x] **7b. TS2454 — "Variable 'X' is used before being assigned"** (+105 tests)
 
   Requires basic definite assignment analysis. For the simplest pattern (variable
   declared with type annotation but no initializer, used before any assignment in

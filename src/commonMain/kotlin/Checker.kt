@@ -65,6 +65,8 @@ class Checker(
         }
         // 5. Check for variables used before assignment (TS2454)
         checkDefiniteAssignment()
+        // 6. Check for class properties without initializer (TS2564)
+        checkPropertyInitialization()
     }
 
     // -----------------------------------------------------------------------
@@ -2678,6 +2680,210 @@ class Checker(
                 }
             }
             is LabeledStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Property initialization checking (TS2564)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for class properties without initializer and not definitely assigned
+     * in the constructor. Emits TS2564.
+     */
+    private fun checkPropertyInitialization() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            checkPropertyInitInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkPropertyInitInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    if (ModifierFlag.Abstract in stmt.modifiers) continue
+                    checkClassPropertyInit(stmt.members, source, fileName)
+                }
+                is ModuleDeclaration -> {
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkPropertyInitInStatements(
+                            body.statements, source, fileName,
+                        )
+                        else -> {}
+                    }
+                }
+                is FunctionDeclaration -> {
+                    stmt.body?.let {
+                        checkPropertyInitInStatements(it.statements, source, fileName)
+                    }
+                }
+                is Block -> checkPropertyInitInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkPropertyInitInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let {
+                        checkPropertyInitInStatements(listOf(it), source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkClassPropertyInit(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Find the constructor and collect assigned properties
+        val constructorAssigned = mutableSetOf<String>()
+        for (member in members) {
+            if (member is Constructor) {
+                member.body?.let { body ->
+                    collectConstructorAssignments(body.statements, constructorAssigned)
+                }
+                // Constructor parameters with access modifiers (public/private/protected)
+                // are automatically assigned
+                for (param in member.parameters) {
+                    if (ModifierFlag.Public in param.modifiers ||
+                        ModifierFlag.Protected in param.modifiers ||
+                        ModifierFlag.Private in param.modifiers) {
+                        val name = param.name
+                        if (name is Identifier) {
+                            constructorAssigned.add(name.text)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check each property
+        for (member in members) {
+            if (member !is PropertyDeclaration) continue
+            // Skip if has initializer, optional, declare, static, abstract, or definite assignment
+            if (member.initializer != null) continue
+            if (member.questionToken) continue
+            if (member.exclamationToken) continue
+            if (ModifierFlag.Declare in member.modifiers) continue
+            if (ModifierFlag.Static in member.modifiers) continue
+            if (ModifierFlag.Abstract in member.modifiers) continue
+            // Must have type annotation (no type = any, which is always ok)
+            if (member.type == null) continue
+
+            // Get property name
+            val propName = when (val name = member.name) {
+                is Identifier -> name.text
+                is StringLiteralNode -> name.text
+                is ComputedPropertyName -> {
+                    // Computed property name — check for Symbol.X or simple identifier
+                    when (val expr = name.expression) {
+                        is PropertyAccessExpression -> {
+                            val base = expr.expression
+                            if (base is Identifier && base.text == "Symbol") {
+                                "[Symbol.${expr.name.text}]"
+                            } else null
+                        }
+                        else -> null
+                    }
+                }
+                else -> null
+            } ?: continue
+
+            // Check if assigned in constructor
+            if (propName in constructorAssigned) continue
+
+            // Emit TS2564
+            val nameNode = member.name
+            val start = nameNode.pos
+            val length = propName.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' has no initializer and is not definitely assigned in the constructor.",
+                category = DiagnosticCategory.Error,
+                code = 2564,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+
+        // Recurse into nested class elements for inner classes
+        for (member in members) {
+            when (member) {
+                is MethodDeclaration -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is Constructor -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is GetAccessor -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is SetAccessor -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is ClassStaticBlockDeclaration -> {
+                    checkPropertyInitInStatements(member.body.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * Collect property names assigned in constructor body via `this.propName = ...`
+     */
+    private fun collectConstructorAssignments(
+        statements: List<Statement>,
+        assigned: MutableSet<String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ExpressionStatement -> {
+                    collectThisAssignment(stmt.expression, assigned)
+                }
+                is IfStatement -> {
+                    // Only if BOTH branches assign, consider it assigned
+                    // For simplicity, check both branches but don't require both
+                    collectConstructorAssignments(
+                        listOf(stmt.thenStatement), assigned,
+                    )
+                    stmt.elseStatement?.let {
+                        collectConstructorAssignments(listOf(it), assigned)
+                    }
+                }
+                is Block -> collectConstructorAssignments(stmt.statements, assigned)
+                else -> {}
+            }
+        }
+    }
+
+    private fun collectThisAssignment(expr: Expression, assigned: MutableSet<String>) {
+        when (expr) {
+            is BinaryExpression -> {
+                if (expr.operator == SyntaxKind.Equals) {
+                    val left = expr.left
+                    if (left is PropertyAccessExpression) {
+                        val base = left.expression
+                        if (base is Identifier && base.text == "this") {
+                            assigned.add(left.name.text)
+                        }
+                    }
+                }
+            }
+            is CommaListExpression -> {
+                expr.elements.forEach { collectThisAssignment(it, assigned) }
+            }
             else -> {}
         }
     }
