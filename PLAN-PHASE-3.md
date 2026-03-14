@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,381 passing (60.2%), 4,211 failing
+- **10,595 tests**, 6,491 passing (61.3%), 4,101 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
 - **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
@@ -421,11 +421,25 @@ by test count and implementation tractability.
 
 - [x] **7d. TS2564 — "Property 'X' has no initializer"** (+104 tests)
 
-  Requires `strictPropertyInitialization` (part of `strict: true`). Check class
-  properties with type annotations but no initializer and no definite assignment
-  in the constructor.
+  Check class properties with type annotations but no initializer and no definite
+  assignment in the constructor.
 
   **Files:** `Checker.kt`
+
+- [x] **7e. TS7006 — "Parameter 'X' implicitly has an 'any' type"** (+6 tests)
+
+  When `noImplicitAny` is enabled, check function/method/arrow parameters for
+  missing type annotations.
+
+  **Files:** `Checker.kt`
+
+- [ ] **7f. TS7026 — "JSX element implicitly has type 'any'"** (~13 pure tests)
+
+  When `noImplicitAny` is enabled and JSX is used, check JSX elements.
+
+- [ ] **7g. TS2300 — "Duplicate identifier 'X'"** (~23 pure tests)
+
+  Check for duplicate declarations in the same scope.
 
 ---
 

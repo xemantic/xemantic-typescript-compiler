@@ -88,7 +88,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 2: Type Checker.** The pipeline is now: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. Binder, Checker, and Types are implemented. The Checker is wired into the Transformer for const enum inlining (`resolveConstEnumMemberAccess`) and import alias elision (`isConstEnumAlias`). Key remaining work: cross-file namespace import resolution in Checker, export specifier type-only elision, CommonJS transform gaps, and parser error recovery.
+**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), plus TS5101/TS5102/TS5107 (deprecation). **6,491 / 10,595 tests passing (61.3%)**. Key remaining work: type inference diagnostics (TS2322, TS2304, TS2339).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -106,7 +106,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 6,219 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,491 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
