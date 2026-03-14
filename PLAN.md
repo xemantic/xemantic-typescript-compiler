@@ -16,129 +16,121 @@ Re-enabling `.d.ts` baseline tests (previously guarded by `hasDtsSection` in
 
 The full history of Phase 1 fixes is in the git log. Key files and line counts:
 - `Parser.kt` (4,504 lines) — full TypeScript syntax parsing
-- `Transformer.kt` (11,333 lines) — module transforms, downlevel emit, decorators
+- `Transformer.kt` (~11,500 lines) — module transforms, downlevel emit, decorators
 - `Emitter.kt` (3,673 lines) — AST → JavaScript text
 - `Scanner.kt` (1,332 lines) — tokenization
 - `Ast.kt` (1,901 lines) — all AST node types including full `TypeNode` hierarchy
+- `Checker.kt` (~930 lines) — MVP type checker (const enum, import elision)
+- `Binder.kt` (~1,200 lines) — symbol table population
+- `Types.kt` (~180 lines) — Symbol, SymbolFlags, ConstantValue
+
+---
+
+## COMPLETED ITEMS (for reference)
+
+### 0. Analysis (complete)
+
+- [x] **0a. Categorize all failures** → `FAILURES.md`
+- [x] **0b. Study TypeScript checker architecture** → `DESIGN-TYPE-CHECKER.md`
+- [x] **0c. Design Kotlin type checker architecture**
+
+### 1. Foundation — Symbol and Type infrastructure (complete)
+
+- [x] **1a. Symbol data class**
+- [x] **1b. Type sealed class hierarchy**
+- [x] **1c. SymbolTable and scope chain**
+
+### 2. Binder (complete)
+
+- [x] **2a. Implement Binder.kt**
+- [x] **2b. Declaration merging**
+- [x] **2c. Module symbol resolution**
+
+### 3. Type Checker MVP — infrastructure (complete)
+
+- [x] **3c. Const enum folding** — Checker computes enum values incl. cross-file, nested namespaces, complex initializers
+- [x] **3d. Import elision** — Checker tracks import references in value positions
+- [x] **3e. Unused import/variable detection**
+
+### 4. Pipeline integration (partially complete)
+
+- [x] **4a. Wire Binder + Checker into TypeScriptCompiler.kt**
+- [x] **4b. Pass checker info to Transformer** — `resolveConstEnumMemberAccess()`, `isConstEnumAlias()` now called from Transformer
 
 ---
 
 ## QUEUE (execute top-to-bottom)
 
-### 0. Analysis — understand current failures and type checker scope
+### 7. Cross-file namespace import resolution (~15-25 tests)
 
-- [x] **0a. Categorize all 323 failures** — Run the full test suite, collect all failing test names, and categorize them by root cause:
-  - (A) Parser error recovery (~50) — tests expecting TypeScript's exact error recovery output
-  - (B) Type-checker-driven transforms (~30) — import elision, const enum inlining, decorator metadata
-  - (C) Missing helpers (~15) — `__esDecorate`, `__setFunctionName`, `__generator`, WeakMap
-  - (D) Module resolution (~20) — paths/baseUrl, symlinks, file ordering, reference resolution
-  - (E) Complex transforms (~15) — CommonJS post-increment exports, super access temp vars
-  - (F) Newly exposed failures from `.d.ts` tests (~173) — needs triage
-  - (G) Internal comments (~10) — per-token comment fields
-  - (H) Other (~10) — control chars, `reScanGreaterToken`, binary input
+The biggest infrastructure gap. Currently `resolveAlias` handles `ImportEqualsDeclaration` and `ImportSpecifier`, but NOT `NamespaceImport` (`import * as Foo from "./mod"`). The checker can't follow namespace imports to resolve module exports, which blocks const enum inlining and import elision for cross-file cases.
 
-  Save the categorized list to `FAILURES.md` for tracking.
+- [ ] **7a. Add NamespaceImport resolution to Checker.resolveAlias()** — When the alias declaration is a `NamespaceImport`, resolve the module specifier to a file, create a synthetic "module" symbol whose `exports` are the target file's `locals`. This lets `resolveNamePath("Foo.ConstEnum", ...)` traverse `Foo` → module exports → `ConstEnum`.
+  - **Key test:** `constEnumNamespaceReferenceCausesNoImport2` — `import * as Foo from "./reexport"` then `Foo.ConstFooEnum.Some` should inline to `0`
+  - **Fix area:** `Checker.kt: resolveAlias()`, add `is NamespaceImport` branch
+  - **Also fixes:** `constEnumExternalModule`, `constEnumNoEmitReexport`, `constEnumNoPreserveDeclarationReexport`, `amdModuleConstEnumUsage`
 
-- [x] **0b. Study the TypeScript checker architecture** — Read TypeScript's checker design from public documentation and any available source. Key concepts to understand:
-  - Binder: scope creation, symbol table population, declaration merging
-  - Checker: type inference, structural subtyping, assignability, narrowing
-  - How the checker communicates with the transformer (symbol flags, const enum values)
-  - Which transforms depend on type info vs which are purely syntactic
-  - **Output:** `DESIGN-TYPE-CHECKER.md` — 1,148-line comprehensive design document
+- [ ] **7b. Add default import resolution** — `import Foo from "./mod"` creates a symbol for the default binding. Resolve it to the target module's `default` export.
+  - **Fix area:** `Checker.kt: resolveAlias()`, handle `ImportDeclaration` with `clause.name` (default import)
 
-- [x] **0c. Design the Kotlin type checker architecture** — Design document (not code) answering:
-  - What `Type` sealed class hierarchy is needed?
-  - What `Symbol` class fields are needed?
-  - How does the Binder walk the AST?
-  - Where does the Checker phase fit in the `TypeScriptCompiler.kt` pipeline?
-  - Which existing `Transformer.kt` code paths need checker input?
-  - What is the MVP scope to unblock the most tests?
+- [ ] **7c. Export re-export type elision** — `export { i } from "./server"` where `i` is an interface should be elided. The Transformer needs to check if re-exported names are value or type in the source module.
+  - **Key test:** `es6ExportClauseWithoutModuleSpecifier` — `export { i, m as instantiatedModule }` should drop `i` (interface) and `uninstantiated` (type-only namespace)
+  - **Fix area:** `Transformer.kt: transformExportDeclaration()` — call `checker.isValueAliasDeclaration()` or a new method to check if re-exported specifier is type-only
+  - **Requires:** 7a/7b for cross-file symbol lookup
 
-### 1. Foundation — Symbol and Type infrastructure
+### 8. CommonJS transform gaps (~10-15 tests)
 
-- [x] **1a. Create `Symbol` data class** — A symbol represents a named entity: variable, function, class, interface, namespace, enum, type alias, parameter, property. Fields: `name`, `flags` (enum set), `declarations` (list of AST nodes), `type` (resolved type), `members` (child symbol table for classes/namespaces).
+The CommonJS transform (`transformToCommonJS`) rewrites identifier references to use `require()` bindings, but misses some contexts.
 
-- [x] **1b. Create `Type` sealed class hierarchy** — Runtime type representation (distinct from `TypeNode` which is syntax). MVP types:
-  - `AnyType`, `UnknownType`, `NeverType`, `VoidType`, `UndefinedType`, `NullType`
-  - `StringType`, `NumberType`, `BooleanType`, `BigIntType`, `SymbolType`
-  - `LiteralType` (string/number/boolean literal types)
-  - `ObjectType` (with members symbol table)
-  - `FunctionType` / `SignatureType`
-  - `UnionType`, `IntersectionType`
-  - `TypeReference` (generic instantiation)
-  - `EnumType`
-  - `TypeParameter`
+- [ ] **8a. Binding pattern computed property rewriting** — `import { a } from "./a"; function fn({ [a]: value })` — the `[a]` computed property key should become `[a_1.a]` in CommonJS output.
+  - **Key test:** `computedPropertyNameWithImportedKey`
+  - **Fix area:** `Transformer.kt: transformToCommonJS()` — the identifier rewriting visitor needs to traverse function parameter binding patterns
+  - **Also affects:** `declarationEmitComputedNameConstEnumAlias`
 
-- [x] **1c. Create `SymbolTable` and scope chain** — A `SymbolTable` is `MutableMap<String, Symbol>`. Scopes form a chain: function scope → block scope → module scope → global scope. Each scope has a `SymbolTable` for its declarations.
+- [ ] **8b. Export alias qualification** — `export const pick = () => (0, exports.pick)()` — some exports need `(0, exports.X)` form for correct `this` binding.
+  - **Key tests:** `conflictingDeclarationsImportFromNamespace1`, `conflictingDeclarationsImportFromNamespace2`
+  - **Fix area:** `Transformer.kt: transformToCommonJS()` — self-referencing exported names need qualification
 
-### 2. Binder — populate symbol tables
+### 9. Class property transform fixes (~10 tests)
 
-- [x] **2a. Implement `Binder.kt`** — Walk the AST and:
-  - Create symbols for all declarations (variables, functions, classes, interfaces, enums, namespaces, type aliases, parameters)
-  - Handle `var` hoisting (function-scoped) vs `let`/`const` (block-scoped)
-  - Handle function declaration hoisting
-  - Build scope chains (module → function → block)
-  - Handle `export` flags on symbols
+Several tests fail because class properties aren't correctly handled.
 
-- [x] **2b. Declaration merging** — TypeScript allows:
-  - Interface + interface → merged interface
-  - Namespace + namespace → merged namespace
-  - Class + namespace → class with static additions
-  - Enum + namespace → enum with additional members
-  - Function + namespace → function with properties
+- [ ] **9a. Static property with modifier keyword name** — `static f = 3;` is parsed as `ExpressionStatement("static")` + `ExpressionStatement(f = 3)` instead of `PropertyDeclaration(static, f, 3)`.
+  - **Key test:** `class2` — expects `foo.f = 3;` outside class, gets `static; f = 3;` inside constructor
+  - **Fix area:** `Parser.kt: parseClassElement()` — need to recognize `static` followed by identifier as a property declaration, not two expression statements. This is a parser error recovery issue.
 
-- [x] **2c. Module symbol resolution** — Connect import/export declarations to their target symbols across files (for multi-file test cases).
+- [ ] **9b. Non-`this`-prefixed property initializers** — `p1 = 0;` in constructor instead of `this.p1 = 0;`
+  - **Key test:** `classUpdateTests` — property-to-constructor move missing `this.` prefix
+  - **Fix area:** `Transformer.kt: movePropertyToConstructor()` or equivalent
 
-### 3. Type Checker — MVP (unblocks ~30 tests)
+### 10. Parser error recovery (~45 tests)
 
-- [ ] **3a. Basic type resolution** — Resolve `TypeNode` AST nodes to `Type` objects:
-  - Keyword types (`string`, `number`, `boolean`, etc.) → primitive types
-  - Type references (`Foo`, `Foo<T>`) → look up symbol, resolve generics
-  - Union/intersection types → compose from resolved members
-  - Array/tuple types
-  - Function types
+These tests expect TypeScript's exact error recovery output. Independent of type checker — only touches `Parser.kt`.
 
-- [ ] **3b. Type inference from initializers** — Infer types for:
-  - `const x = 42` → `x: 42` (literal type)
-  - `let x = "hello"` → `x: string` (widened type)
-  - `const x = { a: 1 }` → object type with inferred members
-  - Enum member values
+- [ ] **10a. Audit the top 10 error recovery patterns** — Compare parser output against TypeScript baselines for the most common failure patterns. Categorize by:
+  - Missing semicolons / incomplete statements
+  - Invalid arrow function syntax
+  - Incomplete type annotations
+  - Missing identifiers / unexpected tokens
 
-- [x] **3c. Const enum folding** — With type info, resolve const enum member references to their computed values. This unblocks ~6 tests: `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, etc.
+- [ ] **10b. Implement recovery for high-value patterns** — Fix the patterns that unblock the most tests. Measure net impact after each fix.
 
-- [x] **3d. Import elision** — With type info, determine which imports are type-only (used only in type positions) and can be elided from JS output. This unblocks ~7 tests: `aliasOnMergedModuleInterface`, `importElisionEnum`, etc.
+### 11. Remaining checker-dependent tests
 
-- [x] **3e. Unused import/variable detection** — Flag imports and locals that are never referenced in value positions. This unblocks ~2 tests.
+- [ ] **11a. Decorator metadata with type info** (~3 tests) — `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`, `metadataOfUnion`. Requires type serialization — significantly more work than other checker integration.
 
-### 4. Integrate checker into pipeline
+- [ ] **11b. Enum non-literal cross-file initializers** (~2 tests) — Regular (non-const) enum member initializers that reference imported values should resolve to their constant value in the enum IIFE body.
+  - **Key test:** `importElisionEnum` — `MyEnum { a = MyEnumFromModule.a }` should resolve to `MyEnum { a = 0 }`
+  - **Fix area:** `Transformer.kt: transformEnumDeclaration()` — use checker to resolve imported enum member values
 
-- [x] **4a. Wire `Binder` + `Checker` into `TypeScriptCompiler.kt`** — Insert after Parser, before Transformer:
-  ```
-  Parser.parse() → Binder.bind() → Checker.check() → Transformer.transform() → Emitter.emit()
-  ```
-
-- [x] **4b. Pass checker info to Transformer** — The Transformer needs:
-  - `isTypeOnly(importDecl)` — for import elision
-  - `getConstEnumValue(member)` — for const enum inlining
-  - `getSymbol(node)` — for decorator metadata type serialization
-  - `isInstantiated(module)` — for module alias elision
+### 4c. Enable `.errors.txt` tests (deferred)
 
 - [ ] **4c. Enable `.errors.txt` tests** — Uncomment the error baseline test generation in `build.gradle.kts` (search `TODO: Re-enable when type checker is implemented`). This will add ~9,055 error diagnostic tests. Initially almost all will fail — use them as a progress metric, not a regression guard.
 
-### 5. Remaining Phase 1 fixes (unblocked by type checker)
+### Deprioritized items (from original plan)
 
-After the checker MVP is working:
-
-- [ ] **5a. Decorator metadata with type info** (~3 tests) — `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`, `metadataOfUnion`
-- [ ] **5b. `isolatedModules` emit blocking** (~2 tests) — `isolatedModulesExportDeclarationType`, `isolatedModulesNoEmitOnError`
-- [ ] **5c. Enum non-literal initializers** (~2 tests) — cross-file constant resolution now possible with checker
-
-### 6. Parser error recovery (independent of type checker)
-
-These ~45 tests need TypeScript's exact error recovery behavior. They can be worked on in parallel with the type checker since they only touch `Parser.kt`:
-
-- [ ] **6a. Audit error recovery patterns** — Compare parser error recovery against TypeScript's parser for the most common patterns: missing semicolons, incomplete type annotations, invalid arrow functions, missing identifiers.
-- [ ] **6b. Fix recoverable cases** — Implement recovery for the easiest patterns first, measuring net test impact.
+- [ ] **3a. Basic type resolution** — Resolve `TypeNode` AST nodes to `Type` objects. Not needed for current test fixes.
+- [ ] **3b. Type inference from initializers** — Infer types for variables/constants. Not needed for current test fixes.
 
 ---
 
@@ -157,8 +149,8 @@ These ~45 tests need TypeScript's exact error recovery behavior. They can be wor
 
 | Category | Count | Status |
 |----------|-------|--------|
-| JS emit tests (no `.d.ts`) | 4,509 | 4,359 passing (96.7%) |
-| JS emit tests (with `.d.ts` stripped) | 933 | 760 passing (81.5%) |
+| JS emit tests (no `.d.ts`) | 4,509 | ~4,362 passing (96.7%) |
+| JS emit tests (with `.d.ts` stripped) | 933 | ~760 passing (81.5%) |
 | **Total JS emit tests** | **5,442** | **5,122 passing (94.1%)** |
 | Error diagnostic tests (`.errors.txt`) | ~9,055 | Not yet enabled |
 | Declaration emit tests (`.d.ts` only) | ~215 | Not applicable without full type checker |
@@ -170,4 +162,22 @@ These ~45 tests need TypeScript's exact error recovery behavior. They can be wor
 1. All type-checker-blocked JS emit tests pass (~30 tests): const enum inlining, import elision, decorator metadata
 2. `.errors.txt` test infrastructure is enabled and basic diagnostics are emitted
 3. `Symbol` and `Type` infrastructure supports incremental checker expansion
-4. No regressions in the 5,119 currently passing tests
+4. No regressions in the 5,122 currently passing tests
+
+---
+
+## Remaining 320 failures — breakdown by root cause
+
+Derived from investigation on 2026-03-14. Numbers are approximate (some tests have multiple issues).
+
+| Category | ~Count | Key blocker | Queue item |
+|----------|--------|-------------|------------|
+| Cross-file module/import resolution | ~50 | Checker doesn't follow namespace imports, re-exports | 7a-7c |
+| `.d.ts` baseline differences | ~60 | Declaration emit not implemented | BLOCKED |
+| Parser error recovery | ~45 | Parser doesn't match TypeScript's exact recovery | 10a-10b |
+| CommonJS transform gaps | ~30 | Binding pattern rewriting, export self-reference | 8a-8b |
+| AMD/UMD/System module issues | ~25 | Module format-specific transforms | Partially 7a |
+| Class property transforms | ~15 | Static property parsing, `this.` prefix | 9a-9b |
+| Missing helpers (`__generator`, WeakMap) | ~15 | Complex state machine / runtime transforms | BLOCKED |
+| Decorator metadata with types | ~5 | Type serialization | 11a |
+| Other (control chars, edge cases) | ~75 | Various | — |
