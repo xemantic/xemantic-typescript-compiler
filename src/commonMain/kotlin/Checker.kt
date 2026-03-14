@@ -1214,7 +1214,7 @@ class Checker(
         if (isTopLevel && !isModuleScope) {
             // Still recurse into nested scopes (namespace bodies, function bodies)
             for (stmt in statements) {
-                checkUnusedInNestedScopes(stmt, source, fileName)
+                checkUnusedInNestedScopes(stmt, source, fileName, siblingStatements = statements)
             }
             return
         }
@@ -1281,7 +1281,7 @@ class Checker(
 
         // 4. Recurse into nested scopes (function bodies, class bodies, etc.)
         for (stmt in statements) {
-            checkUnusedInNestedScopes(stmt, source, fileName)
+            checkUnusedInNestedScopes(stmt, source, fileName, siblingStatements = statements)
         }
     }
 
@@ -1951,7 +1951,7 @@ class Checker(
     /**
      * Recurse into nested scopes to check for unused declarations within them.
      */
-    private fun checkUnusedInNestedScopes(stmt: Statement, source: String, fileName: String) {
+    private fun checkUnusedInNestedScopes(stmt: Statement, source: String, fileName: String, siblingStatements: List<Statement>? = null) {
         when (stmt) {
             is FunctionDeclaration -> {
                 stmt.body?.let { body ->
@@ -1967,10 +1967,10 @@ class Checker(
                     checkUnusedInClassElement(member, source, fileName)
                 }
                 // Check class-level type parameters
-                checkUnusedClassTypeParams(stmt, source, fileName)
+                checkUnusedClassTypeParams(stmt, source, fileName, siblingStatements)
             }
             is InterfaceDeclaration -> {
-                checkUnusedInterfaceTypeParams(stmt, source, fileName)
+                checkUnusedInterfaceTypeParams(stmt, source, fileName, siblingStatements)
             }
             is TypeAliasDeclaration -> {
                 checkUnusedTypeAliasTypeParams(stmt, source, fileName)
@@ -2285,9 +2285,25 @@ class Checker(
         cls: ClassDeclaration,
         source: String,
         fileName: String,
+        siblingStatements: List<Statement>? = null,
     ) {
         val typeParams = cls.typeParameters
         if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+        // Skip if another declaration merges with this class (interface/namespace)
+        val className = cls.name?.text
+        if (className != null && siblingStatements != null) {
+            val hasMerge = siblingStatements.any { stmt ->
+                stmt !== cls && when (stmt) {
+                    is InterfaceDeclaration -> stmt.name.text == className
+                    is ModuleDeclaration -> {
+                        val n = stmt.name
+                        n is Identifier && n.text == className
+                    }
+                    else -> false
+                }
+            }
+            if (hasMerge) return
+        }
 
         val tpScope = UnusedScope()
         for (tp in typeParams) {
@@ -2345,9 +2361,26 @@ class Checker(
         iface: InterfaceDeclaration,
         source: String,
         fileName: String,
+        siblingStatements: List<Statement>? = null,
     ) {
         val typeParams = iface.typeParameters
         if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+        // Skip if another declaration merges or if there are multiple interfaces with same name
+        val ifaceName = iface.name.text
+        if (siblingStatements != null) {
+            val hasMerge = siblingStatements.any { stmt ->
+                stmt !== iface && when (stmt) {
+                    is InterfaceDeclaration -> stmt.name.text == ifaceName
+                    is ClassDeclaration -> stmt.name?.text == ifaceName
+                    is ModuleDeclaration -> {
+                        val n = stmt.name
+                        n is Identifier && n.text == ifaceName
+                    }
+                    else -> false
+                }
+            }
+            if (hasMerge) return
+        }
 
         val tpScope = UnusedScope()
         for (tp in typeParams) {
