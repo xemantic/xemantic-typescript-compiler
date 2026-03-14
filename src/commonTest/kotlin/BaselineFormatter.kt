@@ -267,7 +267,23 @@ private fun toLF(text: String): String {
  */
 fun CompilationResult.toErrorBaseline(): String? {
     if (diagnostics.isEmpty()) return null
-    return formatErrorBaseline(diagnostics, sourceEchoes)
+    // Apply TypeScript test harness file ordering for error baselines:
+    // If the last file has require() or reference path, or noImplicitReferences is set,
+    // move the last file to the front (it's the "root" file in the harness).
+    val orderedEchoes = if (isMultiFile && sourceEchoes.size > 1) {
+        val lastContent = sourceEchoes.last().second
+        val shouldReorder = options.noImplicitReferences
+            || "require(" in lastContent
+            || Regex("reference\\s+path").containsMatchIn(lastContent)
+        if (shouldReorder) {
+            listOf(sourceEchoes.last()) + sourceEchoes.dropLast(1)
+        } else {
+            sourceEchoes
+        }
+    } else {
+        sourceEchoes
+    }
+    return formatErrorBaseline(diagnostics, orderedEchoes)
 }
 
 /**
