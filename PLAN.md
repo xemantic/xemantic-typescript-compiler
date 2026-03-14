@@ -56,9 +56,9 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
 
 ### 1. Foundation — Symbol and Type infrastructure
 
-- [ ] **1a. Create `Symbol` data class** — A symbol represents a named entity: variable, function, class, interface, namespace, enum, type alias, parameter, property. Fields: `name`, `flags` (enum set), `declarations` (list of AST nodes), `type` (resolved type), `members` (child symbol table for classes/namespaces).
+- [x] **1a. Create `Symbol` data class** — A symbol represents a named entity: variable, function, class, interface, namespace, enum, type alias, parameter, property. Fields: `name`, `flags` (enum set), `declarations` (list of AST nodes), `type` (resolved type), `members` (child symbol table for classes/namespaces).
 
-- [ ] **1b. Create `Type` sealed class hierarchy** — Runtime type representation (distinct from `TypeNode` which is syntax). MVP types:
+- [x] **1b. Create `Type` sealed class hierarchy** — Runtime type representation (distinct from `TypeNode` which is syntax). MVP types:
   - `AnyType`, `UnknownType`, `NeverType`, `VoidType`, `UndefinedType`, `NullType`
   - `StringType`, `NumberType`, `BooleanType`, `BigIntType`, `SymbolType`
   - `LiteralType` (string/number/boolean literal types)
@@ -69,7 +69,7 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
   - `EnumType`
   - `TypeParameter`
 
-- [ ] **1c. Create `SymbolTable` and scope chain** — A `SymbolTable` is `MutableMap<String, Symbol>`. Scopes form a chain: function scope → block scope → module scope → global scope. Each scope has a `SymbolTable` for its declarations.
+- [x] **1c. Create `SymbolTable` and scope chain** — A `SymbolTable` is `MutableMap<String, Symbol>`. Scopes form a chain: function scope → block scope → module scope → global scope. Each scope has a `SymbolTable` for its declarations.
 
 ### 2. Binder — populate symbol tables
 
