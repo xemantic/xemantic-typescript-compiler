@@ -2613,11 +2613,13 @@ class Checker(
     ) {
         when (stmt) {
             is FunctionDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
                 stmt.body?.let {
                     checkDefiniteAssignmentInStatements(it.statements, source, fileName)
                 }
             }
             is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> member.body?.let {
@@ -2637,6 +2639,7 @@ class Checker(
                 }
             }
             is ModuleDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return // skip ambient
                 when (val body = stmt.body) {
                     is ModuleBlock -> checkDefiniteAssignmentInStatements(
                         body.statements, source, fileName,
@@ -2717,6 +2720,8 @@ class Checker(
                     checkClassPropertyInit(stmt.members, source, fileName)
                 }
                 is ModuleDeclaration -> {
+                    // Skip declare (ambient) namespaces — classes inside are ambient
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
                     when (val body = stmt.body) {
                         is ModuleBlock -> checkPropertyInitInStatements(
                             body.statements, source, fileName,
@@ -2725,6 +2730,7 @@ class Checker(
                     }
                 }
                 is FunctionDeclaration -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
                     stmt.body?.let {
                         checkPropertyInitInStatements(it.statements, source, fileName)
                     }
