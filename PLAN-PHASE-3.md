@@ -436,9 +436,12 @@ by test count and implementation tractability.
 
   **Files:** `Checker.kt`
 
-- [ ] **7f. TS7026 — "JSX element implicitly has type 'any'"** (~13 pure tests)
+- [x] **7f. TS7026 — "JSX element implicitly has type 'any'"** (0 testable — all .tsx, not in test suite)
 
-  When `noImplicitAny` is enabled and JSX is used, check JSX elements.
+  Implemented but untestable: all TS7026 baselines are `.tsx` files, and test
+  generator only processes `.ts` files. Implementation emits TS7026 for each
+  JSX opening/closing/self-closing tag when no JSX.IntrinsicElements exists.
+  Will activate when .tsx test support is added.
 
 - [ ] **7g. TS2300 — "Duplicate identifier 'X'"** (~23 pure tests)
 

@@ -81,6 +81,10 @@ class Checker(
         }
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
+        // 9. Check JSX elements for missing type definitions (TS7026)
+        if (options.jsx != null) {
+            checkJsxImplicitAny()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -3920,6 +3924,222 @@ class Checker(
             message = "Cannot find name '$name'.",
             category = DiagnosticCategory.Error,
             code = 2304,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // JSX implicit any checking (TS7026)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for JSX elements when no JSX.IntrinsicElements interface is defined.
+     * Since we don't have lib.d.ts JSX type definitions, this fires for all JSX
+     * elements when JSX is configured.
+     * Emits TS7026 at both opening and closing tag names.
+     */
+    private fun checkJsxImplicitAny() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            // Only check .tsx/.jsx files
+            if (!fileName.endsWith(".tsx") && !fileName.endsWith(".jsx")) continue
+            checkJsxInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkJsxInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            checkJsxInStatement(stmt, source, fileName)
+        }
+    }
+
+    private fun checkJsxInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkJsxInExpr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> checkJsxInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkJsxInExpr(it, source, fileName) }
+            is FunctionDeclaration -> {
+                stmt.body?.let { checkJsxInStatements(it.statements, source, fileName) }
+                for (param in stmt.parameters) {
+                    param.initializer?.let { checkJsxInExpr(it, source, fileName) }
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            member.body?.let { checkJsxInStatements(it.statements, source, fileName) }
+                        }
+                        is Constructor -> {
+                            member.body?.let { checkJsxInStatements(it.statements, source, fileName) }
+                        }
+                        is PropertyDeclaration -> {
+                            member.initializer?.let { checkJsxInExpr(it, source, fileName) }
+                        }
+                        is GetAccessor -> {
+                            member.body?.let { checkJsxInStatements(it.statements, source, fileName) }
+                        }
+                        is SetAccessor -> {
+                            member.body?.let { checkJsxInStatements(it.statements, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> checkJsxInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkJsxInExpr(stmt.expression, source, fileName)
+                checkJsxInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkJsxInStatement(it, source, fileName) }
+            }
+            is ForStatement -> {
+                stmt.condition?.let { checkJsxInExpr(it, source, fileName) }
+                checkJsxInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> checkJsxInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkJsxInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> {
+                checkJsxInExpr(stmt.expression, source, fileName)
+                checkJsxInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkJsxInStatement(stmt.statement, source, fileName)
+                checkJsxInExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkJsxInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            checkJsxInExpr(clause.expression, source, fileName)
+                            checkJsxInStatements(clause.statements, source, fileName)
+                        }
+                        is DefaultClause -> checkJsxInStatements(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkJsxInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkJsxInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkJsxInStatements(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> checkJsxInStatement(stmt.statement, source, fileName)
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkJsxInStatements(body.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is ExportAssignment -> checkJsxInExpr(stmt.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkJsxInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is JsxElement -> {
+                emitJsx7026(expr.openingElement.tagName, source, fileName)
+                // Check children for nested JSX
+                for (child in expr.children) {
+                    when (child) {
+                        is Expression -> checkJsxInExpr(child, source, fileName)
+                        is JsxExpressionContainer -> child.expression?.let { checkJsxInExpr(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+                emitJsx7026(expr.closingElement.tagName, source, fileName)
+            }
+            is JsxSelfClosingElement -> {
+                emitJsx7026(expr.tagName, source, fileName)
+            }
+            is JsxFragment -> {
+                for (child in expr.children) {
+                    when (child) {
+                        is Expression -> checkJsxInExpr(child, source, fileName)
+                        is JsxExpressionContainer -> child.expression?.let { checkJsxInExpr(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ParenthesizedExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkJsxInExpr(expr.condition, source, fileName)
+                checkJsxInExpr(expr.whenTrue, source, fileName)
+                checkJsxInExpr(expr.whenFalse, source, fileName)
+            }
+            is BinaryExpression -> {
+                checkJsxInExpr(expr.left, source, fileName)
+                checkJsxInExpr(expr.right, source, fileName)
+            }
+            is CallExpression -> {
+                checkJsxInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { checkJsxInExpr(it, source, fileName) }
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkJsxInStatements(body.statements, source, fileName)
+                    is Expression -> checkJsxInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkJsxInStatements(expr.body.statements, source, fileName)
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { checkJsxInExpr(it, source, fileName) }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkJsxInExpr(prop.initializer, source, fileName)
+                        is SpreadAssignment -> checkJsxInExpr(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is AsExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> {
+                expr.elements.forEach { checkJsxInExpr(it, source, fileName) }
+            }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) {
+                    checkJsxInExpr(span.expression, source, fileName)
+                }
+            }
+            is TaggedTemplateExpression -> {
+                checkJsxInExpr(expr.tag, source, fileName)
+            }
+            is SpreadElement -> checkJsxInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> expr.expression?.let { checkJsxInExpr(it, source, fileName) }
+            is YieldExpression -> expr.expression?.let { checkJsxInExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun emitJsx7026(tagName: Expression, source: String, fileName: String) {
+        val start = tagName.pos
+        val length = tagName.end - tagName.pos
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.",
+            category = DiagnosticCategory.Error,
+            code = 7026,
             fileName = fileName,
             line = line,
             character = character,
