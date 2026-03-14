@@ -377,9 +377,9 @@ fun formatErrorBaseline(
                     val col = (diag.character ?: 1) - 1 // convert to 0-based
                     val len = diag.length ?: 1
 
-                    // Squiggle line
+                    // Squiggle line — preserve tab/space indentation from source
                     +"    "
-                    +" ".repeat(col)
+                    +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
                     +"~".repeat(len)
                     +"\r\n"
 
