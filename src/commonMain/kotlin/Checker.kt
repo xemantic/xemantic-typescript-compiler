@@ -4483,7 +4483,22 @@ class Checker(
                 is EnumDeclaration -> {
                     decls.add(DeclInfo(stmt.name.text, "enum", stmt.name))
                 }
+                is ExportAssignment -> {
+                    if (stmt.isExportEquals) {
+                        decls.add(DeclInfo("export=", "export=", stmt.expression))
+                    }
+                }
                 else -> {}
+            }
+        }
+
+        // Check for duplicate export= assignments
+        val exportEquals = decls.filter { it.kind == "export=" }
+        if (exportEquals.size >= 2) {
+            for (decl in exportEquals) {
+                val expr = decl.nameNode
+                val len = if (expr is Identifier) expr.text.length else (expr.end - expr.pos)
+                emitDuplicate2300("export=", expr, source, fileName, spanLength = len)
             }
         }
 
@@ -4576,9 +4591,14 @@ class Checker(
         }
     }
 
-    private fun emitDuplicate2300(name: String, node: Node, source: String, fileName: String) {
+    private fun emitDuplicate2300(
+        name: String,
+        node: Node,
+        source: String,
+        fileName: String,
+        spanLength: Int = name.length,
+    ) {
         val start = node.pos
-        val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Duplicate identifier '$name'.",
@@ -4588,7 +4608,7 @@ class Checker(
             line = line,
             character = character,
             start = start,
-            length = length,
+            length = spanLength,
         ))
     }
 
