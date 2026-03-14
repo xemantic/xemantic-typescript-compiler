@@ -228,6 +228,14 @@ class Transformer(
                         extractIdentifierName(stmt.name)?.let { topLevelRuntimeNames.add(it) }
                     }
                 }
+                is ImportEqualsDeclaration -> {
+                    // import x = M.N introduces a runtime binding unless type-only
+                    if (stmt.isTypeOnly) {
+                        topLevelTypeOnlyNames.add(stmt.name.text)
+                    } else {
+                        topLevelRuntimeNames.add(stmt.name.text)
+                    }
+                }
                 is ImportDeclaration -> {
                     // Import bindings are runtime values — they must not be treated as type-only
                     // even if the same name is declared as an interface/type in this file.
@@ -10786,12 +10794,24 @@ class Transformer(
                 node.members.forEach { collectRefsFromNode(it, refs) }
             }
             is ComputedPropertyName -> collectRefsFromNode(node.expression, refs)
-            // Class elements
-            is PropertyDeclaration -> collectRefsFromNode(node.initializer, refs)
-            is MethodDeclaration -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            // Class elements — also collect from computed property names
+            is PropertyDeclaration -> {
+                if (node.name is ComputedPropertyName) collectRefsFromNode(node.name, refs)
+                collectRefsFromNode(node.initializer, refs)
+            }
+            is MethodDeclaration -> {
+                if (node.name is ComputedPropertyName) collectRefsFromNode(node.name, refs)
+                node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            }
             is Constructor -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
-            is GetAccessor -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
-            is SetAccessor -> node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            is GetAccessor -> {
+                if (node.name is ComputedPropertyName) collectRefsFromNode(node.name, refs)
+                node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            }
+            is SetAccessor -> {
+                if (node.name is ComputedPropertyName) collectRefsFromNode(node.name, refs)
+                node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
+            }
             is ClassStaticBlockDeclaration -> node.body.statements.forEach { collectRefsFromNode(it, refs) }
             // Variable declaration list (for `for` initializer)
             is VariableDeclarationList -> node.declarations.forEach { collectRefsFromNode(it.initializer, refs) }
