@@ -277,7 +277,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   arrow function missing token recovery, ambiguous generic assertions.
   - Fix area: `Parser.kt`
 
-- [ ] **3i. Enum non-literal cross-file initializers** (Phase 2 item 11b) — *deferred: 2 tests*
+- [x] **3i. Enum non-literal cross-file initializers** (Phase 2 item 11b) — *deferred: 2 tests*
 
   `MyEnum { a = MyEnumFromModule.a }` should resolve to `MyEnum { a = 0 }`.
   - Key test: `importElisionEnum`

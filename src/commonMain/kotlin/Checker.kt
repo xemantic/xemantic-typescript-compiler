@@ -189,6 +189,26 @@ class Checker(
     }
 
     /**
+     * Resolve an enum member value through import aliases.
+     * Works for both const and non-const enums. Returns the numeric value or null.
+     */
+    fun resolveEnumMemberValue(
+        enumName: String,
+        memberName: String,
+        sourceFileName: String,
+    ): Long? {
+        val result = fileResults[sourceFileName] ?: return null
+        val symbol = resolveNamePath(enumName, result) ?: return null
+        val target = resolveAlias(symbol)
+        if (!target.flags.hasAny(SymbolFlags.Enum)) return null
+        val value = enumValues[target.id]?.get(memberName)
+        return when (value) {
+            is ConstantValue.NumberValue -> value.value.toLong()
+            else -> null
+        }
+    }
+
+    /**
      * Get the module instance state for a module/namespace declaration.
      */
     fun getModuleInstanceState(node: ModuleDeclaration): ModuleInstanceState {
