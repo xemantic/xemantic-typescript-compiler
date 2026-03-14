@@ -127,20 +127,26 @@ class TypeScriptCompiler {
         }
         val diagnostics = mutableListOf<Diagnostic>()
 
-        // TS5107: AMD and System module formats are deprecated
-        if (options.module == ModuleKind.AMD) {
+        // TS5107: Deprecated options
+        fun addDeprecation(optionDesc: String, version: String = "7.0", deprecationVersion: String = "6.0") {
             diagnostics.add(Diagnostic(
-                message = "Option 'module=AMD' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
+                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5107,
             ))
         }
-        if (options.module == ModuleKind.System) {
-            diagnostics.add(Diagnostic(
-                message = "Option 'module=System' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
-                category = DiagnosticCategory.Error,
-                code = 5107,
-            ))
+        // Target deprecations
+        if (options.target == ScriptTarget.ES3) addDeprecation("target=ES3", "5.5", "5.0")
+        if (options.target == ScriptTarget.ES5) addDeprecation("target=ES5")
+        // Module deprecations
+        if (options.module == ModuleKind.AMD) addDeprecation("module=AMD")
+        if (options.module == ModuleKind.UMD) addDeprecation("module=UMD")
+        if (options.module == ModuleKind.System) addDeprecation("module=System")
+        if (options.module == ModuleKind.None) addDeprecation("module=None")
+        // Module resolution deprecations
+        when (options.moduleResolution?.lowercase()) {
+            "classic" -> addDeprecation("moduleResolution=classic")
+            "node", "node10" -> addDeprecation("moduleResolution=node10")
         }
 
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
