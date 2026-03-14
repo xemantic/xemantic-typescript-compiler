@@ -54,6 +54,11 @@ data class CompilationResult(
  *   project-level diagnostics.
  * @property line The 1-based line number within [fileName], or `null` if not applicable.
  * @property character The 1-based column number within the line, or `null` if not applicable.
+ * @property start The 0-based byte offset of the error span in the source, or `null` for
+ *   project-level diagnostics.
+ * @property length The length of the error span in characters, or `null` if not applicable.
+ * @property relatedInformation Additional diagnostics related to this one (e.g. "did you mean..."
+ *   suggestions), rendered as `!!! related TS...:` lines in `.errors.txt` baselines.
  */
 data class Diagnostic(
     val message: String,
@@ -62,6 +67,9 @@ data class Diagnostic(
     val fileName: String? = null,
     val line: Int? = null,
     val character: Int? = null,
+    val start: Int? = null,
+    val length: Int? = null,
+    val relatedInformation: List<Diagnostic> = emptyList(),
 )
 
 /**
