@@ -1966,6 +1966,8 @@ class Checker(
                 for (member in stmt.members) {
                     checkUnusedInClassElement(member, source, fileName)
                 }
+                // Check class-level type parameters
+                checkUnusedClassTypeParams(stmt, source, fileName)
             }
             is ModuleDeclaration -> {
                 when (val body = stmt.body) {
@@ -2267,6 +2269,98 @@ class Checker(
                 )
             }
             else -> {}
+        }
+    }
+
+    /**
+     * Check for unused type parameters on a class declaration.
+     */
+    private fun checkUnusedClassTypeParams(
+        cls: ClassDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        val typeParams = cls.typeParameters
+        if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+
+        val tpScope = UnusedScope()
+        for (tp in typeParams) {
+            if (!tp.name.text.startsWith("_")) {
+                tpScope.declarations.add(UnusedDecl(
+                    name = tp.name.text,
+                    nameNode = tp.name,
+                    declNode = tp,
+                    isExported = false,
+                    isParameter = false,
+                    isTypeOnly = true,
+                ))
+            }
+        }
+
+        // Collect type refs from: heritage clauses, member types, constructor params
+        cls.heritageClauses?.forEach { clause ->
+            for (type in clause.types) {
+                type.typeArguments?.forEach { collectTypeRefs(it, tpScope) }
+                // The extends expression itself might reference a type param
+                if (type.expression is Identifier) {
+                    tpScope.referencedNames.add((type.expression as Identifier).text)
+                }
+            }
+        }
+        for (member in cls.members) {
+            when (member) {
+                is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, tpScope) }
+                is MethodDeclaration -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                    member.type?.let { collectTypeRefs(it, tpScope) }
+                    member.body?.let { body ->
+                        for (stmt in body.statements) collectTypeRefsInStatement(stmt, tpScope)
+                    }
+                }
+                is Constructor -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                    member.body?.let { body ->
+                        for (stmt in body.statements) collectTypeRefsInStatement(stmt, tpScope)
+                    }
+                }
+                is GetAccessor -> member.type?.let { collectTypeRefs(it, tpScope) }
+                is SetAccessor -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                }
+                is IndexSignature -> member.type?.let { collectTypeRefs(it, tpScope) }
+                else -> {}
+            }
+        }
+
+        // Report unused type parameters
+        // If ALL type params are unused, use the full <...> span for each
+        val allUnused = tpScope.declarations.none { it.name in tpScope.referencedNames }
+        for (decl in tpScope.declarations) {
+            if (decl.name in tpScope.referencedNames) continue
+            val tp = decl.declNode as TypeParameter
+            // If all params unused and it's the first one, start at '<' (tp.pos - 1)
+            // and cover through '>' of last param
+            val start: Int
+            val length: Int
+            if (allUnused && tpScope.declarations.size == 1) {
+                // Single unused type param — cover <name>
+                start = tp.pos - 1 // the '<' is one char before the identifier
+                length = decl.name.length + 2 // +2 for < and >
+            } else {
+                start = tp.name.pos
+                length = decl.name.length
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'${decl.name}' is declared but its value is never read.",
+                category = DiagnosticCategory.Error,
+                code = 6133,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
         }
     }
 
