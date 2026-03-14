@@ -13,13 +13,12 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **6,560 tests**, 5,624 passing (85.7%), 936 failing
-- Tests cover bare-name `.js` baselines AND parameterized `.js` baselines
-- **5,413 bare-name tests** (5,122 passing — same as Phase 2 end)
-- **1,114 parameterized tests** (498 passing, 616 failing — mostly `target=es5` downlevel)
+- **10,595 tests**, 5,715 passing (53.9%), 4,877 failing
+- **JS emit bare-name:** 5,413 tests, 5,122 passing (94.6%)
+- **JS emit parameterized:** 1,114 tests, 498 passing (44.7%)
+- **Error baselines:** 4,035 tests, 91 passing (2.3%)
 - **Missing from test suite:**
   - ~2,848 parameterized `.js` baselines from non-compiler test dirs — **not in sparse clone**
-  - 9,055 `.errors.txt` baselines — **0 tested** (infrastructure ready)
   - 14,015 `.symbols` baselines — deferred (requires full type inference)
   - 14,015 `.types` baselines — deferred (requires full type inference)
 
@@ -187,7 +186,7 @@ to match the TypeScript harness design documented in `TYPESCRIPT-TEST-HARNESS.md
 
 ### 2. Enable `.errors.txt` tests
 
-- [ ] **2a. Generate `.errors.txt` test functions in `build.gradle.kts`**
+- [x] **2a. Generate `.errors.txt` test functions in `build.gradle.kts`**
 
   For each `.ts` test case file, if a `.errors.txt` baseline exists (either bare-name or
   parameterized), generate a `@Test` function that:
@@ -212,13 +211,15 @@ to match the TypeScript harness design documented in `TYPESCRIPT-TEST-HARNESS.md
   **File:** `build.gradle.kts`
   **Expected new tests:** ~9,055 (`.errors.txt` baselines) — most will fail initially.
 
-- [ ] **2b. Run suite and establish baseline counts**
+- [x] **2b. Run suite and establish baseline counts**
 
-  After enabling all new tests, run the full suite and record:
-  - Total tests (expected: ~18,000+)
-  - JS emit tests: passing / failing (bare + parameterized)
-  - Error baseline tests: passing / failing
-  - Use these numbers as the Phase 3 scorecard
+  Baseline counts (2026-03-14):
+  - **Total tests:** 10,595 (10,592 ran, 3 skipped)
+  - **JS emit (bare-name):** 5,413 tests, 5,122 passing (94.6%)
+  - **JS emit (parameterized):** 1,114 tests, 498 passing (44.7%)
+  - **Error baseline:** 4,035 tests, 91 passing (2.3%)
+  - **Formatter unit tests:** 33 tests, all passing
+  - **Overall:** 5,715 / 10,595 passing (53.9%)
 
 ### 3. Carry forward: remaining Phase 2 JS emit fixes
 
