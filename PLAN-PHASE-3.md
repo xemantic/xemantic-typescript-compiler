@@ -269,9 +269,12 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key test: `classUpdateTests`
   - Fix area: `Transformer.kt`
 
-- [ ] **3h. Parser error recovery** (Phase 2 items 10a-10b, ~45 tests) — *deferred to after 4a-4b*
+- [x] **3h. Parser error recovery** (Phase 2 items 10a-10b, ~45 tests) — *deferred to after 4a-4b*
 
-  Audit and implement the top error recovery patterns to match TypeScript's output.
+  Audited and implemented tractable fixes: alwaysStrict=false suppression (+13),
+  accessor empty body recovery (+1), static/public class member recovery (in 3f/3g).
+  Remaining issues are high-risk: reScanGreaterToken (disabled, 4-test regression),
+  arrow function missing token recovery, ambiguous generic assertions.
   - Fix area: `Parser.kt`
 
 - [ ] **3i. Enum non-literal cross-file initializers** (Phase 2 item 11b) — *deferred: 2 tests*
