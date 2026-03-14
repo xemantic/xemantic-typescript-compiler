@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,554 passing (61.9%), 4,038 failing
+- **10,595 tests**, 6,561 passing (61.9%), 4,031 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
 - **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
@@ -443,9 +443,11 @@ by test count and implementation tractability.
   JSX opening/closing/self-closing tag when no JSX.IntrinsicElements exists.
   Will activate when .tsx test support is added.
 
-- [ ] **7g. TS2300 — "Duplicate identifier 'X'"** (~23 pure tests)
+- [x] **7g. TS2300 — "Duplicate identifier 'X'"** (+7 tests, 6,554 → 6,561)
 
-  Check for duplicate declarations in the same scope.
+  Check for duplicate type parameters, duplicate function parameters, and
+  incompatible duplicate declarations (var+class, var+function) at file scope.
+  Walks all statement lists and parameter lists to detect duplicates.
 
 ---
 

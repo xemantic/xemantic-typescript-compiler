@@ -85,6 +85,8 @@ class Checker(
         if (options.jsx != null) {
             checkJsxImplicitAny()
         }
+        // 10. Check for duplicate identifiers (TS2300)
+        checkDuplicateIdentifiers()
     }
 
     // -----------------------------------------------------------------------
@@ -4140,6 +4142,278 @@ class Checker(
             message = "JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.",
             category = DiagnosticCategory.Error,
             code = 7026,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Duplicate identifier checking (TS2300)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for duplicate identifiers: duplicate type parameters,
+     * duplicate function parameters, and duplicate declarations in the same scope.
+     */
+    private fun checkDuplicateIdentifiers() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            checkDuplicatesInStatements(result.sourceFile.statements, source, fileName)
+            // Check file-level duplicate declarations
+            checkDuplicateDeclarations(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkDuplicatesInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            checkDuplicatesInStatement(stmt, source, fileName)
+        }
+    }
+
+    private fun checkDuplicatesInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
+                checkDuplicateParams(stmt.parameters, source, fileName)
+                stmt.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
+                for (member in stmt.members) {
+                    checkDuplicatesInClassElement(member, source, fileName)
+                }
+            }
+            is InterfaceDeclaration -> {
+                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
+            }
+            is TypeAliasDeclaration -> {
+                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkDuplicatesInExpr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> checkDuplicatesInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkDuplicatesInExpr(it, source, fileName) }
+            is Block -> checkDuplicatesInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkDuplicatesInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkDuplicatesInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkDuplicatesInStatements(clause.statements, source, fileName)
+                        is DefaultClause -> checkDuplicatesInStatements(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkDuplicatesInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkDuplicatesInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkDuplicatesInStatements(body.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkDuplicatesInClassElement(
+        element: ClassElement,
+        source: String,
+        fileName: String,
+    ) {
+        when (element) {
+            is MethodDeclaration -> {
+                checkDuplicateTypeParams(element.typeParameters, source, fileName)
+                checkDuplicateParams(element.parameters, source, fileName)
+                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+            }
+            is Constructor -> {
+                checkDuplicateParams(element.parameters, source, fileName)
+                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+            }
+            is GetAccessor -> {
+                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+            }
+            is SetAccessor -> {
+                checkDuplicateParams(element.parameters, source, fileName)
+                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkDuplicatesInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is ArrowFunction -> {
+                checkDuplicateTypeParams(expr.typeParameters, source, fileName)
+                checkDuplicateParams(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkDuplicatesInStatements(body.statements, source, fileName)
+                    is Expression -> checkDuplicatesInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkDuplicateTypeParams(expr.typeParameters, source, fileName)
+                checkDuplicateParams(expr.parameters, source, fileName)
+                checkDuplicatesInStatements(expr.body.statements, source, fileName)
+            }
+            is ClassExpression -> {
+                checkDuplicateTypeParams(expr.typeParameters, source, fileName)
+                for (member in expr.members) {
+                    checkDuplicatesInClassElement(member, source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is MethodDeclaration -> {
+                            checkDuplicateTypeParams(prop.typeParameters, source, fileName)
+                            checkDuplicateParams(prop.parameters, source, fileName)
+                            prop.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check for duplicate type parameter names in a type parameter list.
+     */
+    private fun checkDuplicateTypeParams(
+        typeParams: List<TypeParameter>?,
+        source: String,
+        fileName: String,
+    ) {
+        if (typeParams == null || typeParams.size < 2) return
+        val seen = mutableSetOf<String>()
+        for (tp in typeParams) {
+            val name = tp.name.text
+            if (!seen.add(name)) {
+                emitDuplicate2300(name, tp.name, source, fileName)
+            }
+        }
+    }
+
+    /**
+     * Check for duplicate parameter names in a parameter list.
+     */
+    private fun checkDuplicateParams(
+        params: List<Parameter>,
+        source: String,
+        fileName: String,
+    ) {
+        if (params.size < 2) return
+        val seen = mutableSetOf<String>()
+        for (param in params) {
+            val name = param.name
+            if (name is Identifier) {
+                if (!seen.add(name.text)) {
+                    emitDuplicate2300(name.text, name, source, fileName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Check for duplicate declarations at the same scope level.
+     * Walks statements and tracks declaration names to detect incompatible duplicates.
+     */
+    private fun checkDuplicateDeclarations(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Collect all declaration names with their kind and node
+        data class DeclInfo(val name: String, val kind: String, val nameNode: Node)
+        val decls = mutableListOf<DeclInfo>()
+
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = decl.name
+                        if (name is Identifier) {
+                            decls.add(DeclInfo(name.text, "var", name))
+                        }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    val name = stmt.name ?: continue
+                    decls.add(DeclInfo(name.text, "function", name))
+                }
+                is ClassDeclaration -> {
+                    val name = stmt.name ?: continue
+                    decls.add(DeclInfo(name.text, "class", name))
+                }
+                is EnumDeclaration -> {
+                    decls.add(DeclInfo(stmt.name.text, "enum", stmt.name))
+                }
+                else -> {}
+            }
+        }
+
+        // Group by name and check for incompatible declarations
+        val byName = decls.groupBy { it.name }
+        for ((_, group) in byName) {
+            if (group.size < 2) continue
+            val kinds = group.map { it.kind }.toSet()
+
+            // var + class or var + function with body → TS2300
+            val hasVar = "var" in kinds
+            val hasClass = "class" in kinds
+            val hasFuncWithBody = group.any { it.kind == "function" }
+
+            if ((hasVar && hasClass) || (hasVar && hasFuncWithBody)) {
+                for (decl in group) {
+                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun emitDuplicate2300(name: String, node: Node, source: String, fileName: String) {
+        val start = node.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Duplicate identifier '$name'.",
+            category = DiagnosticCategory.Error,
+            code = 2300,
             fileName = fileName,
             line = line,
             character = character,
