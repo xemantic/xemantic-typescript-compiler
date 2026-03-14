@@ -111,6 +111,14 @@ data class CompilerOptions(
     val noResolve: Boolean = false,
     val moduleDetection: String? = null,
     val moduleSuffixes: List<String>? = null,
+    // Deprecated options (tracked for TS5101 diagnostics)
+    val charset: String? = null,
+    val keyofStringsOnly: Boolean = false,
+    val noImplicitUseStrict: Boolean = false,
+    val noStrictGenericChecks: Boolean = false,
+    val suppressExcessPropertyErrors: Boolean = false,
+    val suppressImplicitAnyIndexErrors: Boolean = false,
+    val out: String? = null, // distinct from outFile for diagnostic purposes
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -350,12 +358,18 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "emitdeclarationonly" -> options.copy(emitDeclarationOnly = boolValue)
         "maproot" -> options.copy(mapRoot = value.trim())
         "outfile" -> options.copy(outFile = value.trim())
-        "out" -> options.copy(outFile = value.trim())
+        "out" -> options.copy(outFile = value.trim(), out = value.trim())
         "alwaysstrict" -> options.copy(alwaysStrict = boolValue)
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
         "noresolve" -> options.copy(noResolve = boolValue)
         "moduledetection" -> options.copy(moduleDetection = value.trim())
+        "charset" -> options.copy(charset = value.trim())
+        "keyofstringsonly" -> options.copy(keyofStringsOnly = boolValue)
+        "noimplicitusestrict" -> options.copy(noImplicitUseStrict = boolValue)
+        "nostrictgenericchecks" -> options.copy(noStrictGenericChecks = boolValue)
+        "suppressexcesspropertyerrors" -> options.copy(suppressExcessPropertyErrors = boolValue)
+        "suppressimplicitanyindexerrors" -> options.copy(suppressImplicitAnyIndexErrors = boolValue)
         else -> options
     }
 }

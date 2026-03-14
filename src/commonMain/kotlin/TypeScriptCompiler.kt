@@ -70,6 +70,7 @@ data class Diagnostic(
     val start: Int? = null,
     val length: Int? = null,
     val relatedInformation: List<Diagnostic> = emptyList(),
+    val messageChain: List<String> = emptyList(),
 )
 
 /**
@@ -126,6 +127,43 @@ class TypeScriptCompiler {
             options = applyDirective(options, key.lowercase(), value)
         }
         val diagnostics = mutableListOf<Diagnostic>()
+
+        // TS5101: Deprecated options (code 5101, sorted before TS5107)
+        fun addDeprecation5101(
+            optionDesc: String,
+            version: String = "7.0",
+            deprecationVersion: String = "6.0",
+            messageChain: List<String> = emptyList(),
+        ) {
+            diagnostics.add(Diagnostic(
+                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
+                category = DiagnosticCategory.Error,
+                code = 5101,
+                messageChain = messageChain,
+            ))
+        }
+        // baseUrl deprecation (with migration URL)
+        if (options.baseUrl != null) addDeprecation5101(
+            "baseUrl", messageChain = listOf("  Visit https://aka.ms/ts6 for migration information.")
+        )
+        // out (deprecated earlier than outFile)
+        if (options.out != null) addDeprecation5101("out", "5.5", "5.0")
+        // charset (deprecated in 5.5)
+        if (options.charset != null) addDeprecation5101("charset", "5.5", "5.0")
+        // downlevelIteration
+        if (options.downlevelIteration) addDeprecation5101("downlevelIteration")
+        // keyofStringsOnly (deprecated in 5.5)
+        if (options.keyofStringsOnly) addDeprecation5101("keyofStringsOnly", "5.5", "5.0")
+        // noImplicitUseStrict (deprecated in 5.5)
+        if (options.noImplicitUseStrict) addDeprecation5101("noImplicitUseStrict", "5.5", "5.0")
+        // noStrictGenericChecks (deprecated in 5.5)
+        if (options.noStrictGenericChecks) addDeprecation5101("noStrictGenericChecks", "5.5", "5.0")
+        // outFile deprecation (only when explicitly set, not via 'out')
+        if (options.outFile != null && options.out == null) addDeprecation5101("outFile")
+        // suppressExcessPropertyErrors (deprecated in 5.5)
+        if (options.suppressExcessPropertyErrors) addDeprecation5101("suppressExcessPropertyErrors", "5.5", "5.0")
+        // suppressImplicitAnyIndexErrors (deprecated in 5.5)
+        if (options.suppressImplicitAnyIndexErrors) addDeprecation5101("suppressImplicitAnyIndexErrors", "5.5", "5.0")
 
         // TS5107: Deprecated options
         fun addDeprecation(optionDesc: String, version: String = "7.0", deprecationVersion: String = "6.0") {
