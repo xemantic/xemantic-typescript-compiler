@@ -2476,6 +2476,25 @@ class Checker(
             is SwitchStatement -> {
                 findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
             }
+            is Block -> {
+                for (s in stmt.statements) {
+                    checkUsesOfUninitialized(s, uninitialized, source, fileName)
+                    markAssignments(s, uninitialized)
+                }
+            }
+            is DoStatement -> {
+                checkUsesOfUninitialized(stmt.statement, uninitialized, source, fileName)
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) {
+                    checkUsesOfUninitialized(s, uninitialized, source, fileName)
+                    markAssignments(s, uninitialized)
+                }
+            }
+            is LabeledStatement -> {
+                checkUsesOfUninitialized(stmt.statement, uninitialized, source, fileName)
+            }
             else -> {}
         }
     }
