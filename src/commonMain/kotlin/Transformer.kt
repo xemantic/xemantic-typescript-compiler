@@ -666,6 +666,11 @@ class Transformer(
         // Function declarations are JS-hoisted, so their export stubs must appear BEFORE
         // any variable initializer assignments that might override the same name.
         val functionExportStubs = mutableListOf<Statement>()
+        // Track exported names that conflict with imports (same name imported and exported).
+        // References to these names in function/arrow bodies must use (0, exports.name)().
+        val conflictingExportedNames = mutableSetOf<String>()
+        // Track export assignments from keep-declaration path — must be excluded from rewriting.
+        val keepDeclExportAssignments = mutableSetOf<Statement>()
         // Track `export default class X` names — their static initializers must appear
         // BEFORE the `exports.default = X` assignment (TypeScript's ordering).
         val defaultExportedClassNames = mutableSetOf<String>()
@@ -825,8 +830,14 @@ class Transformer(
 
                     // Local variable declaration shadows any imported name with the same name.
                     // Remove shadowed names from renameMap so references use the local binding.
+                    // When an exported name conflicts with an import, track it for (0, exports.name) rewriting.
                     for (decl in stmt.declarationList.declarations) {
-                        for (n in collectBoundNames(decl.name)) renameMap.remove(n)
+                        for (n in collectBoundNames(decl.name)) {
+                            if (isExported && (n in renameMap || n in importStmtForLocalName)) {
+                                conflictingExportedNames.add(n)
+                            }
+                            renameMap.remove(n)
+                        }
                     }
 
                     if (isExported) {
@@ -899,7 +910,14 @@ class Transformer(
                                     for (decl in stmt.declarationList.declarations) {
                                         val names = collectBoundNames(decl.name)
                                         if (names.isNotEmpty() && decl.initializer != null) {
-                                            for (name in names) result.add(makeExportAssignment(name))
+                                            for (name in names) {
+                                                val assignStmt = makeExportAssignment(name)
+                                                result.add(assignStmt)
+                                                // Track for excluding from identifier rewriting
+                                                if (name in conflictingExportedNames) {
+                                                    keepDeclExportAssignments.add(assignStmt)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1481,19 +1499,21 @@ class Transformer(
             result.addAll(rewritten)
         }
 
-        // Rewrite references to "direct" exported vars (exports.x = value, no local var kept).
+        // Rewrite references to "direct" exported vars (exports.x = value, no local var kept)
+        // and conflicting exported names (import/export same name — need (0, exports.name)() form).
         // References to these names throughout the body must become exports.name.
-        if (directExportedVarNames.isNotEmpty()) {
-            val exportRewriteMap: Map<String, Expression> = directExportedVarNames.associateWith { name ->
+        val allExportRewriteNames = directExportedVarNames + conflictingExportedNames
+        if (allExportRewriteNames.isNotEmpty()) {
+            val exportRewriteMap: Map<String, Expression> = allExportRewriteNames.associateWith { name ->
                 PropertyAccessExpression(
                     expression = syntheticId("exports"),
                     name = syntheticId(name),
                     pos = -1, end = -1,
                 ) as Expression
             }
-            val functionExportStubSet = functionExportStubs.toHashSet()
+            val excludeFromRewrite = functionExportStubs.toHashSet() + keepDeclExportAssignments
             val rewritten = result.map { stmt ->
-                if (stmt in functionExportStubSet) stmt else rewriteIdInStatement(stmt, exportRewriteMap)
+                if (stmt in excludeFromRewrite) stmt else rewriteIdInStatement(stmt, exportRewriteMap)
             }
             result.clear()
             result.addAll(rewritten)
