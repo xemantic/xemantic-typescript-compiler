@@ -1957,6 +1957,8 @@ class Checker(
                 stmt.body?.let { body ->
                     checkUnusedInFunctionLike(
                         body.statements, stmt.parameters, source, fileName,
+                        typeParameters = stmt.typeParameters,
+                        returnType = stmt.type,
                     )
                 }
             }
@@ -2233,6 +2235,8 @@ class Checker(
                 element.body?.let { body ->
                     checkUnusedInFunctionLike(
                         body.statements, element.parameters, source, fileName,
+                        typeParameters = element.typeParameters,
+                        returnType = element.type,
                     )
                 }
             }
@@ -2271,6 +2275,8 @@ class Checker(
         parameters: List<Parameter>,
         source: String,
         fileName: String,
+        typeParameters: List<TypeParameter>? = null,
+        returnType: TypeNode? = null,
     ) {
         // Check parameters (if noUnusedParameters is enabled)
         if (options.noUnusedParameters) {
@@ -2325,8 +2331,208 @@ class Checker(
             }
         }
 
+        // Check unused type parameters (TS6133)
+        if (typeParameters != null && typeParameters.isNotEmpty() && options.noUnusedLocals) {
+            val tpScope = UnusedScope()
+            for (tp in typeParameters) {
+                if (!tp.name.text.startsWith("_")) {
+                    tpScope.declarations.add(UnusedDecl(
+                        name = tp.name.text,
+                        nameNode = tp.name,
+                        declNode = tp,
+                        isExported = false,
+                        isParameter = false,
+                        isTypeOnly = true,
+                    ))
+                }
+            }
+            // Collect type references from: type param constraints, parameter types,
+            // return type, and body statements (types in variable declarations etc.)
+            for (tp in typeParameters) {
+                tp.constraint?.let { collectTypeRefs(it, tpScope) }
+                tp.default?.let { collectTypeRefs(it, tpScope) }
+            }
+            for (param in parameters) {
+                param.type?.let { collectTypeRefs(it, tpScope) }
+            }
+            returnType?.let { collectTypeRefs(it, tpScope) }
+            for (stmt in bodyStatements) {
+                collectTypeRefsInStatement(stmt, tpScope)
+            }
+            // Report unused
+            for (decl in tpScope.declarations) {
+                if (decl.name in tpScope.referencedNames) continue
+                val nameNode = decl.nameNode
+                val start = nameNode.pos
+                val length = decl.name.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'${decl.name}' is declared but its value is never read.",
+                    category = DiagnosticCategory.Error,
+                    code = 6133,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+
         // Check local declarations in the body
         checkUnusedInStatements(bodyStatements, source, fileName, isTopLevel = false)
+    }
+
+    /** Collect type identifier references from a type node. */
+    private fun collectTypeRefs(type: TypeNode, scope: UnusedScope) {
+        when (type) {
+            is TypeReference -> {
+                val name = type.typeName
+                if (name is Identifier) scope.referencedNames.add(name.text)
+                type.typeArguments?.forEach { collectTypeRefs(it, scope) }
+            }
+            is KeywordTypeNode -> {} // any, number, string, etc. — no references
+            is ArrayType -> collectTypeRefs(type.elementType, scope)
+            is TupleType -> type.elements.forEach {
+                when (it) {
+                    is TypeNode -> collectTypeRefs(it, scope)
+                    else -> {}
+                }
+            }
+            is UnionType -> type.types.forEach { collectTypeRefs(it, scope) }
+            is IntersectionType -> type.types.forEach { collectTypeRefs(it, scope) }
+            is ParenthesizedType -> collectTypeRefs(type.type, scope)
+            is FunctionType -> {
+                type.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectTypeRefs(it, scope) }
+                }
+                type.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
+                type.type?.let { collectTypeRefs(it, scope) }
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
+                type.type?.let { collectTypeRefs(it, scope) }
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, scope) }
+                        is MethodDeclaration -> {
+                            member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
+                            member.type?.let { collectTypeRefs(it, scope) }
+                        }
+                        is IndexSignature -> member.type?.let { collectTypeRefs(it, scope) }
+                        else -> {}
+                    }
+                }
+            }
+            is ConditionalType -> {
+                collectTypeRefs(type.checkType, scope)
+                collectTypeRefs(type.extendsType, scope)
+                collectTypeRefs(type.trueType, scope)
+                collectTypeRefs(type.falseType, scope)
+            }
+            is MappedType -> {
+                type.type?.let { collectTypeRefs(it, scope) }
+            }
+            is TypeQuery -> {
+                val name = type.exprName
+                if (name is Identifier) scope.referencedNames.add(name.text)
+            }
+            is IndexedAccessType -> {
+                collectTypeRefs(type.objectType, scope)
+                collectTypeRefs(type.indexType, scope)
+            }
+            is TypeOperator -> collectTypeRefs(type.type, scope)
+            is RestType -> collectTypeRefs(type.type, scope)
+            is OptionalType -> collectTypeRefs(type.type, scope)
+            is InferType -> {} // infer T — declares, doesn't reference
+            is LiteralType -> {} // string/number literals
+            is TemplateLiteralType -> {
+                type.templateSpans.forEach { span ->
+                    collectTypeRefs(span.type, scope)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Recursively collect type refs from statements (for unused type param detection). */
+    private fun collectTypeRefsInStatement(stmt: Statement, scope: UnusedScope) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.type?.let { collectTypeRefs(it, scope) }
+                    decl.initializer?.let { collectTypeRefsInExpr(it, scope) }
+                }
+            }
+            is ExpressionStatement -> collectTypeRefsInExpr(stmt.expression, scope)
+            is ReturnStatement -> stmt.expression?.let { collectTypeRefsInExpr(it, scope) }
+            is IfStatement -> {
+                collectTypeRefsInExpr(stmt.expression, scope)
+                collectTypeRefsInStatement(stmt.thenStatement, scope)
+                stmt.elseStatement?.let { collectTypeRefsInStatement(it, scope) }
+            }
+            is Block -> stmt.statements.forEach { collectTypeRefsInStatement(it, scope) }
+            is ForStatement -> collectTypeRefsInStatement(stmt.statement, scope)
+            is ForInStatement -> collectTypeRefsInStatement(stmt.statement, scope)
+            is ForOfStatement -> collectTypeRefsInStatement(stmt.statement, scope)
+            is WhileStatement -> collectTypeRefsInStatement(stmt.statement, scope)
+            is DoStatement -> collectTypeRefsInStatement(stmt.statement, scope)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { collectTypeRefsInStatement(it, scope) }
+                stmt.catchClause?.block?.statements?.forEach { collectTypeRefsInStatement(it, scope) }
+                stmt.finallyBlock?.statements?.forEach { collectTypeRefsInStatement(it, scope) }
+            }
+            else -> {}
+        }
+    }
+
+    /** Collect type refs from expressions (type assertions, as expressions, etc.). */
+    private fun collectTypeRefsInExpr(expr: Expression, scope: UnusedScope) {
+        when (expr) {
+            is AsExpression -> {
+                collectTypeRefs(expr.type, scope)
+                collectTypeRefsInExpr(expr.expression, scope)
+            }
+            is TypeAssertionExpression -> {
+                collectTypeRefs(expr.type, scope)
+                collectTypeRefsInExpr(expr.expression, scope)
+            }
+            is CallExpression -> {
+                expr.typeArguments?.forEach { collectTypeRefs(it, scope) }
+                collectTypeRefsInExpr(expr.expression, scope)
+                expr.arguments.forEach { collectTypeRefsInExpr(it, scope) }
+            }
+            is NewExpression -> {
+                expr.typeArguments?.forEach { collectTypeRefs(it, scope) }
+            }
+            is ParenthesizedExpression -> collectTypeRefsInExpr(expr.expression, scope)
+            is BinaryExpression -> {
+                collectTypeRefsInExpr(expr.left, scope)
+                collectTypeRefsInExpr(expr.right, scope)
+            }
+            is ConditionalExpression -> {
+                collectTypeRefsInExpr(expr.condition, scope)
+                collectTypeRefsInExpr(expr.whenTrue, scope)
+                collectTypeRefsInExpr(expr.whenFalse, scope)
+            }
+            is ArrowFunction -> {
+                expr.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectTypeRefs(it, scope) }
+                }
+                expr.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
+                expr.type?.let { collectTypeRefs(it, scope) }
+            }
+            is FunctionExpression -> {
+                expr.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectTypeRefs(it, scope) }
+                }
+                expr.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, scope) } }
+                expr.type?.let { collectTypeRefs(it, scope) }
+            }
+            else -> {}
+        }
     }
 
     /**
