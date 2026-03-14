@@ -96,7 +96,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), plus TS5101/TS5102/TS5107 (deprecation). **6,508 / 10,595 tests passing (61.4%)**. Key remaining work: type inference diagnostics (TS2322, TS2304, TS2339).
+**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), plus TS5101/TS5102/TS5107 (deprecation). **6,508 / 10,595 tests passing (61.4%)**, up from 6,219. Key remaining work: type inference diagnostics (TS2322, TS2304, TS2339).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
