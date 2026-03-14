@@ -198,6 +198,11 @@ class TypeScriptCompiler {
             "classic" -> addDeprecation("moduleResolution=classic")
             "node", "node10" -> addDeprecation("moduleResolution=node10")
         }
+        // Boolean option deprecations (explicitly set to false)
+        if (options.allowSyntheticDefaultImportsExplicitlyFalse)
+            addDeprecation("allowSyntheticDefaultImports=false")
+        if (options.esModuleInteropExplicitlyFalse)
+            addDeprecation("esModuleInterop=false")
 
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation

@@ -90,6 +90,8 @@ data class CompilerOptions(
     val paths: Map<String, List<String>> = emptyMap(),
     val moduleResolution: String? = null,
     val esModuleInterop: Boolean = false,
+    val esModuleInteropExplicitlyFalse: Boolean = false,
+    val allowSyntheticDefaultImportsExplicitlyFalse: Boolean = false,
     val allowJs: Boolean = false,
     val checkJs: Boolean = false,
     val isolatedModules: Boolean = false,
@@ -345,7 +347,10 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "rootdir" -> options.copy(rootDir = value.trim())
         "baseurl" -> options.copy(baseUrl = value.trim())
         "moduleresolution" -> options.copy(moduleResolution = value.trim())
-        "esmoduleinterop" -> options.copy(esModuleInterop = boolValue)
+        "esmoduleinterop" -> options.copy(
+            esModuleInterop = boolValue,
+            esModuleInteropExplicitlyFalse = !boolValue,
+        )
         "allowjs" -> options.copy(allowJs = boolValue)
         "checkjs" -> options.copy(checkJs = boolValue)
         "isolatedmodules" -> options.copy(isolatedModules = boolValue)
@@ -354,7 +359,10 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noemitonerror" -> options.copy(noEmitOnError = boolValue)
         "downleveliteration" -> options.copy(downlevelIteration = boolValue)
         "importhelpers" -> options.copy(importHelpers = boolValue)
-        "allowsyntheticdefaultimports" -> options.copy(allowSyntheticDefaultImports = boolValue)
+        "allowsyntheticdefaultimports" -> options.copy(
+            allowSyntheticDefaultImports = boolValue,
+            allowSyntheticDefaultImportsExplicitlyFalse = !boolValue,
+        )
         "usedefineforclassfields" -> options.copy(useDefineForClassFields = boolValue)
         "verbatimmodulesyntax" -> options.copy(verbatimModuleSyntax = boolValue)
         "nocheck" -> options.copy(noCheck = boolValue)
