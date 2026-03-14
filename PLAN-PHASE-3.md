@@ -257,7 +257,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key tests: `conflictingDeclarationsImportFromNamespace1/2`
   - Fix area: `Transformer.kt: transformToCommonJS()`
 
-- [ ] **3f. Class static property parsing** (Phase 2 item 9a) — *deferred: 1 test, parser recovery*
+- [x] **3f. Class static property parsing** (Phase 2 item 9a) — *deferred: 1 test, parser recovery*
 
   `static f = 3;` is misparsed as two expression statements.
   - Key test: `class2`

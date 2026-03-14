@@ -25,6 +25,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private val diagnostics = mutableListOf<Diagnostic>()
     private var inAsyncContext = false
     private var disallowIn = false
+    private var classBodyDepth = 0
 
     /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
     private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
@@ -174,6 +175,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private fun parseStatements(): List<Statement> {
         val stmts = mutableListOf<Statement>()
         while (token != SyntaxKind.EndOfFile && token != SyntaxKind.CloseBrace) {
+            // Error recovery: when inside a class body and we encounter `static` followed
+            // by an identifier, terminate the block — the enclosing class body parser will
+            // parse it as a class member (matches TypeScript's error recovery behavior).
+            if (classBodyDepth > 0 && token == SyntaxKind.StaticKeyword &&
+                lookAhead { nextToken(); isIdentifier() }
+            ) {
+                reportError("Declaration or statement expected", code = 1128)
+                break
+            }
             val savedPos = scanner.getTokenPos()
             val stmt = parseStatement()
             // Safety: if no progress was made, skip the current token to avoid infinite loop.
@@ -1114,22 +1124,27 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     }
 
     private fun parseClassMembers(): List<ClassElement> {
-        val members = mutableListOf<ClassElement>()
-        while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
-            if (token == SyntaxKind.Semicolon) {
-                members.add(SemicolonClassElement(pos = getPos(), end = getEnd()))
-                nextToken()
-                continue
+        classBodyDepth++
+        try {
+            val members = mutableListOf<ClassElement>()
+            while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+                if (token == SyntaxKind.Semicolon) {
+                    members.add(SemicolonClassElement(pos = getPos(), end = getEnd()))
+                    nextToken()
+                    continue
+                }
+                val member = parseClassMember()
+                if (member != null) {
+                    members.add(member)
+                } else {
+                    // parseClassMember returned null (e.g. `{` after modifiers) — exit class body
+                    break
+                }
             }
-            val member = parseClassMember()
-            if (member != null) {
-                members.add(member)
-            } else {
-                // parseClassMember returned null (e.g. `{` after modifiers) — exit class body
-                break
-            }
+            return members
+        } finally {
+            classBodyDepth--
         }
-        return members
     }
 
     private fun parseClassMember(): ClassElement? {
