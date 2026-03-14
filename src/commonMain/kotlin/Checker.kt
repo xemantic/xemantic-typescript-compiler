@@ -4594,7 +4594,7 @@ class Checker(
          */
         private val KNOWN_GLOBALS: Set<String> = setOf(
             // Special identifiers
-            "undefined", "arguments", "globalThis",
+            "undefined", "globalThis",
             // ES5 globals
             "NaN", "Infinity", "eval",
             "parseInt", "parseFloat", "isNaN", "isFinite",
