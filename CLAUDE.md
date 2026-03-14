@@ -112,7 +112,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3c: Incremental Diagnostic & Emit Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,626 / 10,595 tests passing (62.5%)**, up from 6,561. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
+**Phase 3c: Incremental Diagnostic & Emit Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,639 / 10,595 tests passing (62.7%)**, up from 6,561. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -130,7 +130,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 6,626 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,639 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
