@@ -733,4 +733,197 @@ class BaselineFormatterTest {
         result sameAs expected
         assert(result == expected)
     }
+
+    // --- formatErrorBaseline / toErrorBaseline ---
+
+    @Test
+    fun `toErrorBaseline should return null when no diagnostics`() {
+        val result = CompilationResult(
+            fileName = "foo.ts",
+            sourceEchoes = listOf("foo.ts" to "const x = 1;\n"),
+            diagnostics = emptyList()
+        )
+        assert(result.toErrorBaseline() == null)
+    }
+
+    @Test
+    fun `formatErrorBaseline should format global error with no file errors`() {
+        // Matches: arrowFunctionWithParameterNameAsync_es5(target=es5).errors.txt
+        val diagnostics = listOf(
+            Diagnostic(
+                message = "Option 'target=ES5' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
+                category = DiagnosticCategory.Error,
+                code = 5107,
+            )
+        )
+        val sourceFiles = listOf(
+            "arrowFunctionWithParameterNameAsync_es5.ts" to "const x = async => async;"
+        )
+
+        val result = formatErrorBaseline(diagnostics, sourceFiles)
+
+        val expected =
+            "error TS5107: Option 'target=ES5' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.\r\n" +
+            "\r\n" +
+            "\r\n" +
+            "!!! error TS5107: Option 'target=ES5' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.\r\n" +
+            "==== arrowFunctionWithParameterNameAsync_es5.ts (0 errors) ====\r\n" +
+            "    const x = async => async;\r\n"
+
+        result sameAs expected
+        assert(result == expected)
+    }
+
+    @Test
+    fun `formatErrorBaseline should format file errors with squiggles and related info`() {
+        // Matches: arityErrorRelatedSpanBindingPattern.errors.txt
+        val diagnostics = listOf(
+            Diagnostic(
+                message = "Expected 3 arguments, but got 2.",
+                category = DiagnosticCategory.Error,
+                code = 2554,
+                fileName = "arityErrorRelatedSpanBindingPattern.ts",
+                line = 5,
+                character = 1,
+                start = 68,
+                length = 3,
+                relatedInformation = listOf(
+                    Diagnostic(
+                        message = "An argument matching this binding pattern was not provided.",
+                        category = DiagnosticCategory.Error,
+                        code = 6211,
+                        fileName = "arityErrorRelatedSpanBindingPattern.ts",
+                        line = 1,
+                        character = 20,
+                    )
+                )
+            ),
+            Diagnostic(
+                message = "Expected 3 arguments, but got 2.",
+                category = DiagnosticCategory.Error,
+                code = 2554,
+                fileName = "arityErrorRelatedSpanBindingPattern.ts",
+                line = 7,
+                character = 1,
+                start = 81,
+                length = 3,
+                relatedInformation = listOf(
+                    Diagnostic(
+                        message = "An argument matching this binding pattern was not provided.",
+                        category = DiagnosticCategory.Error,
+                        code = 6211,
+                        fileName = "arityErrorRelatedSpanBindingPattern.ts",
+                        line = 3,
+                        character = 20,
+                    )
+                )
+            ),
+        )
+        val sourceFiles = listOf(
+            "arityErrorRelatedSpanBindingPattern.ts" to
+                    "function foo(a, b, {c}): void {}\n" +
+                    "\n" +
+                    "function bar(a, b, [c]): void {}\n" +
+                    "\n" +
+                    "foo(\"\", 0);\n" +
+                    "\n" +
+                    "bar(\"\", 0);\n"
+        )
+
+        val result = formatErrorBaseline(diagnostics, sourceFiles)
+
+        val expected =
+            "arityErrorRelatedSpanBindingPattern.ts(5,1): error TS2554: Expected 3 arguments, but got 2.\r\n" +
+            "arityErrorRelatedSpanBindingPattern.ts(7,1): error TS2554: Expected 3 arguments, but got 2.\r\n" +
+            "\r\n" +
+            "\r\n" +
+            "==== arityErrorRelatedSpanBindingPattern.ts (2 errors) ====\r\n" +
+            "    function foo(a, b, {c}): void {}\r\n" +
+            "    \r\n" +
+            "    function bar(a, b, [c]): void {}\r\n" +
+            "    \r\n" +
+            "    foo(\"\", 0);\r\n" +
+            "    ~~~\r\n" +
+            "!!! error TS2554: Expected 3 arguments, but got 2.\r\n" +
+            "!!! related TS6211 arityErrorRelatedSpanBindingPattern.ts:1:20: An argument matching this binding pattern was not provided.\r\n" +
+            "    \r\n" +
+            "    bar(\"\", 0);\r\n" +
+            "    ~~~\r\n" +
+            "!!! error TS2554: Expected 3 arguments, but got 2.\r\n" +
+            "!!! related TS6211 arityErrorRelatedSpanBindingPattern.ts:3:20: An argument matching this binding pattern was not provided.\r\n" +
+            "    \r\n"
+
+        result sameAs expected
+        assert(result == expected)
+    }
+
+    @Test
+    fun `formatErrorBaseline should format multi-file errors with correct per-file counts`() {
+        // Matches: aliasUsageInArray.errors.txt
+        val diagnostics = listOf(
+            Diagnostic(
+                message = "Property 'someData' has no initializer and is not definitely assigned in the constructor.",
+                category = DiagnosticCategory.Error,
+                code = 2564,
+                fileName = "aliasUsageInArray_backbone.ts",
+                line = 2,
+                character = 12,
+                start = 32,
+                length = 8,
+            )
+        )
+        val sourceFiles = listOf(
+            "aliasUsageInArray_main.ts" to
+                    "import Backbone = require(\"./aliasUsageInArray_backbone\");\n" +
+                    "import moduleA = require(\"./aliasUsageInArray_moduleA\");\n" +
+                    "interface IHasVisualizationModel {\n" +
+                    "    VisualizationModel: typeof Backbone.Model;\n" +
+                    "}\n" +
+                    "\n" +
+                    "var xs: IHasVisualizationModel[] = [moduleA];\n" +
+                    "var xs2: typeof moduleA[] = [moduleA];\n",
+            "aliasUsageInArray_backbone.ts" to
+                    "export class Model {\n" +
+                    "    public someData: string;\n" +
+                    "}\n",
+            "aliasUsageInArray_moduleA.ts" to
+                    "import Backbone = require(\"./aliasUsageInArray_backbone\");\n" +
+                    "export class VisualizationModel extends Backbone.Model {\n" +
+                    "    // interesting stuff here\n" +
+                    "}\n",
+        )
+
+        val result = formatErrorBaseline(diagnostics, sourceFiles)
+
+        val expected =
+            "aliasUsageInArray_backbone.ts(2,12): error TS2564: Property 'someData' has no initializer and is not definitely assigned in the constructor.\r\n" +
+            "\r\n" +
+            "\r\n" +
+            "==== aliasUsageInArray_main.ts (0 errors) ====\r\n" +
+            "    import Backbone = require(\"./aliasUsageInArray_backbone\");\r\n" +
+            "    import moduleA = require(\"./aliasUsageInArray_moduleA\");\r\n" +
+            "    interface IHasVisualizationModel {\r\n" +
+            "        VisualizationModel: typeof Backbone.Model;\r\n" +
+            "    }\r\n" +
+            "    \r\n" +
+            "    var xs: IHasVisualizationModel[] = [moduleA];\r\n" +
+            "    var xs2: typeof moduleA[] = [moduleA];\r\n" +
+            "    \r\n" +
+            "==== aliasUsageInArray_backbone.ts (1 errors) ====\r\n" +
+            "    export class Model {\r\n" +
+            "        public someData: string;\r\n" +
+            "               ~~~~~~~~\r\n" +
+            "!!! error TS2564: Property 'someData' has no initializer and is not definitely assigned in the constructor.\r\n" +
+            "    }\r\n" +
+            "    \r\n" +
+            "==== aliasUsageInArray_moduleA.ts (0 errors) ====\r\n" +
+            "    import Backbone = require(\"./aliasUsageInArray_backbone\");\r\n" +
+            "    export class VisualizationModel extends Backbone.Model {\r\n" +
+            "        // interesting stuff here\r\n" +
+            "    }\r\n" +
+            "    \r\n"
+
+        result sameAs expected
+        assert(result == expected)
+    }
 }

@@ -257,3 +257,147 @@ private fun toCRLF(text: String): String {
 private fun toLF(text: String): String {
     return text.replace("\r\n", "\n").replace("\r", "\n")
 }
+
+// --- Error Baseline Formatter ---
+
+/**
+ * Formats a [CompilationResult] as a `.errors.txt` baseline string.
+ * Returns `null` if there are no diagnostics (matching TypeScript's behavior:
+ * no baseline file is produced for error-free compilations).
+ */
+fun CompilationResult.toErrorBaseline(): String? {
+    if (diagnostics.isEmpty()) return null
+    return formatErrorBaseline(diagnostics, sourceEchoes)
+}
+
+/**
+ * Formats diagnostics and source files into the TypeScript `.errors.txt` baseline format.
+ *
+ * The format has three parts:
+ * 1. **Diagnostic summary** — one line per diagnostic
+ * 2. **Global error markers** — `!!! category TScode: message` for diagnostics with no file
+ * 3. **Per-file annotated source** — source lines with squiggles and error annotations
+ */
+fun formatErrorBaseline(
+    diagnostics: List<Diagnostic>,
+    sourceFiles: List<Pair<String, String>>,
+): String {
+    val sorted = diagnostics.sortedWith(diagnosticComparator)
+
+    return text {
+        // Part 1: Diagnostic summary (one line per diagnostic)
+        for (diag in sorted) {
+            if (diag.fileName != null && diag.line != null && diag.character != null) {
+                +diag.fileName!!
+                +"("
+                +diag.line.toString()
+                +","
+                +diag.character.toString()
+                +"): "
+            }
+            +diag.category.name.lowercase()
+            +" TS"
+            +diag.code.toString()
+            +": "
+            +diag.message
+            +"\r\n"
+        }
+        +"\r\n"
+        +"\r\n"
+
+        // Part 2: Global error markers (diagnostics with no file)
+        val globalDiags = sorted.filter { it.fileName == null }
+        for (diag in globalDiags) {
+            +"!!! "
+            +diag.category.name.lowercase()
+            +" TS"
+            +diag.code.toString()
+            +": "
+            +diag.message
+            +"\r\n"
+        }
+
+        // Part 3: Per-file annotated source
+        for ((fileName, content) in sourceFiles) {
+            val baseName = fileName.substringAfterLast('/')
+            val fileDiags = sorted.filter { it.fileName == baseName }
+            val errorCount = fileDiags.size
+
+            +"==== "
+            +baseName
+            +" ("
+            +errorCount.toString()
+            +" errors) ===="
+            +"\r\n"
+
+            val sourceLines = content.replace("\r\n", "\n").replace("\r", "\n").split('\n')
+            for ((lineIdx, lineContent) in sourceLines.withIndex()) {
+                val lineNum = lineIdx + 1 // 1-based
+
+                +"    "
+                +lineContent
+                +"\r\n"
+
+                // Find diagnostics starting on this line, sorted by column then code
+                val lineDiags = fileDiags
+                    .filter { it.line == lineNum }
+                    .sortedWith(compareBy({ it.character ?: 0 }, { it.code }))
+
+                for (diag in lineDiags) {
+                    val col = (diag.character ?: 1) - 1 // convert to 0-based
+                    val len = diag.length ?: 1
+
+                    // Squiggle line
+                    +"    "
+                    +" ".repeat(col)
+                    +"~".repeat(len)
+                    +"\r\n"
+
+                    // Error annotation
+                    +"!!! "
+                    +diag.category.name.lowercase()
+                    +" TS"
+                    +diag.code.toString()
+                    +": "
+                    +diag.message
+                    +"\r\n"
+
+                    // Related information
+                    for (related in diag.relatedInformation) {
+                        +"!!! related TS"
+                        +related.code.toString()
+                        +" "
+                        if (related.fileName != null) {
+                            +related.fileName!!
+                            +":"
+                            +(related.line ?: 0).toString()
+                            +":"
+                            +(related.character ?: 0).toString()
+                        }
+                        +": "
+                        +related.message
+                        +"\r\n"
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val diagnosticComparator = Comparator<Diagnostic> { a, b ->
+    // null fileName sorts before non-null (global diagnostics first)
+    val fileA = a.fileName
+    val fileB = b.fileName
+    when {
+        fileA == null && fileB != null -> return@Comparator -1
+        fileA != null && fileB == null -> return@Comparator 1
+        fileA != null && fileB != null -> {
+            val c = fileA.compareTo(fileB)
+            if (c != 0) return@Comparator c
+        }
+    }
+    compareValues(a.start ?: 0, b.start ?: 0).let { if (it != 0) return@Comparator it }
+    compareValues(a.length ?: 0, b.length ?: 0).let { if (it != 0) return@Comparator it }
+    a.code.compareTo(b.code).let { if (it != 0) return@Comparator it }
+    a.message.compareTo(b.message)
+}

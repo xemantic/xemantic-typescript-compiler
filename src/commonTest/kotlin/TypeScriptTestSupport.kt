@@ -100,6 +100,44 @@ infix fun String?.sameAs(expected: Path) {
 }
 
 /**
+ * Asserts that this [CompilationResult]'s error diagnostics match the `.errors.txt` baseline
+ * at the given [baselinePath].
+ *
+ * - If no baseline file exists AND the compiler produced no diagnostics → test passes.
+ * - If no baseline file exists BUT diagnostics were produced → test fails.
+ * - If baseline file exists BUT no diagnostics were produced → test fails.
+ * - If both exist → formatted output is compared against baseline content.
+ */
+fun CompilationResult.errorsMatchBaseline(baselinePath: Path) {
+    val errorBaseline = toErrorBaseline()
+    val baselineExists = SystemFileSystem.metadataOrNull(baselinePath) != null
+
+    when {
+        !baselineExists && errorBaseline == null -> {
+            // Both agree: no errors — pass
+        }
+        !baselineExists && errorBaseline != null -> {
+            throw AssertionError(
+                "Unexpected diagnostics produced (no baseline file expected):\n$errorBaseline"
+            )
+        }
+        baselineExists && errorBaseline == null -> {
+            throw AssertionError(
+                "Expected diagnostics from baseline ${baselinePath} but none produced"
+            )
+        }
+        else -> {
+            // Compare formatted output against baseline
+            val expected = baselinePath.readText()
+            fun String.normalize() =
+                replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+                    .trimEnd() + "\r\n"
+            errorBaseline!!.normalize() sameAs expected.normalize()
+        }
+    }
+}
+
+/**
  * Strips `.d.ts` / `.d.mts` / `.d.cts` sections and noCheck diff sections from a baseline string.
  * A dts section starts with a line like `//// [filename.d.ts]` or `//// [filename.d.mts]`
  * and extends to the end of the file (or to the next non-dts `//// [...]` section).
