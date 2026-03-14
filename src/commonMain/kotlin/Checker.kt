@@ -4271,6 +4271,7 @@ class Checker(
                 for (member in stmt.members) {
                     checkDuplicatesInClassElement(member, source, fileName)
                 }
+                checkDuplicateClassMembers(stmt.members, source, fileName)
             }
             is InterfaceDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
@@ -4312,7 +4313,10 @@ class Checker(
             is LabeledStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
             is ModuleDeclaration -> {
                 when (val body = stmt.body) {
-                    is ModuleBlock -> checkDuplicatesInStatements(body.statements, source, fileName)
+                    is ModuleBlock -> {
+                        checkDuplicatesInStatements(body.statements, source, fileName)
+                        checkDuplicateDeclarations(body.statements, source, fileName)
+                    }
                     else -> {}
                 }
             }
@@ -4478,6 +4482,63 @@ class Checker(
             if ((hasVar && hasClass) || (hasVar && hasFuncWithBody)) {
                 for (decl in group) {
                     emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Check for duplicate class members: method + getter/setter, method + property, etc.
+     */
+    private fun checkDuplicateClassMembers(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        data class MemberInfo(val name: String, val kind: String, val nameNode: Node)
+
+        val memberInfos = mutableListOf<MemberInfo>()
+        for (member in members) {
+            when (member) {
+                is MethodDeclaration -> {
+                    val name = member.name
+                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "method", name))
+                }
+                is PropertyDeclaration -> {
+                    val name = member.name
+                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "property", name))
+                }
+                is GetAccessor -> {
+                    val name = member.name
+                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "getter", name))
+                }
+                is SetAccessor -> {
+                    val name = member.name
+                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "setter", name))
+                }
+                else -> {}
+            }
+        }
+
+        val byName = memberInfos.groupBy { it.name }
+        for ((_, group) in byName) {
+            if (group.size < 2) continue
+            val kinds = group.map { it.kind }.toSet()
+            // method + getter or method + setter → TS2300
+            // method + property → TS2300
+            // getter + setter → ALLOWED (no error)
+            // property + property → TS2300 (unless overloads)
+            val hasMethod = "method" in kinds
+            val hasGetter = "getter" in kinds
+            val hasSetter = "setter" in kinds
+            val hasProperty = "property" in kinds
+
+            val isDuplicate = (hasMethod && (hasGetter || hasSetter || hasProperty)) ||
+                    (hasProperty && (hasGetter || hasSetter))
+
+            if (isDuplicate) {
+                for (info in group) {
+                    emitDuplicate2300(info.name, info.nameNode, source, fileName)
                 }
             }
         }
