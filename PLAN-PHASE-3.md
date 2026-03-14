@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,185 passing (58.4%), 4,407 failing
+- **10,595 tests**, 6,219 passing (58.7%), 4,373 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
 - **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
@@ -369,19 +369,20 @@ This is the core of Phase 3 — teaching the Checker to emit diagnostics that ma
 - [x] **5c. Measure progress and iterate**
 
   Current metrics (2026-03-14):
-  - **Total:** 6,185 / 10,595 passing (58.4%)
-  - **Error baselines:** ~536 / 4,035 passing (13.3%)
-  - **Error failure breakdown:** 2,849 "none produced" + 1,549 diff-based
+  - **Total:** 6,219 / 10,595 passing (58.7%)
+  - **Error baselines:** ~570 / 4,035 passing (~14.1%)
+  - **Error failure breakdown:** ~2,830 "none produced" + ~1,540 diff-based
   - Remaining error test progress requires actual type checker implementation
     (TS2xxx codes needing type inference, control flow analysis, etc.)
 
 ### 6. Decorator metadata diagnostics (Phase 2 item 11a)
 
-- [ ] **6a. Decorator metadata type serialization** (~3 tests)
+- [ ] **6a. Decorator metadata type serialization** (~3 tests) — *deferred*
 
   `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`,
   `metadataOfUnion`. Requires type serialization — significantly more work than
-  other checker integration.
+  other checker integration. Involves runtime type existence checks (typeof pattern),
+  union type narrowing, and `design:paramtypes` emission.
 
 ---
 
