@@ -81,7 +81,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 2: Type Checker.** Build symbol table and type checker infrastructure to unblock type-checker-dependent tests (import elision, const enum inlining, decorator metadata). The pipeline will become: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. Key files live in `src/commonMain/kotlin/`. New files to create: `Binder.kt`, `Checker.kt`, `Types.kt` (or similar).
+**Phase 2: Type Checker.** The pipeline is now: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. Binder, Checker, and Types are implemented. The Checker is wired into the Transformer for const enum inlining (`resolveConstEnumMemberAccess`) and import alias elision (`isConstEnumAlias`). Key remaining work: cross-file namespace import resolution in Checker, export specifier type-only elision, CommonJS transform gaps, and parser error recovery.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -90,7 +90,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
 2. Implement it — the item describes the deliverable
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. Verify no regressions from the **5,119 currently passing tests**
+4. Verify no regressions from the **5,122 currently passing tests**
 5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
