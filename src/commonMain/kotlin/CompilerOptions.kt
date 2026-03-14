@@ -297,7 +297,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     return ParsedSource(options, fileEntries, hasExplicitFilenames = true)
 }
 
-private fun applyDirective(options: CompilerOptions, key: String, value: String): CompilerOptions {
+internal fun applyDirective(options: CompilerOptions, key: String, value: String): CompilerOptions {
     val boolValue = value.lowercase() == "true"
     return when (key) {
         "target" -> {
