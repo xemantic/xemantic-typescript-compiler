@@ -67,6 +67,10 @@ class Checker(
         checkDefiniteAssignment()
         // 6. Check for class properties without initializer (TS2564)
         checkPropertyInitialization()
+        // 7. Check for implicit any parameters (TS7006)
+        if (options.noImplicitAny || options.strict) {
+            checkImplicitAnyParameters()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2885,6 +2889,186 @@ class Checker(
                 expr.elements.forEach { collectThisAssignment(it, assigned) }
             }
             else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Implicit any checking (TS7006)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for function/method parameters without type annotations when
+     * noImplicitAny is enabled. Emits TS7006.
+     */
+    private fun checkImplicitAnyParameters() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkImplicitAnyInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        checkParamsForImplicitAny(stmt.parameters, source, fileName)
+                        stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                    }
+                }
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        for (member in stmt.members) {
+                            checkImplicitAnyInClassElement(member, source, fileName)
+                        }
+                    }
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                    }
+                }
+                is ExpressionStatement -> {
+                    checkImplicitAnyInExpr(stmt.expression, source, fileName)
+                }
+                is ModuleDeclaration -> {
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkImplicitAnyInStatements(body.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is Block -> checkImplicitAnyInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkImplicitAnyInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkImplicitAnyInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> {
+                    checkImplicitAnyInStatements(listOf(stmt.statement), source, fileName)
+                }
+                is ReturnStatement -> {
+                    stmt.expression?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkImplicitAnyInClassElement(
+        element: ClassElement,
+        source: String,
+        fileName: String,
+    ) {
+        when (element) {
+            is MethodDeclaration -> {
+                checkParamsForImplicitAny(element.parameters, source, fileName)
+                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+            }
+            is Constructor -> {
+                checkParamsForImplicitAny(element.parameters, source, fileName)
+                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+            }
+            is GetAccessor -> {
+                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+            }
+            is SetAccessor -> {
+                checkParamsForImplicitAny(element.parameters, source, fileName)
+                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+            }
+            is PropertyDeclaration -> {
+                element.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                checkParamsForImplicitAny(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
+                    is Expression -> checkImplicitAnyInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkParamsForImplicitAny(expr.parameters, source, fileName)
+                checkImplicitAnyInStatements(expr.body.statements, source, fileName)
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    checkImplicitAnyInClassElement(member, source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is MethodDeclaration -> {
+                            checkParamsForImplicitAny(prop.parameters, source, fileName)
+                            prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                        }
+                        is PropertyAssignment -> {
+                            checkImplicitAnyInExpr(prop.initializer, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is CallExpression -> {
+                expr.arguments.forEach { checkImplicitAnyInExpr(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                checkImplicitAnyInExpr(expr.left, source, fileName)
+                checkImplicitAnyInExpr(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkImplicitAnyInExpr(expr.whenTrue, source, fileName)
+                checkImplicitAnyInExpr(expr.whenFalse, source, fileName)
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { checkImplicitAnyInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkParamsForImplicitAny(
+        parameters: List<Parameter>,
+        source: String,
+        fileName: String,
+    ) {
+        for (param in parameters) {
+            if (param.isCommentPlaceholder) continue
+            // Skip if parameter has type annotation, initializer, or rest token
+            if (param.type != null) continue
+            if (param.initializer != null) continue
+            if (param.dotDotDotToken) continue
+            // Skip `this` parameter
+            val name = param.name
+            if (name is Identifier && name.text == "this") continue
+            // Skip destructured parameters (they get separate diagnostics)
+            if (name !is Identifier) continue
+
+            val start = name.pos
+            val length = name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+            diagnostics.add(Diagnostic(
+                message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7006,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
         }
     }
 }
