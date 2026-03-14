@@ -1,116 +1,172 @@
-# Test Fix Plan — Phase 1 Remaining Work
+# Test Fix Plan — Phase 2: Type Checker
 
-**Current State:** 4509 tests, 150 failing (96.7% passing)
+**Current State:** 5,442 tests, 323 failing (94.1% passing)
 
-This document covers what remains before **Phase 2: type checker implementation**.
-All history of completed fixes lives in the git log. Only actionable or blocked items are tracked here.
+## Phase 1 Summary (complete)
+
+Phase 1 built a full transpiler pipeline: Scanner → Parser → Transformer → Emitter.
+Starting from 0, the project reached **4,359 / 4,509 tests passing (96.7%)** on the
+JS-emit-only test suite. All remaining 150 JS-emit failures are blocked by type checker,
+parser error recovery, missing complex helpers, or module resolution infrastructure.
+
+Re-enabling `.d.ts` baseline tests (previously guarded by `hasDtsSection` in
+`build.gradle.kts`) added **933 new tests**, of which **760 pass immediately** since
+`TypeScriptTestSupport.stripDtsSection()` already strips declaration output from baselines.
+173 new failures are mainly the same blocked categories as Phase 1.
+
+The full history of Phase 1 fixes is in the git log. Key files and line counts:
+- `Parser.kt` (4,504 lines) — full TypeScript syntax parsing
+- `Transformer.kt` (11,333 lines) — module transforms, downlevel emit, decorators
+- `Emitter.kt` (3,673 lines) — AST → JavaScript text
+- `Scanner.kt` (1,332 lines) — tokenization
+- `Ast.kt` (1,901 lines) — all AST node types including full `TypeNode` hierarchy
 
 ---
 
 ## QUEUE (execute top-to-bottom)
 
-### Parser fixes (no type checker needed)
+### 0. Analysis — understand current failures and type checker scope
 
-- [x] **1. `instanceof` on instantiation expression** (1 test: `instanceofOnInstantiationExpression`) — **File:** `Parser.kt` — **Fix:** added `InstanceOfKeyword` and `InKeyword` to `canFollowTypeArgumentsInExpression`; wrap erased instantiation expressions in `ParenthesizedExpression` except when followed by continuation tokens (`.`, `?.`, `)`, `]`).
+- [ ] **0a. Categorize all 323 failures** — Run the full test suite, collect all failing test names, and categorize them by root cause:
+  - (A) Parser error recovery (~50) — tests expecting TypeScript's exact error recovery output
+  - (B) Type-checker-driven transforms (~30) — import elision, const enum inlining, decorator metadata
+  - (C) Missing helpers (~15) — `__esDecorate`, `__setFunctionName`, `__generator`, WeakMap
+  - (D) Module resolution (~20) — paths/baseUrl, symlinks, file ordering, reference resolution
+  - (E) Complex transforms (~15) — CommonJS post-increment exports, super access temp vars
+  - (F) Newly exposed failures from `.d.ts` tests (~173) — needs triage
+  - (G) Internal comments (~10) — per-token comment fields
+  - (H) Other (~10) — control chars, `reScanGreaterToken`, binary input
 
-- [S] **2. Internal comments on member access / element access** (2 tests: `propertyAccessExpressionInnerComments`, `elementAccessExpressionInternalComments`) — **File:** `Parser.kt` + `Emitter.kt` — **Fix:** add `beforeDotComments`/`afterDotComments` fields to `PropertyAccessExpression` (for `obj/*a*/./*b*/prop`), and `beforeBracketComments`/`afterBracketComments` to `ElementAccessExpression`. Parse them in the parser; emit them in the Emitter.
+  Save the categorized list to `FAILURES.md` for tracking.
 
-- [S] **3. Enum non-literal initializers** (2 tests: `enumNoInitializerFollowsNonLiteralInitializer`, `enumWithNonLiteralStringInitializer`) — **File:** `Transformer.kt` — **Fix:** when an enum member has a non-literal initializer (runtime expression), the subsequent member's auto-increment value cannot be computed at compile time. Emit the next member as `E[E["next"] = E["prev"] + 1] = "next"` or stop folding and carry the runtime value through subsequent members.
+- [ ] **0b. Study the TypeScript checker architecture** — Read TypeScript's checker design from public documentation and any available source. Key concepts to understand:
+  - Binder: scope creation, symbol table population, declaration merging
+  - Checker: type inference, structural subtyping, assignability, narrowing
+  - How the checker communicates with the transformer (symbol flags, const enum values)
+  - Which transforms depend on type info vs which are purely syntactic
 
-- [S] **4. `objectRestSpread` async destructuring** (1 test) — **File:** `Transformer.kt` — **Fix:** `async function` with destructuring parameter `{ ...rest }` needs temp var for the spread — the existing `__rest` logic must handle async function parameters with object rest.
+- [ ] **0c. Design the Kotlin type checker architecture** — Design document (not code) answering:
+  - What `Type` sealed class hierarchy is needed?
+  - What `Symbol` class fields are needed?
+  - How does the Binder walk the AST?
+  - Where does the Checker phase fit in the `TypeScriptCompiler.kt` pipeline?
+  - Which existing `Transformer.kt` code paths need checker input?
+  - What is the MVP scope to unblock the most tests?
 
-- [S] **5. Static class fields edge cases** (~5 tests: `staticClassProps`, `staticFieldWithInterfaceContext`, `staticsInAFunction`, `staticsInConstructorBodies`, `classUpdateTests`) — **File:** `Transformer.kt` — **Fix:** various edge cases in static field hoisting (fields inside function bodies, interface-typed fields, constructor body interaction).
+### 1. Foundation — Symbol and Type infrastructure
 
-- [S] **6. `nestedObjectRest`** (1 test) — **File:** `Transformer.kt` — **Fix:** nested object destructuring with rest at multiple levels needs `__rest` applied at each nesting level.
+- [ ] **1a. Create `Symbol` data class** — A symbol represents a named entity: variable, function, class, interface, namespace, enum, type alias, parameter, property. Fields: `name`, `flags` (enum set), `declarations` (list of AST nodes), `type` (resolved type), `members` (child symbol table for classes/namespaces).
 
-- [S] **7. `dynamicImportWithNestedThis_es2015`** — needs `__createBinding`/`__importStar` helpers + CommonJS dynamic import transform.
+- [ ] **1b. Create `Type` sealed class hierarchy** — Runtime type representation (distinct from `TypeNode` which is syntax). MVP types:
+  - `AnyType`, `UnknownType`, `NeverType`, `VoidType`, `UndefinedType`, `NullType`
+  - `StringType`, `NumberType`, `BooleanType`, `BigIntType`, `SymbolType`
+  - `LiteralType` (string/number/boolean literal types)
+  - `ObjectType` (with members symbol table)
+  - `FunctionType` / `SignatureType`
+  - `UnionType`, `IntersectionType`
+  - `TypeReference` (generic instantiation)
+  - `EnumType`
+  - `TypeParameter`
 
-- [S] **8. `moduleExportsUnaryExpression`** — complex CommonJS post-increment/decrement export tracking with temp vars.
+- [ ] **1c. Create `SymbolTable` and scope chain** — A `SymbolTable` is `MutableMap<String, Symbol>`. Scopes form a chain: function scope → block scope → module scope → global scope. Each scope has a `SymbolTable` for its declarations.
 
-- [S] **9. `superAccess2`** — needs temp var wrapping of extends expression for super access in constructor args.
+### 2. Binder — populate symbol tables
 
-- [S] **10. `nestedGlobalNamespaceInClass`** — parser error recovery (`global x` in class body).
+- [ ] **2a. Implement `Binder.kt`** — Walk the AST and:
+  - Create symbols for all declarations (variables, functions, classes, interfaces, enums, namespaces, type aliases, parameters)
+  - Handle `var` hoisting (function-scoped) vs `let`/`const` (block-scoped)
+  - Handle function declaration hoisting
+  - Build scope chains (module → function → block)
+  - Handle `export` flags on symbols
 
-- [S] **11. `destructuringAssignmentWithExportedName`** — complex CommonJS destructuring with exported name aliasing.
+- [ ] **2b. Declaration merging** — TypeScript allows:
+  - Interface + interface → merged interface
+  - Namespace + namespace → merged namespace
+  - Class + namespace → class with static additions
+  - Enum + namespace → enum with additional members
+  - Function + namespace → function with properties
 
-- [S] **12. `destructuringControlFlowNoCrash`** — parser error recovery (type annotation leaking into output).
+- [ ] **2c. Module symbol resolution** — Connect import/export declarations to their target symbols across files (for multi-file test cases).
 
-- [S] **13. `parameterDecoratorsEmitCrash`** — needs `__esDecorate`/`__runInitializers` helpers.
+### 3. Type Checker — MVP (unblocks ~30 tests)
 
-- [S] **14. `importInsideModule`** — file ordering + import-equals inside module block needs type-checker-driven elision.
+- [ ] **3a. Basic type resolution** — Resolve `TypeNode` AST nodes to `Type` objects:
+  - Keyword types (`string`, `number`, `boolean`, etc.) → primitive types
+  - Type references (`Foo`, `Foo<T>`) → look up symbol, resolve generics
+  - Union/intersection types → compose from resolved members
+  - Array/tuple types
+  - Function types
 
-- [S] **15. `namespaceMergedWithImportAliasNoCrash`** — spurious `__importStar` helper emission on import alias.
+- [ ] **3b. Type inference from initializers** — Infer types for:
+  - `const x = 42` → `x: 42` (literal type)
+  - `let x = "hello"` → `x: string` (widened type)
+  - `const x = { a: 1 }` → object type with inferred members
+  - Enum member values
 
-- [S] **16. `emitMemberAccessExpression`** — multi-file output ordering (reference resolution order).
+- [ ] **3c. Const enum folding** — With type info, resolve const enum member references to their computed values. This unblocks ~6 tests: `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, etc.
 
-- [S] **17. `ambiguousGenericAssertion1`** — parser error recovery (generic-vs-assertion ambiguity).
+- [ ] **3d. Import elision** — With type info, determine which imports are type-only (used only in type positions) and can be elided from JS output. This unblocks ~7 tests: `aliasOnMergedModuleInterface`, `importElisionEnum`, etc.
 
-- [S] **18. `assertInWrapSomeTypeParameter`** — blocked by `reScanGreaterToken` regression (method name becomes `>>`).
+- [ ] **3e. Unused import/variable detection** — Flag imports and locals that are never referenced in value positions. This unblocks ~2 tests.
 
-- [S] **19. `extendedUnicodePlaneIdentifiers`** — needs private field WeakMap transform (blocked).
+### 4. Integrate checker into pipeline
 
-- [S] **20. `reactReduxLikeDeferredInferenceAllowsAssignment`** — async function destructuring parameter transform.
+- [ ] **4a. Wire `Binder` + `Checker` into `TypeScriptCompiler.kt`** — Insert after Parser, before Transformer:
+  ```
+  Parser.parse() → Binder.bind() → Checker.check() → Transformer.transform() → Emitter.emit()
+  ```
 
-- [S] **21. `TransportStream`** — scanner control character handling (binary input splitting into multiple statements).
+- [ ] **4b. Pass checker info to Transformer** — The Transformer needs:
+  - `isTypeOnly(importDecl)` — for import elision
+  - `getConstEnumValue(member)` — for const enum inlining
+  - `getSymbol(node)` — for decorator metadata type serialization
+  - `isInstantiated(module)` — for module alias elision
 
-- [S] **22. `exportDefaultAsyncFunction2`** — `async` parsed as keyword instead of imported identifier + missing `__awaiter`.
+- [ ] **4c. Enable `.errors.txt` tests** — Uncomment the error baseline test generation in `build.gradle.kts` (search `TODO: Re-enable when type checker is implemented`). This will add ~9,055 error diagnostic tests. Initially almost all will fail — use them as a progress metric, not a regression guard.
 
-- [S] **23. `externalModuleAssignToVar`, `externalModuleRefernceResolutionOrderInImportDeclaration`, `externModule`** — file ordering + parser error recovery.
+### 5. Remaining Phase 1 fixes (unblocked by type checker)
 
-- [S] **24. `exportAssignmentImportMergeNoCrash`, `exportAssignmentOfDeclaredExternalModule`** — type-checker-driven import elision.
+After the checker MVP is working:
 
-- [S] **25. `emitClassExpressionInDeclarationFile2`** — needs `__setFunctionName` helper.
+- [ ] **5a. Decorator metadata with type info** (~3 tests) — `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`, `metadataOfUnion`
+- [ ] **5b. `isolatedModules` emit blocking** (~2 tests) — `isolatedModulesExportDeclarationType`, `isolatedModulesNoEmitOnError`
+- [ ] **5c. Enum non-literal initializers** (~2 tests) — cross-file constant resolution now possible with checker
 
-### Module resolution (infrastructure work)
+### 6. Parser error recovery (independent of type checker)
 
-- [S] **26. `paths`/`baseUrl` resolution** (~9 tests) — requires implementing `compilerOptions.paths` and `baseUrl` in `TypeScriptCompiler.kt`.
+These ~45 tests need TypeScript's exact error recovery behavior. They can be worked on in parallel with the type checker since they only touch `Parser.kt`:
 
-- [S] **27. Symlink resolution** (3 tests) — needs symlink-aware path resolution infrastructure.
-
-- [S] **28. `moduleResolutionWithRequire`** (1 test) — module resolution infrastructure.
-
-- [S] **29. `requireOfJson*` remaining** (4 tests) — JSON file naming / ordering edge cases.
-
-- [S] **30. `commonSourceDir6`** (1 test) — AMD module naming with rootDir path stripping.
-
-- [S] **31. `moduleResolutionWithSuffixes` remaining** (3 tests) — module suffix resolution infrastructure.
+- [ ] **6a. Audit error recovery patterns** — Compare parser error recovery against TypeScript's parser for the most common patterns: missing semicolons, incomplete type annotations, invalid arrow functions, missing identifiers.
+- [ ] **6b. Fix recoverable cases** — Implement recovery for the easiest patterns first, measuring net test impact.
 
 ---
 
-## BLOCKED — do NOT attempt
+## BLOCKED — infrastructure not planned for Phase 2
 
-These require infrastructure not present in Phase 1:
-
-### Needs type checker
-- **Import alias elision for non-instantiated modules** (~7 tests): `aliasOnMergedModuleInterface`, `duplicateVarsAcrossFileBoundaries`, `importedAliasesInTypePositions`, `importElisionEnum`, `typeUsedAsValueError2`, `exportDefaultImportedType`, `visibilityOfCrossModuleTypeUsage`, `importedEnumMemberMergedWithExportedAliasIsError`, `isolatedModulesExportImportUninstantiatedNamespace`
-- **Const enum cross-file inlining** (~6 tests): `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, `constEnumNamespaceReferenceCausesNoImport2`, `amdModuleConstEnumUsage`, `isolatedDeclarationErrorsEnums`, `isolatedModulesGlobalNamespacesAndEnums`
-- **Decorator metadata with type info** (~3 tests): `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`, `metadataOfUnion`
-- **Unused import detection** (~2 tests): `unusedImports_entireImportDeclaration`, `unusedLocalsAndParameters`
-- **`isolatedModules` emit blocking** (~2 tests): `isolatedModulesExportDeclarationType`, `isolatedModulesNoEmitOnError`
-
-### Needs `__generator` state machine (complex coroutine transform)
-- `classDeclarationShouldBeOutOfScopeInComputedNames`, `classNameReferencesInStaticElements`, `es6ClassTest9` *(if async)*, and other tests requiring async-to-generator downlevel below ES2017
-
-### Needs private field WeakMap transform
-- (~4 tests): `constructorWithParameterPropertiesAndPrivateFields_es2015`, `privateFieldsInClassExpressionDeclaration`, `privateNameWeakMapCollision`, `propertyWrappedInTry`
-
-### Parser error recovery — exact TypeScript heuristics required (~45 tests)
-`arrowFunctionErrorSpan`, `arrowFunctionsMissingTokens`, `classMemberWithMissingIdentifier2`, `constructorWithIncompleteTypeAnnotation`, `errorRecoveryInClassDeclaration`, `errorRecoveryWithDotFollowedByNamespaceKeyword`, `es6ImportNamedImportParsingError`, `es6ImportParseErrors`, `fatarrowfunctionsErrors`, `fatarrowfunctionsOptionalArgs`, `fatarrowfunctionsOptionalArgsErrors2`, `for`, `genericsManyTypeParameters`, `importTypeWithUnparenthesizedGenericFunctionParsed`, `interfaceDeclaration4`, `invalidLetInForOfAndForIn_ES5/ES6`, `invalidUnicodeEscapeSequance/2/4`, `manyCompilerErrorsInTheTwoFiles`, `moduleElementsInWrongContext/2/3`, `numericLiteralsWithTrailingDecimalPoints01/02`, `overloadConsecutiveness`, `overloadingStaticFunctionsInFunctions`, `parseErrorIncorrectReturnToken`, `parseGenericArrowRatherThanLeftShift`, `parseInvalidNames`, `parseInvalidNullableTypes`, `parseJsxElementInUnaryExpressionNoCrash1/2/3`, `parseUnaryExpressionNoTypeAssertionInJsx4`, `parserPrivateIdentifierInArrayAssignment`, `parserUnparsedTokenCrash2`, `privacyImportParseErrors`, `reachabilityChecksNoCrash1`, `reservedWords2/3`, `restParamModifier`, `strictModeReservedWord`, `unclosedExportClause01/02`, `validRegexp`, `expressionsForbiddenInParameterInitializers`, `expressionWithJSDocTypeArguments`, `dontShowCompilerGeneratedMembers`, `bigintArbirtraryIdentifier`, `parseBigInt`, `jsFileCompilationTypeArgumentSyntaxOfCall`
-
-### Out of scope
-- **Declaration emit** (804 additional tests waiting) — requires type analysis; re-enable by removing `hasDtsSection` guard in `build.gradle.kts`
-- **Inline sourcemaps** (~4 tests): `jsFileCompilationWithMapFileAsJsWithInlineSourceMap`, `optionsInlineSourceMapMapRoot/SourceRoot/Sourcemap`
-- **`module: "preserve"`** (1 test): `modulePreserve1`
-- **`outFile` AMD bundling** (~3 tests): `noBundledEmitFromNodeModules`, `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile`, `useBeforeDeclaration`
-- **Computed property name full hoisting** (1 test: `decoratorsOnComputedProperties` — 52 temp vars) — out of scope
-- **SystemJS with type-re-export** (1 test: `systemModule17`) — needs type checker for interface re-exports
+- **`__generator` state machine** — Complex coroutine transform for async-to-generator downlevel (below ES2017). ~5 tests.
+- **Private field WeakMap transform** — ~4 tests.
+- **`outFile` AMD bundling** — ~3 tests.
+- **Inline sourcemaps** — ~4 tests.
+- **`module: "preserve"`** — 1 test.
+- **Computed property name full hoisting** (52 temp vars) — 1 test.
 
 ---
 
-## Phase 2 enablers (after type checker)
+## Test scale reference
 
-Once a type checker is available, re-enable and fix:
-1. Uncomment `.errors.txt` tests in `build.gradle.kts` — search `TODO: Re-enable when type checker is implemented`
-2. Uncomment `.d.ts` declaration emit tests — search `hasDtsSection`
-3. Fix all "Needs type checker" blocked items above
-4. Re-enable `__generator` downlevel async transform
+| Category | Count | Status |
+|----------|-------|--------|
+| JS emit tests (no `.d.ts`) | 4,509 | 4,359 passing (96.7%) |
+| JS emit tests (with `.d.ts` stripped) | 933 | 760 passing (81.5%) |
+| **Total JS emit tests** | **5,442** | **5,119 passing (94.1%)** |
+| Error diagnostic tests (`.errors.txt`) | ~9,055 | Not yet enabled |
+| Declaration emit tests (`.d.ts` only) | ~215 | Not applicable without full type checker |
+
+---
+
+## Phase 2 success criteria
+
+1. All type-checker-blocked JS emit tests pass (~30 tests): const enum inlining, import elision, decorator metadata
+2. `.errors.txt` test infrastructure is enabled and basic diagnostics are emitted
+3. `Symbol` and `Type` infrastructure supports incremental checker expansion
+4. No regressions in the 5,119 currently passing tests

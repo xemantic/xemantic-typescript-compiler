@@ -15,7 +15,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 - `project.exec {}` is not available in Gradle 9 Kotlin DSL task `doLast` blocks — use `ProcessBuilder` directly instead.
 - TypeScript compiler tests are **generated** by `./gradlew generateTypeScriptTests` into `build/generated/typescript-tests/`; this task requires the TypeScript repo to be cloned first (done automatically via `cloneTypeScriptRepo` dependency). Never edit generated files manually.
-- **Disabled test categories** (re-enable when type checker is implemented): Two test categories are commented out in `build.gradle.kts` `generateTypeScriptTests` task: (1) `.errors.txt` error baseline tests — search for `TODO: Re-enable when type checker is implemented`, (2) `.d.ts` declaration emit tests — search for `hasDtsSection`. Uncomment/remove those guards and regenerate with `./gradlew generateTypeScriptTests`.
+- **Disabled test category** (re-enable when type checker is implemented): `.errors.txt` error baseline tests are commented out in `build.gradle.kts` `generateTypeScriptTests` task — search for `TODO: Re-enable when type checker is implemented`. The `.d.ts` guard (`hasDtsSection`) was removed in Phase 2 since `TypeScriptTestSupport.stripDtsSection()` already strips declaration output from baselines during comparison.
 - Kotlin 2.x disallows `.` in backtick-quoted JVM method names (error: "Name contains illegal characters: .."); sanitize test function names by replacing dots with underscores (e.g. `foo_ts` not `foo.ts`). Some TypeScript test base names contain dots beyond the extension (e.g. `accessors_spec_section-4.5_error-cases`), so the entire `nameWithoutExtension` must have dots replaced, not just the `.ts`/`.js` suffix.
 
 ### Scanner/Parser gotchas
@@ -71,30 +71,29 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-Maximize the number of passing tests by fixing bugs in `Transformer.kt`, `Emitter.kt`, and `Parser.kt`. The pipeline: Scanner → Parser → Transformer → Emitter → BaselineFormatter. Key files live in `src/commonMain/kotlin/`.
+**Phase 2: Type Checker.** Build symbol table and type checker infrastructure to unblock type-checker-dependent tests (import elision, const enum inlining, decorator metadata). The pipeline will become: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. Key files live in `src/commonMain/kotlin/`. New files to create: `Binder.kt`, `Checker.kt`, `Types.kt` (or similar).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
-PLAN.md contains a **QUEUE** — a numbered list of fixes in strict order. Execute them top-to-bottom:
+PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-to-bottom:
 
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
-2. Implement it — the item already names the test(s), file, and fix area
+2. Implement it — the item describes the deliverable
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. If net-positive: check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
-5. If net-negative after **2 attempts**: mark the item `- [S]` (skipped), commit nothing, move to the next item
+4. Verify no regressions from the **5,119 currently passing tests**
+5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
 **HARD RULES:**
-- **Do NOT re-analyze or re-prioritize the queue.** The analysis is already done. Just execute.
-- **Do NOT search for "easier" or "better" fixes** outside the queue. The queue IS the plan.
-- **Do NOT spend more than 2 tool calls on analysis** before writing code. Read the failing test diff, read the fix area, start coding.
-- **Do NOT skip ahead** in the queue — work item 1 before item 2, always.
-- **Do NOT switch items** mid-fix — finish or skip the current item before moving on.
-- One item at a time. No parallelism within a single session unless using subagent worktrees.
+- **Do NOT skip ahead** in the queue — work item 0 before item 1, always.
+- **Do NOT switch items** mid-task — finish the current item before moving on.
+- **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
+- **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
+- **No regressions** — the 5,119 passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
-The original TypeScript compiler source is in `typescript-repo/src/compiler/`. When a fix is ambiguous or behavior is unclear, read the corresponding TypeScript source file (e.g. `typescript-repo/src/compiler/emitter.ts`, `parser.ts`, `transformer.ts`, `factory/emitHelpers.ts`) to verify the Kotlin implementation against the original. The 1M context window can accommodate these files.
+The original TypeScript compiler source is in `typescript-repo/src/compiler/` (if cloned — only test fixtures are present in the sparse clone). When a fix is ambiguous or behavior is unclear, consult TypeScript's public documentation and source on GitHub. The 1M context window can accommodate large files when needed.
 
 ## AI agent workflow
 
