@@ -2811,6 +2811,8 @@ class Checker(
             if (ModifierFlag.Abstract in member.modifiers) continue
             // Must have type annotation (no type = any, which is always ok)
             if (member.type == null) continue
+            // Skip `any` type — no assignment needed for any
+            if (isAnyType(member.type)) continue
 
             // Get property name
             val propName = when (val name = member.name) {
