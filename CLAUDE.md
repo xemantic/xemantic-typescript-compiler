@@ -90,7 +90,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
 2. Implement it — the item describes the deliverable
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. Verify no regressions from the **5,715 currently passing tests**
+4. Verify no regressions from the **5,934 currently passing tests**
 5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
@@ -99,7 +99,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 5,715 currently passing tests must continue to pass after every change.
+- **No regressions** — the 5,934 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
