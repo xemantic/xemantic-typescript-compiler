@@ -419,7 +419,7 @@ by test count and implementation tractability.
 
   **Files:** `Checker.kt`
 
-- [ ] **7d. TS2564 — "Property 'X' has no initializer"** (~186 pure tests)
+- [x] **7d. TS2564 — "Property 'X' has no initializer"** (+104 tests)
 
   Requires `strictPropertyInitialization` (part of `strict: true`). Check class
   properties with type annotations but no initializer and no definite assignment
