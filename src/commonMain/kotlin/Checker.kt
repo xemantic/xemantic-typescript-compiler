@@ -3158,7 +3158,8 @@ class Checker(
     /**
      * Collect all names declared at this statement-list level.
      * Includes variables, functions, classes, interfaces, type aliases,
-     * enums, namespaces, imports.
+     * enums, namespaces, imports. Also hoists `var` declarations from
+     * nested blocks/loops (since `var` is function-scoped, not block-scoped).
      */
     private fun collectDeclaredNames(statements: List<Statement>, scope: NameScope) {
         for (stmt in statements) {
@@ -3194,6 +3195,72 @@ class Checker(
                 is ImportEqualsDeclaration -> scope.names.add(stmt.name.text)
                 else -> {}
             }
+            // Hoist var declarations from nested blocks/loops
+            collectHoistedVarNames(stmt, scope)
+        }
+    }
+
+    /**
+     * Recursively find `var` declarations in nested blocks, loops, if/else, etc.
+     * Since `var` is function-scoped (not block-scoped), these names are visible
+     * in the enclosing function/file scope. Does NOT recurse into functions
+     * (which create their own scope).
+     */
+    private fun collectHoistedVarNames(stmt: Statement, scope: NameScope) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (stmt.declarationList.flags == SyntaxKind.VarKeyword) {
+                    for (decl in stmt.declarationList.declarations) {
+                        addBindingName(decl.name, scope)
+                    }
+                }
+            }
+            is Block -> stmt.statements.forEach { collectHoistedVarNames(it, scope) }
+            is IfStatement -> {
+                collectHoistedVarNames(stmt.thenStatement, scope)
+                stmt.elseStatement?.let { collectHoistedVarNames(it, scope) }
+            }
+            is ForStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    for (decl in init.declarations) addBindingName(decl.name, scope)
+                }
+                collectHoistedVarNames(stmt.statement, scope)
+            }
+            is ForInStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    for (decl in init.declarations) addBindingName(decl.name, scope)
+                }
+                collectHoistedVarNames(stmt.statement, scope)
+            }
+            is ForOfStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    for (decl in init.declarations) addBindingName(decl.name, scope)
+                }
+                collectHoistedVarNames(stmt.statement, scope)
+            }
+            is WhileStatement -> collectHoistedVarNames(stmt.statement, scope)
+            is DoStatement -> collectHoistedVarNames(stmt.statement, scope)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> clause.statements.forEach { collectHoistedVarNames(it, scope) }
+                        is DefaultClause -> clause.statements.forEach { collectHoistedVarNames(it, scope) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { collectHoistedVarNames(it, scope) }
+                stmt.catchClause?.block?.statements?.forEach { collectHoistedVarNames(it, scope) }
+                stmt.finallyBlock?.statements?.forEach { collectHoistedVarNames(it, scope) }
+            }
+            is LabeledStatement -> collectHoistedVarNames(stmt.statement, scope)
+            is WithStatement -> collectHoistedVarNames(stmt.statement, scope)
+            // Do NOT recurse into functions/classes — they create their own scope
+            else -> {}
         }
     }
 
