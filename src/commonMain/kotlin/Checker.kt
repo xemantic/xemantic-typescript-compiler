@@ -1968,6 +1968,8 @@ class Checker(
                 }
                 // Check class-level type parameters
                 checkUnusedClassTypeParams(stmt, source, fileName, siblingStatements)
+                // Check unused private members
+                checkUnusedPrivateMembers(stmt.members, source, fileName)
             }
             is InterfaceDeclaration -> {
                 checkUnusedInterfaceTypeParams(stmt, source, fileName, siblingStatements)
@@ -2281,6 +2283,230 @@ class Checker(
     /**
      * Check for unused type parameters on a class declaration.
      */
+    /**
+     * Check for unused private class members (TS6133).
+     * Private properties and methods that are never accessed within the class are unused.
+     */
+    private fun checkUnusedPrivateMembers(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        if (!options.noUnusedLocals) return
+
+        // Collect private members
+        data class PrivateMember(val name: String, val nameNode: Node)
+        val privateMembers = mutableListOf<PrivateMember>()
+        val getterSetterNames = mutableSetOf<String>() // track getter/setter pairs
+
+        for (member in members) {
+            val isPrivate = when (member) {
+                is PropertyDeclaration -> ModifierFlag.Private in member.modifiers
+                is MethodDeclaration -> ModifierFlag.Private in member.modifiers
+                is GetAccessor -> ModifierFlag.Private in member.modifiers
+                is SetAccessor -> ModifierFlag.Private in member.modifiers
+                else -> false
+            }
+            if (!isPrivate) continue
+
+            val name = when (member) {
+                is PropertyDeclaration -> (member.name as? Identifier)?.text
+                is MethodDeclaration -> (member.name as? Identifier)?.text
+                is GetAccessor -> (member.name as? Identifier)?.text
+                is SetAccessor -> (member.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+
+            val nameNode = when (member) {
+                is PropertyDeclaration -> member.name
+                is MethodDeclaration -> member.name
+                is GetAccessor -> member.name
+                is SetAccessor -> member.name
+                else -> continue
+            }
+
+            // Track getter/setter pairs — don't duplicate
+            if (member is GetAccessor || member is SetAccessor) {
+                if (name in getterSetterNames) continue
+                getterSetterNames.add(name)
+            }
+
+            privateMembers.add(PrivateMember(name, nameNode))
+        }
+
+        if (privateMembers.isEmpty()) return
+
+        // Collect all property access names used in the class body
+        val accessedNames = mutableSetOf<String>()
+        for (member in members) {
+            when (member) {
+                is MethodDeclaration -> {
+                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
+                }
+                is Constructor -> {
+                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
+                }
+                is GetAccessor -> {
+                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
+                }
+                is SetAccessor -> {
+                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
+                }
+                is PropertyDeclaration -> {
+                    member.initializer?.let { collectPropertyAccessNamesInExpr(it, accessedNames) }
+                }
+                else -> {}
+            }
+        }
+
+        // Report unused private members
+        for (pm in privateMembers) {
+            if (pm.name in accessedNames) continue
+            if (pm.name.startsWith("_")) continue
+            val start = pm.nameNode.pos
+            val length = pm.name.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'${pm.name}' is declared but its value is never read.",
+                category = DiagnosticCategory.Error,
+                code = 6133,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    private fun collectPropertyAccessNames(block: Block, names: MutableSet<String>) {
+        for (stmt in block.statements) {
+            collectPropertyAccessNamesInStmt(stmt, names)
+        }
+    }
+
+    private fun collectPropertyAccessNamesInStmt(stmt: Statement, names: MutableSet<String>) {
+        when (stmt) {
+            is ExpressionStatement -> collectPropertyAccessNamesInExpr(stmt.expression, names)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { collectPropertyAccessNamesInExpr(it, names) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { collectPropertyAccessNamesInExpr(it, names) }
+            is IfStatement -> {
+                collectPropertyAccessNamesInExpr(stmt.expression, names)
+                collectPropertyAccessNamesInStmt(stmt.thenStatement, names)
+                stmt.elseStatement?.let { collectPropertyAccessNamesInStmt(it, names) }
+            }
+            is Block -> stmt.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is Expression -> collectPropertyAccessNamesInExpr(init, names)
+                    else -> {}
+                }
+                stmt.condition?.let { collectPropertyAccessNamesInExpr(it, names) }
+                stmt.incrementor?.let { collectPropertyAccessNamesInExpr(it, names) }
+                collectPropertyAccessNamesInStmt(stmt.statement, names)
+            }
+            is WhileStatement -> {
+                collectPropertyAccessNamesInExpr(stmt.expression, names)
+                collectPropertyAccessNamesInStmt(stmt.statement, names)
+            }
+            is DoStatement -> {
+                collectPropertyAccessNamesInStmt(stmt.statement, names)
+                collectPropertyAccessNamesInExpr(stmt.expression, names)
+            }
+            is SwitchStatement -> {
+                collectPropertyAccessNamesInExpr(stmt.expression, names)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            collectPropertyAccessNamesInExpr(clause.expression, names)
+                            clause.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                        }
+                        is DefaultClause -> clause.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                stmt.catchClause?.block?.statements?.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                stmt.finallyBlock?.statements?.forEach { collectPropertyAccessNamesInStmt(it, names) }
+            }
+            is ThrowStatement -> stmt.expression?.let { collectPropertyAccessNamesInExpr(it, names) }
+            else -> {}
+        }
+    }
+
+    private fun collectPropertyAccessNamesInExpr(expr: Expression, names: MutableSet<String>) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                names.add(expr.name.text)
+                collectPropertyAccessNamesInExpr(expr.expression, names)
+            }
+            is CallExpression -> {
+                collectPropertyAccessNamesInExpr(expr.expression, names)
+                expr.arguments.forEach { collectPropertyAccessNamesInExpr(it, names) }
+            }
+            is BinaryExpression -> {
+                collectPropertyAccessNamesInExpr(expr.left, names)
+                collectPropertyAccessNamesInExpr(expr.right, names)
+            }
+            is PrefixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names)
+            is PostfixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names)
+            is ParenthesizedExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is ConditionalExpression -> {
+                collectPropertyAccessNamesInExpr(expr.condition, names)
+                collectPropertyAccessNamesInExpr(expr.whenTrue, names)
+                collectPropertyAccessNamesInExpr(expr.whenFalse, names)
+            }
+            is NewExpression -> {
+                collectPropertyAccessNamesInExpr(expr.expression, names)
+                expr.arguments?.forEach { collectPropertyAccessNamesInExpr(it, names) }
+            }
+            is ElementAccessExpression -> {
+                collectPropertyAccessNamesInExpr(expr.expression, names)
+                collectPropertyAccessNamesInExpr(expr.argumentExpression, names)
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { collectPropertyAccessNamesInExpr(it.expression, names) }
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> body.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                    is Expression -> collectPropertyAccessNamesInExpr(body, names)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                expr.body.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names) }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> collectPropertyAccessNamesInExpr(prop.initializer, names)
+                        is ShorthandPropertyAssignment -> {}
+                        is SpreadAssignment -> collectPropertyAccessNamesInExpr(prop.expression, names)
+                        else -> {}
+                    }
+                }
+            }
+            is AsExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is NonNullExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is TypeAssertionExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is AwaitExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is SpreadElement -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is DeleteExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is VoidExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is TypeOfExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is CommaListExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names) }
+            else -> {}
+        }
+    }
+
     private fun checkUnusedClassTypeParams(
         cls: ClassDeclaration,
         source: String,
