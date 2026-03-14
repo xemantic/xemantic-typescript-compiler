@@ -141,6 +141,10 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitUseStrict(sourceFile: SourceFile) {
+        // When alwaysStrict is explicitly false, don't emit "use strict".
+        // Note: `strict: false` does NOT suppress it — only explicit `alwaysStrict: false` does.
+        if (options.alwaysStrict == false) return
+
         // Check if the file is an ES module format — ESM files are inherently strict,
         // no explicit "use strict" needed. But for .mts/.mjs under CommonJS module setting,
         // TypeScript still emits "use strict".
