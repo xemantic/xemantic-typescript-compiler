@@ -4653,6 +4653,9 @@ class Checker(
             is TypeAliasDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
             }
+            is EnumDeclaration -> {
+                checkDuplicateEnumMembers(stmt, source, fileName)
+            }
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { checkDuplicatesInExpr(it, source, fileName) }
@@ -4884,6 +4887,35 @@ class Checker(
             if (isDuplicate) {
                 for (decl in group) {
                     emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Check for duplicate enum members: members with the same name.
+     */
+    private fun checkDuplicateEnumMembers(
+        decl: EnumDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        data class MemberInfo(val name: String, val nameNode: Node)
+        val members = mutableListOf<MemberInfo>()
+        for (m in decl.members) {
+            val name = m.name
+            val text = when (name) {
+                is Identifier -> name.text
+                is StringLiteralNode -> name.text
+                else -> continue
+            }
+            members.add(MemberInfo(text, name))
+        }
+        val byName = members.groupBy { it.name }
+        for ((_, group) in byName) {
+            if (group.size >= 2) {
+                for (info in group) {
+                    emitDuplicate2300(info.name, info.nameNode, source, fileName)
                 }
             }
         }
