@@ -65,6 +65,8 @@ data class CompilerOptions(
     val target: ScriptTarget = ScriptTarget.ES3,
     val module: ModuleKind? = null,
     val strict: Boolean = false,
+    /** True when `// @strict: false` was explicitly set (not just defaulting to false). */
+    val strictExplicitlyFalse: Boolean = false,
     val noEmit: Boolean = false,
     val noEmitHelpers: Boolean = false,
     val declaration: Boolean = false,
@@ -323,7 +325,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
             if (module != null) options.copy(module = module) else options
         }
 
-        "strict" -> options.copy(strict = boolValue)
+        "strict" -> options.copy(strict = boolValue, strictExplicitlyFalse = !boolValue)
         "noemit" -> options.copy(noEmit = boolValue)
         "noemithelpers" -> options.copy(noEmitHelpers = boolValue)
         "declaration" -> options.copy(declaration = boolValue)
