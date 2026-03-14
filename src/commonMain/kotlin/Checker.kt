@@ -1594,12 +1594,19 @@ class Checker(
                 expr.typeArguments?.forEach { collectRefsFromType(it, scope) }
             }
             is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    collectRefsFromExpr(current.right, scope)
-                    current = current.left
+                if (expr.operator == SyntaxKind.Equals) {
+                    // Simple assignment: left side is write-only (not a read)
+                    collectRefsFromExpr(expr.right, scope)
+                    collectWriteTargetRefs(expr.left, scope)
+                } else {
+                    // Non-assignment or compound assignment: iterative traversal
+                    var current: Expression = expr
+                    while (current is BinaryExpression) {
+                        collectRefsFromExpr(current.right, scope)
+                        current = current.left
+                    }
+                    collectRefsFromExpr(current, scope)
                 }
-                collectRefsFromExpr(current, scope)
             }
             is ConditionalExpression -> {
                 collectRefsFromExpr(expr.condition, scope)
@@ -1742,6 +1749,26 @@ class Checker(
                 }
             }
             else -> {} // literals, omitted expressions, binding patterns, etc.
+        }
+    }
+
+    /**
+     * For write-only targets (left side of `=`), only collect references from
+     * property access bases and element access arguments, not the target identifier itself.
+     */
+    private fun collectWriteTargetRefs(expr: Expression, scope: UnusedScope) {
+        when (expr) {
+            is Identifier -> {} // Don't add — this is a write target, not a read
+            is PropertyAccessExpression -> {
+                // obj.prop = value — obj IS read
+                collectRefsFromExpr(expr.expression, scope)
+            }
+            is ElementAccessExpression -> {
+                // obj[key] = value — both obj and key are read
+                collectRefsFromExpr(expr.expression, scope)
+                collectRefsFromExpr(expr.argumentExpression, scope)
+            }
+            else -> collectRefsFromExpr(expr, scope) // fallback: treat as read
         }
     }
 
