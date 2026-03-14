@@ -26,7 +26,10 @@ import kotlin.math.pow
  * Handles type erasure, class property-to-constructor movement, enum IIFE generation,
  * namespace IIFE generation, and module transforms.
  */
-class Transformer(private val options: CompilerOptions) {
+class Transformer(
+    private val options: CompilerOptions,
+    private val checker: Checker? = null,
+) {
 
     // Modifiers that are TypeScript-only and should be stripped from class members
     private val typeOnlyMemberModifiers = setOf(
@@ -514,7 +517,15 @@ class Transformer(private val options: CompilerOptions) {
         }
         expr is AwaitExpression -> exprContainsDynamicImport(expr.expression)
         expr is ParenthesizedExpression -> exprContainsDynamicImport(expr.expression)
-        expr is BinaryExpression -> exprContainsDynamicImport(expr.left) || exprContainsDynamicImport(expr.right)
+        expr is BinaryExpression -> {
+            // Iterative traversal to avoid StackOverflow on deeply nested binaries
+            var current: Expression = expr
+            while (current is BinaryExpression) {
+                if (exprContainsDynamicImport(current.right)) return true
+                current = current.left
+            }
+            exprContainsDynamicImport(current)
+        }
         else -> false
     }
 

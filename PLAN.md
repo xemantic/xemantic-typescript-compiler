@@ -112,7 +112,7 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
 
 ### 4. Integrate checker into pipeline
 
-- [ ] **4a. Wire `Binder` + `Checker` into `TypeScriptCompiler.kt`** — Insert after Parser, before Transformer:
+- [x] **4a. Wire `Binder` + `Checker` into `TypeScriptCompiler.kt`** — Insert after Parser, before Transformer:
   ```
   Parser.parse() → Binder.bind() → Checker.check() → Transformer.transform() → Emitter.emit()
   ```

@@ -148,7 +148,11 @@ class TypeScriptCompiler {
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
 
-            val transformer = Transformer(options)
+            val binder = Binder(options)
+            val binderResult = binder.bind(sourceFile)
+            val checker = Checker(options, listOf(binderResult))
+
+            val transformer = Transformer(options, checker)
             val transformed = transformer.transform(sourceFile)
 
             val emitter = Emitter(options)
@@ -200,6 +204,8 @@ class TypeScriptCompiler {
             val importDeps = mutableMapOf<String, List<String>>()
             // Ordered list of compilable TS file names
             val tsFileNames = mutableListOf<String>()
+            // Parsed source files for two-phase bind+transform
+            val parsedSourceFiles = mutableMapOf<String, SourceFile>()
 
             // Resolve outDir to an absolute path when fullEmitPaths is set.
             // When files use absolute paths (e.g. /a.ts) and outDir is relative (e.g. "bin"),
@@ -313,8 +319,17 @@ class TypeScriptCompiler {
                 )
 
                 tsFileNames.add(file.fileName)
+                parsedSourceFiles[file.fileName] = sourceFile
+            }
 
-                val transformer = Transformer(options)
+            // Phase 2: Bind all files and create shared checker
+            val binder = Binder(options)
+            val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
+            val checker = Checker(options, binderResults)
+
+            // Phase 3: Transform and emit each file
+            for ((tsFileName, sourceFile) in parsedSourceFiles) {
+                val transformer = Transformer(options, checker)
                 val transformed = transformer.transform(sourceFile)
 
                 val emitter = Emitter(options)
@@ -327,7 +342,7 @@ class TypeScriptCompiler {
                 val isJsxPreserveMulti = options.jsx?.lowercase() == "preserve"
                 val tsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
                 val jsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
-                var jsName = file.fileName
+                var jsName = tsFileName
                     .replace(".tsx", tsxExtensionMulti)
                     .replace(".jsx", jsxExtensionMulti)
                     .replace(".mts", ".mjs")
@@ -346,7 +361,7 @@ class TypeScriptCompiler {
                     // Handle both Unix '/' and Windows '\' separators.
                     jsName = jsName.substringAfterLast('/').substringAfterLast('\\')
                 }
-                jsOutputMap[file.fileName] = jsName to javascript
+                jsOutputMap[tsFileName] = jsName to javascript
             }
 
             // Sort JS outputs by dependency order (dependencies first)
