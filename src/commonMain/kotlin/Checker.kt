@@ -63,6 +63,8 @@ class Checker(
         if (options.noUnusedLocals || options.noUnusedParameters) {
             checkUnusedDeclarations()
         }
+        // 5. Check for variables used before assignment (TS2454)
+        checkDefiniteAssignment()
     }
 
     // -----------------------------------------------------------------------
@@ -2318,5 +2320,365 @@ class Checker(
             }
         }
         return line to (position - lineStart + 1)
+    }
+
+    // -----------------------------------------------------------------------
+    // Definite assignment checking (TS2454)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for variables used before being definitively assigned.
+     * Emits TS2454 "Variable 'X' is used before being assigned."
+     */
+    private fun checkDefiniteAssignment() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            checkDefiniteAssignmentInStatements(
+                result.sourceFile.statements, source, fileName,
+            )
+        }
+    }
+
+    /**
+     * Walk statements tracking which variables are uninitialized.
+     * When a reference to an uninitialized variable is found, emit TS2454.
+     */
+    private fun checkDefiniteAssignmentInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Track variables declared with type but no initializer
+        val uninitialized = mutableSetOf<String>()
+
+        for (stmt in statements) {
+            // 1. Collect variable declarations that are uninitialized
+            collectUninitializedVars(stmt, uninitialized)
+
+            // 2. Check for uses of uninitialized variables in this statement
+            if (uninitialized.isNotEmpty()) {
+                checkUsesOfUninitialized(stmt, uninitialized, source, fileName)
+            }
+
+            // 3. Mark variables as assigned if they appear on left side of assignment
+            markAssignments(stmt, uninitialized)
+
+            // 4. Recurse into nested scopes
+            checkDefiniteAssignmentInNestedScopes(stmt, source, fileName)
+        }
+    }
+
+    private fun collectUninitializedVars(stmt: Statement, uninitialized: MutableSet<String>) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (decl in stmt.declarationList.declarations) {
+                    // Only flag variables with type annotation but no initializer
+                    if (decl.type != null && decl.initializer == null) {
+                        val name = decl.name
+                        if (name is Identifier) {
+                            uninitialized.add(name.text)
+                        }
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check expression trees for references to uninitialized variables.
+     * When found, emit TS2454 and remove from uninitialized set (report only first use).
+     */
+    private fun checkUsesOfUninitialized(
+        stmt: Statement,
+        uninitialized: MutableSet<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let {
+                        findUninitializedRefs(it, uninitialized, source, fileName)
+                    }
+                }
+            }
+            is ExpressionStatement -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            is ReturnStatement -> {
+                stmt.expression?.let {
+                    findUninitializedRefs(it, uninitialized, source, fileName)
+                }
+            }
+            is IfStatement -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is Expression -> findUninitializedRefs(init, uninitialized, source, fileName)
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.initializer?.let {
+                                findUninitializedRefs(it, uninitialized, source, fileName)
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+                stmt.condition?.let { findUninitializedRefs(it, uninitialized, source, fileName) }
+            }
+            is ForInStatement -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            is ForOfStatement -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            is WhileStatement -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            is ThrowStatement -> {
+                stmt.expression?.let { findUninitializedRefs(it, uninitialized, source, fileName) }
+            }
+            is SwitchStatement -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk an expression tree to find references to uninitialized variables.
+     * Emits TS2454 diagnostic at the usage site.
+     */
+    private fun findUninitializedRefs(
+        expr: Expression,
+        uninitialized: MutableSet<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                if (expr.text in uninitialized) {
+                    val start = expr.pos
+                    val length = expr.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Variable '${expr.text}' is used before being assigned.",
+                        category = DiagnosticCategory.Error,
+                        code = 2454,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            is PropertyAccessExpression -> {
+                findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+                findUninitializedRefs(expr.argumentExpression, uninitialized, source, fileName)
+            }
+            is CallExpression -> {
+                findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+                expr.arguments.forEach { findUninitializedRefs(it, uninitialized, source, fileName) }
+            }
+            is NewExpression -> {
+                findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+                expr.arguments?.forEach { findUninitializedRefs(it, uninitialized, source, fileName) }
+            }
+            is BinaryExpression -> {
+                if (expr.operator == SyntaxKind.Equals) {
+                    // Assignment — right side may use uninitialized, left side is a write
+                    findUninitializedRefs(expr.right, uninitialized, source, fileName)
+                    // Don't check left side for reads (it's a write target)
+                } else {
+                    findUninitializedRefs(expr.left, uninitialized, source, fileName)
+                    findUninitializedRefs(expr.right, uninitialized, source, fileName)
+                }
+            }
+            is ConditionalExpression -> {
+                findUninitializedRefs(expr.condition, uninitialized, source, fileName)
+                findUninitializedRefs(expr.whenTrue, uninitialized, source, fileName)
+                findUninitializedRefs(expr.whenFalse, uninitialized, source, fileName)
+            }
+            is PrefixUnaryExpression -> {
+                findUninitializedRefs(expr.operand, uninitialized, source, fileName)
+            }
+            is PostfixUnaryExpression -> {
+                findUninitializedRefs(expr.operand, uninitialized, source, fileName)
+            }
+            is ParenthesizedExpression -> {
+                findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { findUninitializedRefs(it, uninitialized, source, fileName) }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> {
+                            findUninitializedRefs(prop.initializer, uninitialized, source, fileName)
+                        }
+                        is ShorthandPropertyAssignment -> {
+                            findUninitializedRefs(prop.name, uninitialized, source, fileName)
+                        }
+                        is SpreadAssignment -> {
+                            findUninitializedRefs(prop.expression, uninitialized, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach {
+                    findUninitializedRefs(it.expression, uninitialized, source, fileName)
+                }
+            }
+            is TaggedTemplateExpression -> {
+                findUninitializedRefs(expr.tag, uninitialized, source, fileName)
+            }
+            is SpreadElement -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is AwaitExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is YieldExpression -> expr.expression?.let { findUninitializedRefs(it, uninitialized, source, fileName) }
+            is AsExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is NonNullExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is TypeOfExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is DeleteExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is VoidExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is TypeAssertionExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is SatisfiesExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is CommaListExpression -> {
+                expr.elements.forEach { findUninitializedRefs(it, uninitialized, source, fileName) }
+            }
+            else -> {} // Literals, arrow functions, etc. — no direct references
+        }
+    }
+
+    /**
+     * Mark variables as assigned when they appear on the left side of assignments.
+     */
+    private fun markAssignments(stmt: Statement, uninitialized: MutableSet<String>) {
+        when (stmt) {
+            is ExpressionStatement -> {
+                markAssignmentsInExpr(stmt.expression, uninitialized)
+            }
+            is VariableStatement -> {
+                // Variable with initializer — it's assigned
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.initializer != null) {
+                        val name = decl.name
+                        if (name is Identifier) {
+                            uninitialized.remove(name.text)
+                        }
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun markAssignmentsInExpr(expr: Expression, uninitialized: MutableSet<String>) {
+        when (expr) {
+            is BinaryExpression -> {
+                if (expr.operator == SyntaxKind.Equals) {
+                    val left = expr.left
+                    if (left is Identifier) {
+                        uninitialized.remove(left.text)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Recurse into function bodies and other nested scopes for TS2454 checking.
+     */
+    private fun checkDefiniteAssignmentInNestedScopes(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                stmt.body?.let {
+                    checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                        }
+                        is Constructor -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                        }
+                        is GetAccessor -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                        }
+                        is SetAccessor -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkDefiniteAssignmentInStatements(
+                        body.statements, source, fileName,
+                    )
+                    is ModuleDeclaration -> checkDefiniteAssignmentInNestedScopes(
+                        body, source, fileName,
+                    )
+                    else -> {}
+                }
+            }
+            is Block -> checkDefiniteAssignmentInStatements(
+                stmt.statements, source, fileName,
+            )
+            is IfStatement -> {
+                checkDefiniteAssignmentInNestedScopes(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkDefiniteAssignmentInNestedScopes(it, source, fileName) }
+            }
+            is ForStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            is ForInStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            is ForOfStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            is WhileStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            is DoStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> clause.statements.forEach {
+                            checkDefiniteAssignmentInNestedScopes(it, source, fileName)
+                        }
+                        is DefaultClause -> clause.statements.forEach {
+                            checkDefiniteAssignmentInNestedScopes(it, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach {
+                    checkDefiniteAssignmentInNestedScopes(it, source, fileName)
+                }
+                stmt.catchClause?.block?.statements?.forEach {
+                    checkDefiniteAssignmentInNestedScopes(it, source, fileName)
+                }
+                stmt.finallyBlock?.statements?.forEach {
+                    checkDefiniteAssignmentInNestedScopes(it, source, fileName)
+                }
+            }
+            is LabeledStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            else -> {}
+        }
     }
 }
