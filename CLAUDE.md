@@ -93,6 +93,14 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **KEYWORD_IDENTIFIERS**: Our parser produces `Identifier` nodes for `this`, `super`, `true`, `false`, `null`, TypeScript type keywords (`any`, `number`, `string`, etc.), and access modifiers (`public`, `private`, etc.). These must be excluded from TS2304 checking.
 - **Binder scope model**: The binder only creates file-level symbol tables. Function parameters, catch variables, and block-scoped declarations are NOT in the binder's symbol table. The TS2304 checker maintains its own scope chain.
 - **Test generator only processes `.ts`**: `.tsx` files are excluded from test generation (`f.extension == "ts"` in build.gradle.kts). This means JSX-related diagnostics (TS7026) are untestable.
+- **`arguments` not a global**: Don't include `arguments` in KNOWN_GLOBALS — it's only available inside non-arrow functions via the `hasArguments` flag on NameScope.
+- **`var` hoisting for TS2304**: `var` declarations inside nested blocks/loops are function-scoped. `collectHoistedVarNames` recursively finds them and adds to the enclosing scope.
+- **`isIdentifier()` vs `isIdentifierToken()`**: Inside `scanner.lookAhead {}`, use `isIdentifierToken(scanner.getToken())` not `isIdentifier()` — the latter checks the Parser's cached `token` field which isn't updated inside lookAhead.
+
+### TS2454/TS2564 gotchas
+
+- **`any` type skips TS2454/TS2564**: Variables and properties typed as `any` don't need definite assignment checking because `any` includes `undefined`.
+- **`var` declarations and TS2454**: Unlike `let`/`const`, TypeScript DOES check `var` declarations for TS2454 (when strict). Only `any`-typed vars are skipped.
 
 ### Kotlin idioms
 
@@ -104,7 +112,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,561 / 10,595 tests passing (61.9%)**, up from 6,508. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
+**Phase 3c: Incremental Diagnostic & Emit Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,612 / 10,595 tests passing (62.4%)**, up from 6,561. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -122,7 +130,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 6,561 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,612 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
