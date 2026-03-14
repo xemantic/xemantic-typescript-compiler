@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 5,934 passing (56.0%), 4,658 failing
+- **10,595 tests**, 5,939 passing (56.0%), 4,653 failing
 - **JS emit bare-name:** 5,413 tests, 5,122 passing (94.6%)
 - **JS emit parameterized:** 1,114 tests, 498 passing (44.7%)
 - **Error baselines:** 4,035 tests, 91 passing (2.3%)
@@ -312,10 +312,12 @@ information. This must be fixed for `.errors.txt` tests to match baselines.
 
   **File:** `Parser.kt`
 
-- [ ] **4c. Measure `.errors.txt` pass rate from parser diagnostics alone**
+- [x] **4c. Measure `.errors.txt` pass rate from parser diagnostics alone**
 
-  Many `.errors.txt` baselines contain only parser errors (TS1xxx codes). After 4a-4b,
-  measure how many `.errors.txt` tests pass with parser diagnostics alone.
+  After 4a-4b: 5,939 / 10,595 passing (56.0%). Error baseline tests: ~310 / 4,035
+  passing (7.7%). Most gains from TS5107 deprecation diagnostics (+214). Parser
+  diagnostic precision (positions + codes) contributed +5 tests. Remaining error
+  baseline failures need type checker diagnostics (TS2xxx+ codes).
 
 ### 5. Checker diagnostic emission
 
