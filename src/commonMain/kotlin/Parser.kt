@@ -1302,7 +1302,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val params = parseParameterList()
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            parseSemicolon(); null
+            // Error recovery: create empty body to match TypeScript's output
+            parseSemicolon()
+            Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
         val trailing = trailingComments()
         return GetAccessor(
@@ -1325,7 +1327,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Setters cannot have a return type annotation, but parse it for error recovery (preserved in emit).
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            parseSemicolon(); null
+            // Error recovery: create empty body to match TypeScript's output
+            parseSemicolon()
+            Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
         val trailing = trailingComments()
         return SetAccessor(
@@ -3547,7 +3551,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val name = parsePropertyName()
                 val params = parseParameterList()
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
-                val body = if (token == SyntaxKind.OpenBrace) parseBlock() else null
+                // Error recovery: create empty body when missing, to match TypeScript's output
+                val body = if (token == SyntaxKind.OpenBrace) parseBlock()
+                    else Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
                 return GetAccessor(
                     name = name,
                     parameters = params,
@@ -3566,7 +3572,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 nextToken()
                 val name = parsePropertyName()
                 val params = parseParameterList()
-                val body = if (token == SyntaxKind.OpenBrace) parseBlock() else null
+                // Error recovery: create empty body when missing, to match TypeScript's output
+                val body = if (token == SyntaxKind.OpenBrace) parseBlock()
+                    else Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
                 return SetAccessor(name = name, parameters = params, body = body, pos = pos, end = getEnd(), leadingComments = comments)
             }
         }
