@@ -226,7 +226,7 @@ to match the TypeScript harness design documented in `TYPESCRIPT-TEST-HARNESS.md
 These items from Phase 2's queue are still valid and independent of the diagnostic
 infrastructure. Execute them to reduce the JS emit failure count.
 
-- [ ] **3a. Cross-file namespace import resolution** (Phase 2 item 7a)
+- [x] **3a. Cross-file namespace import resolution** (Phase 2 item 7a)
 
   Add `NamespaceImport` resolution to `Checker.resolveAlias()`. When the alias is a
   `NamespaceImport`, resolve the module specifier to a file, create a synthetic module
@@ -234,7 +234,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key test: `constEnumNamespaceReferenceCausesNoImport2`
   - Fix area: `Checker.kt: resolveAlias()`
 
-- [ ] **3b. Default import resolution** (Phase 2 item 7b)
+- [x] **3b. Default import resolution** (Phase 2 item 7b)
 
   `import Foo from "./mod"` — resolve default binding to the target module's default export.
   - Fix area: `Checker.kt: resolveAlias()`
