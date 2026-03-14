@@ -7070,8 +7070,13 @@ class Transformer(
         if (clause is NamedExports) {
             val filtered = clause.elements.filter { spec ->
                 if (spec.isTypeOnly) return@filter false
-                // For re-exports (with moduleSpecifier), we don't know the target file's types
-                if (decl.moduleSpecifier != null) return@filter true
+                // For re-exports (with moduleSpecifier), check target module types via checker
+                val moduleSpec = decl.moduleSpecifier
+                if (moduleSpec != null) {
+                    val specifier = (moduleSpec as? StringLiteralNode)?.text ?: return@filter true
+                    val exportName = (spec.propertyName ?: spec.name).text
+                    return@filter checker?.isValueExport(exportName, specifier, currentFileName) ?: true
+                }
                 // For local exports, filter out names that are declared only as types in this file
                 val localName = (spec.propertyName ?: spec.name).text
                 localName !in topLevelTypeOnlyNames

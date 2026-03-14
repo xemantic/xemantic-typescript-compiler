@@ -108,6 +108,35 @@ class Checker(
     }
 
     /**
+     * Check if a re-exported name from a module specifier is a value (not type-only).
+     * Used for `export { name } from "module"` — elide specifiers that are type-only
+     * (interfaces, type aliases, non-instantiated namespaces).
+     */
+    fun isValueExport(name: String, moduleSpecifier: String, sourceFileName: String): Boolean {
+        val result = fileResults[sourceFileName] ?: return true
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return true
+        val targetResult = fileResults[targetFile] ?: return true
+        val symbol = targetResult.locals[name] ?: return true // safe default: keep
+        val resolved = resolveAlias(symbol)
+        // Check if the symbol has value flags
+        if (resolved.flags.hasAny(SymbolFlags.Value)) return true
+        // Non-instantiated namespaces (no value content) are type-only
+        if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
+            // Check module instance state from binder
+            for (br in binderResults) {
+                for (decl in resolved.declarations) {
+                    if (decl is ModuleDeclaration) {
+                        val state = br.moduleInstanceStates[nodeKey(decl)]
+                        if (state == ModuleInstanceState.Instantiated) return true
+                    }
+                }
+            }
+            return false // non-instantiated namespace
+        }
+        return false
+    }
+
+    /**
      * Get the constant value of an enum member node.
      */
     fun getEnumMemberValue(memberNode: Node): ConstantValue? {
@@ -1025,7 +1054,7 @@ class Checker(
      * This is a simplified version for the test suite where module specifiers
      * are relative paths within the same test compilation unit.
      */
-    private fun resolveModuleSpecifier(specifier: String, contextNode: Node): String? {
+    private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
         val baseName = specifier.removePrefix("./").removePrefix("../")
         // Try exact match first, then with extensions
         val candidates = listOf(
