@@ -428,6 +428,10 @@ class Transformer(
                 result.add(stmt)
                 continue
             }
+
+            // Type-only imports are always elided
+            if (clause.isTypeOnly) continue
+
             // Check default import name
             val defaultName = clause.name?.text
             val defaultUsed = defaultName != null && defaultName in referenced
@@ -437,6 +441,8 @@ class Transformer(
             // Check named imports
             val namedImports = clause.namedBindings as? NamedImports
             val usedNamedElements = namedImports?.elements?.filter { spec ->
+                // Type-only import specifiers are always elided
+                if (spec.isTypeOnly) return@filter false
                 val localName = spec.name.text
                 localName in referenced
             }
