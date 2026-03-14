@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,508 passing (61.4%), 4,084 failing
+- **10,595 tests**, 6,554 passing (61.9%), 4,038 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
 - **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
@@ -411,11 +411,14 @@ by test count and implementation tractability.
 
   **Files:** `Checker.kt`
 
-- [ ] **7c. TS2304 — "Cannot find name 'X'"** (~249 pure tests)
+- [x] **7c. TS2304 — "Cannot find name 'X'"** (+46 tests, 6,508 → 6,554)
 
-  Requires comprehensive name resolution. Riskier than TS6133/TS2454 due to
-  potential false positives for built-in globals (console, Array, Promise, etc.).
-  Need awareness of ambient declarations and lib.d.ts types.
+  Implemented scope-aware name resolution with comprehensive AST walking.
+  Checks identifiers in both expression and type positions. Uses scope chain
+  (file-level → function → block → catch) with proper type parameter tracking.
+  Comprehensive KNOWN_GLOBALS set (~400 lib.d.ts names) prevents false positives.
+  Depth protection (maxCheckDepth=200) prevents StackOverflow on stress tests.
+  Many remaining pure TS2304 tests also need TS2503 (Cannot find namespace).
 
   **Files:** `Checker.kt`
 
