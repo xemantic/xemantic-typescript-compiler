@@ -2469,6 +2469,9 @@ class Checker(
             is ElementAccessExpression -> {
                 collectPropertyAccessNamesInExpr(expr.expression, names)
                 collectPropertyAccessNamesInExpr(expr.argumentExpression, names)
+                // String literal element access like obj["name"] counts as accessing "name"
+                val arg = expr.argumentExpression
+                if (arg is StringLiteralNode) names.add(arg.text)
             }
             is TemplateExpression -> {
                 expr.templateSpans.forEach { collectPropertyAccessNamesInExpr(it.expression, names) }
