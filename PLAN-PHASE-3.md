@@ -13,13 +13,13 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,561 passing (61.9%), 4,031 failing
-- **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
-- **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
-- **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
+- **10,595 tests**, 6,604 passing (62.3%), 3,991 failing
+- **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
+- **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
+- **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
 - **Error baseline failure breakdown:**
-  - 2,849 "expected diagnostics but none produced" (need checker TS2xxx codes)
-  - 1,549 diff failures (wrong codes/positions/file order/extra diagnostics)
+  - 2,161 "expected diagnostics but none produced" (need checker TS2xxx codes)
+  - 837 diff failures (wrong codes/positions/file order/extra diagnostics)
 - **Missing from test suite:**
   - ~2,848 parameterized `.js` baselines from non-compiler test dirs — **not in sparse clone**
   - 14,015 `.symbols` baselines — deferred (requires full type inference)
@@ -448,6 +448,64 @@ by test count and implementation tractability.
   Check for duplicate type parameters, duplicate function parameters, and
   incompatible duplicate declarations (var+class, var+function) at file scope.
   Walks all statement lists and parameter lists to detect duplicates.
+
+### 8. Phase 3c — Incremental diagnostic and emit improvements
+
+Picking off tractable fixes to continue improving the pass rate.
+
+- [x] **8a. Fix index signature parsing in lookAhead** (+24 tests, 6,564 → 6,588)
+
+  The `isIndex` lookahead in `parseIndexSignatureOrProperty()` used the Parser's
+  cached `token` field instead of `scanner.getToken()` inside `scanner.lookAhead`.
+  Refactored `isIdentifier()` into `isIdentifierToken(t)`.
+
+- [x] **8b. Hoist var declarations for TS2304 scope resolution** (+1 test, 6,588 → 6,589)
+
+  Added `collectHoistedVarNames()` to recursively find `var` declarations in
+  nested blocks, loops, if/else, switch, try/catch for the TS2304 checker.
+
+- [x] **8c. Skip TS2454 for 'any' type** (+4 tests, 6,589 → 6,593)
+
+  Variables typed as `any` don't need definite assignment checking.
+
+- [x] **8d. Skip TS2564 for 'any' type** (+3 tests, 6,593 → 6,596)
+
+  Same for class properties — `any` includes `undefined`.
+
+- [x] **8e. Extend TS2300 to namespaces and class members** (+5 tests, 6,596 → 6,601)
+
+  Check duplicate declarations inside namespace blocks and conflicting
+  class members (method+getter, method+property).
+
+- [x] **8f. Remove 'arguments' from KNOWN_GLOBALS** (+1 test, 6,601 → 6,602)
+
+  `arguments` is only available inside non-arrow functions, not at file level.
+
+- [x] **8g. Recurse into blocks for TS2454** (+1 test, 6,602 → 6,603)
+
+  Added Block, TryStatement, DoStatement, LabeledStatement to TS2454 checker.
+
+- [x] **8h. Extend TS2300 for class+class duplicates** (+1 test, 6,603 → 6,604)
+
+  Detect duplicate class declarations and class+function/enum conflicts.
+
+- [ ] **8i. Extend TS2300 for duplicate export assignments**
+
+  Multiple `export = X` statements should produce TS2300.
+
+- [ ] **8j. Unused type parameter detection for TS6133**
+
+  Type parameters declared but never referenced in the function/class/interface
+  body should produce TS6133 when `noUnusedLocals` or `noUnusedParameters` is set.
+
+- [ ] **8k. Reduce false-positive TS2304 in multi-file tests**
+
+  Skip TS2304 checking for multi-file compilations where cross-file
+  name resolution would be needed.
+
+- [ ] **8l. Multi-file JS baseline file ordering**
+
+  Fix `.d.ts` file ordering and inclusion in multi-file JS baselines.
 
 ---
 
