@@ -381,12 +381,19 @@ class Transformer(
         val elided = elideUnusedESModuleImports(withHelpers)
 
         // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
-        // only when x is explicitly type-only (import type x = M.N).
-        // Without a type checker, we cannot safely determine if a value-position import
-        // is unused, so we keep all non-type-only import aliases.
+        // when x is explicitly type-only, OR when x resolves to a const enum
+        // (whose values are inlined, so the runtime import is unnecessary).
         val unusedAliasNames = sourceFile.statements
             .filterIsInstance<ImportEqualsDeclaration>()
-            .filter { it.isTypeOnly && it.moduleReference !is ExternalModuleReference }
+            .filter { decl ->
+                decl.moduleReference !is ExternalModuleReference && (
+                    decl.isTypeOnly ||
+                    // Elide import aliases to const enums (values are inlined at use sites)
+                    // Skip when isolatedModules is set (no cross-file const enum inlining)
+                    (!options.isolatedModules && !options.preserveConstEnums &&
+                        checker?.isConstEnumAlias(decl.name.text, currentFileName) == true)
+                )
+            }
             .mapNotNull { decl -> decl.name.text.ifEmpty { null } }
             .toSet()
         val finalStatements = if (unusedAliasNames.isNotEmpty()) {
@@ -450,6 +457,18 @@ class Transformer(
 
             // If nothing is used, drop this import entirely
             if (!defaultUsed && !nsUsed && !hasUsedNamedImports) continue
+
+            // If namespace is unused but default is used, strip the namespace binding
+            if (nsName != null && !nsUsed && defaultUsed) {
+                result.add(stmt.copy(importClause = clause.copy(namedBindings = null)))
+                continue
+            }
+            // If default is unused but namespace or named imports are used, strip the default
+            if (defaultName != null && !defaultUsed && (nsUsed || hasUsedNamedImports)) {
+                val newClause = clause.copy(name = null)
+                result.add(stmt.copy(importClause = newClause))
+                continue
+            }
 
             // If all named imports are used (and there are some), keep as-is.
             // If namedImports is null, or all elements are used and non-empty, keep as-is.
@@ -5742,27 +5761,38 @@ class Transformer(
                 }
                 val baseName = (expr.expression as? Identifier)?.text
                 val memberName = expr.name.text
+                // Build comment label for the full access chain
+                fun accessChainText(e: Expression): String = when (e) {
+                    is Identifier -> e.text
+                    is PropertyAccessExpression -> "${accessChainText(e.expression)}.${e.name.text}"
+                    else -> ""
+                }
                 if (baseName != null) {
-                    val inlined = tryInlineConstEnumMember(baseName, memberName, "$baseName.$memberName")
+                    val commentLabel = "$baseName.$memberName"
+                    val inlined = tryInlineConstEnumMember(baseName, memberName, commentLabel)
+                        ?: if (!options.isolatedModules) {
+                            checker?.resolveConstEnumMemberAccess(baseName, memberName, currentFileName)
+                                ?.let { constValueToExpression(it, commentLabel) }
+                        } else null
                     inlined ?: expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
                 } else {
-                    // Check for namespaced const enum: M.SomeConstEnum.X
-                    // Try the last component of the LHS as the enum name
-                    val nestedEnum = expr.expression as? PropertyAccessExpression
-                    val nestedEnumName = nestedEnum?.name?.text
-                    if (nestedEnumName != null && nestedEnumName in constEnumValues) {
-                        // Build comment label by reconstructing the full access chain text
-                        fun accessChainText(e: Expression): String = when (e) {
-                            is Identifier -> e.text
-                            is PropertyAccessExpression -> "${accessChainText(e.expression)}.${e.name.text}"
-                            else -> ""
-                        }
-                        val commentLabel = "${accessChainText(expr.expression)}.$memberName"
-                        val inlined = tryInlineConstEnumMember(nestedEnumName, memberName, commentLabel)
-                        inlined ?: expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
-                    } else {
-                        expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
+                    // Check for namespaced const enum: M.SomeConstEnum.X or A.B.C.E.V1
+                    val commentLabel = "${accessChainText(expr.expression)}.$memberName"
+                    // Try checker first for accurate namespace resolution (avoids name collisions)
+                    val result = if (!options.isolatedModules) {
+                        checker?.resolveConstEnumMemberAccess(
+                            accessChainText(expr.expression), memberName, currentFileName
+                        )?.let { constValueToExpression(it, commentLabel) }
+                    } else null
+                    val finalResult = result ?: run {
+                        // Fall back to local nested enum lookup
+                        val nestedEnum = expr.expression as? PropertyAccessExpression
+                        val nestedEnumName = nestedEnum?.name?.text
+                        if (nestedEnumName != null && nestedEnumName in constEnumValues)
+                            tryInlineConstEnumMember(nestedEnumName, memberName, commentLabel)
+                        else null
                     }
+                    finalResult ?: expr.copy(expression = parenthesizeForAccess(transformExpression(expr.expression)))
                 }
             }
 
@@ -5803,6 +5833,10 @@ class Transformer(
                         sourceText.substring(expr.pos, argEnd)
                     else """$baseName["$keyStr"]"""
                     val inlined = tryInlineConstEnumMember(baseName, keyStr, commentLabel)
+                        ?: if (!options.isolatedModules) {
+                            checker?.resolveConstEnumMemberAccess(baseName, keyStr, currentFileName)
+                                ?.let { constValueToExpression(it, commentLabel) }
+                        } else null
                     inlined ?: expr.copy(
                         expression = parenthesizeForAccess(transformExpression(expr.expression)),
                         argumentExpression = transformExpression(expr.argumentExpression),
@@ -9058,8 +9092,9 @@ class Transformer(
         val enumMembers = constEnumValues[enumName] ?: return null
         if (!enumMembers.containsKey(memberName)) return null
         val value = enumMembers[memberName] ?: return null  // null = non-constant, can't inline
+        val safeLabel = commentLabel.replace("*/", "*_/")
         val comment = Comment(
-            text = "/* $commentLabel */",
+            text = "/* $safeLabel */",
             hasTrailingNewLine = false,
             kind = MultiLineComment,
             pos = -1, end = -1,
@@ -9074,12 +9109,9 @@ class Transformer(
                     trailingComments = listOf(comment),
                 )
                 if (isNegative) {
-                    ParenthesizedExpression(
-                        expression = PrefixUnaryExpression(
-                            operator = Minus,
-                            operand = literal,
-                            pos = -1, end = -1,
-                        ),
+                    PrefixUnaryExpression(
+                        operator = Minus,
+                        operand = literal,
                         pos = -1, end = -1,
                     )
                 } else literal
@@ -9090,6 +9122,42 @@ class Transformer(
                 trailingComments = listOf(comment),
             )
             else -> null
+        }
+    }
+
+    /**
+     * Convert a [ConstantValue] from the checker to an inlined expression with a trailing comment.
+     */
+    private fun constValueToExpression(value: ConstantValue, commentLabel: String): Expression {
+        val safeLabel = commentLabel.replace("*/", "*_/")
+        val comment = Comment(
+            text = "/* $safeLabel */",
+            hasTrailingNewLine = false,
+            kind = MultiLineComment,
+            pos = -1, end = -1,
+        )
+        return when (value) {
+            is ConstantValue.NumberValue -> {
+                val isNegative = value.value < 0
+                val absText = formatConstEnumDouble(if (isNegative) -value.value else value.value)
+                val literal = NumericLiteralNode(
+                    text = absText,
+                    pos = -1, end = -1,
+                    trailingComments = listOf(comment),
+                )
+                if (isNegative) {
+                    PrefixUnaryExpression(
+                        operator = Minus,
+                        operand = literal,
+                        pos = -1, end = -1,
+                    )
+                } else literal
+            }
+            is ConstantValue.StringValue -> StringLiteralNode(
+                text = value.value,
+                pos = -1, end = -1,
+                trailingComments = listOf(comment),
+            )
         }
     }
 
@@ -11203,12 +11271,15 @@ class Transformer(
      * which would be ambiguous as the LHS of a member-access or element-access
      * (e.g. `new a.b` means `new (a.b)`, not `(new a).b`).
      */
-    private fun parenthesizeForAccess(expr: Expression): Expression =
-        if (expr is NewExpression && expr.arguments == null) {
+    private fun parenthesizeForAccess(expr: Expression): Expression = when {
+        expr is NewExpression && expr.arguments == null ->
             ParenthesizedExpression(expression = expr, pos = expr.pos, end = expr.end)
-        } else {
-            expr
-        }
+        // Negative numeric literals need parens for property access: -1.toString() → (-1).toString()
+        expr is PrefixUnaryExpression && (expr.operator == Minus || expr.operator == Plus) &&
+            expr.operand is NumericLiteralNode ->
+            ParenthesizedExpression(expression = expr, pos = expr.pos, end = expr.end)
+        else -> expr
+    }
 
     companion object {
         /** Strict-mode future reserved words that cannot be used as variable names. */
