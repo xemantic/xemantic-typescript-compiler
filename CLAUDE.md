@@ -29,6 +29,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 - **`if/else` formatting**: `emitEmbeddedStatement` writes a newline after block bodies. For `} else`, the `}` and `else` must be on the same line for non-multiline blocks. The `emitIfStatementCore` method handles this by NOT using `emitEmbeddedStatement` for the then-block when there's an else clause — it calls `emitBlockBody` directly and handles the newline/indentation for `else` itself.
 - **Trailing CRLF in baselines**: The `formatBaseline` function adds trailing `\r\n` after JS output. The `toCRLF` conversion must normalize LF→CRLF.
+- **Tab preservation in error squiggles**: The error baseline formatter must preserve tab characters from source lines in the squiggle indentation — tabs stay as tabs, other characters become spaces. Don't use `" ".repeat(col)`.
 - **Numeric literal property access**: `1.foo` is ambiguous in JS (the `.` is a decimal point). Emit `1..foo` when the numeric literal has no decimal point, exponent, or `0x`/`0b`/`0o` prefix.
 - **Labeled statement chaining**: TypeScript emits `target1: target2: stmt` all on one line. Use a `skipNextIndent` flag to suppress the body statement's `writeIndent()` call after writing all labels inline.
 - **`emitPropertyAssignment` comment tracking**: After emitting `": "`, track `onNewLine` (bool). For each comment: if `hasPrecedingNewLine && !onNewLine` emit newline+indent first; then write comment; if `hasTrailingNewLine` emit newline+indent and set `onNewLine=true`, else write space and `onNewLine=false`. Never double-newline by emitting newline when already at line start.
@@ -112,7 +113,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3c: Incremental Diagnostic & Emit Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,641 / 10,595 tests passing (62.7%)**, up from 6,561. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
+**Phase 3c: Incremental Diagnostic & Emit Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), plus TS5101/TS5102/TS5107 (deprecation). **6,650 / 10,595 tests passing (62.8%)**, up from 6,561. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -130,7 +131,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 6,641 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,650 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
