@@ -310,12 +310,27 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         }
         SyntaxKind.LabeledStatement -> null // won't appear as token
         PrivateKeyword, PublicKeyword, ProtectedKeyword -> {
-            // Access modifier keywords in module/namespace context (e.g. `private y = x;`).
+            // Access modifier keywords in statement context (e.g. `private y = x;` in constructor).
             // TypeScript treats these as property declarations; skip the modifier and parse the rest.
-            if (lookAhead { nextToken(); isIdentifier() }) {
-                nextToken()
-            }
-            parseExpressionStatement()
+            // Also handle `public this.p1 = 0;` pattern (modifier before `this`).
+            val hasModifier = lookAhead { nextToken(); isIdentifier() || token == SyntaxKind.ThisKeyword }
+            if (hasModifier) nextToken()
+            val stmt = parseExpressionStatement()
+            // When inside a class body and the modifier was followed by a bare identifier assignment
+            // (e.g. `public p1 = 0;`), add `this.` prefix to match TypeScript's output.
+            if (hasModifier && classBodyDepth > 0 && stmt != null) {
+                val expr = stmt.expression
+                if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals &&
+                    expr.left is Identifier
+                ) {
+                    val propAccess = PropertyAccessExpression(
+                        expression = Identifier(text = "this", pos = -1, end = -1),
+                        name = expr.left as Identifier,
+                        pos = -1, end = -1,
+                    )
+                    stmt.copy(expression = expr.copy(left = propAccess))
+                } else stmt
+            } else stmt
         }
         else -> {
             if (isIdentifier() && lookAhead { nextToken(); token == Colon }) {
