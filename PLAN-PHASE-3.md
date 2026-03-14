@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,604 passing (62.3%), 3,991 failing
+- **10,595 tests**, 6,641 passing (62.7%), 3,954 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -489,21 +489,45 @@ Picking off tractable fixes to continue improving the pass rate.
 
   Detect duplicate class declarations and class+function/enum conflicts.
 
-- [ ] **8i. Extend TS2300 for duplicate export assignments**
+- [x] **8i. Extend TS2300 for duplicate export assignments** (+2 tests)
 
-  Multiple `export = X` statements should produce TS2300.
+  Multiple `export = X` statements produce TS2300 with expression-text squiggle.
 
-- [ ] **8j. Unused type parameter detection for TS6133**
+- [x] **8j. Unused type parameter detection for TS6133** (+6+2+5 = +13 tests)
 
-  Type parameters declared but never referenced in the function/class/interface
-  body should produce TS6133 when `noUnusedLocals` or `noUnusedParameters` is set.
+  Type parameters on functions, methods, classes, interfaces, and type aliases
+  that are never referenced produce TS6133. Single unused type params cover
+  `<name>` in squiggle. Merged declarations skip the check.
 
-- [ ] **8k. Reduce false-positive TS2304 in multi-file tests**
+- [x] **8k. Unused private class members for TS6133** (+13 tests)
+
+  Private properties, methods, getters, setters that are never accessed
+  within the class body produce TS6133. Handles getter/setter pairs and
+  string-literal element access.
+
+- [x] **8l. TS2564 for class expressions** (+3 tests)
+
+  Class expressions assigned to variables are now checked for property
+  initialization.
+
+- [x] **8m. TS2454 for-loop init assignments** (+1 test)
+
+  Track assignments in for-loop initializer expressions (comma expressions).
+
+- [x] **8n. Duplicate interface members and enum members** (+1+1 = +2 tests)
+
+  Interface properties and enum members with duplicate names produce TS2300.
+
+- [x] **8o. Duplicate names in destructuring parameters** (+2 tests)
+
+  Recursively walk destructuring patterns for duplicate binding names.
+
+- [ ] **8p. Reduce false-positive TS2304 in multi-file tests**
 
   Skip TS2304 checking for multi-file compilations where cross-file
   name resolution would be needed.
 
-- [ ] **8l. Multi-file JS baseline file ordering**
+- [ ] **8q. Multi-file JS baseline file ordering**
 
   Fix `.d.ts` file ordering and inclusion in multi-file JS baselines.
 
