@@ -10976,7 +10976,7 @@ class Transformer(
             members = stmt.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
         )
         is FunctionDeclaration -> stmt.copy(
-            parameters = stmt.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) },
+            parameters = stmt.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
             body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         else -> stmt
@@ -10984,11 +10984,11 @@ class Transformer(
 
     private fun rewriteIdInClassElement(member: ClassElement, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): ClassElement = when (member) {
         is Constructor -> member.copy(
-            parameters = member.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) },
+            parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
             body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is MethodDeclaration -> member.copy(
-            parameters = member.parameters.map { p -> p.copy(initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) },
+            parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
             body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is PropertyDeclaration -> member.copy(initializer = member.initializer?.let { rewriteId(it, map, wrapCallsWithZero) })
@@ -11002,6 +11002,42 @@ class Transformer(
             body = member.body.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         else -> member
+    }
+
+    private fun rewriteIdInParameter(p: Parameter, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Parameter =
+        p.copy(
+            name = rewriteIdInBindingName(p.name, map, wrapCallsWithZero),
+            initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+        )
+
+    private fun rewriteIdInBindingName(name: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Expression = when (name) {
+        is ObjectBindingPattern -> name.copy(
+            elements = name.elements.map { elem ->
+                when (elem) {
+                    is BindingElement -> elem.copy(
+                        propertyName = when (val pn = elem.propertyName) {
+                            is ComputedPropertyName -> pn.copy(expression = rewriteId(pn.expression, map, wrapCallsWithZero))
+                            else -> pn
+                        },
+                        name = rewriteIdInBindingName(elem.name, map, wrapCallsWithZero),
+                        initializer = elem.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+                    )
+                    else -> elem
+                }
+            }
+        )
+        is ArrayBindingPattern -> name.copy(
+            elements = name.elements.map { elem ->
+                when (elem) {
+                    is BindingElement -> elem.copy(
+                        name = rewriteIdInBindingName(elem.name, map, wrapCallsWithZero),
+                        initializer = elem.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+                    )
+                    else -> elem
+                }
+            }
+        )
+        else -> name
     }
 
     /**
@@ -11088,11 +11124,14 @@ class Transformer(
                 span.copy(expression = rewriteId(span.expression, map, wrapCallsWithZero))
             }
         )
-        is ArrowFunction -> expr.copy(body = when (val b = expr.body) {
-            is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
-            is Expression -> rewriteId(b, map, wrapCallsWithZero)
-            else -> b
-        })
+        is ArrowFunction -> expr.copy(
+            parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+            body = when (val b = expr.body) {
+                is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
+                is Expression -> rewriteId(b, map, wrapCallsWithZero)
+                else -> b
+            },
+        )
         is FunctionExpression -> {
             // Don't rewrite names that are locally declared as functions or variables in this scope —
             // they shadow any outer binding with the same name. This prevents namespace-IIFE-local

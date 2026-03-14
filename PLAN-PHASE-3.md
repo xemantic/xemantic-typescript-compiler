@@ -245,7 +245,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key test: `es6ExportClauseWithoutModuleSpecifier`
   - Fix area: `Transformer.kt: transformExportDeclaration()`
 
-- [ ] **3d. CommonJS binding pattern computed property rewriting** (Phase 2 item 8a)
+- [x] **3d. CommonJS binding pattern computed property rewriting** (Phase 2 item 8a)
 
   `import { a } from "./a"; function fn({ [a]: value })` — `[a]` should become `[a_1.a]`.
   - Key test: `computedPropertyNameWithImportedKey`
