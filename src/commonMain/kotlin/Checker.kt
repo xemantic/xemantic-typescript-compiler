@@ -50,6 +50,10 @@ class Checker(
     /** Checker-produced diagnostics. */
     private val diagnostics: MutableList<Diagnostic> = mutableListOf()
 
+    /** Maximum recursion depth for AST walking to prevent StackOverflow. */
+    private val maxCheckDepth = 200
+    private var checkDepth = 0
+
     init {
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
@@ -75,6 +79,8 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyParameters()
         }
+        // 8. Check for unresolved names (TS2304)
+        checkUnresolvedNames()
     }
 
     // -----------------------------------------------------------------------
@@ -3081,5 +3087,1008 @@ class Checker(
                 length = length,
             ))
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Unresolved name checking (TS2304)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Scope for name resolution — tracks names declared at each scope level.
+     * Lookup walks up the parent chain.
+     */
+    private class NameScope(
+        val parent: NameScope?,
+        val names: MutableSet<String> = mutableSetOf(),
+        val hasArguments: Boolean = false,
+    ) {
+        fun has(name: String): Boolean =
+            name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
+
+        fun child(
+            hasArguments: Boolean = false,
+        ): NameScope = NameScope(parent = this, hasArguments = hasArguments)
+    }
+
+    /**
+     * Check for references to names that cannot be resolved.
+     * Emits TS2304: "Cannot find name 'X'."
+     */
+    private fun checkUnresolvedNames() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            // File-level scope: binder locals + globals + known globals
+            val fileScope = NameScope(null)
+            for ((name, _) in result.locals) fileScope.names.add(name)
+            for ((name, _) in globals) fileScope.names.add(name)
+            fileScope.names.addAll(KNOWN_GLOBALS)
+
+            checkUnresolvedInStatements(
+                result.sourceFile.statements,
+                fileScope,
+                source,
+                fileName,
+            )
+        }
+    }
+
+    private fun checkUnresolvedInStatements(
+        statements: List<Statement>,
+        parentScope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        if (checkDepth > maxCheckDepth) return
+        // Create child scope with declarations from this statement list
+        val scope = parentScope.child()
+        collectDeclaredNames(statements, scope)
+
+        for (stmt in statements) {
+            checkUnresolvedInStatement(stmt, scope, source, fileName)
+        }
+    }
+
+    /**
+     * Collect all names declared at this statement-list level.
+     * Includes variables, functions, classes, interfaces, type aliases,
+     * enums, namespaces, imports.
+     */
+    private fun collectDeclaredNames(statements: List<Statement>, scope: NameScope) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        addBindingName(decl.name, scope)
+                    }
+                }
+                is FunctionDeclaration -> stmt.name?.let { scope.names.add(it.text) }
+                is ClassDeclaration -> stmt.name?.let { scope.names.add(it.text) }
+                is InterfaceDeclaration -> scope.names.add(stmt.name.text)
+                is TypeAliasDeclaration -> scope.names.add(stmt.name.text)
+                is EnumDeclaration -> scope.names.add(stmt.name.text)
+                is ModuleDeclaration -> {
+                    val name = stmt.name
+                    if (name is Identifier) scope.names.add(name.text)
+                    else if (name is StringLiteralNode) scope.names.add(name.text)
+                }
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: return
+                    clause.name?.let { scope.names.add(it.text) }
+                    when (val bindings = clause.namedBindings) {
+                        is NamedImports -> {
+                            for (spec in bindings.elements) {
+                                scope.names.add(spec.name.text)
+                            }
+                        }
+                        is NamespaceImport -> scope.names.add(bindings.name.text)
+                        else -> {}
+                    }
+                }
+                is ImportEqualsDeclaration -> scope.names.add(stmt.name.text)
+                else -> {}
+            }
+        }
+    }
+
+    private fun addBindingName(name: Node, scope: NameScope) {
+        when (name) {
+            is Identifier -> scope.names.add(name.text)
+            is ObjectBindingPattern -> {
+                for (element in name.elements) {
+                    addBindingName(element.name, scope)
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (element in name.elements) {
+                    if (element is BindingElement) {
+                        addBindingName(element.name, scope)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkUnresolvedInStatement(
+        stmt: Statement,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        if (checkDepth > maxCheckDepth) return
+        checkDepth++
+        try { checkUnresolvedInStatementCore(stmt, scope, source, fileName) }
+        finally { checkDepth-- }
+    }
+
+    private fun checkUnresolvedInStatementCore(
+        stmt: Statement,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+                    decl.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> {
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+            }
+            is ReturnStatement -> {
+                stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+            }
+            is IfStatement -> {
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+                checkUnresolvedInStatement(stmt.thenStatement, scope, source, fileName)
+                stmt.elseStatement?.let { checkUnresolvedInStatement(it, scope, source, fileName) }
+            }
+            is Block -> {
+                checkUnresolvedInStatements(stmt.statements, scope, source, fileName)
+            }
+            is ForStatement -> {
+                val forScope = scope.child()
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            addBindingName(decl.name, forScope)
+                            decl.initializer?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
+                            decl.type?.let { checkUnresolvedInType(it, forScope, source, fileName) }
+                        }
+                    }
+                    is Expression -> checkUnresolvedInExpr(init, forScope, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
+                stmt.incrementor?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
+                checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
+            }
+            is ForInStatement -> {
+                val forScope = scope.child()
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            addBindingName(decl.name, forScope)
+                        }
+                    }
+                    else -> {}
+                }
+                checkUnresolvedInExpr(stmt.expression, forScope, source, fileName)
+                checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
+            }
+            is ForOfStatement -> {
+                val forScope = scope.child()
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            addBindingName(decl.name, forScope)
+                        }
+                    }
+                    else -> {}
+                }
+                checkUnresolvedInExpr(stmt.expression, forScope, source, fileName)
+                checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
+            }
+            is WhileStatement -> {
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+                checkUnresolvedInStatement(stmt.statement, scope, source, fileName)
+            }
+            is DoStatement -> {
+                checkUnresolvedInStatement(stmt.statement, scope, source, fileName)
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            checkUnresolvedInExpr(clause.expression, scope, source, fileName)
+                            checkUnresolvedInStatements(clause.statements, scope, source, fileName)
+                        }
+                        is DefaultClause -> {
+                            checkUnresolvedInStatements(clause.statements, scope, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ThrowStatement -> {
+                stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+            }
+            is TryStatement -> {
+                checkUnresolvedInStatements(stmt.tryBlock.statements, scope, source, fileName)
+                stmt.catchClause?.let { clause ->
+                    val catchScope = scope.child()
+                    clause.variableDeclaration?.let { decl ->
+                        addBindingName(decl.name, catchScope)
+                    }
+                    checkUnresolvedInStatements(clause.block.statements, catchScope, source, fileName)
+                }
+                stmt.finallyBlock?.let {
+                    checkUnresolvedInStatements(it.statements, scope, source, fileName)
+                }
+            }
+            is LabeledStatement -> {
+                checkUnresolvedInStatement(stmt.statement, scope, source, fileName)
+            }
+            is WithStatement -> {
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+                // Inside with() body, name resolution is dynamic — skip checking
+            }
+            is FunctionDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val fnScope = scope.child(hasArguments = true)
+                addParamsToScope(stmt.parameters, fnScope)
+                stmt.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                stmt.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                for (param in stmt.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                    param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
+                }
+                stmt.body?.let {
+                    checkUnresolvedInStatements(it.statements, fnScope, source, fileName)
+                }
+            }
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val classScope = scope.child()
+                stmt.typeParameters?.forEach { classScope.names.add(it.name.text) }
+                stmt.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        checkUnresolvedInExpr(type.expression, classScope, source, fileName)
+                        type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
+                    }
+                }
+                for (member in stmt.members) {
+                    checkUnresolvedInClassElement(member, classScope, source, fileName)
+                }
+            }
+            is InterfaceDeclaration -> {
+                val ifaceScope = scope.child()
+                stmt.typeParameters?.forEach { ifaceScope.names.add(it.name.text) }
+                stmt.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
+                        type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                    }
+                }
+                for (member in stmt.members) {
+                    when (member) {
+                        is PropertyDeclaration -> {
+                            member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                        }
+                        is MethodDeclaration -> {
+                            val methodScope = ifaceScope.child()
+                            member.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            addParamsToScope(member.parameters, methodScope)
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            }
+                            member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TypeAliasDeclaration -> {
+                val typeScope = scope.child()
+                stmt.typeParameters?.forEach { typeScope.names.add(it.name.text) }
+                checkUnresolvedInType(stmt.type, typeScope, source, fileName)
+            }
+            is EnumDeclaration -> {
+                // Enum member initializers can reference other members
+                for (member in stmt.members) {
+                    member.initializer?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+                }
+            }
+            is ModuleDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkUnresolvedInStatements(body.statements, scope, source, fileName)
+                    is ModuleDeclaration -> checkUnresolvedInStatement(body, scope, source, fileName)
+                    else -> {}
+                }
+            }
+            is ExportDeclaration -> {
+                // export { X } — check that X exists
+                if (stmt.moduleSpecifier == null) {
+                    when (val clause = stmt.exportClause) {
+                        is NamedExports -> {
+                            for (spec in clause.elements) {
+                                val name = spec.propertyName?.text ?: spec.name.text
+                                val node = spec.propertyName ?: spec.name
+                                checkIdentifierResolved(name, node, scope, source, fileName)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ExportAssignment -> {
+                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkUnresolvedInClassElement(
+        element: ClassElement,
+        classScope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        when (element) {
+            is PropertyDeclaration -> {
+                element.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+                element.initializer?.let { checkUnresolvedInExpr(it, classScope, source, fileName) }
+            }
+            is MethodDeclaration -> {
+                val methodScope = classScope.child(hasArguments = true)
+                element.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                addParamsToScope(element.parameters, methodScope)
+                for (param in element.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                    param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
+                }
+                element.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                element.body?.let {
+                    checkUnresolvedInStatements(it.statements, methodScope, source, fileName)
+                }
+            }
+            is Constructor -> {
+                val ctorScope = classScope.child(hasArguments = true)
+                addParamsToScope(element.parameters, ctorScope)
+                for (param in element.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
+                    param.initializer?.let { checkUnresolvedInExpr(it, ctorScope, source, fileName) }
+                }
+                element.body?.let {
+                    checkUnresolvedInStatements(it.statements, ctorScope, source, fileName)
+                }
+            }
+            is GetAccessor -> {
+                val getScope = classScope.child(hasArguments = true)
+                element.type?.let { checkUnresolvedInType(it, getScope, source, fileName) }
+                element.body?.let {
+                    checkUnresolvedInStatements(it.statements, getScope, source, fileName)
+                }
+            }
+            is SetAccessor -> {
+                val setScope = classScope.child(hasArguments = true)
+                addParamsToScope(element.parameters, setScope)
+                for (param in element.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
+                }
+                element.body?.let {
+                    checkUnresolvedInStatements(it.statements, setScope, source, fileName)
+                }
+            }
+            is ClassStaticBlockDeclaration -> {
+                checkUnresolvedInStatements(element.body.statements, classScope, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun addParamsToScope(params: List<Parameter>, scope: NameScope) {
+        for (param in params) {
+            addBindingName(param.name, scope)
+        }
+    }
+
+    private fun checkUnresolvedInExpr(
+        expr: Expression,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        if (checkDepth > maxCheckDepth) return
+        checkDepth++
+        try { checkUnresolvedInExprCore(expr, scope, source, fileName) }
+        finally { checkDepth-- }
+    }
+
+    private fun checkUnresolvedInExprCore(
+        expr: Expression,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                checkIdentifierResolved(expr.text, expr, scope, source, fileName)
+            }
+            is PropertyAccessExpression -> {
+                // Only check the object, not the property name
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+                checkUnresolvedInExpr(expr.argumentExpression, scope, source, fileName)
+            }
+            is CallExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+                expr.arguments.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
+                expr.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
+            }
+            is NewExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+                expr.arguments?.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
+                expr.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
+            }
+            is BinaryExpression -> {
+                checkUnresolvedInExpr(expr.left, scope, source, fileName)
+                checkUnresolvedInExpr(expr.right, scope, source, fileName)
+            }
+            is PrefixUnaryExpression -> {
+                checkUnresolvedInExpr(expr.operand, scope, source, fileName)
+            }
+            is PostfixUnaryExpression -> {
+                checkUnresolvedInExpr(expr.operand, scope, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkUnresolvedInExpr(expr.condition, scope, source, fileName)
+                checkUnresolvedInExpr(expr.whenTrue, scope, source, fileName)
+                checkUnresolvedInExpr(expr.whenFalse, scope, source, fileName)
+            }
+            is ParenthesizedExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is TypeAssertionExpression -> {
+                checkUnresolvedInType(expr.type, scope, source, fileName)
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is AsExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+                checkUnresolvedInType(expr.type, scope, source, fileName)
+            }
+            is NonNullExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is ArrowFunction -> {
+                val arrowScope = scope.child(hasArguments = false)
+                arrowScope.names.addAll(
+                    expr.typeParameters?.map { it.name.text } ?: emptyList()
+                )
+                addParamsToScope(expr.parameters, arrowScope)
+                for (param in expr.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
+                    param.initializer?.let { checkUnresolvedInExpr(it, arrowScope, source, fileName) }
+                }
+                expr.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
+                when (val body = expr.body) {
+                    is Block -> checkUnresolvedInStatements(body.statements, arrowScope, source, fileName)
+                    is Expression -> checkUnresolvedInExpr(body, arrowScope, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                val fnScope = scope.child(hasArguments = true)
+                expr.name?.let { fnScope.names.add(it.text) }
+                expr.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                addParamsToScope(expr.parameters, fnScope)
+                for (param in expr.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                    param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
+                }
+                expr.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                checkUnresolvedInStatements(expr.body.statements, fnScope, source, fileName)
+            }
+            is ClassExpression -> {
+                val classScope = scope.child()
+                expr.typeParameters?.forEach { classScope.names.add(it.name.text) }
+                expr.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        checkUnresolvedInExpr(type.expression, classScope, source, fileName)
+                        type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
+                    }
+                }
+                for (member in expr.members) {
+                    checkUnresolvedInClassElement(member, classScope, source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> {
+                            // Check computed property names
+                            if (prop.name is ComputedPropertyName) {
+                                checkUnresolvedInExpr(
+                                    (prop.name as ComputedPropertyName).expression,
+                                    scope, source, fileName
+                                )
+                            }
+                            checkUnresolvedInExpr(prop.initializer, scope, source, fileName)
+                        }
+                        is ShorthandPropertyAssignment -> {
+                            checkUnresolvedInExpr(prop.name, scope, source, fileName)
+                        }
+                        is SpreadAssignment -> {
+                            checkUnresolvedInExpr(prop.expression, scope, source, fileName)
+                        }
+                        is MethodDeclaration -> {
+                            val methodScope = scope.child(hasArguments = true)
+                            prop.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            addParamsToScope(prop.parameters, methodScope)
+                            for (param in prop.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                                param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
+                            }
+                            prop.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            prop.body?.let {
+                                checkUnresolvedInStatements(it.statements, methodScope, source, fileName)
+                            }
+                        }
+                        is GetAccessor -> {
+                            prop.body?.let {
+                                checkUnresolvedInStatements(it.statements, scope, source, fileName)
+                            }
+                        }
+                        is SetAccessor -> {
+                            val setScope = scope.child(hasArguments = true)
+                            addParamsToScope(prop.parameters, setScope)
+                            prop.body?.let {
+                                checkUnresolvedInStatements(it.statements, setScope, source, fileName)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
+            }
+            is SpreadElement -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) {
+                    checkUnresolvedInExpr(span.expression, scope, source, fileName)
+                }
+            }
+            is TaggedTemplateExpression -> {
+                checkUnresolvedInExpr(expr.tag, scope, source, fileName)
+                when (val template = expr.template) {
+                    is TemplateExpression -> {
+                        for (span in template.templateSpans) {
+                            checkUnresolvedInExpr(span.expression, scope, source, fileName)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            is TypeOfExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is VoidExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is DeleteExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is AwaitExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+            }
+            is YieldExpression -> {
+                expr.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+            }
+            is CommaListExpression -> {
+                expr.elements.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
+            }
+            is SatisfiesExpression -> {
+                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
+                checkUnresolvedInType(expr.type, scope, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkUnresolvedInType(
+        type: TypeNode,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        if (checkDepth > maxCheckDepth) return
+        checkDepth++
+        try { checkUnresolvedInTypeCore(type, scope, source, fileName) }
+        finally { checkDepth-- }
+    }
+
+    private fun checkUnresolvedInTypeCore(
+        type: TypeNode,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        when (type) {
+            is TypeReference -> {
+                // Check the type name (Identifier or QualifiedName)
+                checkTypeNameResolved(type.typeName, scope, source, fileName)
+                type.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
+            }
+            is ArrayType -> checkUnresolvedInType(type.elementType, scope, source, fileName)
+            is TupleType -> type.elements.forEach { checkUnresolvedInType(it, scope, source, fileName) }
+            is UnionType -> type.types.forEach { checkUnresolvedInType(it, scope, source, fileName) }
+            is IntersectionType -> type.types.forEach { checkUnresolvedInType(it, scope, source, fileName) }
+            is ParenthesizedType -> checkUnresolvedInType(type.type, scope, source, fileName)
+            is TypeOperator -> checkUnresolvedInType(type.type, scope, source, fileName)
+            is IndexedAccessType -> {
+                checkUnresolvedInType(type.objectType, scope, source, fileName)
+                checkUnresolvedInType(type.indexType, scope, source, fileName)
+            }
+            is MappedType -> {
+                val mappedScope = scope.child()
+                type.typeParameter?.let { mappedScope.names.add(it.name.text) }
+                type.type?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
+                type.nameType?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
+            }
+            is ConditionalType -> {
+                checkUnresolvedInType(type.checkType, scope, source, fileName)
+                checkUnresolvedInType(type.extendsType, scope, source, fileName)
+                // infer creates new type names in the true branch
+                val trueScope = scope.child()
+                collectInferTypeNames(type.extendsType, trueScope)
+                checkUnresolvedInType(type.trueType, trueScope, source, fileName)
+                checkUnresolvedInType(type.falseType, scope, source, fileName)
+            }
+            is FunctionType -> {
+                val fnScope = scope.child()
+                type.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                addParamsToScope(type.parameters, fnScope)
+                for (param in type.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                }
+                checkUnresolvedInType(type.type, fnScope, source, fileName)
+            }
+            is ConstructorType -> {
+                val ctorScope = scope.child()
+                type.typeParameters?.forEach { ctorScope.names.add(it.name.text) }
+                addParamsToScope(type.parameters, ctorScope)
+                for (param in type.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
+                }
+                checkUnresolvedInType(type.type, ctorScope, source, fileName)
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is PropertyDeclaration -> {
+                            member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                        }
+                        is MethodDeclaration -> {
+                            val methodScope = scope.child()
+                            member.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            addParamsToScope(member.parameters, methodScope)
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            }
+                            member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TypeQuery -> {
+                // typeof expr — check the expression name
+                checkTypeQueryName(type.exprName, scope, source, fileName)
+            }
+            is TemplateLiteralType -> {
+                type.templateSpans.forEach { span ->
+                    checkUnresolvedInType(span.type, scope, source, fileName)
+                }
+            }
+            is InferType -> {
+                // infer U — U is introduced, not referenced
+            }
+            is RestType -> {
+                checkUnresolvedInType(type.type, scope, source, fileName)
+            }
+            is OptionalType -> {
+                checkUnresolvedInType(type.type, scope, source, fileName)
+            }
+            is NamedTupleMember -> {
+                checkUnresolvedInType(type.type, scope, source, fileName)
+            }
+            else -> {
+                // LiteralType, KeywordType, ThisType, etc. — no name resolution needed
+            }
+        }
+    }
+
+    private fun collectInferTypeNames(type: TypeNode, scope: NameScope) {
+        when (type) {
+            is InferType -> scope.names.add(type.typeParameter.name.text)
+            is UnionType -> type.types.forEach { collectInferTypeNames(it, scope) }
+            is IntersectionType -> type.types.forEach { collectInferTypeNames(it, scope) }
+            is TypeReference -> type.typeArguments?.forEach { collectInferTypeNames(it, scope) }
+            is ArrayType -> collectInferTypeNames(type.elementType, scope)
+            is TupleType -> type.elements.forEach { collectInferTypeNames(it, scope) }
+            is ParenthesizedType -> collectInferTypeNames(type.type, scope)
+            is ConditionalType -> {
+                collectInferTypeNames(type.checkType, scope)
+                collectInferTypeNames(type.extendsType, scope)
+                collectInferTypeNames(type.trueType, scope)
+                collectInferTypeNames(type.falseType, scope)
+            }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { collectInferTypeNames(it, scope) } }
+                collectInferTypeNames(type.type, scope)
+            }
+            is RestType -> collectInferTypeNames(type.type, scope)
+            else -> {}
+        }
+    }
+
+    /**
+     * Check if a type reference name (Identifier or QualifiedName) resolves.
+     * For QualifiedName, only check the leftmost identifier.
+     */
+    private fun checkTypeNameResolved(
+        name: Node,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        when (name) {
+            is Identifier -> {
+                checkIdentifierResolved(name.text, name, scope, source, fileName)
+            }
+            is QualifiedName -> {
+                // Only check the leftmost part of A.B.C
+                var leftmost: Node = name
+                while (leftmost is QualifiedName) leftmost = leftmost.left
+                if (leftmost is Identifier) {
+                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check typeof expression names (e.g., `typeof x`, `typeof a.b.c`).
+     */
+    private fun checkTypeQueryName(
+        name: Node,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        when (name) {
+            is Identifier -> {
+                checkIdentifierResolved(name.text, name, scope, source, fileName)
+            }
+            is QualifiedName -> {
+                var leftmost: Node = name
+                while (leftmost is QualifiedName) leftmost = leftmost.left
+                if (leftmost is Identifier) {
+                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check if an identifier name can be resolved in the current scope chain.
+     * If not, emit TS2304.
+     */
+    private fun checkIdentifierResolved(
+        name: String,
+        node: Node,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        // Skip empty/synthetic names or non-identifier text from parser recovery
+        if (name.isEmpty()) return
+        if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
+        // Skip keywords that parse as identifiers in our AST
+        if (name in KEYWORD_IDENTIFIERS) return
+        // Skip well-known globals that don't need declaration
+        if (scope.has(name)) return
+
+        val start = node.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        diagnostics.add(Diagnostic(
+            message = "Cannot find name '$name'.",
+            category = DiagnosticCategory.Error,
+            code = 2304,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    companion object {
+        /**
+         * Keywords/reserved words that parse as Identifier nodes in our AST.
+         * These should never trigger TS2304.
+         */
+        private val KEYWORD_IDENTIFIERS: Set<String> = setOf(
+            // JS keywords
+            "this", "super", "true", "false", "null",
+            "if", "else", "for", "while", "do", "switch", "case", "default",
+            "break", "continue", "return", "throw", "try", "catch", "finally",
+            "new", "delete", "typeof", "instanceof", "in", "of", "with",
+            "var", "let", "const", "function", "class", "extends",
+            "import", "export", "from", "as",
+            "void", "yield", "debugger",
+            // TS type keywords (may appear as Identifiers after parser recovery)
+            "any", "number", "string", "boolean", "symbol", "bigint",
+            "object", "never", "unknown",
+            // TS modifiers/contextual keywords
+            "public", "private", "protected", "readonly", "abstract",
+            "static", "declare", "override", "accessor",
+            "async", "await", "type", "namespace", "module",
+            "interface", "enum", "implements", "is",
+            "infer", "keyof", "unique", "asserts", "satisfies", "out",
+            // JS strict mode reserved words
+            "package",
+        )
+
+        /**
+         * Well-known global names from lib.d.ts and common environments.
+         * These are always considered "in scope" to avoid false positives
+         * when we don't have actual lib.d.ts type definitions.
+         */
+        private val KNOWN_GLOBALS: Set<String> = setOf(
+            // Special identifiers
+            "undefined", "arguments", "globalThis",
+            // ES5 globals
+            "NaN", "Infinity", "eval",
+            "parseInt", "parseFloat", "isNaN", "isFinite",
+            "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+            "escape", "unescape",
+            // ES5 constructors/types
+            "Object", "Function", "Boolean", "Symbol",
+            "Error", "AggregateError", "EvalError", "RangeError",
+            "ReferenceError", "SyntaxError", "TypeError", "URIError",
+            "Number", "BigInt", "Math", "Date",
+            "String", "RegExp",
+            "Array", "Int8Array", "Uint8Array", "Uint8ClampedArray",
+            "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+            "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+            "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry",
+            "ArrayBuffer", "SharedArrayBuffer", "ArrayBufferView", "DataView", "Atomics",
+            "JSON", "Promise", "Proxy", "Reflect", "Intl",
+            // Iterators/generators
+            "Generator", "GeneratorFunction", "AsyncGenerator", "AsyncGeneratorFunction",
+            "Iterator", "AsyncIterator",
+            // TypeScript utility types (used in type positions)
+            "Partial", "Required", "Readonly", "Record", "Pick", "Omit",
+            "Exclude", "Extract", "NonNullable", "Parameters", "ConstructorParameters",
+            "ReturnType", "InstanceType", "ThisType", "ThisParameterType",
+            "OmitThisParameter", "Uppercase", "Lowercase", "Capitalize", "Uncapitalize",
+            "Awaited", "NoInfer",
+            "Iterable", "IterableIterator", "AsyncIterable", "AsyncIterableIterator",
+            "PromiseLike", "ArrayLike", "ReadonlyArray", "ReadonlyMap", "ReadonlySet",
+            "TemplateStringsArray",
+            "PropertyKey", "PropertyDescriptor", "PropertyDescriptorMap",
+            "TypedPropertyDescriptor",
+            "ClassDecorator", "PropertyDecorator", "MethodDecorator", "ParameterDecorator",
+            "PromiseConstructorLike",
+            "Exclude", "Extract",
+            // Console & timers
+            "console",
+            "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+            "setImmediate", "clearImmediate",
+            "queueMicrotask",
+            // DOM — common types
+            "document", "window", "navigator", "location", "history", "screen",
+            "self", "top", "parent", "frames", "opener",
+            "alert", "confirm", "prompt", "open", "close", "print",
+            "requestAnimationFrame", "cancelAnimationFrame",
+            "requestIdleCallback", "cancelIdleCallback",
+            "fetch", "Headers", "Request", "Response",
+            "URL", "URLSearchParams",
+            "FormData", "Blob", "File", "FileReader", "FileList",
+            "AbortController", "AbortSignal",
+            "TextEncoder", "TextDecoder",
+            "atob", "btoa",
+            "Event", "CustomEvent", "ErrorEvent",
+            "MouseEvent", "KeyboardEvent", "TouchEvent", "FocusEvent",
+            "InputEvent", "WheelEvent", "PointerEvent", "DragEvent",
+            "AnimationEvent", "TransitionEvent", "UIEvent", "ClipboardEvent",
+            "CompositionEvent", "ProgressEvent", "PageTransitionEvent",
+            "PopStateEvent", "HashChangeEvent", "StorageEvent",
+            "MessageEvent", "BeforeUnloadEvent",
+            "EventTarget", "EventListener",
+            "Element", "HTMLElement", "SVGElement",
+            "Node", "NodeList", "HTMLCollection", "NamedNodeMap",
+            "Document", "DocumentFragment", "DocumentType",
+            "Window", "Navigator",
+            "HTMLDivElement", "HTMLSpanElement", "HTMLInputElement",
+            "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement",
+            "HTMLImageElement", "HTMLVideoElement", "HTMLAudioElement",
+            "HTMLCanvasElement", "HTMLTextAreaElement", "HTMLSelectElement",
+            "HTMLOptionElement", "HTMLTableElement", "HTMLTableRowElement",
+            "HTMLTableCellElement", "HTMLIFrameElement", "HTMLScriptElement",
+            "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
+            "HTMLHeadElement", "HTMLBodyElement", "HTMLHtmlElement",
+            "HTMLLIElement", "HTMLUListElement", "HTMLOListElement",
+            "HTMLParagraphElement", "HTMLHeadingElement", "HTMLBRElement",
+            "HTMLHRElement", "HTMLPreElement", "HTMLTemplateElement",
+            "HTMLSlotElement", "HTMLLabelElement", "HTMLFieldSetElement",
+            "HTMLLegendElement", "HTMLDataListElement", "HTMLOutputElement",
+            "HTMLProgressElement", "HTMLMeterElement", "HTMLDetailsElement",
+            "HTMLDialogElement", "HTMLMenuElement",
+            "SVGSVGElement", "SVGPathElement", "SVGCircleElement",
+            "SVGRectElement", "SVGLineElement", "SVGTextElement",
+            "Text", "Comment", "CDATASection", "ProcessingInstruction",
+            "Attr", "CharacterData", "ChildNode", "ParentNode",
+            "DOMRect", "DOMRectReadOnly", "DOMPoint", "DOMPointReadOnly",
+            "DOMMatrix", "DOMMatrixReadOnly", "DOMQuad",
+            "Range", "Selection", "TreeWalker", "NodeIterator",
+            "MutationObserver", "MutationRecord",
+            "IntersectionObserver", "IntersectionObserverEntry",
+            "ResizeObserver", "ResizeObserverEntry",
+            "PerformanceObserver", "PerformanceEntry",
+            "CSSStyleDeclaration", "CSSStyleSheet", "CSSRule", "CSSStyleRule",
+            "MediaQueryList", "MediaQueryListEvent",
+            "Storage", "localStorage", "sessionStorage",
+            "XMLHttpRequest", "XMLSerializer", "DOMParser",
+            "WebSocket", "EventSource", "BroadcastChannel",
+            "MessageChannel", "MessagePort",
+            "Worker", "SharedWorker", "ServiceWorker",
+            "ServiceWorkerRegistration", "ServiceWorkerContainer",
+            "Notification", "PushManager", "PushSubscription",
+            "Cache", "CacheStorage",
+            "Crypto", "CryptoKey", "SubtleCrypto", "crypto",
+            "performance", "Performance", "PerformanceObserver",
+            "ReadableStream", "WritableStream", "TransformStream",
+            "ReadableStreamDefaultReader", "WritableStreamDefaultWriter",
+            "ByteLengthQueuingStrategy", "CountQueuingStrategy",
+            "Image", "ImageData", "ImageBitmap",
+            "CanvasRenderingContext2D", "WebGLRenderingContext", "WebGL2RenderingContext",
+            "OffscreenCanvas",
+            "AudioContext", "AudioBuffer", "AudioNode",
+            "MediaStream", "MediaRecorder",
+            "RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate",
+            "Geolocation", "GeolocationPosition",
+            "Clipboard", "ClipboardItem",
+            "VisualViewport",
+            "indexedDB", "IDBDatabase", "IDBObjectStore", "IDBTransaction",
+            "IDBRequest", "IDBCursor", "IDBKeyRange",
+            "structuredClone", "reportError",
+            // Node.js
+            "require", "module", "exports", "global",
+            "process", "Buffer",
+            "__dirname", "__filename",
+            "__non_webpack_require__",
+            // Testing frameworks
+            "describe", "it", "test", "expect", "jest", "beforeEach", "afterEach",
+            "beforeAll", "afterAll",
+            // Common global augmentations
+            "Symbol",
+        )
     }
 }
