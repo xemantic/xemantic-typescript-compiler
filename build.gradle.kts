@@ -321,6 +321,7 @@ val generateTypeScriptTests by tasks.registering {
 
         var totalBareTests = 0
         var totalParamTests = 0
+        var totalErrorTests = 0
 
         for ((groupChar, files) in groups.entries.sortedBy { it.key }) {
             val suffix = if (groupChar == '#') "Numeric" else groupChar.toString()
@@ -383,18 +384,39 @@ val generateTypeScriptTests by tasks.registering {
                     }
                 }
 
-                // TODO: Re-enable when type checker is implemented
-                // if (errorsBaseline.exists()) {
-                //     sb.appendLine()
-                //     sb.appendLine("    @Test")
-                //     sb.appendLine("    fun `${id}_ts has expected compilation errors matching ${id}_errors_txt`() {")
-                //     sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
-                //     sb.appendLine("        assertTrue(")
-                //     sb.appendLine("            actual = TypeScriptCompiler().compile(source, \"$name.ts\").hasErrors,")
-                //     sb.appendLine("            message = \"Expected compilation errors for $name.ts but none were produced\"")
-                //     sb.appendLine("        )")
-                //     sb.appendLine("    }")
-                // }
+                // .errors.txt baseline test (bare-name)
+                val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
+                if (errorsBaseline.exists()) {
+                    totalErrorTests++
+                    sb.appendLine()
+                    sb.appendLine("    @Test")
+                    sb.appendLine("    fun `${id}_ts has expected errors matching ${id}_errors_txt`() {")
+                    sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\")")
+                    sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$name.errors.txt\"))")
+                    sb.appendLine("    }")
+                }
+
+                // .errors.txt parameterized baseline tests
+                for (config in variations) {
+                    val paramErrorName = paramBaselineName(name, config, "errors.txt")
+                    val paramErrorBaseline = baselinesDir.resolve(paramErrorName)
+                    if (paramErrorBaseline.exists()) {
+                        totalErrorTests++
+                        val configId = config.entries.sortedBy { it.key }
+                            .joinToString("_") { "${it.key}_${it.value}" }
+                            .replace('.', '_')
+                        val overridesStr = config.entries.sortedBy { it.key }
+                            .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
+                        sb.appendLine()
+                        sb.appendLine("    @Test")
+                        sb.appendLine("    fun `${id}_ts__${configId}__has expected errors matching baseline`() {")
+                        sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                        sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr))")
+                        sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$paramErrorName\"))")
+                        sb.appendLine("    }")
+                    }
+                }
             }
 
             sb.appendLine()
@@ -403,7 +425,7 @@ val generateTypeScriptTests by tasks.registering {
             packageDir.resolve("$className.kt").writeText(sb.toString())
         }
 
-        logger.lifecycle("Generated $totalBareTests bare-name + $totalParamTests parameterized = ${totalBareTests + totalParamTests} test functions across ${groups.size} files in: $packageDir")
+        logger.lifecycle("Generated $totalBareTests bare-name JS + $totalParamTests parameterized JS + $totalErrorTests error baseline = ${totalBareTests + totalParamTests + totalErrorTests} test functions across ${groups.size} files in: $packageDir")
     }
 }
 
