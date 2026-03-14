@@ -301,6 +301,11 @@ fun formatErrorBaseline(
             +": "
             +diag.message
             +"\r\n"
+            // Message chain continuation lines (e.g. migration URL for baseUrl)
+            for (chain in diag.messageChain) {
+                +chain
+                +"\r\n"
+            }
         }
         +"\r\n"
         +"\r\n"
@@ -315,6 +320,16 @@ fun formatErrorBaseline(
             +": "
             +diag.message
             +"\r\n"
+            // Message chain continuation lines
+            for (chain in diag.messageChain) {
+                +"!!! "
+                +diag.category.name.lowercase()
+                +" TS"
+                +diag.code.toString()
+                +": "
+                +chain
+                +"\r\n"
+            }
         }
 
         // Part 3: Per-file annotated source
