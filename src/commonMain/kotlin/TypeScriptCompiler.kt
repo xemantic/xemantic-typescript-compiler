@@ -128,42 +128,54 @@ class TypeScriptCompiler {
         }
         val diagnostics = mutableListOf<Diagnostic>()
 
-        // TS5101: Deprecated options (code 5101, sorted before TS5107)
+        // TS5101: Deprecated options (still functioning, code 5101)
         fun addDeprecation5101(
             optionDesc: String,
-            version: String = "7.0",
-            deprecationVersion: String = "6.0",
             messageChain: List<String> = emptyList(),
         ) {
             diagnostics.add(Diagnostic(
-                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
+                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5101,
                 messageChain = messageChain,
             ))
         }
-        // baseUrl deprecation (with migration URL)
+        // TS5102: Removed options (no longer functioning, code 5102)
+        fun addRemoved5102(
+            optionDesc: String,
+            messageChain: List<String> = emptyList(),
+        ) {
+            diagnostics.add(Diagnostic(
+                message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
+                category = DiagnosticCategory.Error,
+                code = 5102,
+                messageChain = messageChain,
+            ))
+        }
+        // baseUrl deprecation (TS5101 with migration URL)
         if (options.baseUrl != null) addDeprecation5101(
             "baseUrl", messageChain = listOf("  Visit https://aka.ms/ts6 for migration information.")
         )
-        // out (deprecated earlier than outFile)
-        if (options.out != null) addDeprecation5101("out", "5.5", "5.0")
-        // charset (deprecated in 5.5)
-        if (options.charset != null) addDeprecation5101("charset", "5.5", "5.0")
-        // downlevelIteration
+        // Removed options (TS5102)
+        if (options.charset != null) addRemoved5102("charset")
+        // downlevelIteration (TS5101 - still deprecated, not removed)
         if (options.downlevelIteration) addDeprecation5101("downlevelIteration")
-        // keyofStringsOnly (deprecated in 5.5)
-        if (options.keyofStringsOnly) addDeprecation5101("keyofStringsOnly", "5.5", "5.0")
-        // noImplicitUseStrict (deprecated in 5.5)
-        if (options.noImplicitUseStrict) addDeprecation5101("noImplicitUseStrict", "5.5", "5.0")
-        // noStrictGenericChecks (deprecated in 5.5)
-        if (options.noStrictGenericChecks) addDeprecation5101("noStrictGenericChecks", "5.5", "5.0")
-        // outFile deprecation (only when explicitly set, not via 'out')
+        if (options.keyofStringsOnly) addRemoved5102("keyofStringsOnly")
+        if (options.noImplicitUseStrict) addRemoved5102("noImplicitUseStrict")
+        if (options.noStrictGenericChecks) addRemoved5102("noStrictGenericChecks")
+        if (options.out != null) addRemoved5102("out")
+        // outFile deprecation (TS5101 - only when explicitly set, not via 'out')
         if (options.outFile != null && options.out == null) addDeprecation5101("outFile")
-        // suppressExcessPropertyErrors (deprecated in 5.5)
-        if (options.suppressExcessPropertyErrors) addDeprecation5101("suppressExcessPropertyErrors", "5.5", "5.0")
-        // suppressImplicitAnyIndexErrors (deprecated in 5.5)
-        if (options.suppressImplicitAnyIndexErrors) addDeprecation5101("suppressImplicitAnyIndexErrors", "5.5", "5.0")
+        if (options.suppressExcessPropertyErrors) addRemoved5102("suppressExcessPropertyErrors")
+        if (options.suppressImplicitAnyIndexErrors) addRemoved5102("suppressImplicitAnyIndexErrors")
+        if (options.importsNotUsedAsValues != null) addRemoved5102(
+            "importsNotUsedAsValues",
+            messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
+        )
+        if (options.preserveValueImports) addRemoved5102(
+            "preserveValueImports",
+            messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
+        )
 
         // TS5107: Deprecated options
         fun addDeprecation(optionDesc: String, version: String = "7.0", deprecationVersion: String = "6.0") {
