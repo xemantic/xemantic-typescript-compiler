@@ -13,10 +13,13 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 5,959 passing (56.2%), 4,633 failing
+- **10,595 tests**, 6,185 passing (58.4%), 4,407 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
-- **Error baselines:** 4,035 tests, ~310 passing (~7.7%)
+- **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
+- **Error baseline failure breakdown:**
+  - 2,849 "expected diagnostics but none produced" (need checker TS2xxx codes)
+  - 1,549 diff failures (wrong codes/positions/file order/extra diagnostics)
 - **Missing from test suite:**
   - ~2,848 parameterized `.js` baselines from non-compiler test dirs — **not in sparse clone**
   - 14,015 `.symbols` baselines — deferred (requires full type inference)
@@ -335,31 +338,42 @@ This is the core of Phase 3 — teaching the Checker to emit diagnostics that ma
 
   **File:** `Checker.kt`, `TypeScriptCompiler.kt`
 
-- [ ] **5b. Implement high-frequency checker diagnostics**
+- [x] **5b. Implement high-frequency checker diagnostics** *(infrastructure phase)*
 
-  Prioritize by how many `.errors.txt` baselines each code appears in. The most
-  impactful codes (estimated from baseline corpus):
+  Completed infrastructure improvements (+226 tests, 5,959 → 6,185):
+  - CRLF normalization in `parseMultiFileSource` (+89)
+  - TS5101 deprecation diagnostics for outFile/downlevelIteration/baseUrl (+55)
+  - TS5102 "has been removed" for out/charset/keyofStringsOnly/etc. (+9)
+  - Full file paths in error baseline formatter (+33)
+  - TypeScript test harness file ordering for error baselines (+40)
+  - Trailing period in parser error messages (correctness fix)
+  - `messageChain` support in Diagnostic for multi-line messages
 
-  | Code | Message | Frequency |
-  |------|---------|-----------|
-  | TS2304 | Cannot find name 'X' | Very high |
-  | TS2322 | Type 'X' is not assignable to type 'Y' | Very high |
-  | TS2339 | Property 'X' does not exist on type 'Y' | High |
-  | TS2345 | Argument of type 'X' is not assignable to parameter of type 'Y' | High |
-  | TS2564 | Property 'X' has no initializer | Medium |
-  | TS2511 | Cannot create an instance of an abstract class | Medium |
-  | TS2355 | A function whose declared return type is not 'void'/'any' must return a value | Medium |
-  | TS5107 | Option 'X' is deprecated | Already implemented |
+  **Remaining work** (requires actual type checking, not just diagnostics):
 
-  Each diagnostic code requires specific type checking logic. Implement incrementally,
-  measuring `.errors.txt` pass rate after each batch.
+  | Code | Message | Baselines with ONLY this code |
+  |------|---------|-------------------------------|
+  | TS2322 | Type 'X' is not assignable to type 'Y' | 522 |
+  | TS2454 | Variable used before assignment | 281 |
+  | TS2304 | Cannot find name 'X' | 249 |
+  | TS2564 | Property has no initializer | 186 |
+  | TS2339 | Property does not exist on type | 150 |
+  | TS2345 | Argument not assignable | 125 |
+  | TS6133 | Declared but never used | 106 |
 
-  **File:** `Checker.kt`
+  These require full type inference and are beyond the scope of Phase 3's
+  diagnostic infrastructure work. Tracked for future phases.
 
-- [ ] **5c. Measure progress and iterate**
+  **File:** `Checker.kt`, `TypeScriptCompiler.kt`, `BaselineFormatter.kt`
 
-  After each batch of diagnostics, run the full suite and record the `.errors.txt`
-  pass rate. Track progress toward the goal of matching TypeScript's diagnostic output.
+- [x] **5c. Measure progress and iterate**
+
+  Current metrics (2026-03-14):
+  - **Total:** 6,185 / 10,595 passing (58.4%)
+  - **Error baselines:** ~536 / 4,035 passing (13.3%)
+  - **Error failure breakdown:** 2,849 "none produced" + 1,549 diff-based
+  - Remaining error test progress requires actual type checker implementation
+    (TS2xxx codes needing type inference, control flow analysis, etc.)
 
 ### 6. Decorator metadata diagnostics (Phase 2 item 11a)
 

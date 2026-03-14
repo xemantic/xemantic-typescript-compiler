@@ -65,6 +65,13 @@ Both developers and AI agents are expected to add entries as they encounter surp
 ### Multi-file baseline gotchas
 
 - **`tsconfig.json` not echoed**: The TypeScript test harness treats `tsconfig.json` as project configuration, not a source file. Never include it in the `sourceEchoes` list in `formatMultiFileBaseline`. Other JSON files (e.g. `tsconfig1.json`) ARE echoed.
+- **Error baseline file ordering**: TypeScript's test harness reorders files in error baselines when the last `@Filename` file contains `require(` or `reference path`, or when `noImplicitReferences` is set. In those cases, the last file is moved to the front. This differs from JS baselines which always use `@Filename` order.
+- **CRLF in test source files**: TypeScript test source files use CRLF line endings. `parseMultiFileSource` normalizes to LF early to avoid trailing `\r` characters causing extra blank lines in error baselines.
+
+### Deprecation diagnostic gotchas
+
+- **TS5101 vs TS5102 vs TS5107**: Three different deprecation codes. TS5107 = target/module/moduleResolution deprecations. TS5101 = outFile/baseUrl/downlevelIteration deprecations (still functioning). TS5102 = removed options (out, charset, keyofStringsOnly, noImplicitUseStrict, etc.) with message "has been removed. Please remove it from your configuration."
+- **TS5101 `baseUrl` migration URL**: `baseUrl` deprecation has a message chain continuation "  Visit https://aka.ms/ts6 for migration information." — requires `messageChain` in the Diagnostic.
 - **`const enum` at statement level**: `parseStatement()` must check for `const enum` (not just inside `export`/`declare` contexts) — otherwise `const enum E {}` is misparse as `const` variable named `enum` + expression `E` + block.
 
 ### Test assertion gotchas
@@ -90,7 +97,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
 2. Implement it — the item describes the deliverable
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. Verify no regressions from the **5,939 currently passing tests**
+4. Verify no regressions from the **6,185 currently passing tests**
 5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
@@ -99,7 +106,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 5,939 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,185 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
