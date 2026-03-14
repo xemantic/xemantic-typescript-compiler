@@ -64,9 +64,13 @@ class Checker(
             checkUnusedDeclarations()
         }
         // 5. Check for variables used before assignment (TS2454)
-        checkDefiniteAssignment()
+        if (!options.strictExplicitlyFalse) {
+            checkDefiniteAssignment()
+        }
         // 6. Check for class properties without initializer (TS2564)
-        checkPropertyInitialization()
+        if (!options.strictExplicitlyFalse) {
+            checkPropertyInitialization()
+        }
         // 7. Check for implicit any parameters (TS7006)
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyParameters()
