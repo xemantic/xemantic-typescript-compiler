@@ -107,15 +107,24 @@ class TypeScriptCompiler {
      * @param source The TypeScript source code to compile.
      * @param fileName The logical file name for this source, used in diagnostics.
      *   Defaults to `"input.ts"`.
+     * @param optionOverrides Compiler option overrides applied after parsing directives
+     *   from the source. Keys are lowercase option names (e.g. `"target"`, `"module"`),
+     *   values are the option value strings (e.g. `"es5"`, `"commonjs"`). Used by
+     *   parameterized tests to vary a single option while keeping all other directives.
      * @return A [CompilationResult] containing the JavaScript output and any diagnostics.
      */
     fun compile(
         source: String,
         fileName: String = "input.ts",
+        optionOverrides: Map<String, String> = emptyMap(),
     ): CompilationResult {
         // Parse multi-file source and compiler options
         val parsed = parseMultiFileSource(source, fileName)
-        val options = parsed.options
+        var options = parsed.options
+        // Apply overrides after parsing directives from source
+        for ((key, value) in optionOverrides) {
+            options = applyDirective(options, key.lowercase(), value)
+        }
         val diagnostics = mutableListOf<Diagnostic>()
 
         // TS5107: AMD and System module formats are deprecated

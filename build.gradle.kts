@@ -250,11 +250,77 @@ val generateTypeScriptTests by tasks.registering {
         // $ sign for use in generated Kotlin string templates
         val D = "\$"
 
+        // Directives that use commas as list separators, NOT multi-value variation
+        val nonVaryDirectives = setOf("lib", "types", "paths", "rootdirs", "typeroots")
+
+        // Regex to extract // @option: value directives from test source
+        val directiveRegex = Regex("""^//\s*@(\w+)\s*:\s*(.+)""", RegexOption.MULTILINE)
+
+        /**
+         * Parse directives from a test source file, returning a map of
+         * lowercase option name to raw value string.
+         */
+        fun parseDirectives(source: String): Map<String, String> {
+            val directives = mutableMapOf<String, String>()
+            for (match in directiveRegex.findAll(source)) {
+                val key = match.groupValues[1].trim().lowercase()
+                val value = match.groupValues[2].trim()
+                if (key != "filename") { // @Filename is structural, not an option
+                    directives[key] = value
+                }
+            }
+            return directives
+        }
+
+        /**
+         * Compute parameterized test variations from multi-value directives.
+         * Returns empty list if no multi-value directives are found.
+         * Each variation is a map of option name to single value.
+         */
+        fun computeVariations(directives: Map<String, String>): List<Map<String, String>> {
+            val varyBy = mutableListOf<Pair<String, List<String>>>()
+            for ((key, value) in directives) {
+                if (key in nonVaryDirectives) continue
+                if (',' !in value) continue
+                val values = value.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+                if (values.size > 1) {
+                    varyBy.add(key to values)
+                }
+            }
+            if (varyBy.isEmpty()) return emptyList()
+
+            // Compute Cartesian product (keys sorted alphabetically)
+            var result = listOf(emptyMap<String, String>())
+            for ((key, values) in varyBy.sortedBy { it.first }) {
+                result = result.flatMap { existing ->
+                    values.map { v -> existing + (key to v) }
+                }
+                if (result.size > 25) {
+                    // Safety limit exceeded — skip parameterized tests for this file
+                    return emptyList()
+                }
+            }
+            return result
+        }
+
+        /**
+         * Construct parameterized baseline filename:
+         * name(key1=value1,key2=value2).ext
+         */
+        fun paramBaselineName(baseName: String, config: Map<String, String>, ext: String): String {
+            val configStr = config.entries.sortedBy { it.key }
+                .joinToString(",") { "${it.key}=${it.value}" }
+            return "$baseName($configStr).$ext"
+        }
+
         // Group by first character to keep individual files manageable
         val groups = testFiles.groupBy { file ->
             val ch = file.nameWithoutExtension.first()
             if (ch.isLetter()) ch.uppercaseChar() else '#'
         }
+
+        var totalBareTests = 0
+        var totalParamTests = 0
 
         for ((groupChar, files) in groups.entries.sortedBy { it.key }) {
             val suffix = if (groupChar == '#') "Numeric" else groupChar.toString()
@@ -276,11 +342,11 @@ val generateTypeScriptTests by tasks.registering {
                 // Replace every dot in the base name with an underscore for the function identifier.
                 val id = name.replace('.', '_')
                 val jsBaseline = baselinesDir.resolve("$name.js")
-                val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
 
                 // .d.ts sections in baselines are stripped by TypeScriptTestSupport.stripDtsSection()
                 // so tests with declaration output can be included safely.
                 if (jsBaseline.exists()) {
+                    totalBareTests++
                     sb.appendLine()
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
@@ -288,6 +354,33 @@ val generateTypeScriptTests by tasks.registering {
                     sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").toBaseline()")
                     sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
                     sb.appendLine("    }")
+                }
+
+                // Parameterized test variations
+                val source = file.readText()
+                val directives = parseDirectives(source)
+                val variations = computeVariations(directives)
+
+                for (config in variations) {
+                    val paramName = paramBaselineName(name, config, "js")
+                    val paramBaseline = baselinesDir.resolve(paramName)
+                    if (paramBaseline.exists()) {
+                        totalParamTests++
+                        // Build config suffix for test function name (e.g., target_es5 or alwaysstrict_true_target_es2015)
+                        val configId = config.entries.sortedBy { it.key }
+                            .joinToString("_") { "${it.key}_${it.value}" }
+                            .replace('.', '_')
+                        // Build overrides map literal for generated code
+                        val overridesStr = config.entries.sortedBy { it.key }
+                            .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
+                        sb.appendLine()
+                        sb.appendLine("    @Test")
+                        sb.appendLine("    fun `${id}_ts__${configId}__compiles to JavaScript matching baseline`() {")
+                        sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                        sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr)).toBaseline()")
+                        sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$paramName\"))")
+                        sb.appendLine("    }")
+                    }
                 }
 
                 // TODO: Re-enable when type checker is implemented
@@ -310,11 +403,7 @@ val generateTypeScriptTests by tasks.registering {
             packageDir.resolve("$className.kt").writeText(sb.toString())
         }
 
-        val totalTests = testFiles.count { file ->
-            val name = file.nameWithoutExtension
-            baselinesDir.resolve("$name.js").exists()
-        }
-        logger.lifecycle("Generated $totalTests test functions across ${groups.size} files in: $packageDir")
+        logger.lifecycle("Generated $totalBareTests bare-name + $totalParamTests parameterized = ${totalBareTests + totalParamTests} test functions across ${groups.size} files in: $packageDir")
     }
 }
 

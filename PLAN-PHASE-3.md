@@ -13,11 +13,13 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **5,442 tests**, 5,122 passing (94.1%), 320 failing
-- Tests cover only **bare-name `.js` baselines** (e.g., `foo.js`)
+- **6,560 tests**, 5,624 passing (85.7%), 936 failing
+- Tests cover bare-name `.js` baselines AND parameterized `.js` baselines
+- **5,413 bare-name tests** (5,122 passing — same as Phase 2 end)
+- **1,114 parameterized tests** (498 passing, 616 failing — mostly `target=es5` downlevel)
 - **Missing from test suite:**
-  - 3,962 parameterized `.js` baselines (e.g., `foo(target=es5).js`) — **0 tested**
-  - 9,055 `.errors.txt` baselines — **0 tested**
+  - ~2,848 parameterized `.js` baselines from non-compiler test dirs — **not in sparse clone**
+  - 9,055 `.errors.txt` baselines — **0 tested** (infrastructure ready)
   - 14,015 `.symbols` baselines — deferred (requires full type inference)
   - 14,015 `.types` baselines — deferred (requires full type inference)
 
@@ -119,7 +121,7 @@ to match the TypeScript harness design documented in `TYPESCRIPT-TEST-HARNESS.md
 
 ### 1. Parameterized test generation
 
-- [ ] **1a. Parse multi-value directives from test source files**
+- [x] **1a. Parse multi-value directives from test source files**
 
   In `build.gradle.kts`, before generating test functions for each `.ts` file, scan for
   multi-value directives (`// @target: ES5, ES2015`) and compute the Cartesian product
@@ -140,7 +142,7 @@ to match the TypeScript harness design documented in `TYPESCRIPT-TEST-HARNESS.md
 
   **File:** `build.gradle.kts` — `generateTypeScriptTests` task
 
-- [ ] **1b. Generate parameterized test functions**
+- [x] **1b. Generate parameterized test functions**
 
   For each configuration in the Cartesian product, generate a `@Test` function that:
   1. Reads the `.ts` source
@@ -174,7 +176,7 @@ to match the TypeScript harness design documented in `TYPESCRIPT-TEST-HARNESS.md
   **File:** `build.gradle.kts`
   **Expected new tests:** ~3,962 (parameterized `.js` baselines)
 
-- [ ] **1c. Handle option override in `TypeScriptCompiler.compile()`**
+- [x] **1c. Handle option override in `TypeScriptCompiler.compile()`**
 
   Add mechanism for test harness to override specific compiler options parsed from the
   source. Options:
