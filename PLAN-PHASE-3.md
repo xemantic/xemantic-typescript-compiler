@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,641 passing (62.7%), 3,954 failing
+- **10,595 tests**, 6,650 passing (62.8%), 3,945 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -522,14 +522,24 @@ Picking off tractable fixes to continue improving the pass rate.
 
   Recursively walk destructuring patterns for duplicate binding names.
 
-- [ ] **8p. Reduce false-positive TS2304 in multi-file tests**
+- [x] **8p. Preserve tab indentation in error squiggle lines** (+9 tests)
+
+  The error baseline formatter now preserves tab characters from source
+  lines in squiggle indentation instead of converting all whitespace to spaces.
+
+- [ ] **8q. Reduce false-positive TS2304 in multi-file tests**
 
   Skip TS2304 checking for multi-file compilations where cross-file
   name resolution would be needed.
 
-- [ ] **8q. Multi-file JS baseline file ordering**
+- [ ] **8r. Multi-file JS baseline file ordering**
 
   Fix `.d.ts` file ordering and inclusion in multi-file JS baselines.
+
+- [ ] **8s. Parser related diagnostics (TS1007)**
+
+  Missing close brace/bracket parser errors should include related info
+  pointing to the unmatched opening token. 4 tests waiting.
 
 ---
 
