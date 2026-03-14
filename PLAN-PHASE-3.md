@@ -377,12 +377,55 @@ This is the core of Phase 3 — teaching the Checker to emit diagnostics that ma
 
 ### 6. Decorator metadata diagnostics (Phase 2 item 11a)
 
-- [ ] **6a. Decorator metadata type serialization** (~3 tests) — *deferred*
+- [x] **6a. Decorator metadata type serialization** (~3 tests) — *skipped/deferred*
 
-  `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`,
-  `metadataOfUnion`. Requires type serialization — significantly more work than
-  other checker integration. Involves runtime type existence checks (typeof pattern),
-  union type narrowing, and `design:paramtypes` emission.
+  Skipped: requires type serialization (`design:paramtypes`), significantly more
+  complex than other checker work. Only 3 tests affected. Deferred to future phase.
+
+### 7. Type checker diagnostics — Phase 3b
+
+Implement type checker diagnostics that unlock `.errors.txt` test passes. Prioritized
+by test count and implementation tractability.
+
+- [ ] **7a. TS6133 — "'X' is declared but its value is never read"** (~106 pure tests)
+
+  Gated by `noUnusedLocals: true` and `noUnusedParameters: true` compiler options.
+  No risk of false positives on tests without these options.
+
+  Implementation:
+  1. After `trackAllImportReferences()`, run `checkUnusedDeclarations()` when options set
+  2. For each source file, walk AST collecting declarations and references per scope
+  3. Report TS6133 for declarations that are not referenced, not exported, and not
+     underscore-prefixed
+  4. Handle: variables, functions, classes, interfaces, type aliases, enums, imports
+  5. Handle both `noUnusedLocals` (variables, functions, classes, types) and
+     `noUnusedParameters` (function/method parameters)
+
+  **Files:** `Checker.kt`
+
+- [ ] **7b. TS2454 — "Variable 'X' is used before being assigned"** (~281 pure tests)
+
+  Requires basic definite assignment analysis. For the simplest pattern (variable
+  declared with type annotation but no initializer, used before any assignment in
+  straight-line code), this is tractable without full control flow analysis.
+
+  **Files:** `Checker.kt`
+
+- [ ] **7c. TS2304 — "Cannot find name 'X'"** (~249 pure tests)
+
+  Requires comprehensive name resolution. Riskier than TS6133/TS2454 due to
+  potential false positives for built-in globals (console, Array, Promise, etc.).
+  Need awareness of ambient declarations and lib.d.ts types.
+
+  **Files:** `Checker.kt`
+
+- [ ] **7d. TS2564 — "Property 'X' has no initializer"** (~186 pure tests)
+
+  Requires `strictPropertyInitialization` (part of `strict: true`). Check class
+  properties with type annotations but no initializer and no definite assignment
+  in the constructor.
+
+  **Files:** `Checker.kt`
 
 ---
 
