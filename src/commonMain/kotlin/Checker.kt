@@ -4648,6 +4648,7 @@ class Checker(
             }
             is InterfaceDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
+                checkDuplicateInterfaceMembers(stmt.members, source, fileName)
             }
             is TypeAliasDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
@@ -4883,6 +4884,36 @@ class Checker(
             if (isDuplicate) {
                 for (decl in group) {
                     emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Check for duplicate interface members: properties with the same name.
+     * Unlike classes, interfaces can have method overloads (same name, different params).
+     * Only same-name properties are flagged.
+     */
+    private fun checkDuplicateInterfaceMembers(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        data class PropInfo(val name: String, val nameNode: Node)
+        val props = mutableListOf<PropInfo>()
+        for (member in members) {
+            if (member is PropertyDeclaration) {
+                val name = member.name
+                if (name is Identifier) {
+                    props.add(PropInfo(name.text, name))
+                }
+            }
+        }
+        val byName = props.groupBy { it.name }
+        for ((_, group) in byName) {
+            if (group.size >= 2) {
+                for (prop in group) {
+                    emitDuplicate2300(prop.name, prop.nameNode, source, fileName)
                 }
             }
         }
