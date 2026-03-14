@@ -39,13 +39,14 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
 
   Save the categorized list to `FAILURES.md` for tracking.
 
-- [ ] **0b. Study the TypeScript checker architecture** — Read TypeScript's checker design from public documentation and any available source. Key concepts to understand:
+- [x] **0b. Study the TypeScript checker architecture** — Read TypeScript's checker design from public documentation and any available source. Key concepts to understand:
   - Binder: scope creation, symbol table population, declaration merging
   - Checker: type inference, structural subtyping, assignability, narrowing
   - How the checker communicates with the transformer (symbol flags, const enum values)
   - Which transforms depend on type info vs which are purely syntactic
+  - **Output:** `DESIGN-TYPE-CHECKER.md` — 1,148-line comprehensive design document
 
-- [ ] **0c. Design the Kotlin type checker architecture** — Design document (not code) answering:
+- [x] **0c. Design the Kotlin type checker architecture** — Design document (not code) answering:
   - What `Type` sealed class hierarchy is needed?
   - What `Symbol` class fields are needed?
   - How does the Binder walk the AST?
