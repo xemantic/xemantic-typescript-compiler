@@ -334,12 +334,11 @@ fun formatErrorBaseline(
 
         // Part 3: Per-file annotated source
         for ((fileName, content) in sourceFiles) {
-            val baseName = fileName.substringAfterLast('/')
-            val fileDiags = sorted.filter { it.fileName == baseName }
+            val fileDiags = sorted.filter { it.fileName == fileName || it.fileName == fileName.substringAfterLast('/') }
             val errorCount = fileDiags.size
 
             +"==== "
-            +baseName
+            +fileName
             +" ("
             +errorCount.toString()
             +" errors) ===="
