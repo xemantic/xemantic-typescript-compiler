@@ -59,6 +59,10 @@ class Checker(
         computeAllEnumValues()
         // 3. Track import references across all files
         trackAllImportReferences()
+        // 4. Check for unused declarations (TS6133/TS6196)
+        if (options.noUnusedLocals || options.noUnusedParameters) {
+            checkUnusedDeclarations()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1104,5 +1108,1188 @@ class Checker(
             if (fileBase == baseName) return fileName
         }
         return null
+    }
+
+    // -----------------------------------------------------------------------
+    // Unused declaration checking (TS6133/TS6196)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Tracks declarations and references within a scope for unused checking.
+     */
+    private class UnusedScope {
+        /** All declarations in this scope: name → list of (declaration node, name node, kind). */
+        val declarations = mutableListOf<UnusedDecl>()
+        /** Names referenced in this scope or any nested scope. */
+        val referencedNames = mutableSetOf<String>()
+    }
+
+    private data class UnusedDecl(
+        val name: String,
+        val nameNode: Node,       // Node whose pos gives the error position
+        val declNode: Node,       // The full declaration node
+        val spanLength: Int = 0,  // Explicit squiggle length (0 = use name.length)
+        val isExported: Boolean,
+        val isParameter: Boolean,
+        val isTypeOnly: Boolean,  // interface, type alias
+    )
+
+    private fun checkUnusedDeclarations() {
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val isModule = isModuleFile(result.sourceFile.statements)
+            checkUnusedInStatements(
+                result.sourceFile.statements,
+                source,
+                result.sourceFile.fileName,
+                isTopLevel = true,
+                isModuleScope = isModule,
+            )
+        }
+    }
+
+    /**
+     * Check if a file is a module (has import/export statements).
+     * Non-module files' top-level declarations are global and not checked for unused.
+     */
+    private fun isModuleFile(statements: List<Statement>): Boolean {
+        for (stmt in statements) {
+            when (stmt) {
+                is ImportDeclaration -> return true
+                is ImportEqualsDeclaration -> return true
+                is ExportDeclaration -> return true
+                is ExportAssignment -> return true
+                else -> {
+                    if (stmt is Declaration) {
+                        val modifiers = when (stmt) {
+                            is FunctionDeclaration -> stmt.modifiers
+                            is ClassDeclaration -> stmt.modifiers
+                            is VariableStatement -> stmt.modifiers
+                            is EnumDeclaration -> stmt.modifiers
+                            is InterfaceDeclaration -> stmt.modifiers
+                            is TypeAliasDeclaration -> stmt.modifiers
+                            is ModuleDeclaration -> stmt.modifiers
+                            else -> emptySet()
+                        }
+                        if (ModifierFlag.Export in modifiers) return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private fun checkUnusedInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        isTopLevel: Boolean,
+        isModuleScope: Boolean = false,
+    ) {
+        // Skip file-level declarations in non-module files (they're global)
+        if (isTopLevel && !isModuleScope) {
+            // Still recurse into nested scopes (namespace bodies, function bodies)
+            for (stmt in statements) {
+                checkUnusedInNestedScopes(stmt, source, fileName)
+            }
+            return
+        }
+
+        val scope = UnusedScope()
+
+        // 1. Collect declarations
+        for (stmt in statements) {
+            collectUnusedDeclarations(stmt, scope, isTopLevel)
+        }
+
+        // 2. Collect references
+        for (stmt in statements) {
+            collectUnusedReferences(stmt, scope)
+        }
+
+        // 3. Report unreferenced declarations
+        for (decl in scope.declarations) {
+            if (decl.name in scope.referencedNames) continue
+            if (decl.name.startsWith("_")) continue
+            if (decl.isExported) continue
+
+            if (decl.isParameter) {
+                if (!options.noUnusedParameters) continue
+            } else {
+                if (!options.noUnusedLocals) continue
+            }
+
+            val nameNode = decl.nameNode
+            val start = nameNode.pos
+            // Compute squiggle length: for imports using whole-statement node,
+            // measure the line text; otherwise use identifier text length
+            val length = when {
+                decl.spanLength > 0 -> decl.spanLength
+                nameNode is ImportDeclaration -> {
+                    // Squiggle covers the entire import statement line
+                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+                    lineEnd - start
+                }
+                else -> decl.name.length
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+            // Classes use TS6196 "declared but never used", others use TS6133
+            val isClassDecl = decl.declNode is ClassDeclaration
+            val code = if (isClassDecl) 6196 else 6133
+            val message = if (isClassDecl) {
+                "'${decl.name}' is declared but never used."
+            } else {
+                "'${decl.name}' is declared but its value is never read."
+            }
+
+            diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+
+        // 4. Recurse into nested scopes (function bodies, class bodies, etc.)
+        for (stmt in statements) {
+            checkUnusedInNestedScopes(stmt, source, fileName)
+        }
+    }
+
+    private fun collectUnusedDeclarations(
+        stmt: Statement,
+        scope: UnusedScope,
+        isTopLevel: Boolean,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val isExported = ModifierFlag.Export in stmt.modifiers
+                for (decl in stmt.declarationList.declarations) {
+                    collectVarDeclNames(decl.name, decl, isExported, scope)
+                }
+            }
+            is FunctionDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val name = stmt.name ?: return
+                val isExported = ModifierFlag.Export in stmt.modifiers ||
+                    ModifierFlag.Default in stmt.modifiers
+                scope.declarations.add(UnusedDecl(
+                    name = name.text,
+                    nameNode = name,
+                    declNode = stmt,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = false,
+                ))
+            }
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val name = stmt.name ?: return
+                val isExported = ModifierFlag.Export in stmt.modifiers ||
+                    ModifierFlag.Default in stmt.modifiers
+                scope.declarations.add(UnusedDecl(
+                    name = name.text,
+                    nameNode = name,
+                    declNode = stmt,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = false,
+                ))
+            }
+            is InterfaceDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val isExported = ModifierFlag.Export in stmt.modifiers
+                scope.declarations.add(UnusedDecl(
+                    name = stmt.name.text,
+                    nameNode = stmt.name,
+                    declNode = stmt,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = true,
+                ))
+            }
+            is TypeAliasDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val isExported = ModifierFlag.Export in stmt.modifiers
+                scope.declarations.add(UnusedDecl(
+                    name = stmt.name.text,
+                    nameNode = stmt.name,
+                    declNode = stmt,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = true,
+                ))
+            }
+            is EnumDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val isExported = ModifierFlag.Export in stmt.modifiers
+                scope.declarations.add(UnusedDecl(
+                    name = stmt.name.text,
+                    nameNode = stmt.name,
+                    declNode = stmt,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = false,
+                ))
+            }
+            is ModuleDeclaration -> {
+                // Namespaces/modules are not reported as unused — they always
+                // produce runtime code (var + IIFE) and may be used from other files
+            }
+            is ImportDeclaration -> {
+                if (stmt.importClause?.isTypeOnly == true) return
+                val clause = stmt.importClause ?: return
+                val bindings = clause.namedBindings
+                when (bindings) {
+                    is NamedImports -> {
+                        // For single-specifier imports: squiggle the entire import statement
+                        // For multi-specifier imports: squiggle individual specifiers
+                        for (spec in bindings.elements) {
+                            if (spec.isTypeOnly) continue
+                            val isSingleSpecifier = bindings.elements.size == 1
+                            scope.declarations.add(UnusedDecl(
+                                name = spec.name.text,
+                                nameNode = if (isSingleSpecifier) stmt else spec,
+                                declNode = stmt,
+                                isExported = false,
+                                isParameter = false,
+                                isTypeOnly = false,
+                            ))
+                        }
+                    }
+                    is NamespaceImport -> {
+                        scope.declarations.add(UnusedDecl(
+                            name = bindings.name.text,
+                            nameNode = stmt,
+                            declNode = stmt,
+                            isExported = false,
+                            isParameter = false,
+                            isTypeOnly = false,
+                        ))
+                    }
+                    else -> {}
+                }
+                // Default import
+                if (clause.name != null) {
+                    scope.declarations.add(UnusedDecl(
+                        name = clause.name.text,
+                        nameNode = stmt,
+                        declNode = stmt,
+                        isExported = false,
+                        isParameter = false,
+                        isTypeOnly = false,
+                    ))
+                }
+            }
+            is ImportEqualsDeclaration -> {
+                val isExported = ModifierFlag.Export in stmt.modifiers
+                scope.declarations.add(UnusedDecl(
+                    name = stmt.name.text,
+                    nameNode = stmt.name,
+                    declNode = stmt,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = false,
+                ))
+            }
+            else -> {}
+        }
+    }
+
+    private fun collectVarDeclNames(
+        name: Expression,
+        declNode: Node,
+        isExported: Boolean,
+        scope: UnusedScope,
+    ) {
+        when (name) {
+            is Identifier -> {
+                scope.declarations.add(UnusedDecl(
+                    name = name.text,
+                    nameNode = name,
+                    declNode = declNode,
+                    isExported = isExported,
+                    isParameter = false,
+                    isTypeOnly = false,
+                ))
+            }
+            is ObjectBindingPattern -> {
+                for (element in name.elements) {
+                    collectVarDeclNames(element.name, element, isExported, scope)
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (element in name.elements) {
+                    if (element is BindingElement) {
+                        collectVarDeclNames(element.name, element, isExported, scope)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Collect all name references from a statement (including nested expressions).
+     * This is used for unused declaration checking — it marks names as "referenced"
+     * when they appear in value or type positions.
+     */
+    private fun collectUnusedReferences(stmt: Statement, scope: UnusedScope) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { collectRefsFromExpr(it, scope) }
+                    decl.type?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is ExpressionStatement -> collectRefsFromExpr(stmt.expression, scope)
+            is ReturnStatement -> stmt.expression?.let { collectRefsFromExpr(it, scope) }
+            is IfStatement -> {
+                collectRefsFromExpr(stmt.expression, scope)
+                collectUnusedReferences(stmt.thenStatement, scope)
+                stmt.elseStatement?.let { collectUnusedReferences(it, scope) }
+            }
+            is Block -> stmt.statements.forEach { collectUnusedReferences(it, scope) }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.initializer?.let { collectRefsFromExpr(it, scope) }
+                        }
+                    }
+                    is Expression -> collectRefsFromExpr(init, scope)
+                    else -> {}
+                }
+                stmt.condition?.let { collectRefsFromExpr(it, scope) }
+                stmt.incrementor?.let { collectRefsFromExpr(it, scope) }
+                collectUnusedReferences(stmt.statement, scope)
+            }
+            is ForInStatement -> {
+                collectRefsFromExpr(stmt.expression, scope)
+                collectUnusedReferences(stmt.statement, scope)
+            }
+            is ForOfStatement -> {
+                collectRefsFromExpr(stmt.expression, scope)
+                collectUnusedReferences(stmt.statement, scope)
+            }
+            is WhileStatement -> {
+                collectRefsFromExpr(stmt.expression, scope)
+                collectUnusedReferences(stmt.statement, scope)
+            }
+            is DoStatement -> {
+                collectUnusedReferences(stmt.statement, scope)
+                collectRefsFromExpr(stmt.expression, scope)
+            }
+            is SwitchStatement -> {
+                collectRefsFromExpr(stmt.expression, scope)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            collectRefsFromExpr(clause.expression, scope)
+                            clause.statements.forEach { collectUnusedReferences(it, scope) }
+                        }
+                        is DefaultClause -> {
+                            clause.statements.forEach { collectUnusedReferences(it, scope) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ThrowStatement -> stmt.expression?.let { collectRefsFromExpr(it, scope) }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { collectUnusedReferences(it, scope) }
+                stmt.catchClause?.block?.statements?.forEach { collectUnusedReferences(it, scope) }
+                stmt.finallyBlock?.statements?.forEach { collectUnusedReferences(it, scope) }
+            }
+            is LabeledStatement -> collectUnusedReferences(stmt.statement, scope)
+            is WithStatement -> {
+                collectRefsFromExpr(stmt.expression, scope)
+                collectUnusedReferences(stmt.statement, scope)
+            }
+            is FunctionDeclaration -> {
+                // References inside function bodies count as usage of outer scope names
+                stmt.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                for (param in stmt.parameters) {
+                    param.initializer?.let { collectRefsFromExpr(it, scope) }
+                    param.type?.let { collectRefsFromType(it, scope) }
+                    param.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                }
+                stmt.type?.let { collectRefsFromType(it, scope) }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectRefsFromType(it, scope) }
+                    tp.default?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is ClassDeclaration -> {
+                stmt.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        collectRefsFromExpr(type.expression, scope)
+                        type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+                    }
+                }
+                stmt.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                for (member in stmt.members) {
+                    collectRefsFromClassElement(member, scope)
+                }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectRefsFromType(it, scope) }
+                    tp.default?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is EnumDeclaration -> {
+                for (member in stmt.members) {
+                    member.initializer?.let { collectRefsFromExpr(it, scope) }
+                }
+            }
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> body.statements.forEach { collectUnusedReferences(it, scope) }
+                    is ModuleDeclaration -> collectUnusedReferences(body, scope)
+                    else -> {}
+                }
+            }
+            is ExportDeclaration -> {
+                // export { X } — X is a reference
+                when (val clause = stmt.exportClause) {
+                    is NamedExports -> {
+                        for (spec in clause.elements) {
+                            val name = spec.propertyName?.text ?: spec.name.text
+                            scope.referencedNames.add(name)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            is ExportAssignment -> {
+                collectRefsFromExpr(stmt.expression, scope)
+            }
+            else -> {}
+        }
+    }
+
+    private fun collectRefsFromExpr(expr: Expression, scope: UnusedScope) {
+        when (expr) {
+            is Identifier -> scope.referencedNames.add(expr.text)
+            is PropertyAccessExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+            }
+            is ElementAccessExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+                collectRefsFromExpr(expr.argumentExpression, scope)
+            }
+            is CallExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+                expr.arguments.forEach { collectRefsFromExpr(it, scope) }
+                expr.typeArguments?.forEach { collectRefsFromType(it, scope) }
+            }
+            is NewExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+                expr.arguments?.forEach { collectRefsFromExpr(it, scope) }
+                expr.typeArguments?.forEach { collectRefsFromType(it, scope) }
+            }
+            is BinaryExpression -> {
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    collectRefsFromExpr(current.right, scope)
+                    current = current.left
+                }
+                collectRefsFromExpr(current, scope)
+            }
+            is ConditionalExpression -> {
+                collectRefsFromExpr(expr.condition, scope)
+                collectRefsFromExpr(expr.whenTrue, scope)
+                collectRefsFromExpr(expr.whenFalse, scope)
+            }
+            is PrefixUnaryExpression -> collectRefsFromExpr(expr.operand, scope)
+            is PostfixUnaryExpression -> collectRefsFromExpr(expr.operand, scope)
+            is ParenthesizedExpression -> collectRefsFromExpr(expr.expression, scope)
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { collectRefsFromExpr(it, scope) }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> {
+                            collectRefsFromExpr(prop.initializer, scope)
+                            val propName = prop.name
+                            if (propName is ComputedPropertyName) {
+                                collectRefsFromExpr(propName.expression, scope)
+                            }
+                        }
+                        is ShorthandPropertyAssignment -> {
+                            scope.referencedNames.add(prop.name.text)
+                        }
+                        is SpreadAssignment -> collectRefsFromExpr(prop.expression, scope)
+                        is MethodDeclaration -> {
+                            prop.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                            prop.parameters.forEach { param ->
+                                param.initializer?.let { collectRefsFromExpr(it, scope) }
+                            }
+                        }
+                        is GetAccessor -> {
+                            prop.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                        }
+                        is SetAccessor -> {
+                            prop.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> body.statements.forEach { collectUnusedReferences(it, scope) }
+                    is Expression -> collectRefsFromExpr(body, scope)
+                    else -> {}
+                }
+                expr.parameters.forEach { param ->
+                    param.initializer?.let { collectRefsFromExpr(it, scope) }
+                    param.type?.let { collectRefsFromType(it, scope) }
+                }
+                expr.type?.let { collectRefsFromType(it, scope) }
+            }
+            is FunctionExpression -> {
+                expr.body.statements.forEach { collectUnusedReferences(it, scope) }
+                expr.parameters.forEach { param ->
+                    param.initializer?.let { collectRefsFromExpr(it, scope) }
+                    param.type?.let { collectRefsFromType(it, scope) }
+                }
+                expr.type?.let { collectRefsFromType(it, scope) }
+            }
+            is ClassExpression -> {
+                expr.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        collectRefsFromExpr(type.expression, scope)
+                        type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+                    }
+                }
+                for (member in expr.members) {
+                    collectRefsFromClassElement(member, scope)
+                }
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { collectRefsFromExpr(it.expression, scope) }
+            }
+            is TaggedTemplateExpression -> {
+                collectRefsFromExpr(expr.tag, scope)
+                when (val template = expr.template) {
+                    is TemplateExpression -> {
+                        template.templateSpans.forEach { collectRefsFromExpr(it.expression, scope) }
+                    }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> collectRefsFromExpr(expr.expression, scope)
+            is AwaitExpression -> collectRefsFromExpr(expr.expression, scope)
+            is YieldExpression -> expr.expression?.let { collectRefsFromExpr(it, scope) }
+            is DeleteExpression -> collectRefsFromExpr(expr.expression, scope)
+            is TypeOfExpression -> collectRefsFromExpr(expr.expression, scope)
+            is VoidExpression -> collectRefsFromExpr(expr.expression, scope)
+            is AsExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+                collectRefsFromType(expr.type, scope)
+            }
+            is SatisfiesExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+                collectRefsFromType(expr.type, scope)
+            }
+            is NonNullExpression -> collectRefsFromExpr(expr.expression, scope)
+            is TypeAssertionExpression -> {
+                collectRefsFromExpr(expr.expression, scope)
+                collectRefsFromType(expr.type, scope)
+            }
+            is CommaListExpression -> expr.elements.forEach { collectRefsFromExpr(it, scope) }
+            is JsxElement -> {
+                collectRefsFromExpr(expr.openingElement.tagName, scope)
+                for (child in expr.children) {
+                    if (child is JsxExpressionContainer) {
+                        child.expression?.let { collectRefsFromExpr(it, scope) }
+                    } else if (child is Expression) {
+                        collectRefsFromExpr(child, scope)
+                    }
+                }
+            }
+            is JsxSelfClosingElement -> {
+                collectRefsFromExpr(expr.tagName, scope)
+                for (attr in expr.attributes) {
+                    when (attr) {
+                        is JsxAttribute -> {
+                            val v = attr.value
+                            if (v is JsxExpressionContainer) {
+                                v.expression?.let { collectRefsFromExpr(it, scope) }
+                            } else if (v is Expression) {
+                                collectRefsFromExpr(v, scope)
+                            }
+                        }
+                        is JsxSpreadAttribute -> collectRefsFromExpr(attr.expression, scope)
+                        else -> {}
+                    }
+                }
+            }
+            is JsxFragment -> {
+                for (child in expr.children) {
+                    if (child is JsxExpressionContainer) {
+                        child.expression?.let { collectRefsFromExpr(it, scope) }
+                    } else if (child is Expression) {
+                        collectRefsFromExpr(child, scope)
+                    }
+                }
+            }
+            else -> {} // literals, omitted expressions, binding patterns, etc.
+        }
+    }
+
+    private fun collectRefsFromClassElement(element: ClassElement, scope: UnusedScope) {
+        when (element) {
+            is PropertyDeclaration -> {
+                element.initializer?.let { collectRefsFromExpr(it, scope) }
+                element.type?.let { collectRefsFromType(it, scope) }
+                element.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+            }
+            is MethodDeclaration -> {
+                element.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                element.parameters.forEach { param ->
+                    param.initializer?.let { collectRefsFromExpr(it, scope) }
+                    param.type?.let { collectRefsFromType(it, scope) }
+                    param.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                }
+                element.type?.let { collectRefsFromType(it, scope) }
+                element.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                element.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is Constructor -> {
+                element.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                element.parameters.forEach { param ->
+                    param.initializer?.let { collectRefsFromExpr(it, scope) }
+                    param.type?.let { collectRefsFromType(it, scope) }
+                    param.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                }
+            }
+            is GetAccessor -> {
+                element.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                element.type?.let { collectRefsFromType(it, scope) }
+                element.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+            }
+            is SetAccessor -> {
+                element.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                element.parameters.forEach { param ->
+                    param.type?.let { collectRefsFromType(it, scope) }
+                }
+                element.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+            }
+            is ClassStaticBlockDeclaration -> {
+                element.body.statements.forEach { collectUnusedReferences(it, scope) }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Collect name references from type nodes. Type references count as usage
+     * for unused declaration checking — `let x: MyType` counts as using `MyType`.
+     */
+    private fun collectRefsFromType(type: TypeNode, scope: UnusedScope) {
+        when (type) {
+            is TypeReference -> {
+                when (val name = type.typeName) {
+                    is Identifier -> scope.referencedNames.add(name.text)
+                    is QualifiedName -> {
+                        // For A.B.C, only the leftmost name is a scope reference
+                        var current: Node = name
+                        while (current is QualifiedName) current = current.left
+                        if (current is Identifier) scope.referencedNames.add(current.text)
+                    }
+                    else -> {}
+                }
+                type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+            }
+            is ArrayType -> collectRefsFromType(type.elementType, scope)
+            is TupleType -> type.elements.forEach { collectRefsFromType(it, scope) }
+            is UnionType -> type.types.forEach { collectRefsFromType(it, scope) }
+            is IntersectionType -> type.types.forEach { collectRefsFromType(it, scope) }
+            is ParenthesizedType -> collectRefsFromType(type.type, scope)
+            is FunctionType -> {
+                type.parameters.forEach { param ->
+                    param.type?.let { collectRefsFromType(it, scope) }
+                }
+                collectRefsFromType(type.type, scope)
+                type.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectRefsFromType(it, scope) }
+                    tp.default?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { param ->
+                    param.type?.let { collectRefsFromType(it, scope) }
+                }
+                collectRefsFromType(type.type, scope)
+            }
+            is TypeQuery -> {
+                when (val name = type.exprName) {
+                    is Identifier -> scope.referencedNames.add(name.text)
+                    is QualifiedName -> {
+                        var current: Node = name
+                        while (current is QualifiedName) current = current.left
+                        if (current is Identifier) scope.referencedNames.add(current.text)
+                    }
+                    else -> {}
+                }
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is PropertyDeclaration -> {
+                            member.type?.let { collectRefsFromType(it, scope) }
+                        }
+                        is MethodDeclaration -> {
+                            member.parameters.forEach { param ->
+                                param.type?.let { collectRefsFromType(it, scope) }
+                            }
+                            member.type?.let { collectRefsFromType(it, scope) }
+                        }
+                        is IndexSignature -> {
+                            member.parameters.forEach { param ->
+                                param.type?.let { collectRefsFromType(it, scope) }
+                            }
+                            member.type?.let { collectRefsFromType(it, scope) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ConditionalType -> {
+                collectRefsFromType(type.checkType, scope)
+                collectRefsFromType(type.extendsType, scope)
+                collectRefsFromType(type.trueType, scope)
+                collectRefsFromType(type.falseType, scope)
+            }
+            is MappedType -> {
+                type.type?.let { collectRefsFromType(it, scope) }
+                type.nameType?.let { collectRefsFromType(it, scope) }
+                type.typeParameter.constraint?.let { collectRefsFromType(it, scope) }
+            }
+            is IndexedAccessType -> {
+                collectRefsFromType(type.objectType, scope)
+                collectRefsFromType(type.indexType, scope)
+            }
+            is TypeOperator -> collectRefsFromType(type.type, scope)
+            is InferType -> {} // infer T — doesn't reference existing names
+            is TemplateLiteralType -> {
+                type.templateSpans.forEach { span ->
+                    collectRefsFromType(span.type, scope)
+                }
+            }
+            is RestType -> collectRefsFromType(type.type, scope)
+            is NamedTupleMember -> collectRefsFromType(type.type, scope)
+            is OptionalType -> collectRefsFromType(type.type, scope)
+            is ImportType -> {
+                type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+            }
+            else -> {} // keyword types, literal types, this type, etc.
+        }
+    }
+
+    /**
+     * Recurse into nested scopes to check for unused declarations within them.
+     */
+    private fun checkUnusedInNestedScopes(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                stmt.body?.let { body ->
+                    checkUnusedInFunctionLike(
+                        body.statements, stmt.parameters, source, fileName,
+                    )
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    checkUnusedInClassElement(member, source, fileName)
+                }
+            }
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkUnusedInStatements(
+                        body.statements, source, fileName, isTopLevel = false,
+                    )
+                    is ModuleDeclaration -> checkUnusedInNestedScopes(
+                        body, source, fileName,
+                    )
+                    else -> {}
+                }
+            }
+            is VariableStatement -> {
+                // Check initializer expressions for nested function-likes
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkUnusedInExpr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> {
+                checkUnusedInExpr(stmt.expression, source, fileName)
+            }
+            is ReturnStatement -> {
+                stmt.expression?.let { checkUnusedInExpr(it, source, fileName) }
+            }
+            is Block -> checkUnusedInStatements(
+                stmt.statements, source, fileName, isTopLevel = false,
+            )
+            is IfStatement -> {
+                checkUnusedInExpr(stmt.expression, source, fileName)
+                checkUnusedInNestedScopes(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkUnusedInNestedScopes(it, source, fileName) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.initializer?.let { checkUnusedInExpr(it, source, fileName) }
+                        }
+                    }
+                    is Expression -> checkUnusedInExpr(init, source, fileName)
+                    else -> {}
+                }
+                checkUnusedInNestedScopes(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                checkForLoopVariable(stmt.initializer, stmt.statement, source, fileName)
+                checkUnusedInNestedScopes(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkForLoopVariable(stmt.initializer, stmt.statement, source, fileName)
+                checkUnusedInNestedScopes(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> checkUnusedInNestedScopes(stmt.statement, source, fileName)
+            is DoStatement -> checkUnusedInNestedScopes(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                checkUnusedInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> clause.statements.forEach {
+                            checkUnusedInNestedScopes(it, source, fileName)
+                        }
+                        is DefaultClause -> clause.statements.forEach {
+                            checkUnusedInNestedScopes(it, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach {
+                    checkUnusedInNestedScopes(it, source, fileName)
+                }
+                stmt.catchClause?.block?.statements?.forEach {
+                    checkUnusedInNestedScopes(it, source, fileName)
+                }
+                stmt.finallyBlock?.statements?.forEach {
+                    checkUnusedInNestedScopes(it, source, fileName)
+                }
+            }
+            is LabeledStatement -> checkUnusedInNestedScopes(stmt.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    /**
+     * Check for unused declarations inside expression-level function-likes
+     * (function expressions, arrow functions, class expressions).
+     */
+    private fun checkUnusedInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is FunctionExpression -> {
+                checkUnusedInFunctionLike(
+                    expr.body.statements, expr.parameters, source, fileName,
+                )
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkUnusedInFunctionLike(
+                        body.statements, expr.parameters, source, fileName,
+                    )
+                    is Expression -> {
+                        // Arrow with expression body — still check parameters
+                        if (options.noUnusedParameters) {
+                            val scope = UnusedScope()
+                            for (param in expr.parameters) {
+                                val name = param.name
+                                if (name is Identifier && !name.text.startsWith("_")) {
+                                    scope.declarations.add(UnusedDecl(
+                                        name = name.text,
+                                        nameNode = name,
+                                        declNode = param,
+                                        isExported = false,
+                                        isParameter = true,
+                                        isTypeOnly = false,
+                                    ))
+                                }
+                            }
+                            collectRefsFromExpr(body, scope)
+                            for (decl in scope.declarations) {
+                                if (decl.name in scope.referencedNames) continue
+                                val start = decl.nameNode.pos
+                                val length = decl.name.length
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "'${decl.name}' is declared but its value is never read.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 6133,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                        checkUnusedInExpr(body, source, fileName)
+                    }
+                    else -> {}
+                }
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    checkUnusedInClassElement(member, source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is MethodDeclaration -> {
+                            prop.body?.let { body ->
+                                checkUnusedInFunctionLike(
+                                    body.statements, prop.parameters, source, fileName,
+                                )
+                            }
+                        }
+                        is GetAccessor -> {
+                            prop.body?.let { body ->
+                                checkUnusedInFunctionLike(
+                                    body.statements, prop.parameters, source, fileName,
+                                )
+                            }
+                        }
+                        is SetAccessor -> {
+                            prop.body?.let { body ->
+                                checkUnusedInFunctionLike(
+                                    body.statements, prop.parameters, source, fileName,
+                                )
+                            }
+                        }
+                        is PropertyAssignment -> {
+                            checkUnusedInExpr(prop.initializer, source, fileName)
+                        }
+                        is SpreadAssignment -> {
+                            checkUnusedInExpr(prop.expression, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ParenthesizedExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                checkUnusedInExpr(expr.left, source, fileName)
+                checkUnusedInExpr(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkUnusedInExpr(expr.condition, source, fileName)
+                checkUnusedInExpr(expr.whenTrue, source, fileName)
+                checkUnusedInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkUnusedInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { checkUnusedInExpr(it, source, fileName) }
+            }
+            is NewExpression -> {
+                checkUnusedInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkUnusedInExpr(it, source, fileName) }
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { checkUnusedInExpr(it, source, fileName) }
+            }
+            is AsExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is PropertyAccessExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkUnusedInExpr(expr.expression, source, fileName)
+                checkUnusedInExpr(expr.argumentExpression, source, fileName)
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { checkUnusedInExpr(it.expression, source, fileName) }
+            }
+            is TaggedTemplateExpression -> {
+                checkUnusedInExpr(expr.tag, source, fileName)
+            }
+            is AwaitExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkUnusedInExpr(it, source, fileName) }
+            is SpreadElement -> checkUnusedInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkUnusedInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkUnusedInExpr(expr.operand, source, fileName)
+            else -> {} // Literals, identifiers, etc. — no nested function-likes
+        }
+    }
+
+    /**
+     * Check for unused for-in/for-of loop variables.
+     */
+    private fun checkForLoopVariable(
+        initializer: Node?,
+        body: Statement,
+        source: String,
+        fileName: String,
+    ) {
+        if (!options.noUnusedLocals) return
+        val declList = initializer as? VariableDeclarationList ?: return
+        val scope = UnusedScope()
+        for (decl in declList.declarations) {
+            collectVarDeclNames(decl.name, decl, isExported = false, scope)
+        }
+        // Collect references from the body
+        collectUnusedReferences(body, scope)
+        // Report unused
+        for (decl in scope.declarations) {
+            if (decl.name in scope.referencedNames) continue
+            if (decl.name.startsWith("_")) continue
+            val start = decl.nameNode.pos
+            val length = decl.name.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'${decl.name}' is declared but its value is never read.",
+                category = DiagnosticCategory.Error,
+                code = 6133,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    private fun checkUnusedInClassElement(
+        element: ClassElement,
+        source: String,
+        fileName: String,
+    ) {
+        when (element) {
+            is MethodDeclaration -> {
+                element.body?.let { body ->
+                    checkUnusedInFunctionLike(
+                        body.statements, element.parameters, source, fileName,
+                    )
+                }
+            }
+            is Constructor -> {
+                element.body?.let { body ->
+                    checkUnusedInFunctionLike(
+                        body.statements, element.parameters, source, fileName,
+                    )
+                }
+            }
+            is GetAccessor -> {
+                element.body?.let { body ->
+                    checkUnusedInFunctionLike(
+                        body.statements, element.parameters, source, fileName,
+                    )
+                }
+            }
+            is SetAccessor -> {
+                element.body?.let { body ->
+                    checkUnusedInFunctionLike(
+                        body.statements, element.parameters, source, fileName,
+                    )
+                }
+            }
+            is ClassStaticBlockDeclaration -> {
+                checkUnusedInStatements(
+                    element.body.statements, source, fileName, isTopLevel = false,
+                )
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkUnusedInFunctionLike(
+        bodyStatements: List<Statement>,
+        parameters: List<Parameter>,
+        source: String,
+        fileName: String,
+    ) {
+        // Check parameters (if noUnusedParameters is enabled)
+        if (options.noUnusedParameters) {
+            val scope = UnusedScope()
+            // Collect parameter declarations
+            for (param in parameters) {
+                if (param.isCommentPlaceholder) continue
+                // Skip rest parameters and destructuring — they have complex rules
+                val name = param.name
+                if (name is Identifier) {
+                    // Skip if underscore-prefixed or if it has access modifiers (constructor params)
+                    if (!name.text.startsWith("_") &&
+                        ModifierFlag.Public !in param.modifiers &&
+                        ModifierFlag.Protected !in param.modifiers &&
+                        ModifierFlag.Private !in param.modifiers) {
+                        scope.declarations.add(UnusedDecl(
+                            name = name.text,
+                            nameNode = name,
+                            declNode = param,
+                            isExported = false,
+                            isParameter = true,
+                            isTypeOnly = false,
+                        ))
+                    }
+                }
+            }
+            // Collect references from body
+            for (stmt in bodyStatements) {
+                collectUnusedReferences(stmt, scope)
+            }
+            // Also collect references from parameter defaults and types
+            for (param in parameters) {
+                param.initializer?.let { collectRefsFromExpr(it, scope) }
+            }
+            // Report unused parameters
+            for (decl in scope.declarations) {
+                if (decl.name in scope.referencedNames) continue
+                val nameNode = decl.nameNode
+                val start = nameNode.pos
+                val length = decl.name.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'${decl.name}' is declared but its value is never read.",
+                    category = DiagnosticCategory.Error,
+                    code = 6133,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+
+        // Check local declarations in the body
+        checkUnusedInStatements(bodyStatements, source, fileName, isTopLevel = false)
+    }
+
+    /**
+     * Compute 1-based line and character for a position in source text.
+     */
+    private fun getLineAndCharacterOfPosition(source: String, position: Int): Pair<Int, Int> {
+        var line = 1
+        var lineStart = 0
+        for (i in 0 until position.coerceAtMost(source.length)) {
+            if (source[i] == '\n') {
+                line++
+                lineStart = i + 1
+            }
+        }
+        return line to (position - lineStart + 1)
     }
 }
