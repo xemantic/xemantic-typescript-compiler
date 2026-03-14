@@ -1969,6 +1969,12 @@ class Checker(
                 // Check class-level type parameters
                 checkUnusedClassTypeParams(stmt, source, fileName)
             }
+            is InterfaceDeclaration -> {
+                checkUnusedInterfaceTypeParams(stmt, source, fileName)
+            }
+            is TypeAliasDeclaration -> {
+                checkUnusedTypeAliasTypeParams(stmt, source, fileName)
+            }
             is ModuleDeclaration -> {
                 when (val body = stmt.body) {
                     is ModuleBlock -> checkUnusedInStatements(
@@ -2332,20 +2338,85 @@ class Checker(
             }
         }
 
-        // Report unused type parameters
-        // If ALL type params are unused, use the full <...> span for each
-        val allUnused = tpScope.declarations.none { it.name in tpScope.referencedNames }
-        for (decl in tpScope.declarations) {
-            if (decl.name in tpScope.referencedNames) continue
+        reportUnusedTypeParams(tpScope, typeParams, source, fileName)
+    }
+
+    private fun checkUnusedInterfaceTypeParams(
+        iface: InterfaceDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        val typeParams = iface.typeParameters
+        if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+
+        val tpScope = UnusedScope()
+        for (tp in typeParams) {
+            if (!tp.name.text.startsWith("_")) {
+                tpScope.declarations.add(UnusedDecl(
+                    name = tp.name.text, nameNode = tp.name, declNode = tp,
+                    isExported = false, isParameter = false, isTypeOnly = true,
+                ))
+            }
+        }
+
+        // Collect refs from heritage clauses and members
+        iface.heritageClauses?.forEach { clause ->
+            for (type in clause.types) {
+                type.typeArguments?.forEach { collectTypeRefs(it, tpScope) }
+            }
+        }
+        for (member in iface.members) {
+            when (member) {
+                is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, tpScope) }
+                is MethodDeclaration -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                    member.type?.let { collectTypeRefs(it, tpScope) }
+                }
+                is IndexSignature -> member.type?.let { collectTypeRefs(it, tpScope) }
+                else -> {}
+            }
+        }
+
+        reportUnusedTypeParams(tpScope, typeParams, source, fileName)
+    }
+
+    private fun checkUnusedTypeAliasTypeParams(
+        alias: TypeAliasDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        val typeParams = alias.typeParameters
+        if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+
+        val tpScope = UnusedScope()
+        for (tp in typeParams) {
+            if (!tp.name.text.startsWith("_")) {
+                tpScope.declarations.add(UnusedDecl(
+                    name = tp.name.text, nameNode = tp.name, declNode = tp,
+                    isExported = false, isParameter = false, isTypeOnly = true,
+                ))
+            }
+        }
+
+        collectTypeRefs(alias.type, tpScope)
+        reportUnusedTypeParams(tpScope, typeParams, source, fileName)
+    }
+
+    private fun reportUnusedTypeParams(
+        scope: UnusedScope,
+        typeParams: List<TypeParameter>,
+        source: String,
+        fileName: String,
+    ) {
+        val allUnused = scope.declarations.none { it.name in scope.referencedNames }
+        for (decl in scope.declarations) {
+            if (decl.name in scope.referencedNames) continue
             val tp = decl.declNode as TypeParameter
-            // If all params unused and it's the first one, start at '<' (tp.pos - 1)
-            // and cover through '>' of last param
             val start: Int
             val length: Int
-            if (allUnused && tpScope.declarations.size == 1) {
-                // Single unused type param — cover <name>
-                start = tp.pos - 1 // the '<' is one char before the identifier
-                length = decl.name.length + 2 // +2 for < and >
+            if (allUnused && scope.declarations.size == 1) {
+                start = tp.pos - 1
+                length = decl.name.length + 2
             } else {
                 start = tp.name.pos
                 length = decl.name.length
@@ -2453,24 +2524,7 @@ class Checker(
             for (stmt in bodyStatements) {
                 collectTypeRefsInStatement(stmt, tpScope)
             }
-            // Report unused
-            for (decl in tpScope.declarations) {
-                if (decl.name in tpScope.referencedNames) continue
-                val nameNode = decl.nameNode
-                val start = nameNode.pos
-                val length = decl.name.length
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "'${decl.name}' is declared but its value is never read.",
-                    category = DiagnosticCategory.Error,
-                    code = 6133,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
-            }
+            reportUnusedTypeParams(tpScope, typeParameters, source, fileName)
         }
 
         // Check local declarations in the body
