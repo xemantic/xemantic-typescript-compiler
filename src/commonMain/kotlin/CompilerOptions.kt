@@ -109,6 +109,7 @@ data class CompilerOptions(
     val newLine: String? = null,
     val fullEmitPaths: Boolean = false,
     val noResolve: Boolean = false,
+    val noImplicitReferences: Boolean = false,
     val moduleDetection: String? = null,
     val moduleSuffixes: List<String>? = null,
     // Deprecated options (tracked for TS5101 diagnostics)
@@ -365,6 +366,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
         "noresolve" -> options.copy(noResolve = boolValue)
+        "noimplicitreferences" -> options.copy(noImplicitReferences = boolValue)
         "moduledetection" -> options.copy(moduleDetection = value.trim())
         "charset" -> options.copy(charset = value.trim())
         "keyofstringsonly" -> options.copy(keyofStringsOnly = boolValue)
