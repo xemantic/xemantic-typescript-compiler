@@ -1504,7 +1504,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Could be [key: type]: type  or [K in T (as N)?]: type  or [computed]: type
         val isIndex = scanner.lookAhead {
             scanner.scan() // skip [
-            if (!isIdentifier()) return@lookAhead false
+            if (!isIdentifierToken(scanner.getToken())) return@lookAhead false
             scanner.scan() // skip name
             scanner.getToken() == SyntaxKind.Colon
         }
@@ -4488,47 +4488,49 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         return NumericLiteralNode(text = text, pos = pos, end = getEnd())
     }
 
-    private fun isIdentifier(): Boolean =
-        token == SyntaxKind.Identifier ||
-                token == SyntaxKind.TypeKeyword ||
-                token == SyntaxKind.AbstractKeyword ||
-                token == SyntaxKind.AsKeyword ||
-                token == SyntaxKind.AssertsKeyword ||
-                token == SyntaxKind.AsyncKeyword ||
-                token == SyntaxKind.AwaitKeyword ||
-                token == SyntaxKind.ConstructorKeyword ||
-                token == SyntaxKind.DeclareKeyword ||
-                token == SyntaxKind.GetKeyword ||
-                token == SyntaxKind.GlobalKeyword ||
-                token == SyntaxKind.FromKeyword ||
-                token == SyntaxKind.ImplementsKeyword ||
-                token == SyntaxKind.InterfaceKeyword ||
-                token == SyntaxKind.IsKeyword ||
-                token == SyntaxKind.KeyOfKeyword ||
-                token == SyntaxKind.LetKeyword ||
-                token == SyntaxKind.ModuleKeyword ||
-                token == SyntaxKind.NamespaceKeyword ||
-                token == SyntaxKind.NeverKeyword ||
-                token == SyntaxKind.OfKeyword ||
-                token == SyntaxKind.OutKeyword ||
-                token == SyntaxKind.OverrideKeyword ||
-                token == SyntaxKind.ReadonlyKeyword ||
-                token == SyntaxKind.RequireKeyword ||
-                token == SyntaxKind.SatisfiesKeyword ||
-                token == SyntaxKind.SetKeyword ||
-                token == SyntaxKind.StaticKeyword ||
-                token == SyntaxKind.UniqueKeyword ||
-                token == SyntaxKind.UnknownKeyword ||
-                token == SyntaxKind.UsingKeyword ||
-                token == SyntaxKind.AnyKeyword ||
-                token == SyntaxKind.BooleanKeyword ||
-                token == SyntaxKind.BigIntKeyword ||
-                token == SyntaxKind.NumberKeyword ||
-                token == SyntaxKind.ObjectKeyword ||
-                token == SyntaxKind.StringKeyword ||
-                token == SyntaxKind.SymbolKeyword ||
-                token == SyntaxKind.UndefinedKeyword ||
-                token == SyntaxKind.AccessorKeyword
+    private fun isIdentifier(): Boolean = isIdentifierToken(token)
+
+    private fun isIdentifierToken(t: SyntaxKind): Boolean =
+        t == SyntaxKind.Identifier ||
+                t == SyntaxKind.TypeKeyword ||
+                t == SyntaxKind.AbstractKeyword ||
+                t == SyntaxKind.AsKeyword ||
+                t == SyntaxKind.AssertsKeyword ||
+                t == SyntaxKind.AsyncKeyword ||
+                t == SyntaxKind.AwaitKeyword ||
+                t == SyntaxKind.ConstructorKeyword ||
+                t == SyntaxKind.DeclareKeyword ||
+                t == SyntaxKind.GetKeyword ||
+                t == SyntaxKind.GlobalKeyword ||
+                t == SyntaxKind.FromKeyword ||
+                t == SyntaxKind.ImplementsKeyword ||
+                t == SyntaxKind.InterfaceKeyword ||
+                t == SyntaxKind.IsKeyword ||
+                t == SyntaxKind.KeyOfKeyword ||
+                t == SyntaxKind.LetKeyword ||
+                t == SyntaxKind.ModuleKeyword ||
+                t == SyntaxKind.NamespaceKeyword ||
+                t == SyntaxKind.NeverKeyword ||
+                t == SyntaxKind.OfKeyword ||
+                t == SyntaxKind.OutKeyword ||
+                t == SyntaxKind.OverrideKeyword ||
+                t == SyntaxKind.ReadonlyKeyword ||
+                t == SyntaxKind.RequireKeyword ||
+                t == SyntaxKind.SatisfiesKeyword ||
+                t == SyntaxKind.SetKeyword ||
+                t == SyntaxKind.StaticKeyword ||
+                t == SyntaxKind.UniqueKeyword ||
+                t == SyntaxKind.UnknownKeyword ||
+                t == SyntaxKind.UsingKeyword ||
+                t == SyntaxKind.AnyKeyword ||
+                t == SyntaxKind.BooleanKeyword ||
+                t == SyntaxKind.BigIntKeyword ||
+                t == SyntaxKind.NumberKeyword ||
+                t == SyntaxKind.ObjectKeyword ||
+                t == SyntaxKind.StringKeyword ||
+                t == SyntaxKind.SymbolKeyword ||
+                t == SyntaxKind.UndefinedKeyword ||
+                t == SyntaxKind.AccessorKeyword
 
     private fun isKeyword(): Boolean = token.name.endsWith("Keyword")
 
