@@ -117,7 +117,7 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
   Parser.parse() → Binder.bind() → Checker.check() → Transformer.transform() → Emitter.emit()
   ```
 
-- [ ] **4b. Pass checker info to Transformer** — The Transformer needs:
+- [x] **4b. Pass checker info to Transformer** — The Transformer needs:
   - `isTypeOnly(importDecl)` — for import elision
   - `getConstEnumValue(member)` — for const enum inlining
   - `getSymbol(node)` — for decorator metadata type serialization
