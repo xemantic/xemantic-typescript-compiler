@@ -132,10 +132,21 @@ class Checker(
         sourceFileName: String,
     ): ConstantValue? {
         val result = fileResults[sourceFileName] ?: return null
-        val symbol = result.locals[enumName] ?: globals[enumName] ?: return null
+        val symbol = resolveNamePath(enumName, result) ?: return null
         val target = resolveAlias(symbol)
         if (!target.flags.hasAny(SymbolFlags.ConstEnum)) return null
         return enumValues[target.id]?.get(memberName)
+    }
+
+    /**
+     * Check if a name resolves to a const enum (directly or through alias chains).
+     * Used for eliding import aliases to const enums after inlining.
+     */
+    fun isConstEnumAlias(name: String, sourceFileName: String): Boolean {
+        val result = fileResults[sourceFileName] ?: return false
+        val symbol = result.locals[name] ?: globals[name] ?: return false
+        val target = resolveAlias(symbol)
+        return target.flags.hasAny(SymbolFlags.ConstEnum)
     }
 
     /**
@@ -182,10 +193,18 @@ class Checker(
     private fun computeAllEnumValues() {
         for (result in binderResults) {
             for ((_, symbol) in result.locals) {
-                if (symbol.flags.hasAny(SymbolFlags.Enum)) {
-                    computeEnumSymbolValues(symbol)
-                }
+                computeEnumValuesRecursive(symbol)
             }
+        }
+    }
+
+    private fun computeEnumValuesRecursive(symbol: Symbol) {
+        if (symbol.flags.hasAny(SymbolFlags.Enum)) {
+            computeEnumSymbolValues(symbol)
+        }
+        // Recurse into namespace exports to find nested enums
+        if (symbol.flags.hasAny(SymbolFlags.Module)) {
+            symbol.exports?.values?.forEach { computeEnumValuesRecursive(it) }
         }
     }
 
@@ -194,9 +213,9 @@ class Checker(
         val values = mutableMapOf<String, ConstantValue>()
         enumValues[symbol.id] = values
 
-        var autoValue = 0.0
         for (decl in symbol.declarations) {
             if (decl !is EnumDeclaration) continue
+            var autoValue = 0.0
             for (member in decl.members) {
                 val name = when (val n = member.name) {
                     is Identifier -> n.text
@@ -269,19 +288,60 @@ class Checker(
                 currentValues[expr.text]
             }
             is PropertyAccessExpression -> {
-                // Reference to another enum's member: E.A
-                val objName = (expr.expression as? Identifier)?.text ?: return null
+                // Reference to another enum's member: E.A or A.B.C.E.V1
                 val memberName = expr.name.text
-                if (objName == currentEnum.name) {
-                    // Same enum self-reference
-                    currentValues[memberName]
+                val targetEnum = resolveEnumExpression(expr.expression, currentEnum.name)
+                if (targetEnum != null) {
+                    if (targetEnum.name == currentEnum.name && targetEnum.id == currentEnum.id) {
+                        currentValues[memberName]
+                    } else {
+                        if (!targetEnum.flags.hasAny(SymbolFlags.Enum)) return null
+                        computeEnumSymbolValues(targetEnum) // ensure computed
+                        enumValues[targetEnum.id]?.get(memberName)
+                    }
                 } else {
-                    // Cross-enum reference — look up in globals
-                    val targetEnum = globals[objName] ?: return null
-                    val target = resolveAlias(targetEnum)
-                    if (!target.flags.hasAny(SymbolFlags.Enum)) return null
-                    computeEnumSymbolValues(target) // ensure computed
-                    enumValues[target.id]?.get(memberName)
+                    // Simple case: Identifier.member
+                    val objName = (expr.expression as? Identifier)?.text ?: return null
+                    if (objName == currentEnum.name) {
+                        currentValues[memberName]
+                    } else {
+                        val symbol = globals[objName] ?: return null
+                        val target = resolveAlias(symbol)
+                        if (!target.flags.hasAny(SymbolFlags.Enum)) return null
+                        computeEnumSymbolValues(target)
+                        enumValues[target.id]?.get(memberName)
+                    }
+                }
+            }
+            is ElementAccessExpression -> {
+                // E["member"] or E[`member`] — element access to enum member
+                val keyStr = when (val k = expr.argumentExpression) {
+                    is StringLiteralNode -> k.text
+                    is NoSubstitutionTemplateLiteralNode -> k.text
+                    else -> return null
+                }
+                val objName = (expr.expression as? Identifier)?.text
+                if (objName != null) {
+                    if (objName == currentEnum.name) {
+                        currentValues[keyStr]
+                    } else {
+                        val symbol = globals[objName] ?: return null
+                        val target = resolveAlias(symbol)
+                        if (!target.flags.hasAny(SymbolFlags.Enum)) return null
+                        computeEnumSymbolValues(target)
+                        enumValues[target.id]?.get(keyStr)
+                    }
+                } else {
+                    // Nested: A.B.C.E["V2"]
+                    val targetEnum = resolveEnumExpression(expr.expression, currentEnum.name)
+                        ?: return null
+                    if (targetEnum.name == currentEnum.name && targetEnum.id == currentEnum.id) {
+                        currentValues[keyStr]
+                    } else {
+                        if (!targetEnum.flags.hasAny(SymbolFlags.Enum)) return null
+                        computeEnumSymbolValues(targetEnum)
+                        enumValues[targetEnum.id]?.get(keyStr)
+                    }
                 }
             }
             is NoSubstitutionTemplateLiteralNode -> {
@@ -776,8 +836,9 @@ class Checker(
         return globals[name]
     }
 
-    private fun resolveAlias(symbol: Symbol): Symbol {
-        if (symbol.target != null) return resolveAlias(symbol.target!!)
+    private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol {
+        if (!visited.add(symbol.id)) return symbol // cycle detected
+        if (symbol.target != null) return resolveAlias(symbol.target!!, visited)
         // For import aliases, try to resolve the target
         if (symbol.flags.hasAny(SymbolFlags.Alias)) {
             for (decl in symbol.declarations) {
@@ -785,17 +846,13 @@ class Checker(
                     is ImportEqualsDeclaration -> {
                         val ref = decl.moduleReference
                         if (ref is QualifiedName) {
-                            // import x = A.B — resolve A then look up B
-                            val leftName = (ref.left as? Identifier)?.text ?: continue
-                            val leftSymbol = globals[leftName] ?: continue
-                            val rightName = ref.right.text
-                            val target = leftSymbol.exports?.get(rightName) ?: continue
+                            val target = resolveQualifiedName(ref) ?: continue
                             symbol.target = target
-                            return resolveAlias(target)
+                            return resolveAlias(target, visited)
                         } else if (ref is Identifier) {
                             val target = globals[ref.text] ?: continue
                             symbol.target = target
-                            return resolveAlias(target)
+                            return resolveAlias(target, visited)
                         }
                     }
                     is ImportDeclaration -> {
@@ -805,7 +862,7 @@ class Checker(
                         val targetResult = fileResults[targetFile] ?: continue
                         val target = targetResult.locals[symbol.name] ?: continue
                         symbol.target = target
-                        return resolveAlias(target)
+                        return resolveAlias(target, visited)
                     }
                     is ImportSpecifier -> {
                         // Named import — the original name to look up
@@ -823,7 +880,7 @@ class Checker(
                                         val targetResult2 = fileResults[targetFile2] ?: continue
                                         val target = targetResult2.locals[originalName] ?: continue
                                         symbol.target = target
-                                        return resolveAlias(target)
+                                        return resolveAlias(target, visited)
                                     }
                                 }
                             }
@@ -834,6 +891,51 @@ class Checker(
             }
         }
         return symbol
+    }
+
+    /**
+     * Resolve a QualifiedName (e.g., A.B.C.E) to a symbol by walking the namespace chain.
+     */
+    /**
+     * Resolve an expression to an enum symbol for enum member access.
+     * Handles nested namespace access like A.B.C.E → the symbol for enum E.
+     */
+    private fun resolveEnumExpression(expr: Expression, currentEnumName: String): Symbol? {
+        return when (expr) {
+            is Identifier -> {
+                val symbol = globals[expr.text] ?: return null
+                resolveAlias(symbol)
+            }
+            is PropertyAccessExpression -> {
+                val parent = resolveEnumExpression(expr.expression, currentEnumName) ?: return null
+                val child = parent.exports?.get(expr.name.text) ?: return null
+                resolveAlias(child)
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Resolve a dotted name path (e.g., "A.B.C.E") to a symbol by walking the namespace chain.
+     */
+    private fun resolveNamePath(path: String, result: BinderResult): Symbol? {
+        val parts = path.split(".")
+        var current = result.locals[parts[0]] ?: globals[parts[0]] ?: return null
+        for (i in 1 until parts.size) {
+            current = resolveAlias(current)
+            current = current.exports?.get(parts[i]) ?: return null
+        }
+        return current
+    }
+
+    private fun resolveQualifiedName(qn: QualifiedName): Symbol? {
+        val left = when (val l = qn.left) {
+            is Identifier -> globals[l.text]
+            is QualifiedName -> resolveQualifiedName(l)
+            else -> null
+        } ?: return null
+        val resolved = resolveAlias(left)
+        return resolved.exports?.get(qn.right.text)
     }
 
     /**
