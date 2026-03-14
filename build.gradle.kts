@@ -278,11 +278,9 @@ val generateTypeScriptTests by tasks.registering {
                 val jsBaseline = baselinesDir.resolve("$name.js")
                 val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
 
-                // Skip baselines that require .d.ts declaration emit (needs type checker)
-                val hasDtsSection = jsBaseline.exists()
-                    && jsBaseline.readText().contains(".d.ts]")
-
-                if (jsBaseline.exists() && !hasDtsSection) {
+                // .d.ts sections in baselines are stripped by TypeScriptTestSupport.stripDtsSection()
+                // so tests with declaration output can be included safely.
+                if (jsBaseline.exists()) {
                     sb.appendLine()
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
