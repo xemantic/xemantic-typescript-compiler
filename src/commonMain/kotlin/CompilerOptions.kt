@@ -210,7 +210,7 @@ fun parseCompilerOptions(source: String): Pair<CompilerOptions, String> {
  * If no `// @Filename:` directives are found, returns a single file with the test name.
  */
 fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
-    val cleaned = source.removePrefix("\uFEFF")
+    val cleaned = source.removePrefix("\uFEFF").replace("\r\n", "\n").replace("\r", "\n")
     val lines = cleaned.split('\n')
     val directives = mutableMapOf<String, String>()
     val fileEntries = mutableListOf<SourceFileEntry>()
