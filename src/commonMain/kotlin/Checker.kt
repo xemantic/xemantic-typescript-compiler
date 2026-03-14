@@ -2399,6 +2399,8 @@ class Checker(
                     // Only flag variables with type annotation but no initializer
                     // Skip definite assignment assertions (var x!: Type)
                     if (decl.type != null && decl.initializer == null && !decl.exclamationToken) {
+                        // Skip `var x: any` — `any` includes undefined, no assignment needed
+                        if (isAnyType(decl.type)) continue
                         val name = decl.name
                         if (name is Identifier) {
                             uninitialized.add(name.text)
@@ -2408,6 +2410,12 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    private fun isAnyType(type: Node?): Boolean {
+        if (type == null) return false
+        // Check for keyword type nodes like `any`
+        return type.kind == SyntaxKind.AnyKeyword
     }
 
     /**
