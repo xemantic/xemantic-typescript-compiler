@@ -2385,7 +2385,8 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 for (decl in stmt.declarationList.declarations) {
                     // Only flag variables with type annotation but no initializer
-                    if (decl.type != null && decl.initializer == null) {
+                    // Skip definite assignment assertions (var x!: Type)
+                    if (decl.type != null && decl.initializer == null && !decl.exclamationToken) {
                         val name = decl.name
                         if (name is Identifier) {
                             uninitialized.add(name.text)
