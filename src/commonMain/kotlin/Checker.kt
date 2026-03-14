@@ -3173,8 +3173,31 @@ class Checker(
                         checkPropertyInitInStatements(listOf(it), source, fileName)
                     }
                 }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        checkPropertyInitInExpr(decl.initializer, source, fileName)
+                    }
+                }
+                is ExpressionStatement -> {
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                }
+                is ReturnStatement -> {
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                }
                 else -> {}
             }
+        }
+    }
+
+    private fun checkPropertyInitInExpr(expr: Expression?, source: String, fileName: String) {
+        when (expr) {
+            is ClassExpression -> {
+                if (ModifierFlag.Abstract !in expr.modifiers) {
+                    checkClassPropertyInit(expr.members, source, fileName)
+                }
+            }
+            is ParenthesizedExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            else -> {}
         }
     }
 
