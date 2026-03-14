@@ -572,8 +572,13 @@ class Checker(
                 expr.arguments?.forEach { trackReferencesInExpression(it, result) }
             }
             is BinaryExpression -> {
-                trackReferencesInExpression(expr.left, result)
-                trackReferencesInExpression(expr.right, result)
+                // Iterative traversal to avoid StackOverflow on deeply nested binaries
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    trackReferencesInExpression(current.right, result)
+                    current = current.left
+                }
+                trackReferencesInExpression(current, result)
             }
             is ConditionalExpression -> {
                 trackReferencesInExpression(expr.condition, result)
