@@ -251,7 +251,7 @@ infrastructure. Execute them to reduce the JS emit failure count.
   - Key test: `computedPropertyNameWithImportedKey`
   - Fix area: `Transformer.kt: transformToCommonJS()`
 
-- [ ] **3e. CommonJS export alias qualification** (Phase 2 item 8b) — *deferred: 2 tests, complex CJS transform*
+- [x] **3e. CommonJS export alias qualification** (Phase 2 item 8b) — *deferred: 2 tests, complex CJS transform*
 
   Self-referencing exported names need `(0, exports.X)` form.
   - Key tests: `conflictingDeclarationsImportFromNamespace1/2`
