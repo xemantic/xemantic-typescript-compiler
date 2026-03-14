@@ -2836,11 +2836,19 @@ class Checker(
             }
             is ForStatement -> {
                 when (val init = stmt.initializer) {
-                    is Expression -> findUninitializedRefs(init, uninitialized, source, fileName)
+                    is Expression -> {
+                        findUninitializedRefs(init, uninitialized, source, fileName)
+                        markAssignmentsInExpr(init, uninitialized)
+                    }
                     is VariableDeclarationList -> {
                         for (decl in init.declarations) {
                             decl.initializer?.let {
                                 findUninitializedRefs(it, uninitialized, source, fileName)
+                            }
+                            // Variable with initializer is assigned
+                            if (decl.initializer != null) {
+                                val name = decl.name
+                                if (name is Identifier) uninitialized.remove(name.text)
                             }
                         }
                     }
@@ -3029,7 +3037,14 @@ class Checker(
                         uninitialized.remove(left.text)
                     }
                 }
+                // Recurse into both sides for compound expressions
+                markAssignmentsInExpr(expr.left, uninitialized)
+                markAssignmentsInExpr(expr.right, uninitialized)
             }
+            is CommaListExpression -> {
+                expr.elements.forEach { markAssignmentsInExpr(it, uninitialized) }
+            }
+            is ParenthesizedExpression -> markAssignmentsInExpr(expr.expression, uninitialized)
             else -> {}
         }
     }
