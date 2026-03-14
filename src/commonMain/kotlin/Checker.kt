@@ -4493,12 +4493,25 @@ class Checker(
             if (group.size < 2) continue
             val kinds = group.map { it.kind }.toSet()
 
-            // var + class or var + function with body → TS2300
+            // Duplicate declarations → TS2300
+            // Allowed: function overloads (multiple function declarations)
+            // Allowed: namespace + namespace, namespace + class, namespace + function, namespace + enum
+            // Allowed: interface + interface (declaration merging)
+            // Error: class + class, class + function, class + enum, class + var
+            // Error: var + class, var + function, var + enum
+            // Error: enum + class, enum + var
             val hasVar = "var" in kinds
             val hasClass = "class" in kinds
-            val hasFuncWithBody = group.any { it.kind == "function" }
+            val hasEnum = "enum" in kinds
+            val hasFunc = "function" in kinds
+            val classCount = group.count { it.kind == "class" }
 
-            if ((hasVar && hasClass) || (hasVar && hasFuncWithBody)) {
+            val isDuplicate = (hasClass && classCount >= 2) ||
+                    (hasClass && (hasFunc || hasEnum)) ||
+                    (hasVar && (hasClass || hasFunc || hasEnum)) ||
+                    (hasEnum && hasVar)
+
+            if (isDuplicate) {
                 for (decl in group) {
                     emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
                 }
