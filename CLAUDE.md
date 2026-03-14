@@ -74,6 +74,14 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **TS5101 `baseUrl` migration URL**: `baseUrl` deprecation has a message chain continuation "  Visit https://aka.ms/ts6 for migration information." — requires `messageChain` in the Diagnostic.
 - **`const enum` at statement level**: `parseStatement()` must check for `const enum` (not just inside `export`/`declare` contexts) — otherwise `const enum E {}` is misparse as `const` variable named `enum` + expression `E` + block.
 
+### Checker diagnostic gotchas (TS2454/TS2564/TS6133)
+
+- **`strict: false` suppresses TS2454/TS2564**: TypeScript test baselines expect these diagnostics by default, but NOT when `@strict: false` is explicitly set. Use `options.strictExplicitlyFalse` to distinguish default-false from explicit-false.
+- **Definite assignment assertion `!`**: `var x!: Type` and class property `x!: Type` skip TS2454/TS2564 checking. Check `exclamationToken` on both `VariableDeclaration` and `PropertyDeclaration`.
+- **Ambient contexts**: Skip TS2454/TS2564 in `declare` namespaces, classes, and functions. A class inside a `declare namespace` is ambient even if the class itself doesn't have `declare`.
+- **TS6133 non-module files**: Don't check file-level unused declarations in non-module files (no imports/exports). Only check inside namespaces, functions, blocks.
+- **TS6133 write-only**: Assignment targets (`x = value`) are NOT reads. Left side of `=` operator is write-only. Compound assignments (`x += 1`) ARE reads.
+
 ### Test assertion gotchas
 
 - Avoid partial `assert("x" in result)` — always assert the full expected output.
@@ -88,7 +96,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), plus TS5101/TS5102/TS5107 (deprecation). **6,491 / 10,595 tests passing (61.3%)**. Key remaining work: type inference diagnostics (TS2322, TS2304, TS2339).
+**Phase 3b: Type Checker Diagnostics.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker now emits diagnostics: TS6133/TS6196 (unused declarations), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), plus TS5101/TS5102/TS5107 (deprecation). **6,508 / 10,595 tests passing (61.4%)**. Key remaining work: type inference diagnostics (TS2322, TS2304, TS2339).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -106,7 +114,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 6,491 currently passing tests must continue to pass after every change.
+- **No regressions** — the 6,508 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 

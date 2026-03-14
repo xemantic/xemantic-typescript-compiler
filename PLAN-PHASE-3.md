@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,491 passing (61.3%), 4,101 failing
+- **10,595 tests**, 6,508 passing (61.4%), 4,084 failing
 - **JS emit bare-name:** 5,413 tests, ~5,130 passing (~94.8%)
 - **JS emit parameterized:** 1,114 tests, ~519 passing (~46.6%)
 - **Error baselines:** 4,035 tests, ~536 passing (~13.3%)
