@@ -1302,7 +1302,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val params = parseParameterList()
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            // Error recovery: create empty body to match TypeScript's output
+            // Error recovery: report missing '{' and create empty body
+            if (token != SyntaxKind.Semicolon) reportError("'{' expected")
             parseSemicolon()
             Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
@@ -1327,7 +1328,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Setters cannot have a return type annotation, but parse it for error recovery (preserved in emit).
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            // Error recovery: create empty body to match TypeScript's output
+            // Error recovery: report missing '{' and create empty body
+            if (token != SyntaxKind.Semicolon) reportError("'{' expected")
             parseSemicolon()
             Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
@@ -3553,7 +3555,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
-                    else Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
+                    else { reportError("'{' expected"); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
                 return GetAccessor(
                     name = name,
                     parameters = params,
@@ -3574,7 +3576,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val params = parseParameterList()
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
-                    else Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
+                    else { reportError("'{' expected"); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
                 return SetAccessor(name = name, parameters = params, body = body, pos = pos, end = getEnd(), leadingComments = comments)
             }
         }
