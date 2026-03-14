@@ -1,6 +1,6 @@
 # Test Fix Plan — Phase 2: Type Checker
 
-**Current State:** 5,442 tests, 323 failing (94.1% passing)
+**Current State:** 5,442 tests, 320 failing (94.1% passing, 5,122 passing)
 
 ## Phase 1 Summary (complete)
 
@@ -159,7 +159,7 @@ These ~45 tests need TypeScript's exact error recovery behavior. They can be wor
 |----------|-------|--------|
 | JS emit tests (no `.d.ts`) | 4,509 | 4,359 passing (96.7%) |
 | JS emit tests (with `.d.ts` stripped) | 933 | 760 passing (81.5%) |
-| **Total JS emit tests** | **5,442** | **5,119 passing (94.1%)** |
+| **Total JS emit tests** | **5,442** | **5,122 passing (94.1%)** |
 | Error diagnostic tests (`.errors.txt`) | ~9,055 | Not yet enabled |
 | Declaration emit tests (`.d.ts` only) | ~215 | Not applicable without full type checker |
 

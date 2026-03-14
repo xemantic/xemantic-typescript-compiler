@@ -52,6 +52,16 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`isolatedModules: true` ≠ `moduleDetection: force`**: `isolatedModules` tells TypeScript to check each file independently but does NOT force module treatment for files without imports/exports. Adding `isModuleFile = true` for `isolatedModules` causes regressions.
 - **JSON files re-emitted with trailing comma stripping**: `TypeScriptCompiler.kt` strips trailing commas from JSON output using `stripJsonTrailingCommas()` since TypeScript parses and re-emits JSON, naturally removing them.
 
+### Checker gotchas
+
+- **Merged enum autoValue reset**: Each enum declaration block resets auto-increment to 0. `computeEnumSymbolValues` must have `var autoValue = 0.0` INSIDE the loop over declarations, not outside — otherwise merged enums get wrong values (e.g., `Enum1 { A0 = 100 }; Enum1 { A }` → A should be 0, not 101).
+- **Nested enum value computation**: `computeAllEnumValues` must recurse into namespace `exports` to find nested const enums. Top-level `result.locals` only has the outer namespace symbols.
+- **`resolveAlias` cycle detection**: Import aliases can be circular (import shadowing, re-exports). Must use a `visited: MutableSet<Int>` parameter to prevent StackOverflow.
+- **Nested QualifiedName resolution**: `import I = A.B.C.E` creates a QualifiedName where `left` is another QualifiedName, not an Identifier. `resolveAlias` must handle this via `resolveQualifiedName` which recurses.
+- **Const enum negative values**: TypeScript does NOT wrap negative const enum values in `ParenthesizedExpression`. The Transformer emits `PrefixUnaryExpression(-, literal)` directly. `parenthesizeForAccess` adds parens only when used as property access base (e.g., `(-1).toString()`).
+- **Const enum comment `*/` escaping**: `*/` inside const enum comment labels must be escaped to `*_/` to avoid prematurely closing the `/* ... */` comment.
+- **`isolatedModules` and checker const enums**: When `isolatedModules` is true, do NOT use the checker for const enum inlining — the checker has cross-file info that shouldn't be used. Only use local `collectConstEnumValues`.
+
 ### Multi-file baseline gotchas
 
 - **`tsconfig.json` not echoed**: The TypeScript test harness treats `tsconfig.json` as project configuration, not a source file. Never include it in the `sourceEchoes` list in `formatMultiFileBaseline`. Other JSON files (e.g. `tsconfig1.json`) ARE echoed.
@@ -89,7 +99,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 5,119 passing tests must continue to pass after every change.
+- **No regressions** — the 5,122 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
