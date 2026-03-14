@@ -73,14 +73,14 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
 
 ### 2. Binder — populate symbol tables
 
-- [ ] **2a. Implement `Binder.kt`** — Walk the AST and:
+- [x] **2a. Implement `Binder.kt`** — Walk the AST and:
   - Create symbols for all declarations (variables, functions, classes, interfaces, enums, namespaces, type aliases, parameters)
   - Handle `var` hoisting (function-scoped) vs `let`/`const` (block-scoped)
   - Handle function declaration hoisting
   - Build scope chains (module → function → block)
   - Handle `export` flags on symbols
 
-- [ ] **2b. Declaration merging** — TypeScript allows:
+- [x] **2b. Declaration merging** — TypeScript allows:
   - Interface + interface → merged interface
   - Namespace + namespace → merged namespace
   - Class + namespace → class with static additions
