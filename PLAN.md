@@ -87,7 +87,7 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
   - Enum + namespace → enum with additional members
   - Function + namespace → function with properties
 
-- [ ] **2c. Module symbol resolution** — Connect import/export declarations to their target symbols across files (for multi-file test cases).
+- [x] **2c. Module symbol resolution** — Connect import/export declarations to their target symbols across files (for multi-file test cases).
 
 ### 3. Type Checker — MVP (unblocks ~30 tests)
 
@@ -104,11 +104,11 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
   - `const x = { a: 1 }` → object type with inferred members
   - Enum member values
 
-- [ ] **3c. Const enum folding** — With type info, resolve const enum member references to their computed values. This unblocks ~6 tests: `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, etc.
+- [x] **3c. Const enum folding** — With type info, resolve const enum member references to their computed values. This unblocks ~6 tests: `constEnums`, `constEnumExternalModule`, `constEnumNoEmitReexport`, etc.
 
-- [ ] **3d. Import elision** — With type info, determine which imports are type-only (used only in type positions) and can be elided from JS output. This unblocks ~7 tests: `aliasOnMergedModuleInterface`, `importElisionEnum`, etc.
+- [x] **3d. Import elision** — With type info, determine which imports are type-only (used only in type positions) and can be elided from JS output. This unblocks ~7 tests: `aliasOnMergedModuleInterface`, `importElisionEnum`, etc.
 
-- [ ] **3e. Unused import/variable detection** — Flag imports and locals that are never referenced in value positions. This unblocks ~2 tests.
+- [x] **3e. Unused import/variable detection** — Flag imports and locals that are never referenced in value positions. This unblocks ~2 tests.
 
 ### 4. Integrate checker into pipeline
 
