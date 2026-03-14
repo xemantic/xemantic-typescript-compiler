@@ -293,7 +293,7 @@ information. This must be fixed for `.errors.txt` tests to match baselines.
 
   **File:** `Parser.kt` (or a shared utility)
 
-- [ ] **4b. Use correct TypeScript diagnostic codes in Parser**
+- [x] **4b. Use correct TypeScript diagnostic codes in Parser**
 
   Replace the hardcoded `code = 1005` with the actual TypeScript error codes. Common
   parser diagnostic codes:

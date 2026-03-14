@@ -63,7 +63,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         if (token == kind) {
             nextToken(); return true
         }
-        reportError("'${tokenToString(kind)}' expected.")
+        reportError("'${tokenToString(kind)}' expected.", code = 1005)
         return false
     }
 
@@ -397,7 +397,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
         } else {
             // Report error but produce empty declarations list (e.g. bare `let;`)
-            reportError("Identifier expected.")
+            reportError("Identifier expected.", code = 1003)
         }
         return VariableDeclarationList(declarations = decls, flags = flags, pos = pos, end = getEnd())
     }
@@ -2959,11 +2959,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     val name = when {
                         newLineAfterDot && isKeyword() && !isIdentifier() &&
                                 lookAhead { nextToken(); isIdentifier() || isKeyword() } -> {
-                            reportError("Identifier expected.")
+                            reportError("Identifier expected.", code = 1003)
                             Identifier(text = "", pos = getPos(), end = getPos())
                         }
                         isIdentifier() || isKeyword() -> parseIdentifierName()
-                        else -> { reportError("Identifier expected."); Identifier(text = "", pos = getPos(), end = getPos()) }
+                        else -> { reportError("Identifier expected.", code = 1003); Identifier(text = "", pos = getPos(), end = getPos()) }
                     }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
@@ -3147,7 +3147,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     nextToken()
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
                     val name = if (isIdentifier() || isKeyword()) parseIdentifierName()
-                               else { reportError("Identifier expected."); Identifier(text = "", pos = getPos(), end = getPos()) }
+                               else { reportError("Identifier expected.", code = 1003); Identifier(text = "", pos = getPos(), end = getPos()) }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
                 OpenBracket -> {
@@ -4399,12 +4399,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val rawText = if (raw != value) raw else null
             // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
             if (scanner.hasInvalidUnicodeEscapeInToken()) {
-                reportError("Invalid character.")
+                reportError("Invalid character.", code = 1127)
             }
             nextToken()
             return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
         } else {
-            reportError("Identifier expected.")
+            reportError("Identifier expected.", code = 1003)
             return Identifier(text = "", pos = pos, end = getEnd())
         }
     }
@@ -4416,7 +4416,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val rawText = if (raw != value) raw else null
         // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
         if (scanner.hasInvalidUnicodeEscapeInToken()) {
-            reportError("Invalid character.")
+            reportError("Invalid character.", code = 1127)
         }
         nextToken()
         return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
