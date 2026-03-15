@@ -73,9 +73,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
             nextToken(); return true
         }
-        // When missing a close token, add related info pointing to the opening token
+        // When missing a close token at EOF, add related info pointing to the opening token
         if ((kind == SyntaxKind.CloseBrace || kind == SyntaxKind.CloseBracket || kind == SyntaxKind.CloseParen)
-            && openTokenStack.isNotEmpty()) {
+            && openTokenStack.isNotEmpty() && token == SyntaxKind.EndOfFile) {
             val openPos = openTokenStack.removeAt(openTokenStack.lastIndex)
             val openToken = when (kind) {
                 SyntaxKind.CloseBrace -> "{"
