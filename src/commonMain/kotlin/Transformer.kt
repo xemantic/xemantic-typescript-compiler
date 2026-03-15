@@ -2970,8 +2970,12 @@ class Transformer(
                 is ImportDeclaration -> {
                     val clause = stmt.importClause
                     val moduleSpecifier = stmt.moduleSpecifier
-                    val specStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
+                    var specStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
                         ?: (moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                    // When outFile is set (System bundling), resolve relative specifiers to module names
+                    if (options.outFile != null && (specStr.startsWith("./") || specStr.startsWith("../"))) {
+                        specStr = resolveAmdModuleName(specStr, originalSourceFile.fileName)
+                    }
 
                     if (clause == null) {
                         // Side-effect import: import 'mod' — empty setter with param _N
@@ -4010,9 +4014,14 @@ class Transformer(
                     pos = -1, end = -1,
                 ),
                 arguments = buildList {
-                    // If /// <amd-module name='X'/> directive present, add module name as first arg
-                    if (amdDirectives.moduleName != null) {
-                        add(StringLiteralNode(text = amdDirectives.moduleName, pos = -1, end = -1))
+                    // Module name: explicit <amd-module name='n'/> or derived from file for outFile
+                    val systemModuleName = amdDirectives.moduleName ?: if (options.outFile != null) {
+                        originalSourceFile.fileName
+                            .substringAfterLast('/').substringAfterLast('\\')
+                            .substringBeforeLast('.')
+                    } else null
+                    if (systemModuleName != null) {
+                        add(StringLiteralNode(text = systemModuleName, pos = -1, end = -1))
                     }
                     add(depArray)
                     add(outerFn)
