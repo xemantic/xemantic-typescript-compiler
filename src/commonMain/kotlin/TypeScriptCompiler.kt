@@ -226,12 +226,31 @@ class TypeScriptCompiler {
         }
 
         // TS5070: resolveJsonModule with classic moduleResolution
-        if (options.resolveJsonModule && options.moduleResolution?.lowercase() == "classic") {
+        // Classic is the default for module=none/amd/umd/system
+        val effectiveModuleRes = options.moduleResolution?.lowercase() ?: run {
+            val mod = options.effectiveModule
+            if (mod == ModuleKind.None || mod == ModuleKind.AMD || mod == ModuleKind.UMD || mod == ModuleKind.System) "classic"
+            else null
+        }
+        if (options.resolveJsonModule && effectiveModuleRes == "classic") {
             diagnostics.add(Diagnostic(
                 message = "Option '--resolveJsonModule' cannot be specified when 'moduleResolution' is set to 'classic'.",
                 category = DiagnosticCategory.Error,
                 code = 5070,
             ))
+        }
+
+        // TS5071: resolveJsonModule with module=none/system/umd
+        // This fires based on the module kind, not the moduleResolution
+        if (options.resolveJsonModule) {
+            val effModule = options.effectiveModule
+            if (effModule == ModuleKind.None || effModule == ModuleKind.System || effModule == ModuleKind.UMD) {
+                diagnostics.add(Diagnostic(
+                    message = "Option '--resolveJsonModule' cannot be specified when 'module' is set to 'none', 'system', or 'umd'.",
+                    category = DiagnosticCategory.Error,
+                    code = 5071,
+                ))
+            }
         }
 
         // TS5095: moduleResolution=bundler with incompatible module
