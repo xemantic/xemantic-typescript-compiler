@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,720 passing (63.4%), 3,875 failing
+- **10,595 tests**, 6,726 passing (63.5%), 3,869 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -670,10 +670,18 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **9i. ES2015+ target: skip async/await downleveling** (~22 tests)
+- [x] **9i. const/let→var downleveling for target<ES2015** (+6 tests)
 
-  Gate `__awaiter`/`__generator` injection on `target < ES2017` (async/await
-  is native at ES2017+).
+  All `const` and `let` declarations converted to `var` when `target < ES2015`:
+  `transformVariableStatement`, `transformVariableDeclarationList`, and
+  `makeRequireConst`/`makeImportHelperConst`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **9j. Object.defineProperty getter re-exports in CJS** (~134 tests)
+
+  Re-exports (`export { X } from "./module"`) should use
+  `Object.defineProperty(exports, "X", { get: ... })` for live bindings.
 
   **Files:** `Transformer.kt`
 
