@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,709 passing (63.3%), 3,886 failing
+- **10,595 tests**, 6,711 passing (63.3%), 3,884 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -620,17 +620,17 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **9d. Enum member names in scope within enum body** (~8 tests)
+- [x] **9d. Enum member names in scope within enum body** (+1 test)
 
-  `const enum E { A = 1, B = A + 1 }` — `A` must be resolvable. Add enum
-  member scope to TS2304 checker.
+  Added enum member names to a child scope in the TS2304 checker so
+  `const enum E { A = 1, B = A + 1 }` resolves `A`.
 
   **Files:** `Checker.kt`
 
-- [ ] **9e. Class expression self-reference in class scope** (~5 tests)
+- [x] **9e. Class expression self-reference in class scope** (+1 test)
 
-  `const x = class C { static y = C.x }` — `C` should be in scope inside
-  the class body.
+  Added class expression name to its own scope so
+  `class C { static y = C.x }` resolves `C`.
 
   **Files:** `Checker.kt`
 

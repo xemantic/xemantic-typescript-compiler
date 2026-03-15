@@ -4165,9 +4165,15 @@ class Checker(
                 checkUnresolvedInType(stmt.type, typeScope, source, fileName)
             }
             is EnumDeclaration -> {
-                // Enum member initializers can reference other members
+                // Enum member initializers can reference other members and the enum itself
+                val enumScope = scope.child()
                 for (member in stmt.members) {
-                    member.initializer?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+                    val memberName = member.name
+                    if (memberName is Identifier) enumScope.names.add(memberName.text)
+                    else if (memberName is StringLiteralNode) enumScope.names.add(memberName.text)
+                }
+                for (member in stmt.members) {
+                    member.initializer?.let { checkUnresolvedInExpr(it, enumScope, source, fileName) }
                 }
             }
             is ModuleDeclaration -> {
@@ -4365,6 +4371,8 @@ class Checker(
             }
             is ClassExpression -> {
                 val classScope = scope.child()
+                // Class expression name is in scope within its own body
+                expr.name?.let { classScope.names.add(it.text) }
                 expr.typeParameters?.forEach { classScope.names.add(it.name.text) }
                 expr.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
