@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,703 passing (63.3%), 3,892 failing
+- **10,595 tests**, 6,706 passing (63.3%), 3,889 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -583,10 +583,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
 - [x] **8ad. TS5101 downlevelIteration explicitly-set** (+1 test)
 
-- [ ] **8ae. resolveAlias StackOverflow in rewriteId for deep binary expressions**
+- [x] **8ae. StackOverflow for deep binary expression chains** (+3 tests)
 
-  `manyConstExports` test causes StackOverflow due to deep recursion in
-  `rewriteId` for long BinaryExpression chains. 3 tests affected.
+  `manyConstExports` test (5000 exports) caused StackOverflow in both Transformer
+  `rewriteId` and Emitter `emitBinaryExpression` for deep right-associative chains.
+  Fixed by: (1) batching CJS `exports.x = void 0` hoists into groups of 50 (matching
+  TypeScript), (2) iterative right-spine walk in `rewriteId`, (3) iterative right-deep
+  chain handling in Emitter.
 
 ---
 

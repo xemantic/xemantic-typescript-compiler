@@ -1449,35 +1449,40 @@ class Transformer(
         // Emit hoisted exports: TypeScript chains them as a single assignment expression.
         // e.g. exports.z = exports.y = exports.x = void 0;
         // The chain is built in declaration order so the last-declared name is leftmost.
+        // TypeScript batches into groups of 50 to avoid deep expression trees (manyConstExports).
         if (exportedVarNames.isNotEmpty()) {
-            val void0 = VoidExpression(
-                expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
-                pos = -1, end = -1,
-            )
-            val hoistExpr: Expression = exportedVarNames.fold(void0 as Expression) { acc, name ->
-                BinaryExpression(
-                    left = PropertyAccessExpression(
-                        expression = syntheticId("exports"),
-                        name = syntheticId(name),
-                        pos = -1, end = -1,
-                    ),
-                    operator = Equals,
-                    right = acc,
+            val insertPos = if (hasExportEquals) 0 else 1
+            val batches = exportedVarNames.chunked(50)
+            for ((batchIdx, batch) in batches.withIndex()) {
+                val void0 = VoidExpression(
+                    expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
                     pos = -1, end = -1,
                 )
+                val hoistExpr: Expression = batch.fold(void0 as Expression) { acc, name ->
+                    BinaryExpression(
+                        left = PropertyAccessExpression(
+                            expression = syntheticId("exports"),
+                            name = syntheticId(name),
+                            pos = -1, end = -1,
+                        ),
+                        operator = Equals,
+                        right = acc,
+                        pos = -1, end = -1,
+                    )
+                }
+                val hoistStmt = ExpressionStatement(expression = hoistExpr, pos = -1, end = -1)
+                result.add(insertPos + batchIdx, hoistStmt)
             }
-            val hoistStmt = ExpressionStatement(expression = hoistExpr, pos = -1, end = -1)
-            result.add(if (hasExportEquals) 0 else 1, hoistStmt)
         }
 
         // Insert function export stubs after void0 hoists and Object.defineProperty preamble.
         // They must come before variable initializer assignments so the hoisted function
         // reference is captured before any same-name var overrides it.
         if (functionExportStubs.isNotEmpty()) {
+            val hoistCount = if (exportedVarNames.isEmpty()) 0 else ((exportedVarNames.size + 49) / 50)
             val insertPos = when {
                 hasExportEquals -> 0
-                exportedVarNames.isEmpty() -> 1 // after Object.defineProperty only
-                else -> 2 // after Object.defineProperty + void0 hoist
+                else -> 1 + hoistCount // after Object.defineProperty + all void0 hoists
             }
             result.addAll(insertPos, functionExportStubs)
         }
@@ -2427,25 +2432,27 @@ class Transformer(
             fullBody.add(makeEsModulePreamble())
         }
 
-        // Void0 hoists
+        // Void0 hoists — batch into groups of 50 to avoid deep expression trees
         if (exportedVarNames.isNotEmpty()) {
-            val void0 = VoidExpression(
-                expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
-                pos = -1, end = -1,
-            )
-            val hoistExpr: Expression = exportedVarNames.fold(void0 as Expression) { acc, name ->
-                BinaryExpression(
-                    left = PropertyAccessExpression(
-                        expression = syntheticId("exports"),
-                        name = syntheticId(name),
-                        pos = -1, end = -1,
-                    ),
-                    operator = Equals,
-                    right = acc,
+            for (batch in exportedVarNames.chunked(50)) {
+                val void0 = VoidExpression(
+                    expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
                     pos = -1, end = -1,
                 )
+                val hoistExpr: Expression = batch.fold(void0 as Expression) { acc, name ->
+                    BinaryExpression(
+                        left = PropertyAccessExpression(
+                            expression = syntheticId("exports"),
+                            name = syntheticId(name),
+                            pos = -1, end = -1,
+                        ),
+                        operator = Equals,
+                        right = acc,
+                        pos = -1, end = -1,
+                    )
+                }
+                fullBody.add(ExpressionStatement(expression = hoistExpr, pos = -1, end = -1))
             }
-            fullBody.add(ExpressionStatement(expression = hoistExpr, pos = -1, end = -1))
         }
 
         // Function export stubs (after void0 hoists)
@@ -11137,10 +11144,19 @@ class Transformer(
             expression = rewriteId(expr.expression, map, wrapCallsWithZero),
             arguments = expr.arguments?.map { rewriteId(it, map, wrapCallsWithZero) },
         )
-        is BinaryExpression -> expr.copy(
-            left = rewriteId(expr.left, map, wrapCallsWithZero),
-            right = rewriteId(expr.right, map, wrapCallsWithZero),
-        )
+        is BinaryExpression -> {
+            // Iteratively walk right spine to avoid StackOverflow on deep chains
+            // (e.g., 5000-export comma chains in CommonJS transform — manyConstExports)
+            val spine = ArrayList<BinaryExpression>()
+            var cur: Expression = expr
+            while (cur is BinaryExpression) { spine.add(cur); cur = cur.right }
+            var result = rewriteId(cur, map, wrapCallsWithZero)
+            for (i in spine.lastIndex downTo 0) {
+                val n = spine[i]
+                result = n.copy(left = rewriteId(n.left, map, wrapCallsWithZero), right = result)
+            }
+            result
+        }
         is ConditionalExpression -> expr.copy(
             condition = rewriteId(expr.condition, map, wrapCallsWithZero),
             whenTrue = rewriteId(expr.whenTrue, map, wrapCallsWithZero),
