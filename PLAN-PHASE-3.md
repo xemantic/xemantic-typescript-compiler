@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,760 passing (63.8%), 3,835 failing
+- **10,595 tests**, 6,767 passing (63.9%), 3,828 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -743,7 +743,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **10j. TS6133 namespace declarations as unused** (~5 tests)
+- [x] **10j. TS1203/TS1202 export=/import= in ES modules** (+7 tests)
+
+  Emit TS1203 for export= and TS1202 for import= when targeting ES modules.
+
+  **Files:** `Checker.kt`
+
+- [ ] **10k. TS6133 namespace declarations as unused** (~5 tests)
 
   Namespace declarations (`namespace N {}`) that are never referenced
   should be flagged as TS6133 in module files.
