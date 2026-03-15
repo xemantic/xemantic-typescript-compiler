@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,656 passing (62.8%), 3,939 failing
+- **10,595 tests**, 6,700 passing (63.2%), 3,895 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -544,6 +544,49 @@ Picking off tractable fixes to continue improving the pass rate.
   Track opening token positions (braces/brackets/parens) in a stack.
   When `parseExpected` fails for a closing token, add `relatedInformation`
   with TS1007 pointing to the matching opening token position.
+
+- [x] **8t. Compiler option validation diagnostics** (+17 tests)
+
+  TS6082 (outFile with non-AMD/System module), TS5069 (emitDeclarationOnly
+  without declaration), TS5070 (resolveJsonModule with classic moduleResolution),
+  TS5095 (bundler with incompatible module).
+
+- [x] **8u. TS5101 downlevelIteration explicitly-set** (+1 test)
+
+  Deprecation fires when option is SET (even to false).
+
+- [x] **8v. TS1109 in expression contexts** (+5 tests)
+
+  Use "Expression expected." (TS1109) instead of "Identifier expected."
+  (TS1003) in parsePrimaryExpression fallback.
+
+- [x] **8w. AMD/System module specifier and name resolution** (+5 tests)
+
+  Resolve relative module specifiers to bare names in AMD/System outFile
+  bundles. Preserve directory paths in module names (app/main, not main).
+
+- [x] **8x. TS5071 bundler implies resolveJsonModule** (+4 tests)
+
+  moduleResolution=bundler implies resolveJsonModule for TS5071 check.
+
+- [x] **8y. TS5053 inlineSourceMap conflicts** (+3 tests)
+
+  Emit TS5053 for mapRoot/sourceMap + inlineSourceMap combinations.
+
+- [x] **8z. TS5069 mapRoot without sourceMap** (+1 test)
+
+- [x] **8aa. TS5055 outFile overwrite detection** (+3 tests)
+
+- [x] **8ab. TS1109 in expression contexts** (+5 tests)
+
+- [x] **8ac. TS7006 optional param squiggle** (+1 test)
+
+- [x] **8ad. TS5101 downlevelIteration explicitly-set** (+1 test)
+
+- [ ] **8ae. resolveAlias StackOverflow in rewriteId for deep binary expressions**
+
+  `manyConstExports` test causes StackOverflow due to deep recursion in
+  `rewriteId` for long BinaryExpression chains. 3 tests affected.
 
 ---
 
