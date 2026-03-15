@@ -209,10 +209,12 @@ class TypeScriptCompiler {
         )
 
         // TS5107: Deprecated options — point to VALUE position in tsconfig
-        fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0") {
+        // Only moduleResolution=node10 gets the migration URL chain from tsconfig;
+        // other TS5107 options don't include it.
+        fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0", withMigrationUrl: Boolean = false) {
             if (isDeprecationSuppressed(deprecationVersion)) return
             val pos = tsconfigKey?.let { tsconfigPos[it] }
-            val chain = if (pos != null) listOf("  Visit https://aka.ms/ts6 for migration information.") else emptyList()
+            val chain = if (pos != null && withMigrationUrl) listOf("  Visit https://aka.ms/ts6 for migration information.") else emptyList()
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
@@ -233,10 +235,10 @@ class TypeScriptCompiler {
         if (options.module == ModuleKind.UMD) addDeprecation("module=UMD", tsconfigKey = "module")
         if (options.module == ModuleKind.System) addDeprecation("module=System", tsconfigKey = "module")
         if (options.module == ModuleKind.None) addDeprecation("module=None", tsconfigKey = "module")
-        // Module resolution deprecations
+        // Module resolution deprecations — node10 gets migration URL chain
         when (options.moduleResolution?.lowercase()) {
             "classic" -> addDeprecation("moduleResolution=classic", tsconfigKey = "moduleresolution")
-            "node", "node10" -> addDeprecation("moduleResolution=node10", tsconfigKey = "moduleresolution")
+            "node", "node10" -> addDeprecation("moduleResolution=node10", tsconfigKey = "moduleresolution", withMigrationUrl = true)
         }
         // Boolean option deprecations (explicitly set to false)
         if (options.allowSyntheticDefaultImportsExplicitlyFalse)
