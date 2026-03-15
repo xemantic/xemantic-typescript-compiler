@@ -1797,6 +1797,51 @@ class Checker(
                 collectRefsFromExpr(expr.expression, scope)
                 collectRefsFromExpr(expr.argumentExpression, scope)
             }
+            is ArrayLiteralExpression -> {
+                // [x, y] = [1, 2] — destructuring write: elements are write targets
+                for (element in expr.elements) {
+                    when (element) {
+                        is SpreadElement -> collectWriteTargetRefs(element.expression, scope)
+                        is BinaryExpression -> {
+                            // [x = default] — x is write target, default IS a read
+                            if (element.operator == SyntaxKind.Equals) {
+                                collectWriteTargetRefs(element.left, scope)
+                                collectRefsFromExpr(element.right, scope)
+                            } else {
+                                collectRefsFromExpr(element, scope)
+                            }
+                        }
+                        is OmittedExpression -> {} // skip holes
+                        is Expression -> collectWriteTargetRefs(element, scope)
+                        else -> {}
+                    }
+                }
+            }
+            is ObjectLiteralExpression -> {
+                // { x, y } = { x: 1, y: 2 } — destructuring write: properties are write targets
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is ShorthandPropertyAssignment -> {
+                            // { x } = obj — x is a write target
+                            if (prop.objectAssignmentInitializer != null) {
+                                // { x = default } = obj — x is write target, default IS a read
+                                collectRefsFromExpr(prop.objectAssignmentInitializer!!, scope)
+                            }
+                            // Don't add prop.name to referencedNames
+                        }
+                        is PropertyAssignment -> {
+                            // { key: target } = obj — key is a read (if computed), target is write
+                            if (prop.name is ComputedPropertyName) {
+                                collectRefsFromExpr((prop.name as ComputedPropertyName).expression, scope)
+                            }
+                            collectWriteTargetRefs(prop.initializer, scope)
+                        }
+                        is SpreadAssignment -> collectWriteTargetRefs(prop.expression, scope)
+                        else -> {}
+                    }
+                }
+            }
+            is ParenthesizedExpression -> collectWriteTargetRefs(expr.expression, scope)
             else -> collectRefsFromExpr(expr, scope) // fallback: treat as read
         }
     }
