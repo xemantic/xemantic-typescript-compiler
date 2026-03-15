@@ -63,6 +63,7 @@ enum class ModuleKind {
 
 data class CompilerOptions(
     val target: ScriptTarget = ScriptTarget.ES3,
+    val targetExplicitlySet: Boolean = false,
     val module: ModuleKind? = null,
     val strict: Boolean = false,
     /** True when `// @strict: false` was explicitly set (not just defaulting to false). */
@@ -129,6 +130,7 @@ data class CompilerOptions(
     val preserveValueImports: Boolean = false, // removed in TS 5.5
     val resolveJsonModule: Boolean = false,
     val inlineSourceMap: Boolean = false,
+    val ignoreDeprecations: String? = null,
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -320,7 +322,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
     return when (key) {
         "target" -> {
             val target = ScriptTarget.fromString(value.split(",")[0].trim())
-            if (target != null) options.copy(target = target) else options
+            if (target != null) options.copy(target = target, targetExplicitlySet = true) else options
         }
 
         "module" -> {
@@ -391,6 +393,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "preservevalueimports" -> options.copy(preserveValueImports = boolValue)
         "resolvejsonmodule" -> options.copy(resolveJsonModule = boolValue)
         "inlinesourcemap" -> options.copy(inlineSourceMap = boolValue)
+        "ignoredeprecations" -> options.copy(ignoreDeprecations = value.trim())
         else -> options
     }
 }
@@ -453,7 +456,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
         "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
         "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
         "alwaysstrict", "newline", "noresolve", "moduledetection",
-        "outdir", "allowjs",
+        "outdir", "allowjs", "ignoredeprecations",
     )
 
     var result = options

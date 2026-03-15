@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,706 passing (63.3%), 3,889 failing
+- **10,595 tests**, 6,709 passing (63.3%), 3,886 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -590,6 +590,76 @@ Picking off tractable fixes to continue improving the pass rate.
   Fixed by: (1) batching CJS `exports.x = void 0` hoists into groups of 50 (matching
   TypeScript), (2) iterative right-spine walk in `rewriteId`, (3) iterative right-deep
   chain handling in Emitter.
+
+### 9. Phase 3d — Continued incremental improvements
+
+- [x] **9a. Honor `ignoreDeprecations` + `targetExplicitlySet` + missing globals + TS5071/5070 exclusion** (+3 tests)
+
+  - Added `ignoreDeprecations` field to `CompilerOptions` with parsing in
+    `applyDirective` and `applyTsconfigOptions`. Guards TS5107/TS5101 emission.
+  - Added `targetExplicitlySet` flag — only emit TS5107 for target when
+    explicitly set (not default ES3).
+  - Added missing globals: `RegExpMatchArray`, `RegExpExecArray`, `FlatArray`,
+    `IteratorResult`, `IteratorYieldResult`, `IteratorReturnResult`, `IteratorObject`,
+    `WScript`, `Windows`.
+  - Fixed TS5071/TS5070 mutual exclusion — don't emit both.
+
+  **Files:** `CompilerOptions.kt`, `TypeScriptCompiler.kt`, `Checker.kt`
+
+- [ ] **9b. `moduleResolution: "node"` → `node10` alias fires TS5107** (~5 tests)
+
+  `moduleResolution: "node"` is an alias for `node10`, which is deprecated.
+  Normalize the value and emit TS5107.
+
+  **Files:** `CompilerOptions.kt`, `TypeScriptCompiler.kt`
+
+- [ ] **9c. TS2300 false positives for valid declaration merging** (~33 tests)
+
+  TypeScript allows: class+namespace, function+namespace, namespace+enum,
+  interface+interface, class+interface. Don't fire TS2300 for these merges.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9d. Enum member names in scope within enum body** (~8 tests)
+
+  `const enum E { A = 1, B = A + 1 }` — `A` must be resolvable. Add enum
+  member scope to TS2304 checker.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9e. Class expression self-reference in class scope** (~5 tests)
+
+  `const x = class C { static y = C.x }` — `C` should be in scope inside
+  the class body.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9f. TS6133 write-only assignment detection** (~23 tests)
+
+  Assignment targets (`x = value`) should NOT count as reads. Left side
+  of `=` is write-only. Only compound assignments are reads.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9g. TS7026 false positives with jsxFactory/preserve** (~15 tests)
+
+  When `jsxFactory` is explicitly set or `jsx: preserve`, skip TS7026.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9h. TS2454/TS2564 false positives for index signatures** (~8 tests)
+
+  Index signatures like `[key: string]: T` create fake properties with
+  name `]`. Skip these in TS2454/TS2564 checking.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9i. ES2015+ target: skip async/await downleveling** (~22 tests)
+
+  Gate `__awaiter`/`__generator` injection on `target < ES2017` (async/await
+  is native at ES2017+).
+
+  **Files:** `Transformer.kt`
 
 ---
 
