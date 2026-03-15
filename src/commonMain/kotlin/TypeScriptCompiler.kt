@@ -293,6 +293,29 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS5055: outFile would overwrite input file
+        if (options.outFile != null && parsed.hasExplicitFilenames) {
+            val outJs = options.outFile
+            val outDts = options.outFile.substringBeforeLast('.') + ".d.ts"
+            val inputFiles = parsed.files.map { it.fileName }.toSet()
+            if (outJs in inputFiles) {
+                diagnostics.add(Diagnostic(
+                    message = "Cannot write file '$outJs' because it would overwrite input file.",
+                    category = DiagnosticCategory.Error,
+                    code = 5055,
+                    messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
+                ))
+            }
+            if (options.declaration && outDts in inputFiles) {
+                diagnostics.add(Diagnostic(
+                    message = "Cannot write file '$outDts' because it would overwrite input file.",
+                    category = DiagnosticCategory.Error,
+                    code = 5055,
+                    messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
+                ))
+            }
+        }
+
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation
             val file = parsed.files[0]
