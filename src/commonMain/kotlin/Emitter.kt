@@ -2889,6 +2889,60 @@ class Emitter(
             }
             return
         }
+        // Flatten right-recursive chain to avoid StackOverflow on deep right-associative trees
+        // (e.g., chained assignments: exports.z = exports.y = exports.x = void 0)
+        val rightChain = mutableListOf<BinaryExpression>()
+        var rCur: Expression = node
+        while (rCur is BinaryExpression && !rCur.operatorHasPrecedingLineBreak
+            && !(rCur.left is ConditionalExpression && rCur.operator != SyntaxKind.Comma)
+            && !(rCur.right is ConditionalExpression && rightConditionalNeedsParens(rCur.operator))) {
+            rightChain.add(rCur)
+            rCur = rCur.right
+        }
+        if (rightChain.size > 1) {
+            // Iterative path: emit each (left, operator) then rightmost expression
+            var rightIndentCount = 0
+            for (binNode in rightChain) {
+                if (binNode.left is ConditionalExpression && binNode.operator != SyntaxKind.Comma) {
+                    write("("); emitExpression(binNode.left); write(")")
+                } else {
+                    emitExpression(binNode.left)
+                }
+                val op = operatorToString(binNode.operator)
+                val rightNewLine = binNode.left.end > 0 && hasNewLineInSource(binNode.left.end, binNode.right.pos)
+                if (binNode.operator == SyntaxKind.InKeyword || binNode.operator == SyntaxKind.InstanceOfKeyword) {
+                    write(" $op ")
+                } else if (binNode.operator == SyntaxKind.Comma) {
+                    if (rightNewLine) {
+                        write(op)
+                        writeNewLine()
+                        repeat(indentLevel + 1) { sb.append("    ") }
+                        isStartOfLine = false
+                    } else {
+                        write("$op ")
+                    }
+                } else if (rightNewLine) {
+                    write(" $op")
+                    if (!options.removeComments) {
+                        binNode.operatorTrailingComments?.forEach { write(" "); write(it.text) }
+                    }
+                    writeNewLine()
+                    indentLevel++
+                    rightIndentCount++
+                    repeat(indentLevel) { sb.append("    ") }
+                    isStartOfLine = false
+                } else {
+                    write(" $op ")
+                    if (!options.removeComments) {
+                        binNode.operatorTrailingComments?.forEach { write(it.text); write(" ") }
+                    }
+                }
+            }
+            // Emit rightmost non-binary expression
+            emitExpression(rCur)
+            indentLevel -= rightIndentCount
+            return
+        }
         // Standard recursive path for single node or complex formatting
         // A ConditionalExpression on the left of a binary operator needs parentheses
         // for most operators (since `a ? b : c + d` parses as `a ? b : (c + d)`),
