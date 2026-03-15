@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,777 passing (64.0%), 3,818 failing
+- **10,595 tests**, 6,778 passing (64.0%), 3,817 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -793,6 +793,14 @@ Picking off tractable fixes to continue improving the pass rate.
   Investigated contextual typing suppression for arrow/function expression
   parameters. Doesn't gain tests since affected tests also need other
   diagnostics. Callback argument suppression causes test ordering regression.
+
+  **Files:** `Checker.kt`
+
+- [x] **11b2. TS6133 for destructuring parameters** (+1 test)
+
+  Added `collectDestructuringParamNames` to walk ArrayBindingPattern and
+  ObjectBindingPattern in function parameters. Also use `spanLength` in
+  the function-like parameter reporting code.
 
   **Files:** `Checker.kt`
 
