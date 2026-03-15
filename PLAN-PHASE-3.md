@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,727 passing (63.5%), 3,868 failing
+- **10,595 tests**, 6,731 passing (63.5%), 3,864 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -606,12 +606,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `CompilerOptions.kt`, `TypeScriptCompiler.kt`, `Checker.kt`
 
-- [ ] **9b. `moduleResolution: "node"` → `node10` alias fires TS5107** (~5 tests)
+- [x] **9b. `moduleResolution: "node"` → `node10` alias fires TS5107** (+4 tests)
 
-  `moduleResolution: "node"` is an alias for `node10`, which is deprecated.
-  Normalize the value and emit TS5107.
+  Added `moduleresolution` to `allowedTsconfigOptions` so it's parsed from tsconfig.json.
+  Added `TsconfigOptionPosition` tracking for all tsconfig options to emit positioned
+  diagnostics with file/line/col info. TS5107/TS5101 diagnostics from tsconfig now include
+  `Visit https://aka.ms/ts6 for migration information.` messageChain. Also includes
+  tsconfig.json in `allSourceFiles` for error baseline annotations.
 
-  **Files:** `CompilerOptions.kt`, `TypeScriptCompiler.kt`
+  **Files:** `CompilerOptions.kt`, `TypeScriptCompiler.kt`, `BaselineFormatter.kt`
 
 - [x] **9c-pre. Namespace and enum merged scope for TS2304** (0 net — correctness fix)
 
@@ -622,10 +625,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **9c. TS2300 false positives for valid declaration merging** (~33 tests)
+- [x] **9c. TS2300 false positives for valid declaration merging** (+3 tests, not ~33)
 
-  TypeScript allows: class+namespace, function+namespace, namespace+enum,
-  interface+interface, class+interface. Don't fire TS2300 for these merges.
+  Investigated: actual false positives were much fewer than estimated.
+  Only 2 tests had false TS2300 — both were class+enum conflicts that should
+  use TS2567 ("Enum declarations can only merge with namespace or other enum
+  declarations"). Declaration merging for class+namespace, function+namespace,
+  interface+interface was already correctly handled (not tracked in checker).
 
   **Files:** `Checker.kt`
 
@@ -657,16 +663,22 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Transformer.kt`
 
-- [ ] **9g. TS6133 write-only assignment detection** (~23 tests)
+- [x] **9g. TS6133 write-only assignment detection** (+1 test, not ~23)
 
-  Assignment targets (`x = value`) should NOT count as reads. Left side
-  of `=` is write-only. Only compound assignments are reads.
+  Basic write-only detection was already implemented. Extended
+  `collectWriteTargetRefs` to handle destructuring write targets:
+  ArrayLiteralExpression, ObjectLiteralExpression, ParenthesizedExpression.
+  Most remaining TS6133 failures are from other issues (TS6198/TS6199
+  consolidated diagnostics, self-reference detection, namespace tracking).
 
   **Files:** `Checker.kt`
 
-- [ ] **9h. TS7026 false positives with jsxFactory/preserve** (~15 tests)
+- [x] **9h. TS7026 false positives with jsxFactory/preserve** (already implemented)
 
-  When `jsxFactory` is explicitly set or `jsx: preserve`, skip TS7026.
+  Guards for `jsxFactory != null`, `jsx: preserve`, and `jsx: react-native`
+  were already in place in `checkJsxImplicitAny()`. Only 1 test has a
+  false-positive TS7026 (jsxFactoryMissingErrorInsideAClass) and it needs
+  TS2874 instead — different issue.
 
   **Files:** `Checker.kt`
 
