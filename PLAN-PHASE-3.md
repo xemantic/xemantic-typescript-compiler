@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,781 passing (64.0%), 3,814 failing
+- **10,595 tests**, 6,787 passing (64.1%), 3,808 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -819,6 +819,14 @@ Picking off tractable fixes to continue improving the pass rate.
   - Write-only properties (assigned but never read)
   - `infer` type parameters in conditional types
   - Namespace-level unused checking gaps
+
+  **Files:** `Checker.kt`
+
+- [x] **11g. TS1107 — jump target cannot cross function boundary** (+6 tests)
+
+  Check break/continue statements that target loops/labels outside the
+  enclosing function boundary. Tracks iteration/switch/label context during
+  AST walk, resets at function/arrow/class boundaries.
 
   **Files:** `Checker.kt`
 
