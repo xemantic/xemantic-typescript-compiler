@@ -2213,12 +2213,16 @@ class Checker(
             is FunctionExpression -> {
                 checkUnusedInFunctionLike(
                     expr.body.statements, expr.parameters, source, fileName,
+                    typeParameters = expr.typeParameters,
+                    returnType = expr.type,
                 )
             }
             is ArrowFunction -> {
                 when (val body = expr.body) {
                     is Block -> checkUnusedInFunctionLike(
                         body.statements, expr.parameters, source, fileName,
+                        typeParameters = expr.typeParameters,
+                        returnType = expr.type,
                     )
                     is Expression -> {
                         // Arrow with expression body — still check parameters
@@ -2272,6 +2276,8 @@ class Checker(
                             prop.body?.let { body ->
                                 checkUnusedInFunctionLike(
                                     body.statements, prop.parameters, source, fileName,
+                                    typeParameters = prop.typeParameters,
+                                    returnType = prop.type,
                                 )
                             }
                         }
@@ -2419,6 +2425,9 @@ class Checker(
                 checkUnusedInStatements(
                     element.body.statements, source, fileName, isTopLevel = false,
                 )
+            }
+            is PropertyDeclaration -> {
+                element.initializer?.let { checkUnusedInExpr(it, source, fileName) }
             }
             else -> {}
         }
