@@ -3869,8 +3869,17 @@ class Checker(
                 is EnumDeclaration -> scope.names.add(stmt.name.text)
                 is ModuleDeclaration -> {
                     val name = stmt.name
-                    if (name is Identifier) scope.names.add(name.text)
-                    else if (name is StringLiteralNode) scope.names.add(name.text)
+                    when (name) {
+                        is Identifier -> scope.names.add(name.text)
+                        is StringLiteralNode -> scope.names.add(name.text)
+                        is PropertyAccessExpression -> {
+                            // Dotted namespace: namespace m1.m2.m3 {} — extract leftmost segment
+                            var cur: Expression = name
+                            while (cur is PropertyAccessExpression) cur = cur.expression
+                            if (cur is Identifier) scope.names.add(cur.text)
+                        }
+                        else -> {}
+                    }
                 }
                 is ImportDeclaration -> {
                     val clause = stmt.importClause ?: return
