@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,711 passing (63.3%), 3,884 failing
+- **10,595 tests**, 6,716 passing (63.4%), 3,879 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -634,23 +634,23 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **9f. TS6133 write-only assignment detection** (~23 tests)
+- [x] **9f. Dotted namespace name resolution for TS2304** (+5 tests)
+
+  `namespace m1.m2.m3 {}` produces a PropertyAccessExpression for the name.
+  Extract leftmost segment and add to scope in `collectDeclaredNames`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **9g. TS6133 write-only assignment detection** (~23 tests)
 
   Assignment targets (`x = value`) should NOT count as reads. Left side
   of `=` is write-only. Only compound assignments are reads.
 
   **Files:** `Checker.kt`
 
-- [ ] **9g. TS7026 false positives with jsxFactory/preserve** (~15 tests)
+- [ ] **9h. TS7026 false positives with jsxFactory/preserve** (~15 tests)
 
   When `jsxFactory` is explicitly set or `jsx: preserve`, skip TS7026.
-
-  **Files:** `Checker.kt`
-
-- [ ] **9h. TS2454/TS2564 false positives for index signatures** (~8 tests)
-
-  Index signatures like `[key: string]: T` create fake properties with
-  name `]`. Skip these in TS2454/TS2564 checking.
 
   **Files:** `Checker.kt`
 
