@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,731 passing (63.5%), 3,864 failing
+- **10,595 tests**, 6,760 passing (63.8%), 3,835 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -697,6 +697,65 @@ Picking off tractable fixes to continue improving the pass rate.
   `exports.X = X`. Tracks named import elements in `namedImportLocalNames`.
 
   **Files:** `Transformer.kt`
+
+### 10. Phase 3e — Further incremental improvements
+
+- [x] **10a. Tsconfig positioned diagnostics** (+4 tests)
+
+  Added `moduleresolution` to allowed tsconfig options, tsconfig position
+  tracking for all options, and positioned TS5107/TS5101/TS5102 diagnostics.
+
+- [x] **10b. TS2567 for enum+class conflicts** (+3 tests)
+
+  Use TS2567 instead of TS2300 for class+enum merge conflicts.
+
+- [x] **10c. Destructuring write targets for TS6133** (+1 test)
+
+  Extended `collectWriteTargetRefs` for array/object destructuring assignments.
+
+- [x] **10d. KEY vs VALUE position for tsconfig diagnostics** (+8 tests)
+
+  TS5101/TS5102 point to option KEY, TS5107 points to option VALUE.
+
+- [x] **10e. Migration URL only for moduleResolution=node10** (+1 test)
+
+  Only `moduleResolution=node10` TS5107 gets `Visit https://aka.ms/ts6` chain.
+
+- [x] **10f. ignoreDeprecations suppresses TS5102** (+1 test)
+
+  `ignoreDeprecations: "5.0"` suppresses TS5102 removed-option diagnostics.
+
+- [x] **10g. TS6196 for type declarations + interface refs** (+3 tests)
+
+  Interfaces, type aliases, enums use TS6196. Interface heritage + member
+  type references are collected for unused checking.
+
+- [x] **10h. TS2309 export assignment conflicts** (+6 tests)
+
+  Emit TS2309 when `export = X` coexists with other exports in a file.
+
+  **Files:** `Checker.kt`
+
+- [x] **10i. TS1100 strict mode identifier restrictions** (+6 tests)
+
+  `arguments` and `eval` cannot be used as variable/parameter/function
+  names in strict mode (alwaysStrict or strict).
+
+  **Files:** `Checker.kt`
+
+- [ ] **10j. TS6133 namespace declarations as unused** (~5 tests)
+
+  Namespace declarations (`namespace N {}`) that are never referenced
+  should be flagged as TS6133 in module files.
+
+  **Files:** `Checker.kt`
+
+- [ ] **10j. TS6133 self-referencing declarations** (~7 tests)
+
+  Declarations that only reference themselves (`function f() { f(); }`)
+  should be flagged as unused.
+
+  **Files:** `Checker.kt`
 
 ---
 
