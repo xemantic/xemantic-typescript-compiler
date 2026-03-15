@@ -5555,8 +5555,7 @@ class Checker(
     // -----------------------------------------------------------------------
 
     /**
-     * Check for TS1203: "Export assignment cannot be used when targeting ECMAScript modules."
-     * Fires when `export = X` is used with ES module format.
+     * Check for TS1203/TS1202: export=/import= cannot be used with ES modules.
      */
     private fun checkExportAssignmentInEsModule() {
         val effectiveModule = options.effectiveModule
@@ -5571,29 +5570,45 @@ class Checker(
             val source = result.sourceFile.text
 
             for (stmt in result.sourceFile.statements) {
-                if (stmt is ExportAssignment && stmt.isExportEquals) {
-                    var start = stmt.pos
-                    while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
-                        start++
+                when {
+                    stmt is ExportAssignment && stmt.isExportEquals -> {
+                        emitStatementLineDiagnostic(
+                            stmt, source, fileName, 1203,
+                            "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead.",
+                        )
                     }
-                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-                    var end = lineEnd
-                    while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) end--
-                    val length = end - start
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead.",
-                        category = DiagnosticCategory.Error,
-                        code = 1203,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+                    stmt is ImportEqualsDeclaration -> {
+                        emitStatementLineDiagnostic(
+                            stmt, source, fileName, 1202,
+                            "Import assignment cannot be used when targeting ECMAScript modules. Consider using 'import * as ns from \"mod\"', 'import {a} from \"mod\"', 'import d from \"mod\"', or another module format instead.",
+                        )
+                    }
                 }
             }
         }
+    }
+
+    /** Emit a diagnostic for a statement, spanning the trimmed line content. */
+    private fun emitStatementLineDiagnostic(
+        stmt: Statement, source: String, fileName: String, code: Int, message: String,
+    ) {
+        var start = stmt.pos
+        while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) start++
+        val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+        var end = lineEnd
+        while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) end--
+        val length = end - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
