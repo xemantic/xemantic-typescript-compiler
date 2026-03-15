@@ -1263,10 +1263,12 @@ class Checker(
             }
             val (line, character) = getLineAndCharacterOfPosition(source, start)
 
-            // Classes use TS6196 "declared but never used", others use TS6133
-            val isClassDecl = decl.declNode is ClassDeclaration
-            val code = if (isClassDecl) 6196 else 6133
-            val message = if (isClassDecl) {
+            // Classes, interfaces, type aliases, enums use TS6196 "declared but never used"
+            // Variables, functions, parameters use TS6133 "declared but its value is never read"
+            val isTypeDecl = decl.declNode is ClassDeclaration || decl.declNode is InterfaceDeclaration
+                    || decl.declNode is TypeAliasDeclaration || decl.declNode is EnumDeclaration
+            val code = if (isTypeDecl) 6196 else 6133
+            val message = if (isTypeDecl) {
                 "'${decl.name}' is declared but never used."
             } else {
                 "'${decl.name}' is declared but its value is never read."
@@ -1566,6 +1568,30 @@ class Checker(
                 for (member in stmt.members) {
                     collectRefsFromClassElement(member, scope)
                 }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectRefsFromType(it, scope) }
+                    tp.default?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is InterfaceDeclaration -> {
+                // Collect references from extends clause: interface I2 extends I1 {}
+                stmt.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        collectRefsFromExpr(type.expression, scope)
+                        type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+                    }
+                }
+                // Collect references from member types
+                for (member in stmt.members) {
+                    collectRefsFromClassElement(member, scope)
+                }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { collectRefsFromType(it, scope) }
+                    tp.default?.let { collectRefsFromType(it, scope) }
+                }
+            }
+            is TypeAliasDeclaration -> {
+                stmt.type?.let { collectRefsFromType(it, scope) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { collectRefsFromType(it, scope) }
                     tp.default?.let { collectRefsFromType(it, scope) }
