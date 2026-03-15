@@ -4073,7 +4073,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseTypeParameter(): TypeParameter? {
         val pos = getPos()
-        val modifiers = parseModifiers()
+        val modifiers = parseModifiers().toMutableSet()
+        // Handle `in`/`out` variance modifiers (TypeScript 4.7+)
+        while (token == SyntaxKind.InKeyword || token == SyntaxKind.OutKeyword) {
+            modifiers.add(if (token == SyntaxKind.InKeyword) ModifierFlag.In else ModifierFlag.Out)
+            nextToken()
+        }
         if (!isIdentifier()) return null
         val name = parseIdentifier()
         val constraint = if (parseOptional(SyntaxKind.ExtendsKeyword)) parseType() else null
