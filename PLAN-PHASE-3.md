@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,726 passing (63.5%), 3,869 failing
+- **10,595 tests**, 6,720 passing (63.4%), 3,875 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -670,11 +670,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **9i. const/let→var downleveling for target<ES2015** (+6 tests)
+- [x] **9i. CJS require const→var for target<ES2015** (+4 tests)
 
-  All `const` and `let` declarations converted to `var` when `target < ES2015`:
-  `transformVariableStatement`, `transformVariableDeclarationList`, and
-  `makeRequireConst`/`makeImportHelperConst`.
+  TypeScript does NOT downlevel const/let→var for user code, only for its own
+  synthesized CJS require statements. Fixed `makeRequireConst` and
+  `makeImportHelperConst` to use `var` for target < ES2015.
 
   **Files:** `Transformer.kt`
 
