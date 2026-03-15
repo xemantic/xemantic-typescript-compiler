@@ -1750,6 +1750,24 @@ class Transformer(
     // -----------------------------------------------------------------
 
     /**
+     * Resolve a relative module specifier to an AMD module name for outFile bundling.
+     * E.g., "./Configurable" imported from "Class.ts" → "Configurable"
+     */
+    private fun resolveAmdModuleName(specifier: String, importingFile: String): String {
+        val dir = importingFile.substringBeforeLast('/', "").substringBeforeLast('\\', "")
+        val parts = mutableListOf<String>()
+        if (dir.isNotEmpty()) parts.addAll(dir.split('/'))
+        for (segment in specifier.split('/')) {
+            when (segment) {
+                "." -> {}
+                ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.lastIndex)
+                else -> parts.add(segment)
+            }
+        }
+        return parts.joinToString("/")
+    }
+
+    /**
      * Parses `/// <amd-dependency path='p' name='n'/>` and `/// <amd-module name='n'/>`
      * directives from the source text. Returns triple of:
      * - amdModuleName: last `<amd-module name=...>` value (or null)
@@ -1972,8 +1990,12 @@ class Transformer(
                 is ImportDeclaration -> {
                     val clause = stmt.importClause
                     val moduleSpecifier = stmt.moduleSpecifier
-                    val specStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
+                    var specStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
                         ?: (moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                    // When outFile is set (AMD bundling), resolve relative specifiers to module names
+                    if (options.outFile != null && (specStr.startsWith("./") || specStr.startsWith("../"))) {
+                        specStr = resolveAmdModuleName(specStr, originalSourceFile.fileName)
+                    }
 
                     if (clause == null) {
                         // Side-effect import: dep only, no param
