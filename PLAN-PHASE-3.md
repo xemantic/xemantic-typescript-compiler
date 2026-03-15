@@ -613,6 +613,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `CompilerOptions.kt`, `TypeScriptCompiler.kt`
 
+- [x] **9c-pre. Namespace and enum merged scope for TS2304** (0 net — correctness fix)
+
+  Build namespace scopes from binder's merged symbol exports so that
+  `namespace A { export class Foo {} } namespace A { new Foo() }` resolves.
+  Also adds merged enum member names to enum initializer scope.
+  No immediate test impact (affected tests also need other diagnostics).
+
+  **Files:** `Checker.kt`
+
 - [ ] **9c. TS2300 false positives for valid declaration merging** (~33 tests)
 
   TypeScript allows: class+namespace, function+namespace, namespace+enum,

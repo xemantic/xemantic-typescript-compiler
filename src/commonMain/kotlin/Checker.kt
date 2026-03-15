@@ -4176,6 +4176,15 @@ class Checker(
             is EnumDeclaration -> {
                 // Enum member initializers can reference other members and the enum itself
                 val enumScope = scope.child()
+                // Add members from ALL merged enum declarations (via binder symbol)
+                val enumResult = fileResults[fileName]
+                val enumSymbol = enumResult?.nodeToSymbol?.get(nodeKey(stmt))
+                if (enumSymbol?.exports != null) {
+                    for ((exportName, _) in enumSymbol.exports!!) {
+                        enumScope.names.add(exportName)
+                    }
+                }
+                // Also add members from this specific declaration (covers cases without binder symbol)
                 for (member in stmt.members) {
                     val memberName = member.name
                     if (memberName is Identifier) enumScope.names.add(memberName.text)
@@ -4187,9 +4196,11 @@ class Checker(
             }
             is ModuleDeclaration -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
+                // Build namespace scope that includes merged exports from all declarations
+                val nsScope = buildNamespaceScope(stmt, scope, fileName)
                 when (val body = stmt.body) {
-                    is ModuleBlock -> checkUnresolvedInStatements(body.statements, scope, source, fileName)
-                    is ModuleDeclaration -> checkUnresolvedInStatement(body, scope, source, fileName)
+                    is ModuleBlock -> checkUnresolvedInStatements(body.statements, nsScope, source, fileName)
+                    is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
                     else -> {}
                 }
             }
@@ -4674,6 +4685,50 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * Build a scope for a namespace body that includes all merged exports.
+     * This allows `namespace A { export class Foo {} } namespace A { new Foo() }`
+     * to resolve `Foo` in the second block.
+     */
+    private fun buildNamespaceScope(stmt: ModuleDeclaration, parentScope: NameScope, fileName: String): NameScope {
+        val result = fileResults[fileName] ?: return parentScope
+        // For simple identifier names, look up the binder symbol directly
+        val name = stmt.name
+        val symbol = when (name) {
+            is Identifier -> {
+                // Look up the merged symbol for this namespace via nodeToSymbol
+                result.nodeToSymbol[nodeKey(stmt)]
+            }
+            is PropertyAccessExpression -> {
+                // Dotted namespace: resolve through globals chain (A.B.C → globals["A"].exports["B"].exports["C"])
+                val segments = mutableListOf<String>()
+                var cur: Expression = name
+                while (cur is PropertyAccessExpression) {
+                    segments.add(0, cur.name.text)
+                    cur = cur.expression
+                }
+                if (cur is Identifier) segments.add(0, cur.text)
+                var sym: Symbol? = null
+                for ((i, seg) in segments.withIndex()) {
+                    sym = if (i == 0) {
+                        result.locals[seg] ?: globals[seg]
+                    } else {
+                        sym?.exports?.get(seg)
+                    }
+                    if (sym == null) break
+                }
+                sym
+            }
+            else -> null
+        }
+        if (symbol?.exports == null || symbol.exports!!.isEmpty()) return parentScope
+        val nsScope = parentScope.child()
+        for ((exportName, _) in symbol.exports!!) {
+            nsScope.names.add(exportName)
+        }
+        return nsScope
     }
 
     /**
