@@ -93,6 +93,10 @@ class Checker(
         checkDuplicateIdentifiers()
         // 11. Check export assignment conflicts (TS2309)
         checkExportAssignmentConflicts()
+        // 12. Check strict mode identifier restrictions (TS1100)
+        if (options.alwaysStrict == true || options.strict) {
+            checkStrictModeIdentifiers()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5542,6 +5546,205 @@ class Checker(
             start = start,
             length = spanLength,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Strict mode identifier checking (TS1100)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS1100: "Invalid use of 'arguments'/'eval' in strict mode."
+     * In strict mode, `arguments` and `eval` cannot be used as variable/parameter/function names.
+     */
+    private fun checkStrictModeIdentifiers() {
+        val restricted = setOf("arguments", "eval")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
+        }
+    }
+
+    private fun checkStrictModeInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (stmt in statements) {
+            checkStrictModeInStatement(stmt, source, fileName, restricted)
+        }
+    }
+
+    private fun checkStrictModeInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    checkStrictModeBindingName(decl.name, source, fileName, restricted)
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.name?.let { checkStrictModeName(it, source, fileName, restricted) }
+                for (param in stmt.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                stmt.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    checkStrictModeInClassElement(member, source, fileName, restricted)
+                }
+            }
+            is ExpressionStatement -> checkStrictModeInExpr(stmt.expression, source, fileName, restricted)
+            is ReturnStatement -> stmt.expression?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
+            is Block -> checkStrictModeInStatements(stmt.statements, source, fileName, restricted)
+            is IfStatement -> {
+                checkStrictModeInStatement(stmt.thenStatement, source, fileName, restricted)
+                stmt.elseStatement?.let { checkStrictModeInStatement(it, source, fileName, restricted) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            checkStrictModeBindingName(decl.name, source, fileName, restricted)
+                        }
+                    }
+                    else -> {}
+                }
+                checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
+            }
+            is ForInStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
+            is ForOfStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
+            is WhileStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
+            is DoStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkStrictModeInStatements(clause.statements, source, fileName, restricted)
+                        is DefaultClause -> checkStrictModeInStatements(clause.statements, source, fileName, restricted)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkStrictModeInStatements(stmt.tryBlock.statements, source, fileName, restricted)
+                stmt.catchClause?.let {
+                    it.variableDeclaration?.let { v ->
+                        checkStrictModeBindingName(v.name, source, fileName, restricted)
+                    }
+                    checkStrictModeInStatements(it.block.statements, source, fileName, restricted)
+                }
+                stmt.finallyBlock?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+            }
+            is LabeledStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkStrictModeInStatements(body.statements, source, fileName, restricted)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkStrictModeInClassElement(
+        member: ClassElement,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (member) {
+            is MethodDeclaration -> {
+                for (param in member.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+            }
+            is Constructor -> {
+                for (param in member.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+            }
+            is GetAccessor -> {
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+            }
+            is SetAccessor -> {
+                for (param in member.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkStrictModeInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (expr) {
+            is FunctionExpression -> {
+                expr.name?.let { checkStrictModeName(it, source, fileName, restricted) }
+                for (param in expr.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                checkStrictModeInStatements(expr.body.statements, source, fileName, restricted)
+            }
+            is ArrowFunction -> {
+                for (param in expr.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                when (val body = expr.body) {
+                    is Block -> checkStrictModeInStatements(body.statements, source, fileName, restricted)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkStrictModeBindingName(
+        name: Node,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (name) {
+            is Identifier -> checkStrictModeName(name, source, fileName, restricted)
+            // Could recurse into destructuring patterns if needed
+            else -> {}
+        }
+    }
+
+    private fun checkStrictModeName(
+        name: Identifier,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        if (name.text in restricted) {
+            val start = name.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Invalid use of '${name.text}' in strict mode.",
+                category = DiagnosticCategory.Error,
+                code = 1100,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = name.text.length,
+            ))
+        }
     }
 
     // -----------------------------------------------------------------------
