@@ -5239,11 +5239,7 @@ class Transformer(
         // Declare modifier on the variable statement — erase, but preserve detached comments
         if (ModifierFlag.Declare in stmt.modifiers) return orphanedComments(stmt)
 
-        var transformedList = transformVariableDeclarationListWithRest(stmt.declarationList)
-        // Downlevel const/let to var for target < ES2015
-        if (options.effectiveTarget < ScriptTarget.ES2015 && transformedList.flags != VarKeyword) {
-            transformedList = transformedList.copy(flags = VarKeyword)
-        }
+        val transformedList = transformVariableDeclarationListWithRest(stmt.declarationList)
         val strippedModifiers = stripTypeScriptModifiers(stmt.modifiers)
         return listOf(
             stmt.copy(
@@ -5256,10 +5252,8 @@ class Transformer(
     private fun transformVariableDeclarationList(
         list: VariableDeclarationList
     ): VariableDeclarationList {
-        val flags = if (options.effectiveTarget < ScriptTarget.ES2015 && list.flags != VarKeyword) VarKeyword else list.flags
         return list.copy(
-            declarations = list.declarations.map { transformVariableDeclaration(it) },
-            flags = flags,
+            declarations = list.declarations.map { transformVariableDeclaration(it) }
         )
     }
 
