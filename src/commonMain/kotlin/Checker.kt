@@ -1378,8 +1378,19 @@ class Checker(
                 ))
             }
             is ModuleDeclaration -> {
-                // Namespaces/modules are not reported as unused — they always
-                // produce runtime code (var + IIFE) and may be used from other files
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val nameNode = stmt.name
+                if (nameNode is Identifier) {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    scope.declarations.add(UnusedDecl(
+                        name = nameNode.text,
+                        nameNode = nameNode,
+                        declNode = stmt,
+                        isExported = isExported,
+                        isParameter = false,
+                        isTypeOnly = false,
+                    ))
+                }
             }
             is ImportDeclaration -> {
                 if (stmt.importClause?.isTypeOnly == true) return
