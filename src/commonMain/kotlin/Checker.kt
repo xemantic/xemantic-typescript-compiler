@@ -4722,6 +4722,11 @@ class Checker(
      * Emits TS7026 at both opening and closing tag names.
      */
     private fun checkJsxImplicitAny() {
+        // Skip when jsxFactory is explicitly set or jsx is preserve/react-native
+        // (TypeScript doesn't check implicit any in these cases)
+        if (options.jsxFactory != null) return
+        val jsxMode = options.jsx?.lowercase()
+        if (jsxMode == "preserve" || jsxMode == "react-native") return
         for (result in binderResults) {
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
