@@ -126,6 +126,7 @@ data class CompilerOptions(
     val out: String? = null, // distinct from outFile for diagnostic purposes
     val importsNotUsedAsValues: String? = null, // removed in TS 5.5
     val preserveValueImports: Boolean = false, // removed in TS 5.5
+    val resolveJsonModule: Boolean = false,
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -386,6 +387,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "suppressimplicitanyindexerrors" -> options.copy(suppressImplicitAnyIndexErrors = boolValue)
         "importsnotusedasvalues" -> options.copy(importsNotUsedAsValues = value.trim())
         "preservevalueimports" -> options.copy(preserveValueImports = boolValue)
+        "resolvejsonmodule" -> options.copy(resolveJsonModule = boolValue)
         else -> options
     }
 }
