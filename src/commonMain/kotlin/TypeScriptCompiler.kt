@@ -139,7 +139,7 @@ class TypeScriptCompiler {
         // Helper to look up tsconfig.json position for a given option key (lowercase)
         val tsconfigPos = options.tsconfigOptionPositions
 
-        // TS5101: Deprecated options (still functioning, code 5101)
+        // TS5101: Deprecated options — point to KEY position in tsconfig
         fun addDeprecation5101(
             optionDesc: String,
             tsconfigKey: String? = null,
@@ -156,14 +156,14 @@ class TypeScriptCompiler {
                 category = DiagnosticCategory.Error,
                 code = 5101,
                 fileName = pos?.fileName,
-                line = pos?.line,
-                character = pos?.character,
-                start = pos?.start,
-                length = pos?.length,
+                line = pos?.keyLine,
+                character = pos?.keyCharacter,
+                start = pos?.keyStart,
+                length = pos?.keyLength,
                 messageChain = chain,
             ))
         }
-        // TS5102: Removed options (no longer functioning, code 5102)
+        // TS5102: Removed options — point to KEY position in tsconfig
         fun addRemoved5102(
             optionDesc: String,
             tsconfigKey: String? = null,
@@ -175,10 +175,10 @@ class TypeScriptCompiler {
                 category = DiagnosticCategory.Error,
                 code = 5102,
                 fileName = pos?.fileName,
-                line = pos?.line,
-                character = pos?.character,
-                start = pos?.start,
-                length = pos?.length,
+                line = pos?.keyLine,
+                character = pos?.keyCharacter,
+                start = pos?.keyStart,
+                length = pos?.keyLength,
                 messageChain = messageChain,
             ))
         }
@@ -208,7 +208,7 @@ class TypeScriptCompiler {
             messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
         )
 
-        // TS5107: Deprecated options
+        // TS5107: Deprecated options — point to VALUE position in tsconfig
         fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0") {
             if (isDeprecationSuppressed(deprecationVersion)) return
             val pos = tsconfigKey?.let { tsconfigPos[it] }
@@ -218,10 +218,10 @@ class TypeScriptCompiler {
                 category = DiagnosticCategory.Error,
                 code = 5107,
                 fileName = pos?.fileName,
-                line = pos?.line,
-                character = pos?.character,
-                start = pos?.start,
-                length = pos?.length,
+                line = pos?.valueLine,
+                character = pos?.valueCharacter,
+                start = pos?.valueStart,
+                length = pos?.valueLength,
                 messageChain = chain,
             ))
         }
