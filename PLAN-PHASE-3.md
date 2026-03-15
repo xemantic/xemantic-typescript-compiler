@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,720 passing (63.4%), 3,875 failing, 3 skipped
+- **10,595 tests**, 6,727 passing (63.5%), 3,868 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -678,10 +678,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Transformer.kt`
 
-- [ ] **9j. Object.defineProperty getter re-exports in CJS** (~134 tests)
+- [x] **9j. Object.defineProperty getter re-exports in CJS** (+7 tests)
 
-  Re-exports (`export { X } from "./module"`) should use
-  `Object.defineProperty(exports, "X", { get: ... })` for live bindings.
+  `export { X }` where X came from a named import now uses
+  `Object.defineProperty(exports, "X", { get: ... })` instead of direct
+  `exports.X = X`. Tracks named import elements in `namedImportLocalNames`.
 
   **Files:** `Transformer.kt`
 
