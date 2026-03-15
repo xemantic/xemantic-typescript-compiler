@@ -99,6 +99,8 @@ class Checker(
         }
         // 13. Check export= in ES module files (TS1203)
         checkExportAssignmentInEsModule()
+        // 14. Check unresolved module specifiers (TS2307)
+        checkUnresolvedModules()
     }
 
     // -----------------------------------------------------------------------
@@ -5731,6 +5733,64 @@ class Checker(
             message = message,
             category = DiagnosticCategory.Error,
             code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Unresolved module checking (TS2307)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS2307: "Cannot find module 'X' or its corresponding type declarations."
+     * Emitted when an import module specifier doesn't resolve to a known file.
+     */
+    private fun checkUnresolvedModules() {
+        // Only check in single-file compilations to avoid false positives
+        // in multi-file tests where we can't fully resolve module paths
+        if (binderResults.size > 1) return
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                val specifier = when (stmt) {
+                    is ImportDeclaration -> stmt.moduleSpecifier
+                    is ExportDeclaration -> stmt.moduleSpecifier
+                    is ImportEqualsDeclaration -> {
+                        val ref = stmt.moduleReference
+                        if (ref is ExternalModuleReference) ref.expression else null
+                    }
+                    else -> null
+                }
+                if (specifier == null) continue
+                val moduleName = when (specifier) {
+                    is StringLiteralNode -> specifier.text
+                    else -> continue
+                }
+                if (moduleName.isEmpty() || moduleName.startsWith("./") || moduleName.startsWith("../")) {
+                    // Relative or empty specifier in a single-file compilation = unresolved
+                    emitTS2307(specifier, moduleName, source, fileName)
+                }
+                // Bare specifiers: don't flag (could be node_modules)
+            }
+        }
+    }
+
+    private fun emitTS2307(specifier: Expression, moduleName: String, source: String, fileName: String) {
+        val start = specifier.pos
+        val length = specifier.end - specifier.pos - 1
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find module '$moduleName' or its corresponding type declarations.",
+            category = DiagnosticCategory.Error,
+            code = 2307,
             fileName = fileName,
             line = line,
             character = character,
