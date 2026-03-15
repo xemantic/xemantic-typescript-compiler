@@ -204,6 +204,49 @@ class TypeScriptCompiler {
         if (options.esModuleInteropExplicitlyFalse)
             addDeprecation("esModuleInterop=false")
 
+        // TS6082: outFile with explicitly-set non-AMD/System module
+        // Only fires when module is explicitly specified (not defaulted) and not emitDeclarationOnly
+        if (options.outFile != null && options.module != null && !options.emitDeclarationOnly) {
+            if (options.module != ModuleKind.AMD && options.module != ModuleKind.System && options.module != ModuleKind.None) {
+                diagnostics.add(Diagnostic(
+                    message = "Only 'amd' and 'system' modules are supported alongside --outFile.",
+                    category = DiagnosticCategory.Error,
+                    code = 6082,
+                ))
+            }
+        }
+
+        // TS5069: emitDeclarationOnly without declaration/composite
+        if (options.emitDeclarationOnly && !options.declaration) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'.",
+                category = DiagnosticCategory.Error,
+                code = 5069,
+            ))
+        }
+
+        // TS5070: resolveJsonModule with classic moduleResolution
+        if (options.resolveJsonModule && options.moduleResolution?.lowercase() == "classic") {
+            diagnostics.add(Diagnostic(
+                message = "Option '--resolveJsonModule' cannot be specified when 'moduleResolution' is set to 'classic'.",
+                category = DiagnosticCategory.Error,
+                code = 5070,
+            ))
+        }
+
+        // TS5095: moduleResolution=bundler with incompatible module
+        if (options.moduleResolution?.lowercase() == "bundler") {
+            val effModule = options.effectiveModule
+            if (effModule == ModuleKind.None || effModule == ModuleKind.AMD ||
+                effModule == ModuleKind.UMD || effModule == ModuleKind.System) {
+                diagnostics.add(Diagnostic(
+                    message = "Option 'bundler' can only be used when 'module' is set to 'preserve', 'commonjs', or 'es2015' or later.",
+                    category = DiagnosticCategory.Error,
+                    code = 5095,
+                ))
+            }
+        }
+
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation
             val file = parsed.files[0]
