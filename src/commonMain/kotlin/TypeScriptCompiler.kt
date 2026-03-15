@@ -241,8 +241,9 @@ class TypeScriptCompiler {
         }
 
         // TS5071: resolveJsonModule with module=none/system/umd
-        // This fires based on the module kind, not the moduleResolution
-        if (options.resolveJsonModule) {
+        // Also fires when moduleResolution=bundler (which implies resolveJsonModule)
+        val effectiveResolveJson = options.resolveJsonModule || options.moduleResolution?.lowercase() == "bundler"
+        if (effectiveResolveJson) {
             val effModule = options.effectiveModule
             if (effModule == ModuleKind.None || effModule == ModuleKind.System || effModule == ModuleKind.UMD) {
                 diagnostics.add(Diagnostic(
