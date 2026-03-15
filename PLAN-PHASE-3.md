@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,770 passing (63.9%), 3,825 failing
+- **10,595 tests**, 6,774 passing (63.9%), 3,821 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -757,10 +757,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **10j. TS6133 self-referencing declarations** (~7 tests)
+- [x] **10l. TS6133 self-referencing declarations** (+4 tests)
 
-  Declarations that only reference themselves (`function f() { f(); }`)
-  should be flagged as unused.
+  Declarations that only reference themselves are now flagged as unused.
+  Uses per-statement reference tracking to detect self-references at scope
+  level. Also handles private member self-references via per-member tracking.
+  Type parameter names are excluded from outer scope references (scoping).
+  Switch case/default clause statements now checked for unused declarations.
 
   **Files:** `Checker.kt`
 

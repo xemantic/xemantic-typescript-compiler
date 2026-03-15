@@ -1168,6 +1168,7 @@ class Checker(
         val isExported: Boolean,
         val isParameter: Boolean,
         val isTypeOnly: Boolean,  // interface, type alias
+        val stmtIndex: Int = -1,  // index in parent statement list (for self-reference detection)
     )
 
     private fun checkUnusedDeclarations() {
@@ -1234,19 +1235,33 @@ class Checker(
 
         val scope = UnusedScope()
 
-        // 1. Collect declarations
-        for (stmt in statements) {
-            collectUnusedDeclarations(stmt, scope, isTopLevel)
+        // 1. Collect declarations (with statement index for self-reference detection)
+        for ((idx, stmt) in statements.withIndex()) {
+            collectUnusedDeclarations(stmt, scope, isTopLevel, stmtIndex = idx)
         }
 
-        // 2. Collect references
-        for (stmt in statements) {
-            collectUnusedReferences(stmt, scope)
+        // 2. Collect references per statement (for self-reference detection)
+        val refsPerStmt = Array(statements.size) { mutableSetOf<String>() }
+        for ((idx, stmt) in statements.withIndex()) {
+            val stmtScope = UnusedScope()
+            collectUnusedReferences(stmt, stmtScope)
+            refsPerStmt[idx] = stmtScope.referencedNames
+            scope.referencedNames.addAll(stmtScope.referencedNames)
         }
 
         // 3. Report unreferenced declarations
+        // A declaration is considered unused if:
+        // - It's not referenced at all, OR
+        // - It's only referenced from within its own declaration (self-reference)
         for (decl in scope.declarations) {
-            if (decl.name in scope.referencedNames) continue
+            val isExternallyReferenced = if (decl.stmtIndex >= 0) {
+                refsPerStmt.withIndex().any { (idx, refs) ->
+                    idx != decl.stmtIndex && decl.name in refs
+                }
+            } else {
+                decl.name in scope.referencedNames
+            }
+            if (isExternallyReferenced) continue
             if (decl.name.startsWith("_")) continue
             if (decl.isExported) continue
 
@@ -1304,13 +1319,14 @@ class Checker(
         stmt: Statement,
         scope: UnusedScope,
         isTopLevel: Boolean,
+        stmtIndex: Int = -1,
     ) {
         when (stmt) {
             is VariableStatement -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 val isExported = ModifierFlag.Export in stmt.modifiers
                 for (decl in stmt.declarationList.declarations) {
-                    collectVarDeclNames(decl.name, decl, isExported, scope)
+                    collectVarDeclNames(decl.name, decl, isExported, scope, stmtIndex)
                 }
             }
             is FunctionDeclaration -> {
@@ -1325,6 +1341,7 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = false,
+                    stmtIndex = stmtIndex,
                 ))
             }
             is ClassDeclaration -> {
@@ -1339,6 +1356,7 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = false,
+                    stmtIndex = stmtIndex,
                 ))
             }
             is InterfaceDeclaration -> {
@@ -1351,6 +1369,7 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = true,
+                    stmtIndex = stmtIndex,
                 ))
             }
             is TypeAliasDeclaration -> {
@@ -1363,6 +1382,7 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = true,
+                    stmtIndex = stmtIndex,
                 ))
             }
             is EnumDeclaration -> {
@@ -1375,6 +1395,7 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = false,
+                    stmtIndex = stmtIndex,
                 ))
             }
             is ModuleDeclaration -> {
@@ -1389,6 +1410,7 @@ class Checker(
                         isExported = isExported,
                         isParameter = false,
                         isTypeOnly = false,
+                        stmtIndex = stmtIndex,
                     ))
                 }
             }
@@ -1410,6 +1432,7 @@ class Checker(
                                 isExported = false,
                                 isParameter = false,
                                 isTypeOnly = false,
+                                stmtIndex = stmtIndex,
                             ))
                         }
                     }
@@ -1421,6 +1444,7 @@ class Checker(
                             isExported = false,
                             isParameter = false,
                             isTypeOnly = false,
+                            stmtIndex = stmtIndex,
                         ))
                     }
                     else -> {}
@@ -1434,6 +1458,7 @@ class Checker(
                         isExported = false,
                         isParameter = false,
                         isTypeOnly = false,
+                        stmtIndex = stmtIndex,
                     ))
                 }
             }
@@ -1446,6 +1471,7 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = false,
+                    stmtIndex = stmtIndex,
                 ))
             }
             else -> {}
@@ -1457,6 +1483,7 @@ class Checker(
         declNode: Node,
         isExported: Boolean,
         scope: UnusedScope,
+        stmtIndex: Int = -1,
     ) {
         when (name) {
             is Identifier -> {
@@ -1467,17 +1494,18 @@ class Checker(
                     isExported = isExported,
                     isParameter = false,
                     isTypeOnly = false,
+                    stmtIndex = stmtIndex,
                 ))
             }
             is ObjectBindingPattern -> {
                 for (element in name.elements) {
-                    collectVarDeclNames(element.name, element, isExported, scope)
+                    collectVarDeclNames(element.name, element, isExported, scope, stmtIndex)
                 }
             }
             is ArrayBindingPattern -> {
                 for (element in name.elements) {
                     if (element is BindingElement) {
-                        collectVarDeclNames(element.name, element, isExported, scope)
+                        collectVarDeclNames(element.name, element, isExported, scope, stmtIndex)
                     }
                 }
             }
@@ -1564,56 +1592,78 @@ class Checker(
             }
             is FunctionDeclaration -> {
                 // References inside function bodies count as usage of outer scope names
-                stmt.body?.statements?.forEach { collectUnusedReferences(it, scope) }
+                // Type parameters shadow outer names, so collect into inner scope first
+                val innerScope = if (stmt.typeParameters?.isNotEmpty() == true) UnusedScope() else scope
+                stmt.body?.statements?.forEach { collectUnusedReferences(it, innerScope) }
                 for (param in stmt.parameters) {
-                    param.initializer?.let { collectRefsFromExpr(it, scope) }
-                    param.type?.let { collectRefsFromType(it, scope) }
-                    param.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                    param.initializer?.let { collectRefsFromExpr(it, innerScope) }
+                    param.type?.let { collectRefsFromType(it, innerScope) }
+                    param.decorators?.forEach { collectRefsFromExpr(it.expression, innerScope) }
                 }
-                stmt.type?.let { collectRefsFromType(it, scope) }
+                stmt.type?.let { collectRefsFromType(it, innerScope) }
                 stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectRefsFromType(it, scope) }
-                    tp.default?.let { collectRefsFromType(it, scope) }
+                    tp.constraint?.let { collectRefsFromType(it, innerScope) }
+                    tp.default?.let { collectRefsFromType(it, innerScope) }
+                }
+                if (innerScope !== scope) {
+                    val tpNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                    scope.referencedNames.addAll(innerScope.referencedNames - tpNames)
                 }
             }
             is ClassDeclaration -> {
+                val innerScope = if (stmt.typeParameters?.isNotEmpty() == true) UnusedScope() else scope
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
-                        collectRefsFromExpr(type.expression, scope)
-                        type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+                        collectRefsFromExpr(type.expression, innerScope)
+                        type.typeArguments?.forEach { collectRefsFromType(it, innerScope) }
                     }
                 }
-                stmt.decorators?.forEach { collectRefsFromExpr(it.expression, scope) }
+                stmt.decorators?.forEach { collectRefsFromExpr(it.expression, innerScope) }
                 for (member in stmt.members) {
-                    collectRefsFromClassElement(member, scope)
+                    collectRefsFromClassElement(member, innerScope)
                 }
                 stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectRefsFromType(it, scope) }
-                    tp.default?.let { collectRefsFromType(it, scope) }
+                    tp.constraint?.let { collectRefsFromType(it, innerScope) }
+                    tp.default?.let { collectRefsFromType(it, innerScope) }
+                }
+                if (innerScope !== scope) {
+                    val tpNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                    scope.referencedNames.addAll(innerScope.referencedNames - tpNames)
                 }
             }
             is InterfaceDeclaration -> {
-                // Collect references from extends clause: interface I2 extends I1 {}
+                // Collect references from extends clause and members
+                // Type parameters shadow outer names
+                val innerScope = if (stmt.typeParameters?.isNotEmpty() == true) UnusedScope() else scope
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
-                        collectRefsFromExpr(type.expression, scope)
-                        type.typeArguments?.forEach { collectRefsFromType(it, scope) }
+                        collectRefsFromExpr(type.expression, innerScope)
+                        type.typeArguments?.forEach { collectRefsFromType(it, innerScope) }
                     }
                 }
-                // Collect references from member types
                 for (member in stmt.members) {
-                    collectRefsFromClassElement(member, scope)
+                    collectRefsFromClassElement(member, innerScope)
                 }
                 stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectRefsFromType(it, scope) }
-                    tp.default?.let { collectRefsFromType(it, scope) }
+                    tp.constraint?.let { collectRefsFromType(it, innerScope) }
+                    tp.default?.let { collectRefsFromType(it, innerScope) }
+                }
+                if (innerScope !== scope) {
+                    val tpNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                    scope.referencedNames.addAll(innerScope.referencedNames - tpNames)
                 }
             }
             is TypeAliasDeclaration -> {
-                stmt.type?.let { collectRefsFromType(it, scope) }
+                // Type parameters shadow outer names
+                val innerScope = if (stmt.typeParameters?.isNotEmpty() == true) UnusedScope() else scope
+                stmt.type.let { collectRefsFromType(it, innerScope) }
                 stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { collectRefsFromType(it, scope) }
-                    tp.default?.let { collectRefsFromType(it, scope) }
+                    tp.constraint?.let { collectRefsFromType(it, innerScope) }
+                    tp.default?.let { collectRefsFromType(it, innerScope) }
+                }
+                if (innerScope !== scope) {
+                    val tpNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                    scope.referencedNames.addAll(innerScope.referencedNames - tpNames)
                 }
             }
             is EnumDeclaration -> {
@@ -2128,15 +2178,14 @@ class Checker(
             is SwitchStatement -> {
                 checkUnusedInExpr(stmt.expression, source, fileName)
                 for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> clause.statements.forEach {
-                            checkUnusedInNestedScopes(it, source, fileName)
-                        }
-                        is DefaultClause -> clause.statements.forEach {
-                            checkUnusedInNestedScopes(it, source, fileName)
-                        }
-                        else -> {}
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
                     }
+                    // Check unused declarations within each case/default clause
+                    checkUnusedInStatements(clauseStmts, source, fileName, isTopLevel = false)
+                    clauseStmts.forEach { checkUnusedInNestedScopes(it, source, fileName) }
                 }
             }
             is TryStatement -> {
@@ -2431,32 +2480,38 @@ class Checker(
 
         if (privateMembers.isEmpty()) return
 
-        // Collect all property access names used in the class body
-        val accessedNames = mutableSetOf<String>()
+        // Collect property access names per member (for self-reference detection)
+        val privateMemberNames = privateMembers.map { it.name }.toSet()
+        data class MemberRefs(val memberName: String?, val refs: MutableSet<String>)
+        val refsPerMember = mutableListOf<MemberRefs>()
         for (member in members) {
+            val memberName = when (member) {
+                is MethodDeclaration -> (member.name as? Identifier)?.text
+                is GetAccessor -> (member.name as? Identifier)?.text
+                is SetAccessor -> (member.name as? Identifier)?.text
+                is Constructor -> null
+                is PropertyDeclaration -> (member.name as? Identifier)?.text
+                else -> null
+            }
+            val refs = mutableSetOf<String>()
             when (member) {
-                is MethodDeclaration -> {
-                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
-                }
-                is Constructor -> {
-                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
-                }
-                is GetAccessor -> {
-                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
-                }
-                is SetAccessor -> {
-                    member.body?.let { collectPropertyAccessNames(it, accessedNames) }
-                }
-                is PropertyDeclaration -> {
-                    member.initializer?.let { collectPropertyAccessNamesInExpr(it, accessedNames) }
-                }
+                is MethodDeclaration -> member.body?.let { collectPropertyAccessNames(it, refs) }
+                is Constructor -> member.body?.let { collectPropertyAccessNames(it, refs) }
+                is GetAccessor -> member.body?.let { collectPropertyAccessNames(it, refs) }
+                is SetAccessor -> member.body?.let { collectPropertyAccessNames(it, refs) }
+                is PropertyDeclaration -> member.initializer?.let { collectPropertyAccessNamesInExpr(it, refs) }
                 else -> {}
             }
+            refsPerMember.add(MemberRefs(memberName, refs))
         }
 
         // Report unused private members
+        // A member is unused if it's only accessed from its own body (self-reference)
         for (pm in privateMembers) {
-            if (pm.name in accessedNames) continue
+            val isExternallyAccessed = refsPerMember.any { mr ->
+                mr.memberName != pm.name && pm.name in mr.refs
+            }
+            if (isExternallyAccessed) continue
             if (pm.name.startsWith("_")) continue
             val start = pm.nameNode.pos
             val length = pm.name.length
