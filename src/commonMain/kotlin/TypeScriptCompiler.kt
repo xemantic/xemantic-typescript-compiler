@@ -224,6 +224,14 @@ class TypeScriptCompiler {
                 code = 5069,
             ))
         }
+        // TS5069: mapRoot without sourceMap or declarationMap
+        if (options.mapRoot != null && !options.sourceMap) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'mapRoot' cannot be specified without specifying option 'sourceMap' or option 'declarationMap'.",
+                category = DiagnosticCategory.Error,
+                code = 5069,
+            ))
+        }
 
         // TS5070: resolveJsonModule with classic moduleResolution
         // Classic is the default for module=none/amd/umd/system
