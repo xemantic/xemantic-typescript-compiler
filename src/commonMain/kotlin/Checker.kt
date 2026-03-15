@@ -91,6 +91,8 @@ class Checker(
         }
         // 10. Check for duplicate identifiers (TS2300)
         checkDuplicateIdentifiers()
+        // 11. Check export assignment conflicts (TS2309)
+        checkExportAssignmentConflicts()
     }
 
     // -----------------------------------------------------------------------
@@ -5540,6 +5542,73 @@ class Checker(
             start = start,
             length = spanLength,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Export assignment conflict checking (TS2309)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS2309: "An export assignment cannot be used in a module with other exported elements."
+     * Fires when a file has both `export = X` and other exported declarations.
+     */
+    private fun checkExportAssignmentConflicts() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+
+            // Find export assignments (export = X)
+            val exportAssignments = statements.filterIsInstance<ExportAssignment>()
+                .filter { it.isExportEquals }
+            if (exportAssignments.isEmpty()) continue
+
+            // Check for other exported elements
+            val hasOtherExports = statements.any { stmt ->
+                when (stmt) {
+                    is ExportDeclaration -> true
+                    is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                    is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+                    else -> false
+                }
+            }
+
+            if (hasOtherExports) {
+                for (ea in exportAssignments) {
+                    // Find the start of the actual statement text (skip leading trivia)
+                    var start = ea.pos
+                    while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+                        start++
+                    }
+                    // Compute length from start to end of current line (or semicolon)
+                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+                    var end = lineEnd
+                    // Trim trailing whitespace/CR
+                    while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) {
+                        end--
+                    }
+                    val length = end - start
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "An export assignment cannot be used in a module with other exported elements.",
+                        category = DiagnosticCategory.Error,
+                        code = 2309,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        }
     }
 
     companion object {
