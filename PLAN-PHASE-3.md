@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,716 passing (63.4%), 3,879 failing
+- **10,595 tests**, 6,720 passing (63.4%), 3,875 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -649,6 +649,13 @@ Picking off tractable fixes to continue improving the pass rate.
   Extract leftmost segment and add to scope in `collectDeclaredNames`.
 
   **Files:** `Checker.kt`
+
+- [x] **9g-pre. CJS require const→var for target<ES2015** (+4 tests)
+
+  `makeRequireConst` and `makeImportHelperConst` used `ConstKeyword` unconditionally.
+  For `target < ES2015`, use `VarKeyword` since `const` didn't exist in ES5.
+
+  **Files:** `Transformer.kt`
 
 - [ ] **9g. TS6133 write-only assignment detection** (~23 tests)
 

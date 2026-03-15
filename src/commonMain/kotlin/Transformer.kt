@@ -4536,7 +4536,7 @@ class Transformer(
                         pos = -1, end = -1,
                     )
                 ),
-                flags = if (useVar) VarKeyword else ConstKeyword,
+                flags = if (useVar || options.effectiveTarget < ScriptTarget.ES2015) VarKeyword else ConstKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
@@ -4573,7 +4573,7 @@ class Transformer(
                         pos = -1, end = -1,
                     )
                 ),
-                flags = ConstKeyword,
+                flags = if (options.effectiveTarget < ScriptTarget.ES2015) VarKeyword else ConstKeyword,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
