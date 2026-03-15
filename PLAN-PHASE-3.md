@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,774 passing (63.9%), 3,821 failing
+- **10,595 tests**, 6,777 passing (64.0%), 3,818 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -764,6 +764,68 @@ Picking off tractable fixes to continue improving the pass rate.
   level. Also handles private member self-references via per-member tracking.
   Type parameter names are excluded from outer scope references (scoping).
   Switch case/default clause statements now checked for unused declarations.
+
+  **Files:** `Checker.kt`
+
+### 11. Phase 3f — Reduce false positives and fill diagnostic gaps
+
+- [x] **11a-pre. TS6133 for type params in function expressions/arrows** (+3 tests)
+
+  Pass `typeParameters` and `returnType` to `checkUnusedInFunctionLike` for
+  ArrowFunction, FunctionExpression, and object literal MethodDeclaration.
+  Also handle PropertyDeclaration initializers in `checkUnusedInClassElement`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **11a. Reduce TS2304 false positives** (~10-20 tests)
+
+  The TS2304 checker over-reports for valid names it can't resolve:
+  - Type parameters used as values (e.g. `T` in `typeof T`)
+  - Lib-defined names like `window`, `document` that aren't in KNOWN_GLOBALS
+  - Names from merged declarations across files
+  - Names from `declare global {}` blocks
+  Add missing globals and improve scope resolution.
+
+  **Files:** `Checker.kt`
+
+- [x] **11b. Reduce TS7006 false positives** (deferred — 0 net tests)
+
+  Investigated contextual typing suppression for arrow/function expression
+  parameters. Doesn't gain tests since affected tests also need other
+  diagnostics. Callback argument suppression causes test ordering regression.
+
+  **Files:** `Checker.kt`
+
+- [ ] **11c. TS2300 gaps — prototype and cross-file duplicates** (~5 tests)
+
+  Missing TS2300 diagnostics for:
+  - `prototype` property conflicts with static members
+  - Cross-file duplicate declarations in multi-file tests
+  - Numeric/computed property duplicates in classes
+
+  **Files:** `Checker.kt`
+
+- [ ] **11d. TS6133 gaps — write-only properties and underscore conventions** (~5 tests)
+
+  Missing TS6133 diagnostics for:
+  - Write-only properties (assigned but never read)
+  - `infer` type parameters in conditional types
+  - Namespace-level unused checking gaps
+
+  **Files:** `Checker.kt`
+
+- [ ] **11e. TS2554 — wrong argument count** (~17 tests)
+
+  "Expected N arguments, but got M." Check call expressions against
+  declared parameter counts. Only handle straightforward cases (no overloads).
+
+  **Files:** `Checker.kt`
+
+- [ ] **11f. TS2307 — cannot find module** (~32 tests)
+
+  "Cannot find module 'X' or its corresponding type declarations."
+  Emit when import specifier doesn't resolve to a known file.
+  Only for test files with explicit module imports.
 
   **Files:** `Checker.kt`
 
