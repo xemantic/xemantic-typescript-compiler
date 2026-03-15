@@ -27,6 +27,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private var disallowIn = false
     private var classBodyDepth = 0
 
+    /** Stack of opening token positions for related-info on missing close tokens. */
+    private val openTokenStack = mutableListOf<Int>()
+
     /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
     private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
 
@@ -62,9 +65,32 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseExpected(kind: SyntaxKind): Boolean {
         if (token == kind) {
+            // Track opening tokens for related-info on missing close
+            if (kind == SyntaxKind.OpenBrace || kind == SyntaxKind.OpenBracket || kind == SyntaxKind.OpenParen) {
+                openTokenStack.add(scanner.getTokenPos())
+            } else if (kind == SyntaxKind.CloseBrace || kind == SyntaxKind.CloseBracket || kind == SyntaxKind.CloseParen) {
+                if (openTokenStack.isNotEmpty()) openTokenStack.removeAt(openTokenStack.lastIndex)
+            }
             nextToken(); return true
         }
-        reportError("'${tokenToString(kind)}' expected.", code = 1005)
+        // When missing a close token, add related info pointing to the opening token
+        if ((kind == SyntaxKind.CloseBrace || kind == SyntaxKind.CloseBracket || kind == SyntaxKind.CloseParen)
+            && openTokenStack.isNotEmpty()) {
+            val openPos = openTokenStack.removeAt(openTokenStack.lastIndex)
+            val openToken = when (kind) {
+                SyntaxKind.CloseBrace -> "{"
+                SyntaxKind.CloseBracket -> "["
+                else -> "("
+            }
+            val closeToken = tokenToString(kind)
+            reportErrorWithRelatedInfo(
+                "'$closeToken' expected.", 1005,
+                "The parser expected to find a '$closeToken' to match the '$openToken' token here.",
+                1007, openPos
+            )
+        } else {
+            reportError("'${tokenToString(kind)}' expected.", code = 1005)
+        }
         return false
     }
 
@@ -131,6 +157,40 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 character = character,
                 start = start,
                 length = length,
+            )
+        )
+    }
+
+    private fun reportErrorWithRelatedInfo(
+        message: String, code: Int,
+        relatedMessage: String, relatedCode: Int, relatedPos: Int,
+    ) {
+        val start = scanner.getTokenPos()
+        val length = (scanner.getPos() - start).coerceAtLeast(0)
+        val (line, character) = getLineAndCharacterOfPosition(start)
+        val (relLine, relChar) = getLineAndCharacterOfPosition(relatedPos)
+        diagnostics.add(
+            Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                relatedInformation = listOf(
+                    Diagnostic(
+                        message = relatedMessage,
+                        category = DiagnosticCategory.Error,
+                        code = relatedCode,
+                        fileName = fileName,
+                        line = relLine,
+                        character = relChar,
+                        start = relatedPos,
+                        length = 1,
+                    )
+                ),
             )
         )
     }

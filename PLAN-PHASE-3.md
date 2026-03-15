@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,652 passing (62.8%), 3,943 failing
+- **10,595 tests**, 6,656 passing (62.8%), 3,939 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -533,14 +533,17 @@ Picking off tractable fixes to continue improving the pass rate.
   Skip all checker diagnostics (TS2304/TS2454/TS2564/TS6133/TS7006/TS2300)
   for `.d.ts` files. Reduced false-positive TS2304 from 155 to 128 tests.
 
-- [ ] **8r. Multi-file JS baseline file ordering**
+- [x] **8r. Multi-file JS baseline file ordering** (investigated — no specific ordering fix needed)
 
-  Fix `.d.ts` file ordering and inclusion in multi-file JS baselines.
+  Multi-file JS failures (183 tests) are diverse: missing reference directives,
+  CommonJS export issues, import elision, parser recovery. No single "ordering" fix.
+  Addressed by 8q (.d.ts parsing) and other incremental fixes.
 
-- [ ] **8s. Parser related diagnostics (TS1007)**
+- [x] **8s. Parser related diagnostics (TS1007)** (+4 tests)
 
-  Missing close brace/bracket parser errors should include related info
-  pointing to the unmatched opening token. 4 tests waiting.
+  Track opening token positions (braces/brackets/parens) in a stack.
+  When `parseExpected` fails for a closing token, add `relatedInformation`
+  with TS1007 pointing to the matching opening token position.
 
 ---
 
