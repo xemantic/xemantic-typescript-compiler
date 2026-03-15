@@ -3770,7 +3770,8 @@ class Checker(
             if (name !is Identifier) continue
 
             val start = name.pos
-            val length = name.text.length
+            // Include the `?` token in the span if present (e.g., `x?` → length 2)
+            val length = if (param.questionToken) name.text.length + 1 else name.text.length
             val (line, character) = getLineAndCharacterOfPosition(source, start)
 
             diagnostics.add(Diagnostic(
