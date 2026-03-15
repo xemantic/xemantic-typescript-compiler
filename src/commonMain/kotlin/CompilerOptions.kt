@@ -63,15 +63,22 @@ enum class ModuleKind {
 }
 
 /**
- * Tracks the position of a compiler option value within a tsconfig.json file,
+ * Tracks the position of a compiler option in a tsconfig.json file,
  * used for emitting positioned deprecation diagnostics.
+ * Stores both KEY position (for TS5101/TS5102) and VALUE position (for TS5107).
  */
 data class TsconfigOptionPosition(
     val fileName: String,
-    val line: Int,       // 1-based
-    val character: Int,  // 1-based (for diagnostic formatting)
-    val start: Int,      // 0-based byte offset of the value
-    val length: Int,     // length of the value (including quotes for strings)
+    // Key position (for TS5101/TS5102 diagnostics that point to the option name)
+    val keyLine: Int,        // 1-based
+    val keyCharacter: Int,   // 1-based
+    val keyStart: Int,       // 0-based byte offset
+    val keyLength: Int,      // length of key including quotes
+    // Value position (for TS5107 diagnostics that point to the option value)
+    val valueLine: Int,      // 1-based
+    val valueCharacter: Int, // 1-based
+    val valueStart: Int,     // 0-based byte offset
+    val valueLength: Int,    // length of value including quotes for strings
 )
 
 data class CompilerOptions(
@@ -440,7 +447,12 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
     val compilerOptionsBlock = json.substring(blockStart, pos - 1)
 
     // Parse key-value pairs from the block, tracking positions relative to the full JSON
-    data class KvMatch(val key: String, val value: String, val valueStart: Int, val valueLength: Int)
+    // keyStart/keyLength point to the option KEY (e.g., "baseUrl"), valueStart/valueLength to the VALUE
+    data class KvMatch(
+        val key: String, val value: String,
+        val keyStart: Int, val keyLength: Int,
+        val valueStart: Int, val valueLength: Int,
+    )
 
     val kvPattern = Regex(""""(\w+)"\s*:\s*("([^"]*)"|(true|false)|(\d+))""")
     val kvMatches = mutableListOf<KvMatch>()
@@ -451,11 +463,14 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
                 match.groupValues[5]
             }
         }
-        // The value capture group position: group 2 is the full value (including quotes for strings)
+        // Key position: full match starts at the opening quote of the key
+        val keyStartInJson = blockStart + match.range.first
+        val keyLength = match.groupValues[1].length + 2 // +2 for quotes
+        // Value position: group 2 is the full value (including quotes for strings)
         val valueGroup = match.groups[2]!!
         val valueStartInJson = blockStart + valueGroup.range.first
         val valueLength = valueGroup.range.last - valueGroup.range.first + 1
-        kvMatches.add(KvMatch(key, value, valueStartInJson, valueLength))
+        kvMatches.add(KvMatch(key, value, keyStartInJson, keyLength, valueStartInJson, valueLength))
     }
 
     // Parse array-valued options (e.g. moduleSuffixes: [".ios", ""])
@@ -487,17 +502,22 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         "resolvejsonmodule", "inlinesourcemap", "sourcemap", "maproot",
     )
 
-    // Compute line/column positions for option values in the tsconfig JSON
+    // Compute line/column positions for option keys and values in the tsconfig JSON
     val optionPositions = mutableMapOf<String, TsconfigOptionPosition>()
     for (kv in kvMatches) {
         if (kv.key in allowedTsconfigOptions) {
-            val lineCol = computeLineAndColumn(json, kv.valueStart)
+            val keyLineCol = computeLineAndColumn(json, kv.keyStart)
+            val valueLineCol = computeLineAndColumn(json, kv.valueStart)
             optionPositions[kv.key] = TsconfigOptionPosition(
                 fileName = tsconfigFileName,
-                line = lineCol.first,
-                character = lineCol.second,
-                start = kv.valueStart,
-                length = kv.valueLength,
+                keyLine = keyLineCol.first,
+                keyCharacter = keyLineCol.second,
+                keyStart = kv.keyStart,
+                keyLength = kv.keyLength,
+                valueLine = valueLineCol.first,
+                valueCharacter = valueLineCol.second,
+                valueStart = kv.valueStart,
+                valueLength = kv.valueLength,
             )
         }
     }
