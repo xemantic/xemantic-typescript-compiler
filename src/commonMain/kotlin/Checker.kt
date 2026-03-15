@@ -5300,14 +5300,35 @@ class Checker(
             val hasFunc = "function" in kinds
             val classCount = group.count { it.kind == "class" }
 
-            val isDuplicate = (hasClass && classCount >= 2) ||
-                    (hasClass && (hasFunc || hasEnum)) ||
-                    (hasVar && (hasClass || hasFunc || hasEnum)) ||
-                    (hasEnum && hasVar)
-
-            if (isDuplicate) {
+            // TS2567: Enum declarations can only merge with namespace or other enum declarations
+            if (hasEnum && (hasClass || hasFunc || hasVar)) {
                 for (decl in group) {
-                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                    if (decl.kind == "enum" || decl.kind == "class" || decl.kind == "function") {
+                        val start = decl.nameNode.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Enum declarations can only merge with namespace or other enum declarations.",
+                            category = DiagnosticCategory.Error,
+                            code = 2567,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = decl.name.length,
+                        ))
+                    } else {
+                        emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                    }
+                }
+            } else {
+                val isDuplicate = (hasClass && classCount >= 2) ||
+                        (hasClass && hasFunc) ||
+                        (hasVar && (hasClass || hasFunc))
+
+                if (isDuplicate) {
+                    for (decl in group) {
+                        emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                    }
                 }
             }
         }
