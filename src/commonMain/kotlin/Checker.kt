@@ -1514,6 +1514,57 @@ class Checker(
     }
 
     /**
+     * Collect destructuring parameter binding element names for unused checking.
+     * For `([a])`, collects `a` with span covering the binding pattern.
+     */
+    private fun collectDestructuringParamNames(
+        pattern: Expression,
+        param: Parameter,
+        scope: UnusedScope,
+    ) {
+        // For destructuring parameters, the squiggle covers the entire binding pattern
+        // (e.g., [a] or {a}). TypeScript uses the binding pattern node for the span.
+        when (pattern) {
+            is ArrayBindingPattern -> {
+                for (element in pattern.elements) {
+                    if (element is BindingElement) {
+                        val name = element.name
+                        if (name is Identifier && !name.text.startsWith("_")) {
+                            // Span from '[' to ']' inclusive — end includes trailing trivia
+                            scope.declarations.add(UnusedDecl(
+                                name = name.text,
+                                nameNode = pattern,
+                                declNode = param,
+                                spanLength = pattern.end - pattern.pos - 1,
+                                isExported = false,
+                                isParameter = true,
+                                isTypeOnly = false,
+                            ))
+                        }
+                    }
+                }
+            }
+            is ObjectBindingPattern -> {
+                for (element in pattern.elements) {
+                    val name = element.name
+                    if (name is Identifier && !name.text.startsWith("_")) {
+                        scope.declarations.add(UnusedDecl(
+                            name = name.text,
+                            nameNode = pattern,
+                            declNode = param,
+                            spanLength = pattern.end - pattern.pos - 1,
+                            isExported = false,
+                            isParameter = true,
+                            isTypeOnly = false,
+                        ))
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
      * Collect all name references from a statement (including nested expressions).
      * This is used for unused declaration checking — it marks names as "referenced"
      * when they appear in value or type positions.
@@ -2870,7 +2921,6 @@ class Checker(
             // Collect parameter declarations
             for (param in parameters) {
                 if (param.isCommentPlaceholder) continue
-                // Skip rest parameters and destructuring — they have complex rules
                 val name = param.name
                 if (name is Identifier) {
                     // Skip if underscore-prefixed or if it has access modifiers (constructor params)
@@ -2887,6 +2937,9 @@ class Checker(
                             isTypeOnly = false,
                         ))
                     }
+                } else {
+                    // Destructuring parameters: collect individual binding element names
+                    collectDestructuringParamNames(name, param, scope)
                 }
             }
             // Collect references from body
@@ -2902,7 +2955,7 @@ class Checker(
                 if (decl.name in scope.referencedNames) continue
                 val nameNode = decl.nameNode
                 val start = nameNode.pos
-                val length = decl.name.length
+                val length = if (decl.spanLength > 0) decl.spanLength else decl.name.length
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
                     message = "'${decl.name}' is declared but its value is never read.",
