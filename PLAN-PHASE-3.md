@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,778 passing (64.0%), 3,817 failing
+- **10,595 tests**, 6,781 passing (64.0%), 3,814 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -829,11 +829,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **11f. TS2307 — cannot find module** (~32 tests)
+- [x] **11f. TS2307 — cannot find module** (+3 tests)
 
-  "Cannot find module 'X' or its corresponding type declarations."
-  Emit when import specifier doesn't resolve to a known file.
-  Only for test files with explicit module imports.
+  Emit TS2307 for relative/empty module specifiers in single-file
+  compilations. Bare specifiers skipped to avoid false positives.
+  Multi-file tests skipped due to module resolution complexity.
 
   **Files:** `Checker.kt`
 
