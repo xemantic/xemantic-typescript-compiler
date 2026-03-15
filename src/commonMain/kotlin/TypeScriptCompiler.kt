@@ -254,6 +254,24 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS5053: inlineSourceMap conflicts
+        if (options.inlineSourceMap) {
+            if (options.mapRoot != null) {
+                diagnostics.add(Diagnostic(
+                    message = "Option 'mapRoot' cannot be specified with option 'inlineSourceMap'.",
+                    category = DiagnosticCategory.Error,
+                    code = 5053,
+                ))
+            }
+            if (options.sourceMap) {
+                diagnostics.add(Diagnostic(
+                    message = "Option 'sourceMap' cannot be specified with option 'inlineSourceMap'.",
+                    category = DiagnosticCategory.Error,
+                    code = 5053,
+                ))
+            }
+        }
+
         // TS5095: moduleResolution=bundler with incompatible module
         if (options.moduleResolution?.lowercase() == "bundler") {
             val effModule = options.effectiveModule
