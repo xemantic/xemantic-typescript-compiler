@@ -669,6 +669,9 @@ class Transformer(
         // Track exported names that conflict with imports (same name imported and exported).
         // References to these names in function/arrow bodies must use (0, exports.name)().
         val conflictingExportedNames = mutableSetOf<String>()
+        // Track local names imported via NamedImports elements (not default clause or namespace).
+        // These get Object.defineProperty re-export form when re-exported via `export { X }`.
+        val namedImportLocalNames = mutableSetOf<String>()
         // Track export assignments from keep-declaration path — must be excluded from rewriting.
         val keepDeclExportAssignments = mutableSetOf<Statement>()
         // Track `export default class X` names — their static initializers must appear
@@ -729,6 +732,7 @@ class Transformer(
                             is NamespaceImport -> runtimeDeclaredNames.add(bindings.name.text)
                             is NamedImports -> bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
                                 runtimeDeclaredNames.add(spec.name.text)
+                                namedImportLocalNames.add(spec.name.text)
                             }
                             else -> {}
                         }
@@ -1313,6 +1317,34 @@ class Transformer(
                                 // the void 0 hoist already provides `exports.undefined = void 0`.
                                 if (localName == "undefined") {
                                     if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                } else if (localName in namedImportLocalNames) {
+                                    // Re-export of a named import: use Object.defineProperty getter
+                                    val renamedExpr = renameMap[localName]
+                                    val sourceName = if (renamedExpr is PropertyAccessExpression) {
+                                        (renamedExpr.expression as? Identifier)?.text
+                                    } else null
+                                    val importedProp = if (renamedExpr is PropertyAccessExpression) {
+                                        renamedExpr.name.text
+                                    } else null
+                                    if (sourceName != null && importedProp != null) {
+                                        val isNewExport = exportName !in exportedVarNames
+                                        if (isNewExport) exportedVarNames.add(exportName)
+                                        if (isNewExport) {
+                                            val getterStmt = makeReExportGetter(exportName, sourceName, importedProp)
+                                            val anchorStmt = importStmtForLocalName[localName]
+                                            if (anchorStmt != null) {
+                                                exportAssignmentsAfterImport.getOrPut(anchorStmt) { mutableListOf() }.add(getterStmt)
+                                            } else {
+                                                result.add(getterStmt)
+                                            }
+                                        }
+                                    } else {
+                                        // Fallback: direct assignment (shouldn't normally reach here)
+                                        val isNewExport = exportName !in exportedVarNames
+                                        if (isNewExport) exportedVarNames.add(exportName)
+                                        val exportAssignment = makeExportAssignment(exportName, syntheticId(localName))
+                                        if (isNewExport) result.add(exportAssignment)
+                                    }
                                 } else {
                                     // If the local var lost its binding (Direct path), reference via exports.
                                     val localExpr: Expression = if (localName in directExportedVarNames) {
