@@ -19,7 +19,7 @@
 package com.xemantic.typescript.compiler
 
 enum class ScriptTarget {
-    ES3, ES5, ES2015, ES2016, ES2017, ES2018, ES2019, ES2020, ES2021, ES2022, ES2023, ESNext;
+    ES3, ES5, ES2015, ES2016, ES2017, ES2018, ES2019, ES2020, ES2021, ES2022, ES2023, ES2024, ESNext;
 
     companion object {
         fun fromString(value: String): ScriptTarget? = when (value.lowercase()) {
@@ -34,6 +34,7 @@ enum class ScriptTarget {
             "es2021" -> ES2021
             "es2022" -> ES2022
             "es2023" -> ES2023
+            "es2024" -> ES2024
             "esnext" -> ESNext
             else -> null
         }
