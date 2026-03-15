@@ -128,6 +128,7 @@ data class CompilerOptions(
     val importsNotUsedAsValues: String? = null, // removed in TS 5.5
     val preserveValueImports: Boolean = false, // removed in TS 5.5
     val resolveJsonModule: Boolean = false,
+    val inlineSourceMap: Boolean = false,
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -389,6 +390,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "importsnotusedasvalues" -> options.copy(importsNotUsedAsValues = value.trim())
         "preservevalueimports" -> options.copy(preserveValueImports = boolValue)
         "resolvejsonmodule" -> options.copy(resolveJsonModule = boolValue)
+        "inlinesourcemap" -> options.copy(inlineSourceMap = boolValue)
         else -> options
     }
 }
