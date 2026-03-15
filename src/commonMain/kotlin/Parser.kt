@@ -3350,7 +3350,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 parseIdentifier()
             }
 
-            else -> parseIdentifier()
+            else -> {
+                // In expression context, report "Expression expected" (TS1109) not "Identifier expected" (TS1003)
+                if (isIdentifier() || isKeyword()) {
+                    parseIdentifier()
+                } else {
+                    reportError("Expression expected.", code = 1109)
+                    Identifier(text = "", pos = pos, end = getEnd())
+                }
+            }
         }
         // Attach collected leading comments to the result when the sub-parser didn't store them.
         return if (comments != null && result.leadingComments == null) {
