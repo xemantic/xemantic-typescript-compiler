@@ -101,6 +101,7 @@ data class CompilerOptions(
     val forceConsistentCasingInFileNames: Boolean = false,
     val noEmitOnError: Boolean = false,
     val downlevelIteration: Boolean = false,
+    val downlevelIterationExplicitlySet: Boolean = false,
     val importHelpers: Boolean = false,
     val allowSyntheticDefaultImports: Boolean = false,
     val useDefineForClassFields: Boolean? = null,
@@ -360,7 +361,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "skiplibcheck" -> options.copy(skipLibCheck = boolValue)
         "forceconsistentcasinginfilenames" -> options.copy(forceConsistentCasingInFileNames = boolValue)
         "noemitonerror" -> options.copy(noEmitOnError = boolValue)
-        "downleveliteration" -> options.copy(downlevelIteration = boolValue)
+        "downleveliteration" -> options.copy(downlevelIteration = boolValue, downlevelIterationExplicitlySet = true)
         "importhelpers" -> options.copy(importHelpers = boolValue)
         "allowsyntheticdefaultimports" -> options.copy(
             allowSyntheticDefaultImports = boolValue,
