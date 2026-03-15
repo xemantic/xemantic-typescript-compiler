@@ -164,11 +164,14 @@ class TypeScriptCompiler {
             ))
         }
         // TS5102: Removed options — point to KEY position in tsconfig
+        // ignoreDeprecations suppresses TS5102 for options that were deprecated at or before the specified version
         fun addRemoved5102(
             optionDesc: String,
             tsconfigKey: String? = null,
             messageChain: List<String> = emptyList(),
+            deprecationVersion: String = "5.0",
         ) {
+            if (isDeprecationSuppressed(deprecationVersion)) return
             val pos = tsconfigKey?.let { tsconfigPos[it] }
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
@@ -187,7 +190,7 @@ class TypeScriptCompiler {
             "baseUrl", tsconfigKey = "baseurl",
             messageChain = listOf("  Visit https://aka.ms/ts6 for migration information.")
         )
-        // Removed options (TS5102)
+        // Removed options (TS5102) — all deprecated in version 5.0
         if (options.charset != null) addRemoved5102("charset", tsconfigKey = "charset")
         // downlevelIteration (TS5101 - still deprecated, not removed; fires even when set to false)
         if (options.downlevelIterationExplicitlySet) addDeprecation5101("downlevelIteration", tsconfigKey = "downleveliteration")
@@ -201,11 +204,11 @@ class TypeScriptCompiler {
         if (options.suppressImplicitAnyIndexErrors) addRemoved5102("suppressImplicitAnyIndexErrors", tsconfigKey = "suppressimplicitanyindexerrors")
         if (options.importsNotUsedAsValues != null) addRemoved5102(
             "importsNotUsedAsValues", tsconfigKey = "importsnotusedasvalues",
-            messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
+            messageChain = listOf("  Use 'verbatimModuleSyntax' instead."),
         )
         if (options.preserveValueImports) addRemoved5102(
             "preserveValueImports", tsconfigKey = "preservevalueimports",
-            messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
+            messageChain = listOf("  Use 'verbatimModuleSyntax' instead."),
         )
 
         // TS5107: Deprecated options — point to VALUE position in tsconfig
