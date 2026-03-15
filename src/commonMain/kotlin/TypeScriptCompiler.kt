@@ -37,6 +37,8 @@ data class CompilationResult(
     val isMultiFile: Boolean = false,
     val options: CompilerOptions = CompilerOptions(),
     val diagnostics: List<Diagnostic> = emptyList(),
+    /** All source files including tsconfig.json — used for error baselines which annotate all files. */
+    val allSourceFiles: List<Pair<String, String>> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
@@ -134,84 +136,113 @@ class TypeScriptCompiler {
             return ign >= deprecationVersion // lexicographic comparison works for "X.Y" format
         }
 
+        // Helper to look up tsconfig.json position for a given option key (lowercase)
+        val tsconfigPos = options.tsconfigOptionPositions
+
         // TS5101: Deprecated options (still functioning, code 5101)
         fun addDeprecation5101(
             optionDesc: String,
+            tsconfigKey: String? = null,
             messageChain: List<String> = emptyList(),
             deprecationVersion: String = "6.0",
         ) {
             if (isDeprecationSuppressed(deprecationVersion)) return
+            val pos = tsconfigKey?.let { tsconfigPos[it] }
+            val chain = if (pos != null)
+                listOf("  Visit https://aka.ms/ts6 for migration information.")
+            else messageChain
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5101,
-                messageChain = messageChain,
+                fileName = pos?.fileName,
+                line = pos?.line,
+                character = pos?.character,
+                start = pos?.start,
+                length = pos?.length,
+                messageChain = chain,
             ))
         }
         // TS5102: Removed options (no longer functioning, code 5102)
         fun addRemoved5102(
             optionDesc: String,
+            tsconfigKey: String? = null,
             messageChain: List<String> = emptyList(),
         ) {
+            val pos = tsconfigKey?.let { tsconfigPos[it] }
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
                 category = DiagnosticCategory.Error,
                 code = 5102,
+                fileName = pos?.fileName,
+                line = pos?.line,
+                character = pos?.character,
+                start = pos?.start,
+                length = pos?.length,
                 messageChain = messageChain,
             ))
         }
         // baseUrl deprecation (TS5101 with migration URL)
         if (options.baseUrl != null) addDeprecation5101(
-            "baseUrl", messageChain = listOf("  Visit https://aka.ms/ts6 for migration information.")
+            "baseUrl", tsconfigKey = "baseurl",
+            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information.")
         )
         // Removed options (TS5102)
-        if (options.charset != null) addRemoved5102("charset")
+        if (options.charset != null) addRemoved5102("charset", tsconfigKey = "charset")
         // downlevelIteration (TS5101 - still deprecated, not removed; fires even when set to false)
-        if (options.downlevelIterationExplicitlySet) addDeprecation5101("downlevelIteration")
-        if (options.keyofStringsOnly) addRemoved5102("keyofStringsOnly")
-        if (options.noImplicitUseStrict) addRemoved5102("noImplicitUseStrict")
-        if (options.noStrictGenericChecks) addRemoved5102("noStrictGenericChecks")
-        if (options.out != null) addRemoved5102("out")
+        if (options.downlevelIterationExplicitlySet) addDeprecation5101("downlevelIteration", tsconfigKey = "downleveliteration")
+        if (options.keyofStringsOnly) addRemoved5102("keyofStringsOnly", tsconfigKey = "keyofstringsonly")
+        if (options.noImplicitUseStrict) addRemoved5102("noImplicitUseStrict", tsconfigKey = "noimplicitusestrict")
+        if (options.noStrictGenericChecks) addRemoved5102("noStrictGenericChecks", tsconfigKey = "nostrictgenericchecks")
+        if (options.out != null) addRemoved5102("out", tsconfigKey = "out")
         // outFile deprecation (TS5101 - only when explicitly set, not via 'out')
-        if (options.outFile != null && options.out == null) addDeprecation5101("outFile")
-        if (options.suppressExcessPropertyErrors) addRemoved5102("suppressExcessPropertyErrors")
-        if (options.suppressImplicitAnyIndexErrors) addRemoved5102("suppressImplicitAnyIndexErrors")
+        if (options.outFile != null && options.out == null) addDeprecation5101("outFile", tsconfigKey = "outfile")
+        if (options.suppressExcessPropertyErrors) addRemoved5102("suppressExcessPropertyErrors", tsconfigKey = "suppressexcesspropertyerrors")
+        if (options.suppressImplicitAnyIndexErrors) addRemoved5102("suppressImplicitAnyIndexErrors", tsconfigKey = "suppressimplicitanyindexerrors")
         if (options.importsNotUsedAsValues != null) addRemoved5102(
-            "importsNotUsedAsValues",
+            "importsNotUsedAsValues", tsconfigKey = "importsnotusedasvalues",
             messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
         )
         if (options.preserveValueImports) addRemoved5102(
-            "preserveValueImports",
+            "preserveValueImports", tsconfigKey = "preservevalueimports",
             messageChain = listOf("  Use 'verbatimModuleSyntax' instead.")
         )
 
         // TS5107: Deprecated options
-        fun addDeprecation(optionDesc: String, version: String = "7.0", deprecationVersion: String = "6.0") {
+        fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0") {
             if (isDeprecationSuppressed(deprecationVersion)) return
+            val pos = tsconfigKey?.let { tsconfigPos[it] }
+            val chain = if (pos != null) listOf("  Visit https://aka.ms/ts6 for migration information.") else emptyList()
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5107,
+                fileName = pos?.fileName,
+                line = pos?.line,
+                character = pos?.character,
+                start = pos?.start,
+                length = pos?.length,
+                messageChain = chain,
             ))
         }
         // Target deprecations — only when target is explicitly set
-        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) addDeprecation("target=ES3", "5.5", "5.0")
-        if (options.targetExplicitlySet && options.target == ScriptTarget.ES5) addDeprecation("target=ES5")
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) addDeprecation("target=ES3", tsconfigKey = "target", version = "5.5", deprecationVersion = "5.0")
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES5) addDeprecation("target=ES5", tsconfigKey = "target")
         // Module deprecations
-        if (options.module == ModuleKind.AMD) addDeprecation("module=AMD")
-        if (options.module == ModuleKind.UMD) addDeprecation("module=UMD")
-        if (options.module == ModuleKind.System) addDeprecation("module=System")
-        if (options.module == ModuleKind.None) addDeprecation("module=None")
+        if (options.module == ModuleKind.AMD) addDeprecation("module=AMD", tsconfigKey = "module")
+        if (options.module == ModuleKind.UMD) addDeprecation("module=UMD", tsconfigKey = "module")
+        if (options.module == ModuleKind.System) addDeprecation("module=System", tsconfigKey = "module")
+        if (options.module == ModuleKind.None) addDeprecation("module=None", tsconfigKey = "module")
         // Module resolution deprecations
         when (options.moduleResolution?.lowercase()) {
-            "classic" -> addDeprecation("moduleResolution=classic")
-            "node", "node10" -> addDeprecation("moduleResolution=node10")
+            "classic" -> addDeprecation("moduleResolution=classic", tsconfigKey = "moduleresolution")
+            "node", "node10" -> addDeprecation("moduleResolution=node10", tsconfigKey = "moduleresolution")
         }
         // Boolean option deprecations (explicitly set to false)
         if (options.allowSyntheticDefaultImportsExplicitlyFalse)
-            addDeprecation("allowSyntheticDefaultImports=false")
+            addDeprecation("allowSyntheticDefaultImports=false", tsconfigKey = "allowsyntheticdefaultimports")
         if (options.esModuleInteropExplicitlyFalse)
-            addDeprecation("esModuleInterop=false")
+            addDeprecation("esModuleInterop=false", tsconfigKey = "esmoduleinterop")
 
         // TS6082: outFile with explicitly-set non-AMD/System module
         // Only fires when module is explicitly specified (not defaulted) and not emitDeclarationOnly
@@ -382,6 +413,9 @@ class TypeScriptCompiler {
                 diagnostics = diagnostics,
             )
         } else {
+            // All source files including tsconfig.json (for error baselines)
+            val allFiles = parsed.files.map { it.fileName to it.content }
+
             // Multi-file compilation — emitDeclarationOnly: produce source echoes only
             if (options.emitDeclarationOnly) {
                 val declSourceEchoes = mutableListOf<Pair<String, String>>()
@@ -397,6 +431,7 @@ class TypeScriptCompiler {
                     isMultiFile = true,
                     options = options,
                     diagnostics = diagnostics,
+                    allSourceFiles = allFiles,
                 )
             }
 
@@ -606,6 +641,7 @@ class TypeScriptCompiler {
                 isMultiFile = true,
                 options = options,
                 diagnostics = diagnostics,
+                allSourceFiles = allFiles,
             )
         }
     }

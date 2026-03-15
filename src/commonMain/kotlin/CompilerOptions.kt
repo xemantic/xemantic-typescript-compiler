@@ -62,6 +62,18 @@ enum class ModuleKind {
     }
 }
 
+/**
+ * Tracks the position of a compiler option value within a tsconfig.json file,
+ * used for emitting positioned deprecation diagnostics.
+ */
+data class TsconfigOptionPosition(
+    val fileName: String,
+    val line: Int,       // 1-based
+    val character: Int,  // 1-based (for diagnostic formatting)
+    val start: Int,      // 0-based byte offset of the value
+    val length: Int,     // length of the value (including quotes for strings)
+)
+
 data class CompilerOptions(
     val target: ScriptTarget = ScriptTarget.ES3,
     val targetExplicitlySet: Boolean = false,
@@ -132,6 +144,8 @@ data class CompilerOptions(
     val resolveJsonModule: Boolean = false,
     val inlineSourceMap: Boolean = false,
     val ignoreDeprecations: String? = null,
+    /** Maps lowercase option names to their positions in tsconfig.json (for positioned diagnostics). */
+    val tsconfigOptionPositions: Map<String, TsconfigOptionPosition> = emptyMap(),
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -306,7 +320,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     // Apply options from tsconfig.json if present in the file entries
     val tsconfigEntry = fileEntries.find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
     if (tsconfigEntry != null) {
-        options = applyTsconfigOptions(options, tsconfigEntry.content)
+        options = applyTsconfigOptions(options, tsconfigEntry.content, tsconfigEntry.fileName)
     }
 
     if (fileEntries.isEmpty()) {
@@ -402,8 +416,9 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
 /**
  * Parses a tsconfig.json content and applies its `compilerOptions` to the given options.
  * Uses simple string matching rather than a full JSON parser.
+ * Tracks option value positions for emitting positioned deprecation diagnostics.
  */
-private fun applyTsconfigOptions(options: CompilerOptions, json: String): CompilerOptions {
+private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfigFileName: String = "tsconfig.json"): CompilerOptions {
     // Extract the compilerOptions block
     val compilerOptionsStart = json.indexOf("\"compilerOptions\"")
     if (compilerOptionsStart < 0) return options
@@ -421,11 +436,14 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
         }
         pos++
     }
-    val compilerOptionsBlock = json.substring(braceStart + 1, pos - 1)
+    val blockStart = braceStart + 1
+    val compilerOptionsBlock = json.substring(blockStart, pos - 1)
 
-    // Parse key-value pairs from the block
+    // Parse key-value pairs from the block, tracking positions relative to the full JSON
+    data class KvMatch(val key: String, val value: String, val valueStart: Int, val valueLength: Int)
+
     val kvPattern = Regex(""""(\w+)"\s*:\s*("([^"]*)"|(true|false)|(\d+))""")
-    val kvPairs = mutableListOf<Pair<String, String>>()
+    val kvMatches = mutableListOf<KvMatch>()
     for (match in kvPattern.findAll(compilerOptionsBlock)) {
         val key = match.groupValues[1].lowercase()
         val value = match.groupValues[3].ifEmpty {
@@ -433,7 +451,11 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
                 match.groupValues[5]
             }
         }
-        kvPairs.add(key to value)
+        // The value capture group position: group 2 is the full value (including quotes for strings)
+        val valueGroup = match.groups[2]!!
+        val valueStartInJson = blockStart + valueGroup.range.first
+        val valueLength = valueGroup.range.last - valueGroup.range.first + 1
+        kvMatches.add(KvMatch(key, value, valueStartInJson, valueLength))
     }
 
     // Parse array-valued options (e.g. moduleSuffixes: [".ios", ""])
@@ -447,8 +469,6 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
     }
 
     // Only apply a safe subset of tsconfig options that our transpiler handles correctly.
-    // Options like outDir, rootDir, paths, etc. affect module resolution in complex ways
-    // that we don't fully support — skip them to avoid regressions.
     val allowedTsconfigOptions = setOf(
         "target", "module", "strict", "noemit", "noemithelpers",
         "declaration", "removecomments", "preserveconstenums", "sourcemap",
@@ -457,13 +477,35 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
         "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
         "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
         "alwaysstrict", "newline", "noresolve", "moduledetection",
-        "outdir", "allowjs", "ignoredeprecations",
+        "outdir", "allowjs", "ignoredeprecations", "moduleresolution",
+        // Deprecated/removed options needed for diagnostics
+        "charset", "keyofstringsonly", "noimplicitusestrict", "nostrictgenericchecks",
+        "suppressexcesspropertyerrors", "suppressimplicitanyindexerrors",
+        "out", "importsnotusedasvalues", "preservevalueimports",
+        "noimplicitany", "noimplicitreturns", "strictnullchecks",
+        "nounusedlocals", "nounusedparameters", "baseurl",
+        "resolvejsonmodule", "inlinesourcemap", "sourcemap", "maproot",
     )
 
+    // Compute line/column positions for option values in the tsconfig JSON
+    val optionPositions = mutableMapOf<String, TsconfigOptionPosition>()
+    for (kv in kvMatches) {
+        if (kv.key in allowedTsconfigOptions) {
+            val lineCol = computeLineAndColumn(json, kv.valueStart)
+            optionPositions[kv.key] = TsconfigOptionPosition(
+                fileName = tsconfigFileName,
+                line = lineCol.first,
+                character = lineCol.second,
+                start = kv.valueStart,
+                length = kv.valueLength,
+            )
+        }
+    }
+
     var result = options
-    for ((key, value) in kvPairs) {
-        if (key !in allowedTsconfigOptions) continue
-        result = applyDirective(result, key, value)
+    for (kv in kvMatches) {
+        if (kv.key !in allowedTsconfigOptions) continue
+        result = applyDirective(result, kv.key, kv.value)
     }
     // Apply array options
     for ((key, values) in arrayPairs) {
@@ -472,5 +514,24 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String): Compil
             else -> result
         }
     }
+    // Merge tsconfig option positions into the result
+    if (optionPositions.isNotEmpty()) {
+        result = result.copy(tsconfigOptionPositions = result.tsconfigOptionPositions + optionPositions)
+    }
     return result
+}
+
+/** Compute 1-based line and 1-based column for a 0-based offset in text. */
+private fun computeLineAndColumn(text: String, offset: Int): Pair<Int, Int> {
+    var line = 1
+    var col = 1
+    for (i in 0 until offset.coerceAtMost(text.length)) {
+        if (text[i] == '\n') {
+            line++
+            col = 1
+        } else if (text[i] != '\r') {
+            col++
+        }
+    }
+    return line to col
 }
