@@ -101,6 +101,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 15. Check break/continue crossing function boundaries (TS1107)
+        checkJumpTargets()
     }
 
     // -----------------------------------------------------------------------
@@ -5791,6 +5793,226 @@ class Checker(
             message = "Cannot find module '$moduleName' or its corresponding type declarations.",
             category = DiagnosticCategory.Error,
             code = 2307,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Jump target checking (TS1107)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS1107: "Jump target cannot cross function boundary."
+     * break/continue inside a nested function/arrow that targets an outer loop/label.
+     */
+    private fun checkJumpTargets() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkJumpInStatements(result.sourceFile.statements, source, fileName,
+                inIteration = false, inSwitch = false, labelNames = emptySet())
+        }
+    }
+
+    private fun checkJumpInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        inIteration: Boolean,
+        inSwitch: Boolean,
+        labelNames: Set<String>,
+    ) {
+        for (stmt in statements) {
+            checkJumpInStatement(stmt, source, fileName, inIteration, inSwitch, labelNames)
+        }
+    }
+
+    private fun checkJumpInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        inIteration: Boolean,
+        inSwitch: Boolean,
+        labelNames: Set<String>,
+    ) {
+        when (stmt) {
+            is BreakStatement -> {
+                val label = stmt.label?.text
+                if (label != null) {
+                    // Labeled break — check if label is in scope
+                    if (label !in labelNames) {
+                        // Label is outside function boundary
+                        emitTS1107(stmt, source, fileName)
+                    }
+                } else {
+                    // Unlabeled break — needs to be in a loop or switch
+                    if (!inIteration && !inSwitch) {
+                        emitTS1107(stmt, source, fileName)
+                    }
+                }
+            }
+            is ContinueStatement -> {
+                val label = (stmt as? ContinueStatement)?.label?.text
+                if (label != null) {
+                    if (label !in labelNames) {
+                        emitTS1107(stmt, source, fileName)
+                    }
+                } else {
+                    if (!inIteration) {
+                        emitTS1107(stmt, source, fileName)
+                    }
+                }
+            }
+            // Loop statements: set inIteration = true
+            is ForStatement -> {
+                checkJumpInStatement(stmt.statement, source, fileName,
+                    inIteration = true, inSwitch, labelNames)
+            }
+            is ForInStatement -> {
+                checkJumpInStatement(stmt.statement, source, fileName,
+                    inIteration = true, inSwitch, labelNames)
+            }
+            is ForOfStatement -> {
+                checkJumpInStatement(stmt.statement, source, fileName,
+                    inIteration = true, inSwitch, labelNames)
+            }
+            is WhileStatement -> {
+                checkJumpInStatement(stmt.statement, source, fileName,
+                    inIteration = true, inSwitch, labelNames)
+            }
+            is DoStatement -> {
+                checkJumpInStatement(stmt.statement, source, fileName,
+                    inIteration = true, inSwitch, labelNames)
+            }
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    val stmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkJumpInStatements(stmts, source, fileName,
+                        inIteration, inSwitch = true, labelNames)
+                }
+            }
+            is LabeledStatement -> {
+                val newLabels = labelNames + stmt.label.text
+                checkJumpInStatement(stmt.statement, source, fileName,
+                    inIteration, inSwitch, newLabels)
+            }
+            is Block -> {
+                checkJumpInStatements(stmt.statements, source, fileName,
+                    inIteration, inSwitch, labelNames)
+            }
+            is IfStatement -> {
+                checkJumpInStatement(stmt.thenStatement, source, fileName,
+                    inIteration, inSwitch, labelNames)
+                stmt.elseStatement?.let {
+                    checkJumpInStatement(it, source, fileName, inIteration, inSwitch, labelNames)
+                }
+            }
+            is TryStatement -> {
+                checkJumpInStatements(stmt.tryBlock.statements, source, fileName,
+                    inIteration, inSwitch, labelNames)
+                stmt.catchClause?.block?.let {
+                    checkJumpInStatements(it.statements, source, fileName,
+                        inIteration, inSwitch, labelNames)
+                }
+                stmt.finallyBlock?.let {
+                    checkJumpInStatements(it.statements, source, fileName,
+                        inIteration, inSwitch, labelNames)
+                }
+            }
+            // Function boundaries: reset iteration/switch/label state
+            is FunctionDeclaration -> {
+                stmt.body?.let {
+                    checkJumpInStatements(it.statements, source, fileName,
+                        inIteration = false, inSwitch = false, labelNames = emptySet())
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let {
+                        checkJumpInStatements(it.statements, source, fileName,
+                            inIteration = false, inSwitch = false, labelNames = emptySet())
+                    }
+                }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkJumpInExpr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> checkJumpInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkJumpInExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkJumpInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkJumpInStatements(body.statements, source, fileName,
+                        inIteration = false, inSwitch = false, labelNames = emptySet())
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkJumpInStatements(expr.body.statements, source, fileName,
+                    inIteration = false, inSwitch = false, labelNames = emptySet())
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let {
+                        checkJumpInStatements(it.statements, source, fileName,
+                            inIteration = false, inSwitch = false, labelNames = emptySet())
+                    }
+                }
+            }
+            is CallExpression -> {
+                expr.arguments.forEach { checkJumpInExpr(it, source, fileName) }
+            }
+            is ParenthesizedExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                checkJumpInExpr(expr.left, source, fileName)
+                checkJumpInExpr(expr.right, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS1107(stmt: Statement, source: String, fileName: String) {
+        var start = stmt.pos
+        while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) start++
+        val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+        var end = lineEnd
+        while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) end--
+        val length = end - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Jump target cannot cross function boundary.",
+            category = DiagnosticCategory.Error,
+            code = 1107,
             fileName = fileName,
             line = line,
             character = character,
