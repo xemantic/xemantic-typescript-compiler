@@ -97,6 +97,8 @@ class Checker(
         if (options.alwaysStrict == true || options.strict) {
             checkStrictModeIdentifiers()
         }
+        // 13. Check export= in ES module files (TS1203)
+        checkExportAssignmentInEsModule()
     }
 
     // -----------------------------------------------------------------------
@@ -5546,6 +5548,52 @@ class Checker(
             start = start,
             length = spanLength,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Export= in ES module checking (TS1203)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS1203: "Export assignment cannot be used when targeting ECMAScript modules."
+     * Fires when `export = X` is used with ES module format.
+     */
+    private fun checkExportAssignmentInEsModule() {
+        val effectiveModule = options.effectiveModule
+        // ES module kinds: ES2015, ES2020, ES2022, ESNext, Node16, NodeNext
+        val isEsModule = effectiveModule >= ModuleKind.ES2015 ||
+                effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext
+        if (!isEsModule) return
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ExportAssignment && stmt.isExportEquals) {
+                    var start = stmt.pos
+                    while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+                        start++
+                    }
+                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+                    var end = lineEnd
+                    while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) end--
+                    val length = end - start
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead.",
+                        category = DiagnosticCategory.Error,
+                        code = 1203,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
