@@ -5428,6 +5428,7 @@ class Checker(
             // Iterators/generators
             "Generator", "GeneratorFunction", "AsyncGenerator", "AsyncGeneratorFunction",
             "Iterator", "AsyncIterator",
+            "IteratorResult", "IteratorYieldResult", "IteratorReturnResult", "IteratorObject",
             // TypeScript utility types (used in type positions)
             "Partial", "Required", "Readonly", "Record", "Pick", "Omit",
             "Exclude", "Extract", "NonNullable", "Parameters", "ConstructorParameters",
@@ -5435,6 +5436,7 @@ class Checker(
             "OmitThisParameter", "Uppercase", "Lowercase", "Capitalize", "Uncapitalize",
             "Awaited", "NoInfer",
             "Iterable", "IterableIterator", "AsyncIterable", "AsyncIterableIterator",
+            "RegExpMatchArray", "RegExpExecArray", "FlatArray",
             "PromiseLike", "ArrayLike", "ReadonlyArray", "ReadonlyMap", "ReadonlySet",
             "TemplateStringsArray",
             "PropertyKey", "PropertyDescriptor", "PropertyDescriptorMap",
@@ -5524,6 +5526,8 @@ class Checker(
             "indexedDB", "IDBDatabase", "IDBObjectStore", "IDBTransaction",
             "IDBRequest", "IDBCursor", "IDBKeyRange",
             "structuredClone", "reportError",
+            // Windows scripting / runtime
+            "WScript", "Windows",
             // Node.js
             "require", "module", "exports", "global",
             "process", "Buffer",

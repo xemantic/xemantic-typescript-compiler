@@ -128,13 +128,21 @@ class TypeScriptCompiler {
         }
         val diagnostics = mutableListOf<Diagnostic>()
 
+        // Helper to compare version strings like "5.0", "6.0"
+        fun isDeprecationSuppressed(deprecationVersion: String): Boolean {
+            val ign = options.ignoreDeprecations ?: return false
+            return ign >= deprecationVersion // lexicographic comparison works for "X.Y" format
+        }
+
         // TS5101: Deprecated options (still functioning, code 5101)
         fun addDeprecation5101(
             optionDesc: String,
             messageChain: List<String> = emptyList(),
+            deprecationVersion: String = "6.0",
         ) {
+            if (isDeprecationSuppressed(deprecationVersion)) return
             diagnostics.add(Diagnostic(
-                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.",
+                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5101,
                 messageChain = messageChain,
@@ -179,15 +187,16 @@ class TypeScriptCompiler {
 
         // TS5107: Deprecated options
         fun addDeprecation(optionDesc: String, version: String = "7.0", deprecationVersion: String = "6.0") {
+            if (isDeprecationSuppressed(deprecationVersion)) return
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5107,
             ))
         }
-        // Target deprecations
-        if (options.target == ScriptTarget.ES3) addDeprecation("target=ES3", "5.5", "5.0")
-        if (options.target == ScriptTarget.ES5) addDeprecation("target=ES5")
+        // Target deprecations — only when target is explicitly set
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) addDeprecation("target=ES3", "5.5", "5.0")
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES5) addDeprecation("target=ES5")
         // Module deprecations
         if (options.module == ModuleKind.AMD) addDeprecation("module=AMD")
         if (options.module == ModuleKind.UMD) addDeprecation("module=UMD")
@@ -235,6 +244,7 @@ class TypeScriptCompiler {
 
         // TS5070: resolveJsonModule with classic moduleResolution
         // Classic is the default for module=none/amd/umd/system
+        var emitted5070 = false
         val effectiveModuleRes = options.moduleResolution?.lowercase() ?: run {
             val mod = options.effectiveModule
             if (mod == ModuleKind.None || mod == ModuleKind.AMD || mod == ModuleKind.UMD || mod == ModuleKind.System) "classic"
@@ -246,19 +256,23 @@ class TypeScriptCompiler {
                 category = DiagnosticCategory.Error,
                 code = 5070,
             ))
+            emitted5070 = true
         }
 
         // TS5071: resolveJsonModule with module=none/system/umd
         // Also fires when moduleResolution=bundler (which implies resolveJsonModule)
-        val effectiveResolveJson = options.resolveJsonModule || options.moduleResolution?.lowercase() == "bundler"
-        if (effectiveResolveJson) {
-            val effModule = options.effectiveModule
-            if (effModule == ModuleKind.None || effModule == ModuleKind.System || effModule == ModuleKind.UMD) {
-                diagnostics.add(Diagnostic(
-                    message = "Option '--resolveJsonModule' cannot be specified when 'module' is set to 'none', 'system', or 'umd'.",
-                    category = DiagnosticCategory.Error,
-                    code = 5071,
-                ))
+        // TS5071 is mutually exclusive with TS5070 — don't emit both
+        if (!emitted5070) {
+            val effectiveResolveJson = options.resolveJsonModule || options.moduleResolution?.lowercase() == "bundler"
+            if (effectiveResolveJson) {
+                val effModule = options.effectiveModule
+                if (effModule == ModuleKind.None || effModule == ModuleKind.System || effModule == ModuleKind.UMD) {
+                    diagnostics.add(Diagnostic(
+                        message = "Option '--resolveJsonModule' cannot be specified when 'module' is set to 'none', 'system', or 'umd'.",
+                        category = DiagnosticCategory.Error,
+                        code = 5071,
+                    ))
+                }
             }
         }
 
