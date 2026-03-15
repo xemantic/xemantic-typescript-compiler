@@ -355,10 +355,7 @@ class TypeScriptCompiler {
                     (!options.allowJs || file.content.isBlank())) {
                     continue
                 }
-                // Skip .d.ts/.d.mts/.d.cts files (they don't produce JS output)
-                if (file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")) {
-                    continue
-                }
+                val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
                 // .tsx files without --jsx: skip only if the file content is blank
                 // (TypeScript reports an error for JSX syntax without --jsx, but still emits non-JSX tsx content)
                 if (file.fileName.endsWith(".tsx") && options.jsx == null && file.content.isBlank()) {
@@ -389,6 +386,11 @@ class TypeScriptCompiler {
                 val forceJsxForJsMulti = isPlainJsFileMulti && (options.jsx != null || options.allowJs)
                 val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti)
                 val sourceFile = parser.parse()
+                parsedSourceFiles[file.fileName] = sourceFile
+
+                // .d.ts files are parsed and bound (for checker globals) but not emitted
+                if (isDtsFile) continue
+
                 diagnostics.addAll(parser.getDiagnostics())
 
                 // Extract relative imports for dependency ordering
@@ -398,7 +400,6 @@ class TypeScriptCompiler {
                 )
 
                 tsFileNames.add(file.fileName)
-                parsedSourceFiles[file.fileName] = sourceFile
             }
 
             // Phase 2: Bind all files and create shared checker

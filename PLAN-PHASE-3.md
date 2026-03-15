@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,650 passing (62.8%), 3,945 failing
+- **10,595 tests**, 6,652 passing (62.8%), 3,943 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -527,10 +527,11 @@ Picking off tractable fixes to continue improving the pass rate.
   The error baseline formatter now preserves tab characters from source
   lines in squiggle indentation instead of converting all whitespace to spaces.
 
-- [ ] **8q. Reduce false-positive TS2304 in multi-file tests**
+- [x] **8q. Reduce false-positive TS2304 in multi-file tests** (+2 tests)
 
-  Skip TS2304 checking for multi-file compilations where cross-file
-  name resolution would be needed.
+  Parse and bind `.d.ts` files for checker globals (without emitting JS).
+  Skip all checker diagnostics (TS2304/TS2454/TS2564/TS6133/TS7006/TS2300)
+  for `.d.ts` files. Reduced false-positive TS2304 from 155 to 128 tests.
 
 - [ ] **8r. Multi-file JS baseline file ordering**
 

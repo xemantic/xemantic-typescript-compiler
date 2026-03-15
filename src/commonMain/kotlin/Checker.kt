@@ -54,6 +54,10 @@ class Checker(
     private val maxCheckDepth = 200
     private var checkDepth = 0
 
+    /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
+    private fun isDtsFile(fileName: String): Boolean =
+        fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
+
     init {
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
@@ -1160,6 +1164,7 @@ class Checker(
 
     private fun checkUnusedDeclarations() {
         for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val isModule = isModuleFile(result.sourceFile.statements)
             checkUnusedInStatements(
@@ -2970,8 +2975,9 @@ class Checker(
      */
     private fun checkDefiniteAssignment() {
         for (result in binderResults) {
-            val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
             checkDefiniteAssignmentInStatements(
                 result.sourceFile.statements, source, fileName,
             )
@@ -3376,8 +3382,9 @@ class Checker(
      */
     private fun checkPropertyInitialization() {
         for (result in binderResults) {
-            val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
             checkPropertyInitInStatements(result.sourceFile.statements, source, fileName)
         }
     }
@@ -3608,8 +3615,9 @@ class Checker(
      */
     private fun checkImplicitAnyParameters() {
         for (result in binderResults) {
-            val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
             checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
         }
     }
@@ -3805,8 +3813,9 @@ class Checker(
      */
     private fun checkUnresolvedNames() {
         for (result in binderResults) {
-            val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
             // File-level scope: binder locals + globals + known globals
             val fileScope = NameScope(null)
             for ((name, _) in result.locals) fileScope.names.add(name)
@@ -4910,8 +4919,9 @@ class Checker(
      */
     private fun checkDuplicateIdentifiers() {
         for (result in binderResults) {
-            val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
             checkDuplicatesInStatements(result.sourceFile.statements, source, fileName)
             // Check file-level duplicate declarations
             checkDuplicateDeclarations(result.sourceFile.statements, source, fileName)
