@@ -953,7 +953,7 @@ class Checker(
                                 val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
                                 val targetResult = fileResults[targetFile] ?: continue
                                 // Look for export = X in the target module
-                                val exportTarget = resolveModuleExportAssignment(targetResult)
+                                val exportTarget = resolveModuleExportAssignment(targetResult, visited)
                                 if (exportTarget != null) {
                                     symbol.target = exportTarget
                                     return resolveAlias(exportTarget, visited)
@@ -1026,10 +1026,10 @@ class Checker(
      * Resolve a module's export assignment (`export = expr`) to a symbol.
      * Returns null if no export assignment exists.
      */
-    private fun resolveModuleExportAssignment(result: BinderResult): Symbol? {
+    private fun resolveModuleExportAssignment(result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         for (stmt in result.sourceFile.statements) {
             if (stmt is ExportAssignment && stmt.isExportEquals) {
-                return resolveExpressionToSymbol(stmt.expression, result)
+                return resolveExpressionToSymbol(stmt.expression, result, visited)
             }
         }
         return null
@@ -1038,16 +1038,16 @@ class Checker(
     /**
      * Resolve an expression to a symbol (for export assignment resolution).
      */
-    private fun resolveExpressionToSymbol(expr: Expression, result: BinderResult): Symbol? {
+    private fun resolveExpressionToSymbol(expr: Expression, result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         return when (expr) {
             is Identifier -> {
                 val symbol = result.locals[expr.text] ?: globals[expr.text] ?: return null
-                resolveAlias(symbol)
+                resolveAlias(symbol, visited)
             }
             is PropertyAccessExpression -> {
-                val parent = resolveExpressionToSymbol(expr.expression, result) ?: return null
+                val parent = resolveExpressionToSymbol(expr.expression, result, visited) ?: return null
                 val child = parent.exports?.get(expr.name.text) ?: return null
-                resolveAlias(child)
+                resolveAlias(child, visited)
             }
             else -> null
         }
