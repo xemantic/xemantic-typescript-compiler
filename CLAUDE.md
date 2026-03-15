@@ -88,6 +88,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 ### Test assertion gotchas
 
 - Avoid partial `assert("x" in result)` — always assert the full expected output.
+- **Test ordering sensitivity**: Adding new checker code that increases diagnostics can cause deterministic failures in unrelated JS emit tests (e.g., `commentOnArrayElement3`, `castParentheses`). This appears to be a JIT or test execution order interaction — tests pass individually but fail in the full suite. Always run the full suite to verify no regressions.
 
 ### TS2304 unresolved name checking gotchas
 
