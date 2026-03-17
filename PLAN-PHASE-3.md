@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,787 passing (64.1%), 3,808 failing
+- **10,595 tests**, 6,797 passing (64.2%), 3,798 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -777,16 +777,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **11a. Reduce TS2304 false positives** (~10-20 tests)
+- [x] **11a. Reduce TS2304 false positives** (analyzed — ~0 net tests)
 
-  The TS2304 checker over-reports for valid names it can't resolve:
-  - Type parameters used as values (e.g. `T` in `typeof T`)
-  - Lib-defined names like `window`, `document` that aren't in KNOWN_GLOBALS
-  - Names from merged declarations across files
-  - Names from `declare global {}` blocks
-  Add missing globals and improve scope resolution.
+  Thorough analysis of all 3,808 failing tests found only 1 test (`dottedModuleName`)
+  with false-positive TS2304 in the diff, and that test also has a parser error code
+  mismatch (TS1109 vs TS1144). Zero "none produced" tests need only TS2304.
+  Zero JS emit tests are affected. The TS2304 checker is already well-calibrated.
+  The estimated ~10-20 tests was too high — actual impact is negligible.
 
-  **Files:** `Checker.kt`
+  **Files:** `Checker.kt` (no changes needed)
 
 - [x] **11b. Reduce TS7006 false positives** (deferred — 0 net tests)
 
@@ -804,14 +803,17 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **11c. TS2300 gaps — prototype and cross-file duplicates** (~5 tests)
+- [x] **11c. TS2300/TS2567 gaps + TS5069 declarationMap + namespace+var merging** (+3 tests)
 
-  Missing TS2300 diagnostics for:
-  - `prototype` property conflicts with static members
-  - Cross-file duplicate declarations in multi-file tests
-  - Numeric/computed property duplicates in classes
+  Fixed false-positive TS2300 for namespace+var when namespace is type-only:
+  - `declare namespace` + var → allowed (no value produced)
+  - Namespace with only interfaces/types + var → allowed
+  - Empty namespace + var → allowed
+  Also: TS2567 for enum+interface conflicts (all sides get TS2567, not TS2300),
+  TS5069 for `declarationMap` without `declaration` option.
+  Remaining TS2300 issues (prototype, cross-file) won't gain tests alone.
 
-  **Files:** `Checker.kt`
+  **Files:** `Checker.kt`, `CompilerOptions.kt`, `TypeScriptCompiler.kt`
 
 - [ ] **11d. TS6133 gaps — write-only properties and underscore conventions** (~5 tests)
 

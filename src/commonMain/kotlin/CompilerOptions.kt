@@ -91,6 +91,7 @@ data class CompilerOptions(
     val noEmit: Boolean = false,
     val noEmitHelpers: Boolean = false,
     val declaration: Boolean = false,
+    val declarationMap: Boolean = false,
     val removeComments: Boolean = false,
     val preserveConstEnums: Boolean = false,
     val sourceMap: Boolean = false,
@@ -356,6 +357,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noemit" -> options.copy(noEmit = boolValue)
         "noemithelpers" -> options.copy(noEmitHelpers = boolValue)
         "declaration" -> options.copy(declaration = boolValue)
+        "declarationmap" -> options.copy(declarationMap = boolValue)
         "removecomments" -> options.copy(removeComments = boolValue)
         "preserveconstenums" -> options.copy(preserveConstEnums = boolValue)
         "sourcemap" -> options.copy(sourceMap = boolValue)
@@ -486,7 +488,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
     // Only apply a safe subset of tsconfig options that our transpiler handles correctly.
     val allowedTsconfigOptions = setOf(
         "target", "module", "strict", "noemit", "noemithelpers",
-        "declaration", "removecomments", "preserveconstenums", "sourcemap",
+        "declaration", "declarationmap", "removecomments", "preserveconstenums", "sourcemap",
         "experimentaldecorators", "emitdecoratormetadata", "jsx", "jsxfactory", "jsxfragmentfactory", "reactnamespace",
         "esmoduleinterop", "isolatedmodules", "downleveliteration",
         "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
