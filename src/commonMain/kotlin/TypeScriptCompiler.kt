@@ -269,6 +269,14 @@ class TypeScriptCompiler {
                 code = 5069,
             ))
         }
+        // TS5069: declarationMap without declaration/composite
+        if (options.declarationMap && !options.declaration) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'declarationMap' cannot be specified without specifying option 'declaration' or option 'composite'.",
+                category = DiagnosticCategory.Error,
+                code = 5069,
+            ))
+        }
         // TS5069: mapRoot without sourceMap or declarationMap
         if (options.mapRoot != null && !options.sourceMap) {
             diagnostics.add(Diagnostic(

@@ -5236,6 +5236,8 @@ class Checker(
             is FunctionDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
                 checkDuplicateParams(stmt.parameters, source, fileName)
+                checkDuplicatesInType(stmt.type, source, fileName)
+                for (param in stmt.parameters) checkDuplicatesInType(param.type, source, fileName)
                 stmt.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
             }
             is ClassDeclaration -> {
@@ -5248,9 +5250,13 @@ class Checker(
             is InterfaceDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
                 checkDuplicateInterfaceMembers(stmt.members, source, fileName)
+                for (member in stmt.members) {
+                    checkDuplicatesInTypeMember(member, source, fileName)
+                }
             }
             is TypeAliasDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
+                checkDuplicatesInType(stmt.type, source, fileName)
             }
             is EnumDeclaration -> {
                 checkDuplicateEnumMembers(stmt, source, fileName)
@@ -5296,7 +5302,33 @@ class Checker(
                     else -> {}
                 }
             }
+            is ExportDeclaration -> {
+                val exportClause = stmt.exportClause
+                if (exportClause is NamedExports) {
+                    checkDuplicateExportSpecifiers(exportClause.elements, source, fileName)
+                }
+            }
             else -> {}
+        }
+    }
+
+    private fun checkDuplicateExportSpecifiers(
+        specifiers: List<ExportSpecifier>,
+        source: String,
+        fileName: String,
+    ) {
+        data class SpecInfo(val name: String, val nameNode: Identifier)
+        val specs = mutableListOf<SpecInfo>()
+        for (spec in specifiers) {
+            specs.add(SpecInfo(spec.name.text, spec.name))
+        }
+        val byName = specs.groupBy { it.name }
+        for ((_, group) in byName) {
+            if (group.size >= 2) {
+                for (spec in group) {
+                    emitDuplicate2300(spec.name, spec.nameNode, source, fileName)
+                }
+            }
         }
     }
 
@@ -5449,7 +5481,7 @@ class Checker(
         fileName: String,
     ) {
         // Collect all declaration names with their kind and node
-        data class DeclInfo(val name: String, val kind: String, val nameNode: Node)
+        data class DeclInfo(val name: String, val kind: String, val nameNode: Node, val stmt: Statement? = null)
         val decls = mutableListOf<DeclInfo>()
 
         for (stmt in statements) {
@@ -5458,25 +5490,38 @@ class Checker(
                     for (decl in stmt.declarationList.declarations) {
                         val name = decl.name
                         if (name is Identifier) {
-                            decls.add(DeclInfo(name.text, "var", name))
+                            decls.add(DeclInfo(name.text, "var", name, stmt))
                         }
                     }
                 }
                 is FunctionDeclaration -> {
                     val name = stmt.name ?: continue
-                    decls.add(DeclInfo(name.text, "function", name))
+                    decls.add(DeclInfo(name.text, "function", name, stmt))
                 }
                 is ClassDeclaration -> {
                     val name = stmt.name ?: continue
-                    decls.add(DeclInfo(name.text, "class", name))
+                    decls.add(DeclInfo(name.text, "class", name, stmt))
                 }
                 is EnumDeclaration -> {
-                    decls.add(DeclInfo(stmt.name.text, "enum", stmt.name))
+                    decls.add(DeclInfo(stmt.name.text, "enum", stmt.name, stmt))
                 }
                 is ExportAssignment -> {
                     if (stmt.isExportEquals) {
                         decls.add(DeclInfo("export=", "export=", stmt.expression))
                     }
+                }
+                is ModuleDeclaration -> {
+                    val name = stmt.name
+                    if (name is Identifier) {
+                        decls.add(DeclInfo(name.text, "namespace", name, stmt))
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    decls.add(DeclInfo(stmt.name.text, "interface", stmt.name, stmt))
+                }
+                is ImportEqualsDeclaration -> {
+                    val name = stmt.name
+                    decls.add(DeclInfo(name.text, "import=", name))
                 }
                 else -> {}
             }
@@ -5511,30 +5556,57 @@ class Checker(
             val hasFunc = "function" in kinds
             val classCount = group.count { it.kind == "class" }
 
+            // Check for duplicate import= declarations
+            val hasImportEq = "import=" in kinds
+            val importEqCount = group.count { it.kind == "import=" }
+            if (hasImportEq && importEqCount >= 2) {
+                for (decl in group.filter { it.kind == "import=" }) {
+                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+
             // TS2567: Enum declarations can only merge with namespace or other enum declarations
-            if (hasEnum && (hasClass || hasFunc || hasVar)) {
+            val hasInterface = "interface" in kinds
+            if (hasEnum && (hasClass || hasFunc || hasVar || hasInterface)) {
                 for (decl in group) {
-                    if (decl.kind == "enum" || decl.kind == "class" || decl.kind == "function") {
-                        val start = decl.nameNode.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Enum declarations can only merge with namespace or other enum declarations.",
-                            category = DiagnosticCategory.Error,
-                            code = 2567,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = decl.name.length,
-                        ))
-                    } else {
-                        emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
-                    }
+                    if (decl.kind == "namespace") continue // namespace+enum is allowed
+                    val start = decl.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Enum declarations can only merge with namespace or other enum declarations.",
+                        category = DiagnosticCategory.Error,
+                        code = 2567,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = decl.name.length,
+                    ))
                 }
             } else {
+                val hasNamespace = "namespace" in kinds
+
+                // Check if namespace+var should be allowed:
+                // A namespace can merge with a var when:
+                // - The namespace is `declare` (ambient), OR
+                // - The namespace only contains type declarations (interfaces, types) and no value exports
+                // A `declare var` can merge with any namespace
+                val namespaceVarAllowed = if (hasVar && hasNamespace) {
+                    val allNamespacesValueFree = group.filter { it.kind == "namespace" }.all { decl ->
+                        val modDecl = decl.stmt as? ModuleDeclaration ?: return@all true
+                        !isNamespaceInstantiated(modDecl)
+                    }
+                    val allVarsDeclare = group.filter { it.kind == "var" }.all { decl ->
+                        val varStmt = decl.stmt as? VariableStatement ?: return@all false
+                        ModifierFlag.Declare in varStmt.modifiers
+                    }
+                    allNamespacesValueFree || allVarsDeclare
+                } else false
+
                 val isDuplicate = (hasClass && classCount >= 2) ||
                         (hasClass && hasFunc) ||
-                        (hasVar && (hasClass || hasFunc))
+                        (hasVar && (hasClass || hasFunc)) ||
+                        (hasVar && hasNamespace && !namespaceVarAllowed)
 
                 if (isDuplicate) {
                     for (decl in group) {
@@ -5589,9 +5661,8 @@ class Checker(
         for (member in members) {
             if (member is PropertyDeclaration) {
                 val name = member.name
-                if (name is Identifier) {
-                    props.add(PropInfo(name.text, name))
-                }
+                val text = getMemberNameText(name) ?: continue
+                props.add(PropInfo(text, name))
             }
         }
         val byName = props.groupBy { it.name }
@@ -5612,46 +5683,49 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        data class MemberInfo(val name: String, val kind: String, val nameNode: Node)
+        data class MemberInfo(val name: String, val normalizedName: String, val kind: String, val nameNode: Node)
 
         val memberInfos = mutableListOf<MemberInfo>()
         for (member in members) {
             when (member) {
                 is MethodDeclaration -> {
-                    val name = member.name
-                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "method", name))
+                    val text = getMemberNameText(member.name) ?: continue
+                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "method", member.name))
                 }
                 is PropertyDeclaration -> {
-                    val name = member.name
-                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "property", name))
+                    val text = getMemberNameText(member.name) ?: continue
+                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "property", member.name))
                 }
                 is GetAccessor -> {
-                    val name = member.name
-                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "getter", name))
+                    val text = getMemberNameText(member.name) ?: continue
+                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "getter", member.name))
                 }
                 is SetAccessor -> {
-                    val name = member.name
-                    if (name is Identifier) memberInfos.add(MemberInfo(name.text, "setter", name))
+                    val text = getMemberNameText(member.name) ?: continue
+                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "setter", member.name))
                 }
                 else -> {}
             }
         }
 
-        val byName = memberInfos.groupBy { it.name }
+        val byName = memberInfos.groupBy { it.normalizedName }
         for ((_, group) in byName) {
             if (group.size < 2) continue
             val kinds = group.map { it.kind }.toSet()
             // method + getter or method + setter → TS2300
             // method + property → TS2300
-            // getter + setter → ALLOWED (no error)
+            // getter + setter → ALLOWED (single pair only)
             // property + property → TS2300 (unless overloads)
             val hasMethod = "method" in kinds
             val hasGetter = "getter" in kinds
             val hasSetter = "setter" in kinds
             val hasProperty = "property" in kinds
+            val getterCount = group.count { it.kind == "getter" }
+            val setterCount = group.count { it.kind == "setter" }
 
             val isDuplicate = (hasMethod && (hasGetter || hasSetter || hasProperty)) ||
-                    (hasProperty && (hasGetter || hasSetter))
+                    (hasProperty && (hasGetter || hasSetter)) ||
+                    (getterCount >= 2) || (setterCount >= 2)
 
             if (isDuplicate) {
                 for (info in group) {
@@ -5661,12 +5735,76 @@ class Checker(
         }
     }
 
+    /**
+     * Recursively walk type annotations checking for duplicates.
+     */
+    private fun checkDuplicatesInType(
+        type: TypeNode?,
+        source: String,
+        fileName: String,
+    ) {
+        if (type == null) return
+        when (type) {
+            is TypeLiteral -> {
+                checkDuplicateInterfaceMembers(type.members, source, fileName)
+                for (member in type.members) {
+                    checkDuplicatesInTypeMember(member, source, fileName)
+                }
+            }
+            is FunctionType -> {
+                checkDuplicateTypeParams(type.typeParameters, source, fileName)
+                checkDuplicatesInType(type.type, source, fileName)
+            }
+            is ConstructorType -> {
+                checkDuplicateTypeParams(type.typeParameters, source, fileName)
+                checkDuplicatesInType(type.type, source, fileName)
+            }
+            is UnionType -> for (t in type.types) checkDuplicatesInType(t, source, fileName)
+            is IntersectionType -> for (t in type.types) checkDuplicatesInType(t, source, fileName)
+            is ParenthesizedType -> checkDuplicatesInType(type.type, source, fileName)
+            is ArrayType -> checkDuplicatesInType(type.elementType, source, fileName)
+            is TypePredicate -> checkDuplicatesInType(type.type, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkDuplicatesInTypeMember(
+        member: ClassElement,
+        source: String,
+        fileName: String,
+    ) {
+        when (member) {
+            is PropertyDeclaration -> checkDuplicatesInType(member.type, source, fileName)
+            is MethodDeclaration -> {
+                checkDuplicateTypeParams(member.typeParameters, source, fileName)
+                checkDuplicatesInType(member.type, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Extract the effective property name from a member name node. */
+    private fun getMemberNameText(name: Node): String? = when (name) {
+        is Identifier -> name.text
+        is StringLiteralNode -> name.text
+        is NumericLiteralNode -> name.text
+        else -> null
+    }
+
+    /** Normalize numeric string to canonical form for duplicate comparison. */
+    private fun normalizeNumericKey(text: String): String {
+        val num = text.toDoubleOrNull() ?: return text
+        // 0.0 → "0", 1.0 → "1", etc.
+        return if (num == num.toLong().toDouble()) num.toLong().toString() else text
+    }
+
     private fun emitDuplicate2300(
         name: String,
         node: Node,
         source: String,
         fileName: String,
-        spanLength: Int = name.length,
+        spanLength: Int = if (node is StringLiteralNode || node is NumericLiteralNode)
+            node.end - node.pos else name.length,
     ) {
         val start = node.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -5680,6 +5818,33 @@ class Checker(
             start = start,
             length = spanLength,
         ))
+    }
+
+    /**
+     * Checks if a namespace/module declaration is "instantiated" — meaning it
+     * contributes a runtime value. A namespace is instantiated when it is NOT
+     * `declare` and its body contains value-producing statements.
+     * Value-free namespaces (empty, or only containing interfaces/types) can
+     * merge with var declarations without conflict.
+     */
+    private fun isNamespaceInstantiated(decl: ModuleDeclaration): Boolean {
+        if (ModifierFlag.Declare in decl.modifiers) return false
+        val body = decl.body as? ModuleBlock ?: return false
+        return body.statements.any { s ->
+            when (s) {
+                is VariableStatement -> true
+                is FunctionDeclaration -> true
+                is ClassDeclaration -> true
+                is EnumDeclaration -> true
+                is ModuleDeclaration -> isNamespaceInstantiated(s)
+                is ExportDeclaration -> {
+                    // export { ... } from "..." or export { ... } — check if there's an actual re-export
+                    // of values (not just types). For simplicity, assume value export.
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
