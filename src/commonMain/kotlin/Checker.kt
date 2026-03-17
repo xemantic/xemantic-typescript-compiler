@@ -2211,6 +2211,8 @@ class Checker(
             is ForStatement -> {
                 when (val init = stmt.initializer) {
                     is VariableDeclarationList -> {
+                        // Check for unused variables declared in the for-initializer
+                        checkForStatementVariable(init, stmt, source, fileName)
                         for (decl in init.declarations) {
                             decl.initializer?.let { checkUnusedInExpr(it, source, fileName) }
                         }
@@ -2406,6 +2408,46 @@ class Checker(
     /**
      * Check for unused for-in/for-of loop variables.
      */
+    /**
+     * Check for unused variables declared in a C-style for-loop initializer:
+     * `for(var i = 0; condition; increment) { body }`
+     * Collects references from condition, incrementor, and body.
+     */
+    private fun checkForStatementVariable(
+        declList: VariableDeclarationList,
+        forStmt: ForStatement,
+        source: String,
+        fileName: String,
+    ) {
+        if (!options.noUnusedLocals) return
+        val scope = UnusedScope()
+        for (decl in declList.declarations) {
+            collectVarDeclNames(decl.name, decl, isExported = false, scope)
+        }
+        // Collect references from condition, incrementor, and body
+        forStmt.condition?.let { collectRefsFromExpr(it, scope) }
+        forStmt.incrementor?.let { collectRefsFromExpr(it, scope) }
+        collectUnusedReferences(forStmt.statement, scope)
+        // Report unused
+        for (decl in scope.declarations) {
+            if (decl.name in scope.referencedNames) continue
+            if (decl.name.startsWith("_")) continue
+            val start = decl.nameNode.pos
+            val length = decl.name.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'${decl.name}' is declared but its value is never read.",
+                category = DiagnosticCategory.Error,
+                code = 6133,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
     private fun checkForLoopVariable(
         initializer: Node?,
         body: Statement,
@@ -2731,7 +2773,7 @@ class Checker(
         siblingStatements: List<Statement>? = null,
     ) {
         val typeParams = cls.typeParameters
-        if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+        if (typeParams.isNullOrEmpty() || !(options.noUnusedLocals || options.noUnusedParameters)) return
         // Skip if another declaration merges with this class (interface/namespace)
         val className = cls.name?.text
         if (className != null && siblingStatements != null) {
@@ -2807,7 +2849,7 @@ class Checker(
         siblingStatements: List<Statement>? = null,
     ) {
         val typeParams = iface.typeParameters
-        if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+        if (typeParams.isNullOrEmpty() || !(options.noUnusedLocals || options.noUnusedParameters)) return
         // Skip if another declaration merges or if there are multiple interfaces with same name
         val ifaceName = iface.name.text
         if (siblingStatements != null) {
@@ -2862,7 +2904,7 @@ class Checker(
         fileName: String,
     ) {
         val typeParams = alias.typeParameters
-        if (typeParams.isNullOrEmpty() || !options.noUnusedLocals) return
+        if (typeParams.isNullOrEmpty() || !(options.noUnusedLocals || options.noUnusedParameters)) return
 
         val tpScope = UnusedScope()
         for (tp in typeParams) {
@@ -2890,7 +2932,7 @@ class Checker(
             val tp = decl.declNode as TypeParameter
             val start: Int
             val length: Int
-            if (allUnused && scope.declarations.size == 1) {
+            if (allUnused && scope.declarations.size == 1 && typeParams.size == 1) {
                 start = tp.pos - 1
                 length = decl.name.length + 2
             } else {
@@ -2975,7 +3017,7 @@ class Checker(
         }
 
         // Check unused type parameters (TS6133)
-        if (typeParameters != null && typeParameters.isNotEmpty() && options.noUnusedLocals) {
+        if (typeParameters != null && typeParameters.isNotEmpty() && (options.noUnusedLocals || options.noUnusedParameters)) {
             val tpScope = UnusedScope()
             for (tp in typeParameters) {
                 if (!tp.name.text.startsWith("_")) {

@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,797 passing (64.2%), 3,798 failing
+- **10,595 tests**, 6,800 passing (64.2%), 3,795 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -815,12 +815,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`, `CompilerOptions.kt`, `TypeScriptCompiler.kt`
 
-- [ ] **11d. TS6133 gaps — write-only properties and underscore conventions** (~5 tests)
+- [x] **11d. TS6133 gaps — type param and for-loop unused checking** (+3 tests)
 
-  Missing TS6133 diagnostics for:
-  - Write-only properties (assigned but never read)
-  - `infer` type parameters in conditional types
-  - Namespace-level unused checking gaps
+  - Type params checked by `noUnusedParameters` (not just `noUnusedLocals`)
+  - Fixed single-param squiggle when underscore params are skipped
+  - ForStatement initializer unused variable checking
+  Remaining TS6133 gaps (write-only properties, infer type params,
+  consolidated codes TS6198/TS6199/TS6192) require more complex changes
+  and won't gain many tests individually.
 
   **Files:** `Checker.kt`
 
