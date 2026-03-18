@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,829 passing (64.5%), 3,763 failing
+- **10,595 tests**, 6,849 passing (64.6%), 3,746 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -902,10 +902,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **12g. TS2314 — wrong type argument count** (~14 tests)
+- [x] **12g. TS2314 — wrong type argument count** (+17 tests)
 
   "Generic type 'X' requires N type argument(s)." Check type references
-  against declared type parameter counts.
+  and heritage clause types against declared type parameter counts.
+  Handles user-declared classes/interfaces/type aliases (via binder symbol
+  lookup) and built-in generics (Array, Promise, Map, etc. via hardcoded
+  table). Skips types with default type parameters (need TS2707 instead).
+  Suppresses false-positive TS2564/TS2454 for properties/variables whose
+  type annotation has a TS2314 error.
 
   **Files:** `Checker.kt`
 
