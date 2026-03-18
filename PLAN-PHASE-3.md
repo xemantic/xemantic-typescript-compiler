@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,976 passing (65.8%), 3,619 failing
+- **10,595 tests**, 6,998 passing (66.1%), 3,597 failing
+- **Session 2026-03-18c**: +22 tests (6,976→6,998) — TS5055/TS5056 per-file output, TS2695 comma operator, TS2448/TS2450 use before decl, TS1049/TS1030/TS1014 syntax, TS1183 ambient impl
 - **Session 2026-03-18b**: +34 tests (6,942→6,976) — fix FP TS1005/TS2872/TS6133, add TS6131/TS7019/TS1185/TS1148/TS1218/TS2441/TS1250/TS7010/TS1191
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
@@ -1289,6 +1290,47 @@ Picking off tractable fixes to continue improving the pass rate.
   Detect top-level declarations named `exports` or `require` in module
   files with CJS/AMD/UMD/System module format. Skip ambient (`declare`)
   declarations and `noEmit` mode.
+
+  **Files:** `Checker.kt`
+
+### 17. Phase 3l — New syntax and semantic diagnostics
+
+- [ ] **17a. TS2396 — duplicate 'arguments' in function** (~6 tests)
+
+  Detect parameter named 'arguments' in functions targeting ES5.
+  "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters."
+
+  **Files:** `Checker.kt`
+
+- [ ] **17b. TS1029 — modifier order validation** (~4 tests)
+
+  "'X' modifier must precede 'Y' modifier." Check that export precedes
+  default, static precedes public/private, etc.
+
+  **Files:** `Checker.kt`
+
+- [ ] **17c. TS1090 — parameter cannot have access modifier in setter** (~4 tests)
+
+  "Parameter cannot have question mark and initializer" and related
+  parameter modifier restrictions.
+
+  **Files:** `Checker.kt`
+
+- [ ] **17d. TS1039 — initializers not allowed in ambient context** (~3 tests)
+
+  Variables with initializers in declare contexts.
+
+  **Files:** `Checker.kt`
+
+- [ ] **17e. TS2397 — missing properties in type** (~3 tests)
+
+  "Variable 'X' implicitly has type 'any' in some locations where its type cannot be determined."
+
+  **Files:** `Checker.kt`
+
+- [ ] **17f. TS2497 — module has no default export** (~2 tests)
+
+  "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag."
 
   **Files:** `Checker.kt`
 

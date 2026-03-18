@@ -165,6 +165,10 @@ class Checker(
         checkRestParameterLast()
         // 41. Check implementation in ambient context (TS1183)
         checkAmbientImplementation()
+        // 42. Check arguments collision with rest params (TS2396)
+        if (options.target < ScriptTarget.ES2015) {
+            checkArgumentsCollision()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -11994,5 +11998,150 @@ class Checker(
             start = start,
             length = 1,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Arguments collision with rest parameters (TS2396)
+    // -----------------------------------------------------------------------
+
+    private fun checkArgumentsCollision() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkArgsCollisionInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkArgsCollisionInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkArgsCollisionInStatement(stmt, source, fileName)
+    }
+
+    private fun checkArgsCollisionInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                // Only check implementations (have body), skip overload signatures and declare
+                if (stmt.body != null && ModifierFlag.Declare !in stmt.modifiers) {
+                    checkArgsCollisionInParams(stmt.parameters, source, fileName)
+                }
+                stmt.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> {
+                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName)
+                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        }
+                        is Constructor -> {
+                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName)
+                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        }
+                        is GetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ExpressionStatement -> checkArgsCollisionInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkArgsCollisionInExpr(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkArgsCollisionInExpr(it, source, fileName) }
+            is Block -> checkArgsCollisionInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkArgsCollisionInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkArgsCollisionInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName)
+            is TryStatement -> {
+                checkArgsCollisionInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkArgsCollisionInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> {
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    (stmt.body as? ModuleBlock)?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkArgsCollisionInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                checkArgsCollisionInParams(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkArgsCollisionInStatements(body.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkArgsCollisionInParams(expr.parameters, source, fileName)
+                expr.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+            }
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> {
+                        checkArgsCollisionInParams(m.parameters, source, fileName)
+                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                    }
+                    is Constructor -> {
+                        checkArgsCollisionInParams(m.parameters, source, fileName)
+                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is MethodDeclaration -> {
+                        checkArgsCollisionInParams(prop.parameters, source, fileName)
+                        prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+            is ParenthesizedExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkArgsCollisionInParams(params: List<Parameter>, source: String, fileName: String) {
+        val hasRest = params.any { it.dotDotDotToken && !it.isCommentPlaceholder }
+        if (!hasRest) return
+        // Check each parameter for "arguments" name
+        for (param in params) {
+            if (param.isCommentPlaceholder) continue
+            val name = param.name
+            if (name is Identifier && name.text == "arguments") {
+                // Span includes type annotation if present
+                val start = if (param.dotDotDotToken) name.pos - 3 else name.pos
+                val end = if (param.type != null) {
+                    // end position is after the type text, minus trailing trivia
+                    param.type!!.end - 1
+                } else if (param.dotDotDotToken) {
+                    name.pos + name.text.length
+                } else {
+                    name.pos + name.text.length
+                }
+                val length = (end - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters.",
+                    category = DiagnosticCategory.Error,
+                    code = 2396,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
     }
 }
