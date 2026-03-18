@@ -1081,10 +1081,12 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Parser.kt`
 
-- [ ] **15e. Suppress false-positive TS2454 cases** (~4 tests)
+- [x] **15e. Suppress false-positive TS2454 for destructuring assignments** (+3 tests)
 
-  Some TS2454 false positives where variables are actually assigned in
-  initializers or patterns that our checker doesn't track.
+  Variables assigned via destructuring patterns (`({ x } = this)`,
+  `[a, b] = [1, 2]`) are now tracked as initialized. Added
+  `collectDestructuringTargets` to walk object/array destructuring
+  assignment targets and remove variables from the uninitialized set.
 
   **Files:** `Checker.kt`
 
