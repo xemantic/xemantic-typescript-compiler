@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,939 passing (65.5%), 3,656 failing
+- **10,595 tests**, 6,952 passing (65.6%), 3,643 failing
+- **Session 2026-03-18b**: +10 tests (6,942→6,952) — fix false-positive TS1005 from lookAhead in binding element parsing
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
@@ -1074,11 +1075,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **15d. Suppress false-positive TS1005 from destructuring** (~10 tests)
+- [x] **15d. Suppress false-positive TS1005 from destructuring** (+10 tests)
 
-  Parser emits false TS1005 (']' expected) on array binding patterns with
-  default values in for-loop variable declarations. The parser is confused
-  by the `=` in `[x = defaultValue]` patterns.
+  The `lookAhead` in `parseBindingElement()` called `parseComputedPropertyName()`
+  to check if `[...]` was a computed property key. But `parseComputedPropertyName()`
+  uses `parseAssignmentExpression()` (not `parseExpression()`), so it stops at
+  commas. For binding patterns like `[a = "x", b = "y"]`, the lookAhead only
+  consumed the first element, then `parseExpected(CloseBracket)` found `,`
+  instead of `]` and reported TS1005. Fix: save/restore diagnostics count
+  around the lookAhead to discard speculative errors.
 
   **Files:** `Parser.kt`
 
