@@ -11044,10 +11044,21 @@ class Checker(
     private fun checkUBDInStatements(stmts: List<Statement>, source: String, fileName: String) {
         // Collect all let/const/enum declaration names in this block with their positions
         val blockScopedDecls = collectBlockScopedDeclsEx(stmts, source)
-        // Now walk each statement checking:
-        // 1. Cross-statement forward references (identifier used before its let/const/enum declaration)
-        // 2. Self-references in initializers (let x = x)
-        // 3. Recurse into nested scopes
+        // Remove names that also have hoisted declarations (function/var) in the same scope
+        // because hoisted declarations make the name available before its let/const decl
+        val hoistedNames = mutableSetOf<String>()
+        for (stmt in stmts) {
+            if (stmt is FunctionDeclaration && stmt.name != null) {
+                hoistedNames.add(stmt.name!!.text)
+            }
+            if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.VarKeyword) {
+                for (d in stmt.declarationList.declarations) {
+                    if (d.name is Identifier) hoistedNames.add((d.name as Identifier).text)
+                }
+            }
+        }
+        for (name in hoistedNames) blockScopedDecls.remove(name)
+
         for (stmt in stmts) {
             checkUBDForwardRefs(stmt, blockScopedDecls, source, fileName)
             checkUBDInStatement(stmt, source, fileName, blockScopedDecls)
