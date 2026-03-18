@@ -137,6 +137,8 @@ class Checker(
         checkConstWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
         checkReservedWordIdentifiers()
+        // 30. Check outFile with non-AMD/System module (TS6131)
+        checkOutFileModuleConflict()
     }
 
     // -----------------------------------------------------------------------
@@ -10294,5 +10296,108 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    // TS6131: Cannot compile modules using option 'outFile' unless '--module' is 'amd' or 'system'
+    // Only emitted when module kind is NOT explicitly set (defaulted from target).
+    // When module is explicitly set, TS6082 handles the conflict at the configuration level.
+    private fun checkOutFileModuleConflict() {
+        if (options.outFile == null) return
+        // When 'out' is set (removed option), TS5102 handles it — don't add TS6131
+        if (options.out != null) return
+        // When module is explicitly set, TS6082 handles it (from TypeScriptCompiler.kt)
+        if (options.module != null) return
+        val effectiveModule = options.effectiveModule
+        if (effectiveModule == ModuleKind.AMD || effectiveModule == ModuleKind.System
+            || effectiveModule == ModuleKind.UMD) return
+        if (effectiveModule == ModuleKind.None) return
+
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            // Find the first module statement (import/export)
+            val firstModuleStmt = findFirstModuleStatement(result.sourceFile.statements)
+                ?: continue
+
+            // Determine diagnostic span based on statement type
+            val (spanStart, spanLength) = getModuleStatementSpan(firstModuleStmt, source)
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+            diagnostics.add(Diagnostic(
+                message = "Cannot compile modules using option 'outFile' unless the '--module' flag is 'amd' or 'system'.",
+                category = DiagnosticCategory.Error,
+                code = 6131,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = spanLength,
+            ))
+        }
+    }
+
+    private fun findFirstModuleStatement(statements: List<Statement>): Statement? {
+        for (stmt in statements) {
+            when (stmt) {
+                is ImportDeclaration -> return stmt
+                is ImportEqualsDeclaration -> return stmt
+                is ExportDeclaration -> return stmt
+                is ExportAssignment -> return stmt
+                else -> {
+                    val modifiers = when (stmt) {
+                        is FunctionDeclaration -> stmt.modifiers
+                        is ClassDeclaration -> stmt.modifiers
+                        is VariableStatement -> stmt.modifiers
+                        is EnumDeclaration -> stmt.modifiers
+                        is InterfaceDeclaration -> stmt.modifiers
+                        is TypeAliasDeclaration -> stmt.modifiers
+                        is ModuleDeclaration -> stmt.modifiers
+                        else -> emptySet()
+                    }
+                    if (ModifierFlag.Export in modifiers) return stmt
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Get the diagnostic span for a module statement.
+     * For class/function/enum/interface: span covers the name identifier.
+     * For variable statements and imports: span covers the entire statement including export keyword.
+     */
+    private fun getModuleStatementSpan(stmt: Statement, source: String): Pair<Int, Int> {
+        // For class/function declarations, use the name identifier position
+        when (stmt) {
+            is ClassDeclaration -> stmt.name?.let {
+                return Pair(it.pos, it.text.length)
+            }
+            is FunctionDeclaration -> stmt.name?.let {
+                return Pair(it.pos, it.text.length)
+            }
+            is EnumDeclaration -> {
+                return Pair(stmt.name.pos, stmt.name.text.length)
+            }
+            is InterfaceDeclaration -> {
+                return Pair(stmt.name.pos, stmt.name.text.length)
+            }
+            else -> {}
+        }
+        // For everything else (export var, import, export =, etc.), use the full statement span.
+        // The statement pos may start after the 'export' keyword, so search backwards for it.
+        var start = stmt.pos
+        if (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) {
+            // Find the 'export' keyword before the var/let/const keyword
+            var p = start - 1
+            while (p >= 0 && source[p] in " \t\r\n") p--
+            // p should now be at the 't' of 'export'
+            if (p >= 5 && source.substring(p - 5, p + 1) == "export") {
+                start = p - 5
+            }
+        }
+        // Find the end of actual content (before trailing whitespace/newline)
+        var end = stmt.end
+        while (end > start && end - 1 < source.length && source[end - 1] in " \t\r\n") end--
+        return Pair(start, (end - start).coerceAtLeast(1))
     }
 }

@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,952 passing (65.6%), 3,643 failing
-- **Session 2026-03-18b**: +10 tests (6,942→6,952) — fix false-positive TS1005 from lookAhead in binding element parsing
+- **10,595 tests**, 6,955 passing (65.6%), 3,640 failing
+- **Session 2026-03-18b**: +13 tests (6,942→6,955) — fix false-positive TS1005, add TS6131
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
@@ -1161,6 +1161,96 @@ Picking off tractable fixes to continue improving the pass rate.
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep
   classic resolution. This correctly produces TS2307 instead of TS2792 for
   tests with ES module kinds.
+
+  **Files:** `Checker.kt`
+
+### 16. Phase 3k — Options diagnostics and simple checker codes
+
+- [x] **16a. TS6131 — cannot compile modules using outFile** (+3 tests)
+
+  When `outFile` is set, module kind defaults to non-AMD/System, and a
+  file is a module (has imports/exports), emit TS6131 per-file. Only fires
+  when module is NOT explicitly set (TS6082 handles explicit misconfiguration).
+  Also skips when `out` (removed option) is used (TS5102 handles it).
+  Span covers statement name for class/function, full statement for variables.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16b. TS2354 — cannot use importHelpers without tslib** (~7 tests)
+
+  When `importHelpers: true` but no tslib module available, emit
+  TS2354: "This syntax requires an imported helper named '__decorate',
+  but module 'tslib' cannot be found." Check at options validation level.
+
+  **Files:** `TypeScriptCompiler.kt` or `Checker.kt`
+
+- [ ] **16c. TS1148 — cannot use imports with --module none** (~3 tests)
+
+  When `module: "none"` is set, import/export statements should produce
+  TS1148: "Cannot use imports, exports, or module augmentations when
+  '--module' is 'none'."
+
+  **Files:** `Checker.kt`
+
+- [ ] **16d. TS1218 — export assignment not allowed in System modules** (~3 tests)
+
+  `export = expr` in system module format should produce TS1218.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16e. TS5055 — cannot write file (output overwrites input)** (~5 tests)
+
+  When output file path would overwrite an input source file, emit
+  TS5055. Check `outDir`/`outFile` against input file paths.
+
+  **Files:** `TypeScriptCompiler.kt`
+
+- [ ] **16f. TS7019 — rest parameter implicitly has 'any[]' type** (~7 tests)
+
+  When `noImplicitAny: true`, rest parameters without type annotation
+  produce TS7019 instead of TS7006. Check for `...` parameter prefix.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16g. TS2695 — left side of comma operator is unused** (~5 tests)
+
+  Detect `expr, expr` where the left side has no side effects.
+  Only for comma operators in non-for-loop positions.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16h. TS1185 — merge conflict markers** (~3 tests)
+
+  Detect `<<<<<<<`, `=======`, `>>>>>>>` conflict markers in source.
+  Report TS1185: "Merge conflict marker encountered."
+
+  **Files:** `Parser.kt` or `Scanner.kt`
+
+- [ ] **16i. TS2450/TS2448 — block-scoped variable used before declaration** (~7 tests)
+
+  Detect use of `let`/`const` variables before their declaration within
+  the same block scope. TS2448 for variables, TS2450 for block-scoped.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16j. Fix false-positive TS7006 for rest parameters** (~3 tests)
+
+  Rest parameters shouldn't get TS7006 (should get TS7019 instead).
+  Currently both may be emitted. Fix the TS7006 check to skip `...` params.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16k. Fix false-positive TS6133 for type-only imports** (~3 tests)
+
+  `import type { X }` should not flag X as unused since it's type-only.
+  Also fix TS6133 for type parameters used only in type positions.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16l. TS2802 — iterators/generators need target ES2015+** (~4 tests)
+
+  When target < ES2015 and code uses `for...of` with iterators or
+  `function*` generators, emit TS2802 if downlevelIteration is not set.
 
   **Files:** `Checker.kt`
 
