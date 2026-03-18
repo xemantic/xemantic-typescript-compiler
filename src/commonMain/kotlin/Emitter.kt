@@ -306,7 +306,10 @@ class Emitter(
     }
 
     private fun emitVariableDeclarationList(node: VariableDeclarationList) {
-        val keyword = when (node.flags) {
+        val keyword = if (options.effectiveTarget < ScriptTarget.ES2015) {
+            // ES3/ES5: downlevel const/let to var
+            "var"
+        } else when (node.flags) {
             SyntaxKind.LetKeyword -> "let"
             SyntaxKind.ConstKeyword -> "const"
             else -> "var"
