@@ -10177,6 +10177,7 @@ class Checker(
                 is FunctionDeclaration -> {
                     // Function parameters with access modifiers → TS2369
                     checkParamPropsInParams(stmt.parameters, source, fileName)
+                    checkInvalidParameterModifiers(stmt.parameters, source, fileName)
                     stmt.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                 }
                 is ClassDeclaration -> {
@@ -10184,6 +10185,7 @@ class Checker(
                         when (member) {
                             is MethodDeclaration -> {
                                 checkParamPropsInParams(member.parameters, source, fileName)
+                                checkInvalidParameterModifiers(member.parameters, source, fileName)
                                 member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                             }
                             is Constructor -> {
@@ -10191,14 +10193,18 @@ class Checker(
                                 if (member.body == null) {
                                     checkParamPropsInParams(member.parameters, source, fileName)
                                 }
+                                // TS1090: invalid modifiers checked on ALL constructors (with or without body)
+                                checkInvalidParameterModifiers(member.parameters, source, fileName)
                                 member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                             }
                             is GetAccessor -> {
                                 checkParamPropsInParams(member.parameters, source, fileName)
+                                checkInvalidParameterModifiers(member.parameters, source, fileName)
                                 member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                             }
                             is SetAccessor -> {
                                 checkParamPropsInParams(member.parameters, source, fileName)
+                                checkInvalidParameterModifiers(member.parameters, source, fileName)
                                 member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                             }
                             else -> {}
@@ -10252,6 +10258,53 @@ class Checker(
         flag == ModifierFlag.Public || flag == ModifierFlag.Private ||
         flag == ModifierFlag.Protected || flag == ModifierFlag.Readonly ||
         flag == ModifierFlag.Override
+
+    private fun isInvalidParameterModifier(flag: ModifierFlag): Boolean =
+        flag == ModifierFlag.Static || flag == ModifierFlag.Export ||
+        flag == ModifierFlag.Async || flag == ModifierFlag.Declare
+
+    private fun modifierFlagKeyword(flag: ModifierFlag): String = when (flag) {
+        ModifierFlag.Static -> "static"
+        ModifierFlag.Export -> "export"
+        ModifierFlag.Async -> "async"
+        ModifierFlag.Declare -> "declare"
+        ModifierFlag.Public -> "public"
+        ModifierFlag.Private -> "private"
+        ModifierFlag.Protected -> "protected"
+        ModifierFlag.Readonly -> "readonly"
+        ModifierFlag.Override -> "override"
+        ModifierFlag.Abstract -> "abstract"
+        ModifierFlag.Default -> "default"
+        ModifierFlag.Const -> "const"
+        ModifierFlag.In -> "in"
+        ModifierFlag.Out -> "out"
+        ModifierFlag.Accessor -> "accessor"
+    }
+
+    private fun checkInvalidParameterModifiers(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            for (mod in param.modifiers) {
+                if (!isInvalidParameterModifier(mod)) continue
+                val keyword = modifierFlagKeyword(mod)
+                // Find keyword position in source between param.pos and param.name.pos
+                val searchStart = param.pos
+                val searchEnd = param.name.pos
+                val idx = source.indexOf(keyword, searchStart)
+                if (idx < 0 || idx >= searchEnd) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, idx)
+                diagnostics.add(Diagnostic(
+                    message = "'$keyword' modifier cannot appear on a parameter.",
+                    category = DiagnosticCategory.Error,
+                    code = 1090,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = idx,
+                    length = keyword.length,
+                ))
+            }
+        }
+    }
 
     private fun checkParamPropsInParams(params: List<Parameter>, source: String, fileName: String) {
         for (param in params) {
