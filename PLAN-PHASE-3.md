@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,813 passing (64.3%), 3,779 failing
+- **10,595 tests**, 6,818 passing (64.4%), 3,774 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -878,10 +878,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **12d. TS2872 — comparison always truthy** (~9 tests)
+- [x] **12d. TS2872 — expression always truthy** (+5 tests)
 
-  Detect `typeof x === "string"` patterns that are always true,
-  and `x === x` self-comparisons.
+  Detect always-truthy expressions on left side of `||` (non-empty
+  string literals, non-zero numeric literals) and always-truthy numeric
+  literals in if conditions. Conservative to avoid false positives.
 
   **Files:** `Checker.kt`
 
