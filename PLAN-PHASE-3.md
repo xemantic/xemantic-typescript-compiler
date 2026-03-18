@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,877 passing (64.9%), 3,718 failing
+- **10,595 tests**, 6,881 passing (65.0%), 3,714 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -998,10 +998,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **13e. TS6133 write-only private property detection** (~2-3 tests)
+- [x] **13e. TS6133 write-only private property detection** (+4 tests)
 
-  Private class properties that are only assigned (never read) should
-  be flagged as TS6133. Currently we miss write-only private members.
+  Fixed two bugs: removed incorrect `startsWith("_")` skip that
+  suppressed TS6133 for underscore-prefixed private members, and
+  added write-only detection by skipping left-side PropertyAccessExpression
+  names in simple assignments (the `=` operator) — only the right side
+  and sub-expressions count as reads.
 
   **Files:** `Checker.kt`
 
