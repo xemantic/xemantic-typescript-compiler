@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,802 passing (64.2%), 3,793 failing
+- **10,595 tests**, 6,807 passing (64.2%), 3,785 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -848,6 +848,45 @@ Picking off tractable fixes to continue improving the pass rate.
   Emit TS2307 for relative/empty module specifiers in single-file
   compilations. Bare specifiers skipped to avoid false positives.
   Multi-file tests skipped due to module resolution complexity.
+
+  **Files:** `Checker.kt`
+
+### 12. Phase 3g — Next diagnostic improvements
+
+- [x] **12a. TS2391 — function implementation missing** (+5 tests)
+
+  Check overload declarations without a following implementation body.
+  Only flags the LAST signature in an overload chain, not intermediate ones.
+  Handles both file-level functions and class methods.
+  Skips `declare` contexts.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12b. TS7027 — unreachable code detected** (~10 tests)
+
+  Detect code after return/throw/break/continue statements.
+  Some control flow analysis already exists for TS2454.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12c. TS2693 — type used as value** (~7 tests)
+
+  Detect interface/type alias names used in value positions.
+  Uses binder symbol info to distinguish type-only declarations.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12d. TS2872 — comparison always truthy** (~9 tests)
+
+  Detect `typeof x === "string"` patterns that are always true,
+  and `x === x` self-comparisons.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12e. TS2304/TS2307 gap fixes** (~35 tests)
+
+  Edge cases in existing checkers where these codes should fire
+  but don't. 15 TS2304 + 20 TS2307 tests.
 
   **Files:** `Checker.kt`
 

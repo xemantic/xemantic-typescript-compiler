@@ -105,6 +105,8 @@ class Checker(
         checkJumpTargets()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
+        // 17. Check missing function implementations (TS2391)
+        checkMissingImplementations()
     }
 
     // -----------------------------------------------------------------------
@@ -6662,6 +6664,150 @@ class Checker(
             // Common global augmentations
             "Symbol",
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // Missing function implementation checking (TS2391)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for function/method overload declarations that are missing their
+     * implementation. Emits TS2391 "Function implementation is missing or
+     * not immediately following the declaration."
+     */
+    private fun checkMissingImplementations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkMissingImplInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkMissingImplInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Check file-level function declarations
+        for (i in statements.indices) {
+            val stmt = statements[i]
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (stmt.body == null && ModifierFlag.Declare !in stmt.modifiers) {
+                        val name = stmt.name?.text ?: continue
+                        // Check if next same-name function has a body
+                        val hasImpl = findImplementation(statements, i, name)
+                        if (!hasImpl) {
+                            emitTS2391(stmt.name!!, source, fileName)
+                        }
+                    }
+                }
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        checkMissingImplInClass(stmt.members, source, fileName)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        val body = stmt.body as? ModuleBlock ?: continue
+                        checkMissingImplInStatements(body.statements, source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun findImplementation(
+        statements: List<Statement>,
+        fromIdx: Int,
+        name: String,
+    ): Boolean {
+        // Look at subsequent statements for a same-name function.
+        // If the next same-name function exists (with or without body),
+        // this signature is still part of the chain — don't flag it.
+        for (j in fromIdx + 1 until statements.size) {
+            val next = statements[j]
+            if (next is FunctionDeclaration && next.name?.text == name) {
+                return true // Same name follows — either has body or chain continues
+            }
+            break // Different statement breaks the chain
+        }
+        return false // No same-name function follows — missing impl
+    }
+
+    private fun checkMissingImplInClass(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (i in members.indices) {
+            val member = members[i]
+            if (member is MethodDeclaration && member.body == null) {
+                val name = when (val n = member.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> continue
+                }
+                // Check if the next same-name method has a body
+                val hasImpl = findMethodImplementation(members, i, name)
+                if (!hasImpl) {
+                    emitTS2391(member.name, source, fileName)
+                }
+            }
+            // Recurse into nested class declarations
+            if (member is PropertyDeclaration) {
+                val init = member.initializer
+                if (init is ClassExpression) {
+                    checkMissingImplInClass(init.members, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun findMethodImplementation(
+        members: List<ClassElement>,
+        fromIdx: Int,
+        name: String,
+    ): Boolean {
+        for (j in fromIdx + 1 until members.size) {
+            val next = members[j]
+            if (next is MethodDeclaration) {
+                val nextName = when (val n = next.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> null
+                }
+                if (nextName == name) {
+                    return true // Same name follows — either has body or chain continues
+                }
+            }
+            // Any non-matching member breaks the chain
+            break
+        }
+        return false // No same-name method follows — missing impl
+    }
+
+    private fun emitTS2391(nameNode: Node, source: String, fileName: String) {
+        val start = nameNode.pos
+        val name = when (nameNode) {
+            is Identifier -> nameNode.text
+            is StringLiteralNode -> nameNode.text
+            else -> return
+        }
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Function implementation is missing or not immediately following the declaration.",
+            category = DiagnosticCategory.Error,
+            code = 2391,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
