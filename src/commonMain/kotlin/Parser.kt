@@ -1711,8 +1711,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     ): ModuleDeclaration {
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
-        nextToken() // skip namespace/module
-        val name: Expression = if (token == SyntaxKind.StringLiteral) {
+        val isGlobal = token == SyntaxKind.GlobalKeyword
+        nextToken() // skip namespace/module/global
+        val name: Expression = if (isGlobal) {
+            // `declare global { ... }` — no module name, just the body
+            Identifier(text = "global", pos = pos, end = pos + 6)
+        } else if (token == SyntaxKind.StringLiteral) {
             parseStringLiteral()
         } else {
             var ident: Expression = parseIdentifier()
