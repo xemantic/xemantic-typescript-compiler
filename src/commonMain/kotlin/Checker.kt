@@ -145,6 +145,8 @@ class Checker(
         checkModuleNoneConflict()
         // 33. Check export= in system modules (TS1218)
         checkExportAssignmentInSystem()
+        // 34. Check reserved name collisions in modules (TS2441)
+        checkReservedModuleNames()
     }
 
     // -----------------------------------------------------------------------
@@ -10515,6 +10517,67 @@ class Checker(
                         start = stmt.pos,
                         length = length,
                     ))
+                }
+            }
+        }
+    }
+
+    // TS2441: Duplicate identifier 'exports'/'require'. Compiler reserves name in top level scope.
+    // Applies to CJS/AMD/UMD/System module formats where exports/require are runtime variables.
+    private fun checkReservedModuleNames() {
+        // Skip when no emit (no runtime conflict possible)
+        if (options.noEmit) return
+        val module = options.effectiveModule
+        // Only applies to module formats that use exports/require at runtime
+        if (module != ModuleKind.CommonJS && module != ModuleKind.AMD
+            && module != ModuleKind.UMD && module != ModuleKind.System) return
+
+        val reservedNames = setOf("exports", "require")
+
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            if (!isModuleFile(result.sourceFile.statements)) continue
+
+            for (stmt in result.sourceFile.statements) {
+                // Check top-level function/class/enum/variable declarations
+                // Skip ambient (declare) declarations — they don't conflict at runtime
+                val names = mutableListOf<Identifier>()
+                when (stmt) {
+                    is FunctionDeclaration -> {
+                        if (ModifierFlag.Declare !in stmt.modifiers) stmt.name?.let { names.add(it) }
+                    }
+                    is ClassDeclaration -> {
+                        if (ModifierFlag.Declare !in stmt.modifiers) stmt.name?.let { names.add(it) }
+                    }
+                    is EnumDeclaration -> {
+                        if (ModifierFlag.Declare !in stmt.modifiers) names.add(stmt.name)
+                    }
+                    is VariableStatement -> {
+                        if (ModifierFlag.Declare !in stmt.modifiers) {
+                            for (decl in stmt.declarationList.declarations) {
+                                val n = decl.name
+                                if (n is Identifier) names.add(n)
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+                for (name in names) {
+                    if (name.text in reservedNames) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Duplicate identifier '${name.text}'. Compiler reserves name '${name.text}' in top level scope of a module.",
+                            category = DiagnosticCategory.Error,
+                            code = 2441,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                        ))
+                    }
                 }
             }
         }
