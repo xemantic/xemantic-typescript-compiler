@@ -129,6 +129,8 @@ class Checker(
         checkSuperBeforeThis()
         // 25. Check assignment to const variables (TS2540)
         checkConstAssignment()
+        // 26. Check parameter properties outside constructor (TS2369)
+        checkParameterProperties()
     }
 
     // -----------------------------------------------------------------------
@@ -9708,5 +9710,138 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Parameter property checking (TS2369)
+    // -----------------------------------------------------------------------
+
+    private fun checkParameterProperties() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForParameterProperties(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForParameterProperties(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    // Function parameters with access modifiers → TS2369
+                    checkParamPropsInParams(stmt.parameters, source, fileName)
+                    stmt.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> {
+                                checkParamPropsInParams(member.parameters, source, fileName)
+                                member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                            }
+                            is Constructor -> {
+                                // Flag parameter properties on constructor declarations without body
+                                if (member.body == null) {
+                                    checkParamPropsInParams(member.parameters, source, fileName)
+                                }
+                                member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                            }
+                            is GetAccessor -> {
+                                checkParamPropsInParams(member.parameters, source, fileName)
+                                member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                            }
+                            is SetAccessor -> {
+                                checkParamPropsInParams(member.parameters, source, fileName)
+                                member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        when (val init = decl.initializer) {
+                            is ArrowFunction -> checkParamPropsInParams(init.parameters, source, fileName)
+                            is FunctionExpression -> {
+                                checkParamPropsInParams(init.parameters, source, fileName)
+                                walkForParameterProperties(init.body.statements, source, fileName)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is ExpressionStatement -> walkForParamPropsInExpr(stmt.expression, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkForParameterProperties(body.statements, source, fileName)
+                }
+                is Block -> walkForParameterProperties(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkForParamPropsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> checkParamPropsInParams(expr.parameters, source, fileName)
+            is FunctionExpression -> {
+                checkParamPropsInParams(expr.parameters, source, fileName)
+                walkForParameterProperties(expr.body.statements, source, fileName)
+            }
+            is ParenthesizedExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                walkForParamPropsInExpr(expr.left, source, fileName)
+                walkForParamPropsInExpr(expr.right, source, fileName)
+            }
+            is CallExpression -> {
+                walkForParamPropsInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { walkForParamPropsInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun isParameterPropertyModifier(flag: ModifierFlag): Boolean =
+        flag == ModifierFlag.Public || flag == ModifierFlag.Private ||
+        flag == ModifierFlag.Protected || flag == ModifierFlag.Readonly ||
+        flag == ModifierFlag.Override
+
+    private fun checkParamPropsInParams(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            if (param.modifiers.any { isParameterPropertyModifier(it) }) {
+                // Parameter has access modifier outside constructor implementation → TS2369
+                val start = param.pos
+                // Skip leading whitespace
+                var spanStart = start
+                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                // Calculate span: from modifier to end of type or name
+                // Use the type pos + type text length if present, otherwise name
+                val contentEnd = param.type?.let { typeNode ->
+                    // For keyword types (string, number, etc.), use the type pos + keyword length
+                    // For other types, use type.end - 1 to skip trailing trivia
+                    var te = typeNode.end
+                    while (te > typeNode.pos && te <= source.length && source[te - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' }) te--
+                    te
+                } ?: run {
+                    var ne = param.name.end
+                    while (ne > param.name.pos && ne <= source.length && source[ne - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' }) ne--
+                    ne
+                }
+                val spanEnd = contentEnd
+                val length = spanEnd - spanStart
+                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                diagnostics.add(Diagnostic(
+                    message = "A parameter property is only allowed in a constructor implementation.",
+                    category = DiagnosticCategory.Error,
+                    code = 2369,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = spanStart,
+                    length = length,
+                ))
+            }
+        }
     }
 }

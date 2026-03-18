@@ -1114,7 +1114,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **15i. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+- [x] **15i. TS2369 — parameter property only in constructor** (+9 tests)
+
+  Detect access modifiers (public/private/protected/readonly) on function
+  parameters outside of constructor implementations. Handles arrow functions,
+  methods, getters/setters, and declare class constructor overloads.
+
+  **Files:** `Checker.kt`
+
+- [x] **15j. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
 
   Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep
