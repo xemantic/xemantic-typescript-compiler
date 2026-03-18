@@ -141,6 +141,8 @@ class Checker(
         checkOutFileModuleConflict()
         // 31. Check for merge conflict markers (TS1185)
         checkConflictMarkers()
+        // 32. Check module=none with imports/exports (TS1148)
+        checkModuleNoneConflict()
     }
 
     // -----------------------------------------------------------------------
@@ -10455,6 +10457,34 @@ class Checker(
                 }
                 i++
             }
+        }
+    }
+
+    // TS1148: Cannot use imports, exports, or module augmentations when '--module' is 'none'
+    // Only fires for pre-ES2015 targets — ES2015+ supports module syntax natively
+    private fun checkModuleNoneConflict() {
+        if (options.module != ModuleKind.None) return
+        if (options.target >= ScriptTarget.ES2015) return
+
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            val firstModuleStmt = findFirstModuleStatement(result.sourceFile.statements)
+                ?: continue
+
+            val (spanStart, spanLength) = getModuleStatementSpan(firstModuleStmt, source)
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+            diagnostics.add(Diagnostic(
+                message = "Cannot use imports, exports, or module augmentations when '--module' is 'none'.",
+                category = DiagnosticCategory.Error,
+                code = 1148,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = spanLength,
+            ))
         }
     }
 }

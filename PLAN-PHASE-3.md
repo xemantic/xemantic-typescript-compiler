@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,962 passing (65.7%), 3,633 failing
-- **Session 2026-03-18b**: +20 tests (6,942→6,962) — fix false-positive TS1005, add TS6131, TS7019, TS1185
+- **10,595 tests**, 6,965 passing (65.7%), 3,630 failing
+- **Session 2026-03-18b**: +23 tests (6,942→6,965) — fix false-positive TS1005, add TS6131, TS7019, TS1185, TS1148
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
@@ -1181,11 +1181,11 @@ Picking off tractable fixes to continue improving the pass rate.
   Complex: requires detecting helper-needing syntax (extends, decorators,
   esModuleInterop default import/export) per target/module/options. Deferred.
 
-- [ ] **16c. TS1148 — cannot use imports with --module none** (~3 tests)
+- [x] **16c. TS1148 — cannot use imports with --module none** (+3 tests)
 
-  When `module: "none"` is set, import/export statements should produce
-  TS1148: "Cannot use imports, exports, or module augmentations when
-  '--module' is 'none'."
+  When `module: none` is set and target < ES2015, emit TS1148 per-file
+  on the first module statement. Reuses `findFirstModuleStatement` and
+  `getModuleStatementSpan` from TS6131 implementation.
 
   **Files:** `Checker.kt`
 
