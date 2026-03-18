@@ -157,6 +157,12 @@ class Checker(
         checkImportModifiers()
         // 37. Check block-scoped variable use before declaration (TS2448)
         checkUseBeforeDeclaration()
+        // 38. Check setter parameter count (TS1049)
+        checkSetterParameterCount()
+        // 39. Check duplicate modifiers (TS1030)
+        checkDuplicateModifiers()
+        // 40. Check rest parameter is last (TS1014)
+        checkRestParameterLast()
     }
 
     // -----------------------------------------------------------------------
@@ -11446,5 +11452,386 @@ class Checker(
                 length = name.length,
             )),
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Setter parameter count (TS1049)
+    // -----------------------------------------------------------------------
+
+    private fun checkSetterParameterCount() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkSetterInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkSetterInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkSetterInStatement(stmt, source, fileName)
+    }
+
+    private fun checkSetterInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    if (m is SetAccessor) {
+                        checkSetterParams(m.name, m.parameters, source, fileName)
+                    }
+                    // Recurse into methods/constructors
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ExpressionStatement -> checkSetterInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkSetterInExpr(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkSetterInExpr(it, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+            is Block -> checkSetterInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkSetterInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkSetterInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkSetterInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkSetterInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkSetterInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkSetterInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkSetterInStatement(stmt.statement, source, fileName)
+            is TryStatement -> {
+                checkSetterInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkSetterInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkSetterInStatements(it.statements, source, fileName) }
+            }
+            is SwitchStatement -> for (c in stmt.caseBlock) {
+                when (c) {
+                    is CaseClause -> checkSetterInStatements(c.statements, source, fileName)
+                    is DefaultClause -> checkSetterInStatements(c.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is LabeledStatement -> checkSetterInStatement(stmt.statement, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkSetterInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkSetterInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                if (prop is SetAccessor) {
+                    checkSetterParams(prop.name, prop.parameters, source, fileName)
+                }
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkSetterInStatements(body.statements, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+            is ClassExpression -> {
+                for (m in expr.members) {
+                    if (m is SetAccessor) {
+                        checkSetterParams(m.name, m.parameters, source, fileName)
+                    }
+                }
+            }
+            is ParenthesizedExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                checkSetterInExpr(expr.left, source, fileName)
+                checkSetterInExpr(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkSetterInExpr(expr.whenTrue, source, fileName)
+                checkSetterInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkSetterInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkSetterInExpr(arg, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkSetterParams(name: Node, params: List<Parameter>, source: String, fileName: String) {
+        // Count non-comment-placeholder params
+        val realParams = params.count { !it.isCommentPlaceholder }
+        if (realParams != 1) {
+            val nameId = when (name) {
+                is Identifier -> name
+                is ComputedPropertyName -> null // skip computed names
+                else -> null
+            }
+            val start = nameId?.pos ?: name.pos
+            val length = if (nameId != null) nameId.text.length else (name.end - 1 - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "A 'set' accessor must have exactly one parameter.",
+                category = DiagnosticCategory.Error,
+                code = 1049,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Duplicate modifiers (TS1030)
+    // -----------------------------------------------------------------------
+
+    private fun checkDuplicateModifiers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkDupModInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkDupModInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkDupModInStatement(stmt, source, fileName)
+    }
+
+    private fun checkDupModInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                for (m in stmt.members) {
+                    when (m) {
+                        is PropertyDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
+                        is MethodDeclaration -> {
+                            checkModifiers(m.modifiers, source, fileName, m.pos)
+                            m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                        }
+                        is Constructor -> m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> {
+                            checkModifiers(m.modifiers, source, fileName, m.pos)
+                            m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                        }
+                        is SetAccessor -> {
+                            checkModifiers(m.modifiers, source, fileName, m.pos)
+                            m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is FunctionDeclaration -> {
+                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                stmt.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+            }
+            is VariableStatement -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            is InterfaceDeclaration -> {
+                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                for (m in stmt.members) {
+                    when (m) {
+                        is PropertyDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
+                        is MethodDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
+                        else -> {}
+                    }
+                }
+            }
+            is EnumDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            is TypeAliasDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            is ModuleDeclaration -> {
+                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                (stmt.body as? ModuleBlock)?.let { checkDupModInStatements(it.statements, source, fileName) }
+            }
+            is Block -> checkDupModInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkDupModInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkDupModInStatement(it, source, fileName) }
+            }
+            is ExportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            is ImportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            else -> {}
+        }
+    }
+
+    private fun checkModifiers(modifiers: Set<ModifierFlag>, source: String, fileName: String, stmtPos: Int) {
+        if (modifiers.size <= 1) return
+        // Check for duplicate modifiers by scanning the source text around the statement
+        // Find the modifier keyword positions
+        val modifierKeywords = listOf("export", "default", "declare", "abstract", "async",
+            "static", "readonly", "public", "private", "protected", "override", "const", "accessor")
+        // Scan from stmtPos to find modifier keywords
+        var pos = stmtPos
+        val seen = mutableSetOf<String>()
+        val end = (stmtPos + 200).coerceAtMost(source.length) // scan up to 200 chars
+        while (pos < end) {
+            // Skip whitespace
+            while (pos < end && source[pos].isWhitespace()) pos++
+            if (pos >= end) break
+            // Try to match a modifier keyword
+            var matched = false
+            for (kw in modifierKeywords) {
+                if (pos + kw.length <= source.length &&
+                    source.substring(pos, pos + kw.length) == kw &&
+                    (pos + kw.length >= source.length || !source[pos + kw.length].isLetterOrDigit())) {
+                    if (kw in seen) {
+                        // Duplicate modifier
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'$kw' modifier already seen.",
+                            category = DiagnosticCategory.Error,
+                            code = 1030,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = pos,
+                            length = kw.length,
+                        ))
+                    }
+                    seen.add(kw)
+                    pos += kw.length
+                    matched = true
+                    break
+                }
+            }
+            if (!matched) break // Hit a non-modifier token → done
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Rest parameter must be last (TS1014)
+    // -----------------------------------------------------------------------
+
+    private fun checkRestParameterLast() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkRestLastInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkRestLastInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkRestLastInStatement(stmt, source, fileName)
+    }
+
+    private fun checkRestLastInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                checkRestLastInParams(stmt.parameters, source, fileName)
+                stmt.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> {
+                        checkRestLastInParams(m.parameters, source, fileName)
+                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    is Constructor -> {
+                        checkRestLastInParams(m.parameters, source, fileName)
+                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    is GetAccessor -> m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> {
+                        checkRestLastInParams(m.parameters, source, fileName)
+                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+            is ExpressionStatement -> checkRestLastInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkRestLastInExpr(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkRestLastInExpr(it, source, fileName) }
+            is Block -> checkRestLastInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkRestLastInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkRestLastInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is TryStatement -> {
+                checkRestLastInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkRestLastInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkRestLastInStatements(it.statements, source, fileName) }
+            }
+            is InterfaceDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> checkRestLastInParams(m.parameters, source, fileName)
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkRestLastInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkRestLastInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                checkRestLastInParams(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkRestLastInStatements(body.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkRestLastInParams(expr.parameters, source, fileName)
+                expr.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+            }
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> {
+                        checkRestLastInParams(m.parameters, source, fileName)
+                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    is Constructor -> {
+                        checkRestLastInParams(m.parameters, source, fileName)
+                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+            is ParenthesizedExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is MethodDeclaration -> {
+                        checkRestLastInParams(prop.parameters, source, fileName)
+                        prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    is SetAccessor -> checkRestLastInParams(prop.parameters, source, fileName)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkRestLastInParams(params: List<Parameter>, source: String, fileName: String) {
+        val realParams = params.filter { !it.isCommentPlaceholder }
+        for (i in 0 until realParams.size - 1) {
+            val param = realParams[i]
+            if (param.dotDotDotToken) {
+                val name = param.name
+                // Span covers `...name`
+                val start = if (name is Identifier) name.pos - 3 else param.pos
+                val length = if (name is Identifier) 3 + name.text.length else (param.end - 1 - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "A rest parameter must be last in a parameter list.",
+                    category = DiagnosticCategory.Error,
+                    code = 1014,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
     }
 }
