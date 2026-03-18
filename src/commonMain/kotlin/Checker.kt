@@ -139,6 +139,8 @@ class Checker(
         checkReservedWordIdentifiers()
         // 30. Check outFile with non-AMD/System module (TS6131)
         checkOutFileModuleConflict()
+        // 31. Check for merge conflict markers (TS1185)
+        checkConflictMarkers()
     }
 
     // -----------------------------------------------------------------------
@@ -10416,5 +10418,43 @@ class Checker(
         var end = stmt.end
         while (end > start && end - 1 < source.length && source[end - 1] in " \t\r\n") end--
         return Pair(start, (end - start).coerceAtLeast(1))
+    }
+
+    // TS1185: Merge conflict marker encountered
+    private fun checkConflictMarkers() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            // Scan for conflict markers at the start of lines
+            var i = 0
+            while (i < source.length) {
+                // Check if we're at the start of a line (position 0 or preceded by newline)
+                if (i == 0 || source[i - 1] == '\n') {
+                    val ch = source[i]
+                    val isMarker = when (ch) {
+                        '<' -> i + 6 < source.length && source.substring(i, i + 7) == "<<<<<<<"
+                        '=' -> i + 6 < source.length && source.substring(i, i + 7) == "======="
+                        '>' -> i + 6 < source.length && source.substring(i, i + 7) == ">>>>>>>"
+                        '|' -> i + 6 < source.length && source.substring(i, i + 7) == "|||||||"
+                        else -> false
+                    }
+                    if (isMarker) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, i)
+                        diagnostics.add(Diagnostic(
+                            message = "Merge conflict marker encountered.",
+                            category = DiagnosticCategory.Error,
+                            code = 1185,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = i,
+                            length = 7,
+                        ))
+                    }
+                }
+                i++
+            }
+        }
     }
 }
