@@ -111,6 +111,8 @@ class Checker(
         if (options.allowUnreachableCode == false) {
             checkUnreachableCode()
         }
+        // 19. Check type used as value (TS2693)
+        checkTypeUsedAsValue()
     }
 
     // -----------------------------------------------------------------------
@@ -6503,6 +6505,13 @@ class Checker(
     }
 
     companion object {
+        /** Type keywords that are only types, never values.
+         * Excludes 'object' which can be used as a variable name in JS. */
+        private val TYPE_ONLY_KEYWORDS = setOf(
+            "any", "number", "string", "boolean", "symbol", "void",
+            "never", "unknown", "bigint",
+        )
+
         /**
          * Keywords/reserved words that parse as Identifier nodes in our AST.
          * These should never trigger TS2304.
@@ -6668,6 +6677,193 @@ class Checker(
             // Common global augmentations
             "Symbol",
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // Type used as value checking (TS2693)
+    // -----------------------------------------------------------------------
+
+    // TYPE_ONLY_KEYWORDS is in the companion object to avoid init-order issues
+
+    /**
+     * Check for type-only names used in value positions.
+     * Emits TS2693 "'X' only refers to a type, but is being used as a value here."
+     */
+    private fun checkTypeUsedAsValue() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Collect interface/type alias names at file level (type-only declarations)
+            // Skip names that also have a class/function/variable declaration (merged)
+            val typeOnlyNames = mutableSetOf<String>()
+            val valueNames = mutableSetOf<String>()
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ClassDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
+                    is FunctionDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
+                    is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                        (decl.name as? Identifier)?.text?.let { valueNames.add(it) }
+                    }
+                    is EnumDeclaration -> valueNames.add(stmt.name.text)
+                    else -> {}
+                }
+            }
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is InterfaceDeclaration -> {
+                        val n = stmt.name.text
+                        if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                    }
+                    is TypeAliasDeclaration -> {
+                        val n = stmt.name.text
+                        if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                    }
+                    else -> {}
+                }
+            }
+            checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames)
+        }
+    }
+
+    private fun checkTypeAsValueInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        typeOnlyNames: Set<String>,
+    ) {
+        for (stmt in statements) {
+            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames)
+        }
+    }
+
+    private fun checkTypeAsValueInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        typeOnlyNames: Set<String>,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames)
+            is LabeledStatement -> checkTypeAsValueInStatement(stmt.statement, source, fileName, typeOnlyNames)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+            is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames)
+            is IfStatement -> {
+                checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames)
+                checkTypeAsValueInStatement(stmt.thenStatement, source, fileName, typeOnlyNames)
+                stmt.elseStatement?.let { checkTypeAsValueInStatement(it, source, fileName, typeOnlyNames) }
+            }
+            is FunctionDeclaration -> {
+                // Collect type parameters as type-only within this function
+                // But exclude names that are also parameter names (parameter shadows type param)
+                val innerTypeOnly = typeOnlyNames.toMutableSet()
+                stmt.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
+                // Remove parameter names — they are values, not types
+                for (p in stmt.parameters) {
+                    val pName = p.name
+                    if (pName is Identifier) innerTypeOnly.remove(pName.text)
+                }
+                stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            val innerTypeOnly = typeOnlyNames.toMutableSet()
+                            member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
+                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly) }
+                        }
+                        is Constructor -> member.body?.let {
+                            checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames)
+                        }
+                        is PropertyDeclaration -> member.initializer?.let {
+                            checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkTypeAsValueInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        typeOnlyNames: Set<String>,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                val name = expr.text
+                if (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames) {
+                    emitTS2693(name, expr, source, fileName)
+                }
+            }
+            is NewExpression -> {
+                // Check the constructor expression
+                val ctorExpr = expr.expression
+                if (ctorExpr is Identifier) {
+                    val name = ctorExpr.text
+                    if (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames) {
+                        emitTS2693(name, ctorExpr, source, fileName)
+                    }
+                }
+                // Recurse into arguments
+                expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+            }
+            is CallExpression -> {
+                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
+                expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+            }
+            is BinaryExpression -> {
+                checkTypeAsValueInExpr(expr.left, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(expr.right, source, fileName, typeOnlyNames)
+            }
+            is TypeOfExpression -> {
+                // typeof T where T is a type param → TS2693
+                val operand = expr.expression
+                if (operand is Identifier) {
+                    val name = operand.text
+                    if (name in typeOnlyNames) {
+                        emitTS2693(name, operand, source, fileName)
+                    }
+                }
+            }
+            is ParenthesizedExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
+            is ConditionalExpression -> {
+                checkTypeAsValueInExpr(expr.condition, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(expr.whenTrue, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(expr.whenFalse, source, fileName, typeOnlyNames)
+            }
+            is PropertyAccessExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
+            is ElementAccessExpression -> {
+                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames)
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2693(name: String, node: Node, source: String, fileName: String) {
+        val start = node.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'$name' only refers to a type, but is being used as a value here.",
+            category = DiagnosticCategory.Error,
+            code = 2693,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -7001,7 +7197,8 @@ class Checker(
     ) {
         for (i in members.indices) {
             val member = members[i]
-            if (member is MethodDeclaration && member.body == null) {
+            if (member is MethodDeclaration && member.body == null
+                && ModifierFlag.Abstract !in member.modifiers) {
                 val name = when (val n = member.name) {
                     is Identifier -> n.text
                     is StringLiteralNode -> n.text

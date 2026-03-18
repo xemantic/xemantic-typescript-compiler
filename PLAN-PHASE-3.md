@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,808 passing (64.3%), 3,784 failing
+- **10,595 tests**, 6,813 passing (64.3%), 3,779 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -870,10 +870,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`, `CompilerOptions.kt`
 
-- [ ] **12c. TS2693 — type used as value** (~7 tests)
+- [x] **12c. TS2693 — type used as value** (+5 tests)
 
-  Detect interface/type alias names used in value positions.
-  Uses binder symbol info to distinguish type-only declarations.
+  Detect type keywords (any, number, string, etc.) and interface/type alias
+  names in value positions. Excludes names that merge with classes/functions
+  and known globals. Also fixed TS2391 false positive for abstract methods.
 
   **Files:** `Checker.kt`
 
