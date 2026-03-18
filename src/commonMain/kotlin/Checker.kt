@@ -155,6 +155,8 @@ class Checker(
         }
         // 36. Check import declarations with modifiers (TS1191)
         checkImportModifiers()
+        // 37. Check block-scoped variable use before declaration (TS2448)
+        checkUseBeforeDeclaration()
     }
 
     // -----------------------------------------------------------------------
@@ -11016,5 +11018,433 @@ class Checker(
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Block-scoped variable use before declaration (TS2448/TS2450)
+    // -----------------------------------------------------------------------
+
+    private fun checkUseBeforeDeclaration() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkUBDInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkUBDInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        // Collect all let/const/enum declaration names in this block with their positions
+        val blockScopedDecls = collectBlockScopedDeclsEx(stmts, source)
+        // Now walk each statement checking:
+        // 1. Cross-statement forward references (identifier used before its let/const/enum declaration)
+        // 2. Self-references in initializers (let x = x)
+        // 3. Recurse into nested scopes
+        for (stmt in stmts) {
+            checkUBDForwardRefs(stmt, blockScopedDecls, source, fileName)
+            checkUBDInStatement(stmt, source, fileName, blockScopedDecls)
+        }
+    }
+
+    /** Check all identifier usages in this statement for forward references to block-scoped declarations */
+    private fun checkUBDForwardRefs(stmt: Statement, blockDecls: Map<String, BlockScopedDecl>, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
+            is VariableStatement -> {
+                val kind = stmt.declarationList.flags
+                if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                    for (d in stmt.declarationList.declarations) {
+                        // Self-referencing initializers (let x = x)
+                        val selfNames = mutableMapOf<String, Int>()
+                        collectSelfRefNames(d.name, selfNames)
+                        d.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
+                        checkUBDInBindingDefaults(d.name, selfNames, source, fileName)
+                        // Forward refs to OTHER block-scoped decls (let a = x; let x;)
+                        d.initializer?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+                    }
+                } else {
+                    // var declarations: check for forward refs to block-scoped decls
+                    for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+                    }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+            is IfStatement -> {
+                checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
+                checkUBDForwardRefs(stmt.thenStatement, blockDecls, source, fileName)
+                stmt.elseStatement?.let { checkUBDForwardRefs(it, blockDecls, source, fileName) }
+            }
+            is WhileStatement -> {
+                checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
+                // Don't check body — it runs after condition, which may include the decl
+            }
+            is SwitchStatement -> checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
+            is LabeledStatement -> checkUBDForwardRefs(stmt.statement, blockDecls, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Check expression for forward references to block-scoped declarations */
+    private fun checkUBDForwardInExpr(expr: Expression, blockDecls: Map<String, BlockScopedDecl>, source: String, fileName: String) {
+        when (expr) {
+            is Identifier -> {
+                val decl = blockDecls[expr.text]
+                if (decl != null && expr.pos < decl.pos) {
+                    if (decl.isEnum) {
+                        emitTS2450(expr, decl.pos, expr.text, source, fileName)
+                    } else {
+                        emitTS2448(expr, decl.pos, expr.text, source, fileName)
+                    }
+                }
+            }
+            is BinaryExpression -> {
+                checkUBDForwardInExpr(expr.left, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.right, blockDecls, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName)
+            is PostfixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName)
+            is ParenthesizedExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is ConditionalExpression -> {
+                checkUBDForwardInExpr(expr.condition, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.whenTrue, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.whenFalse, blockDecls, source, fileName)
+            }
+            is CallExpression -> {
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+                for (arg in expr.arguments) checkUBDForwardInExpr(arg, blockDecls, source, fileName)
+            }
+            is PropertyAccessExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is ElementAccessExpression -> {
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.argumentExpression, blockDecls, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) checkUBDForwardInExpr(el, blockDecls, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkUBDForwardInExpr(prop.initializer, blockDecls, source, fileName)
+                    is SpreadAssignment -> checkUBDForwardInExpr(prop.expression, blockDecls, source, fileName)
+                    else -> {}
+                }
+            }
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                checkUBDForwardInExpr(span.expression, blockDecls, source, fileName)
+            }
+            is TypeOfExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is NonNullExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is SpreadElement -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is NewExpression -> {
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+                expr.arguments?.forEach { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+            }
+            is AsExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is TypeAssertionExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is VoidExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is DeleteExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is AwaitExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            // Don't recurse into functions/arrows (they capture lazily)
+            is ArrowFunction, is FunctionExpression -> {}
+            else -> {}
+        }
+    }
+
+    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false)
+
+    private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
+        val decls = mutableMapOf<String, BlockScopedDecl>()
+        for (stmt in stmts) collectBlockScopedDeclEx(stmt, decls, source)
+        return decls
+    }
+
+    private fun collectBlockScopedDeclEx(stmt: Statement, decls: MutableMap<String, BlockScopedDecl>, source: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                val kind = stmt.declarationList.flags
+                if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                    for (d in stmt.declarationList.declarations) {
+                        collectBindingNamesEx(d.name, decls)
+                    }
+                }
+            }
+            is EnumDeclaration -> {
+                // const enum values are inlined at compile time — no temporal dead zone
+                if (ModifierFlag.Const !in stmt.modifiers) {
+                    decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Collect binding names into a simple name -> pos map for self-reference checks */
+    private fun collectSelfRefNames(name: Node, decls: MutableMap<String, Int>) {
+        when (name) {
+            is Identifier -> decls[name.text] = name.pos
+            is ObjectBindingPattern -> for (el in name.elements) {
+                collectSelfRefNames(el.name, decls)
+            }
+            is ArrayBindingPattern -> for (el in name.elements) {
+                if (el is BindingElement) collectSelfRefNames(el.name, decls)
+            }
+            else -> {}
+        }
+    }
+
+    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>) {
+        when (name) {
+            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos)
+            is ObjectBindingPattern -> for (el in name.elements) {
+                collectBindingNamesEx(el.name, decls)
+            }
+            is ArrayBindingPattern -> for (el in name.elements) {
+                if (el is BindingElement) collectBindingNamesEx(el.name, decls)
+            }
+            else -> {}
+        }
+    }
+
+    /** Recurse into nested block scopes (functions, classes, blocks) */
+    private fun checkUBDInStatement(stmt: Statement, source: String, fileName: String, blockDecls: Map<String, BlockScopedDecl>) {
+        when (stmt) {
+            is VariableStatement -> {
+                // Recurse into nested scopes in initializers
+                for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { checkUBDInExprForNested(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> checkUBDInExprForNested(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkUBDInExprForNested(it, source, fileName) }
+            is IfStatement -> {
+                checkUBDInStatement(stmt.thenStatement, source, fileName, blockDecls)
+                stmt.elseStatement?.let { checkUBDInStatement(it, source, fileName, blockDecls) }
+            }
+            is Block -> checkUBDInStatements(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkUBDInExprForNested(it, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ForStatement -> {
+                // Self-references in for-loop let/const initializers
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    val kind = init.flags
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in init.declarations) {
+                            val selfNames = mutableMapOf<String, Int>()
+                            collectSelfRefNames(d.name, selfNames)
+                            d.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
+                        }
+                    }
+                }
+                checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
+            }
+            is ForInStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    val kind = init.flags
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in init.declarations) {
+                            val selfNames = mutableMapOf<String, Int>()
+                            collectSelfRefNames(d.name, selfNames)
+                            checkUBDInInitializer(stmt.expression, selfNames, source, fileName)
+                        }
+                    }
+                }
+                checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
+            }
+            is ForOfStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    val kind = init.flags
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in init.declarations) {
+                            val selfNames = mutableMapOf<String, Int>()
+                            collectSelfRefNames(d.name, selfNames)
+                            checkUBDInInitializer(stmt.expression, selfNames, source, fileName)
+                        }
+                    }
+                }
+                checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
+            }
+            is WhileStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
+            is DoStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
+            is SwitchStatement -> for (c in stmt.caseBlock) {
+                val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                checkUBDInStatements(clauseStmts, source, fileName)
+            }
+            is TryStatement -> {
+                checkUBDInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkUBDInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkUBDInStatements(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkUBDInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** Check defaults in destructuring binding patterns for self-references */
+    private fun checkUBDInBindingDefaults(name: Node, selfNames: Map<String, Int>, source: String, fileName: String) {
+        when (name) {
+            is ObjectBindingPattern -> for (el in name.elements) {
+                el.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
+                checkUBDInBindingDefaults(el.name, selfNames, source, fileName)
+            }
+            is ArrayBindingPattern -> for (el in name.elements) {
+                if (el is BindingElement) {
+                    el.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
+                    checkUBDInBindingDefaults(el.name, selfNames, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Check an initializer expression for references to the variable being declared */
+    private fun checkUBDInInitializer(expr: Expression, selfNames: Map<String, Int>, source: String, fileName: String) {
+        when (expr) {
+            is Identifier -> {
+                val declPos = selfNames[expr.text]
+                if (declPos != null) {
+                    emitTS2448(expr, declPos, expr.text, source, fileName)
+                }
+            }
+            is BinaryExpression -> {
+                checkUBDInInitializer(expr.left, selfNames, source, fileName)
+                checkUBDInInitializer(expr.right, selfNames, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkUBDInInitializer(expr.operand, selfNames, source, fileName)
+            is PostfixUnaryExpression -> checkUBDInInitializer(expr.operand, selfNames, source, fileName)
+            is ParenthesizedExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is ConditionalExpression -> {
+                checkUBDInInitializer(expr.condition, selfNames, source, fileName)
+                checkUBDInInitializer(expr.whenTrue, selfNames, source, fileName)
+                checkUBDInInitializer(expr.whenFalse, selfNames, source, fileName)
+            }
+            is CallExpression -> {
+                checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+                for (arg in expr.arguments) checkUBDInInitializer(arg, selfNames, source, fileName)
+            }
+            is NewExpression -> {
+                checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+                expr.arguments?.forEach { checkUBDInInitializer(it, selfNames, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is ElementAccessExpression -> {
+                checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+                checkUBDInInitializer(expr.argumentExpression, selfNames, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) checkUBDInInitializer(el, selfNames, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkUBDInInitializer(prop.initializer, selfNames, source, fileName)
+                    is ShorthandPropertyAssignment -> {
+                        // Shorthand { x } where x is a self-ref
+                        val declPos = selfNames[prop.name.text]
+                        if (declPos != null) {
+                            emitTS2448(prop.name, declPos, prop.name.text, source, fileName)
+                        }
+                        prop.objectAssignmentInitializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
+                    }
+                    is SpreadAssignment -> checkUBDInInitializer(prop.expression, selfNames, source, fileName)
+                    else -> {}
+                }
+            }
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                checkUBDInInitializer(span.expression, selfNames, source, fileName)
+            }
+            is TypeOfExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is NonNullExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is SpreadElement -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is VoidExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is DeleteExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is AsExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is TypeAssertionExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            is SatisfiesExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
+            // Arrow functions, function expressions — DON'T recurse into bodies (lazy evaluation)
+            is ArrowFunction, is FunctionExpression -> {}
+            else -> {}
+        }
+    }
+
+    /** Recurse into nested scopes (functions, classes) to find new block-scoped declarations */
+    private fun checkUBDInExprForNested(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkUBDInStatements(body.statements, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String) {
+        val start = useNode.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+        diagnostics.add(Diagnostic(
+            message = "Block-scoped variable '$name' used before its declaration.",
+            category = DiagnosticCategory.Error,
+            code = 2448,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = fileName,
+                line = declLine,
+                character = declChar,
+                start = declPos,
+                length = name.length,
+            )),
+        ))
+    }
+
+    private fun emitTS2450(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String) {
+        val start = useNode.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+        diagnostics.add(Diagnostic(
+            message = "Enum '$name' used before its declaration.",
+            category = DiagnosticCategory.Error,
+            code = 2450,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = fileName,
+                line = declLine,
+                character = declChar,
+                start = declPos,
+                length = name.length,
+            )),
+        ))
     }
 }
