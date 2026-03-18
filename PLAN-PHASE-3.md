@@ -1270,6 +1270,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
+- [x] **16o. TS7010 — missing return type on overload** (+0 tests, correctness fix)
+
+  Function overload signatures (no body) without return type annotation
+  get TS7010 when noImplicitAny is true. No net test gain (tests need
+  additional codes), but diagnostic output is now correct.
+
+  **Files:** `Checker.kt`
+
   Detect top-level declarations named `exports` or `require` in module
   files with CJS/AMD/UMD/System module format. Skip ambient (`declare`)
   declarations and `noEmit` mode.

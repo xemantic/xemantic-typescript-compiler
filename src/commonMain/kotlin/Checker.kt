@@ -4061,6 +4061,21 @@ class Checker(
                     if (ModifierFlag.Declare !in stmt.modifiers) {
                         checkParamsForImplicitAny(stmt.parameters, source, fileName)
                         stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                        // TS7010: overload signature without return type annotation
+                        if (stmt.body == null && stmt.type == null && stmt.name != null) {
+                            val name = stmt.name
+                            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "'${name.text}', which lacks return-type annotation, implicitly has an 'any' return type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7010,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = name.pos,
+                                length = name.text.length,
+                            ))
+                        }
                     }
                 }
                 is ClassDeclaration -> {
