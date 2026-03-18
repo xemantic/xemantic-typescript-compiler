@@ -1098,6 +1098,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
+- [x] **15g. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+
+  Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
+  and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep
+  classic resolution. This correctly produces TS2307 instead of TS2792 for
+  tests with ES module kinds.
+
+  **Files:** `Checker.kt`
+
 ---
 
 ## BLOCKED — not planned for Phase 3

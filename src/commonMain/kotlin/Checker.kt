@@ -6305,8 +6305,13 @@ class Checker(
         val effectiveModuleRes = moduleRes ?: run {
             // Default moduleResolution based on module option
             when (options.module) {
-                ModuleKind.CommonJS, ModuleKind.Node16, ModuleKind.NodeNext -> "node"
-                else -> "classic" // system, amd, es2015, esnext, null, etc.
+                ModuleKind.CommonJS -> "node10"
+                ModuleKind.Node16 -> "node16"
+                ModuleKind.NodeNext -> "nodenext"
+                // System and AMD use classic resolution
+                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
+                // ES module kinds (es2015, es2020, esnext) and null/none: default to node10 in TS6+
+                else -> "node10"
             }
         }
         val isNodeResolution = effectiveModuleRes in setOf("node", "node10", "node16", "nodenext", "bundler")
