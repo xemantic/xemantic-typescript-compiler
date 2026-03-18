@@ -2731,7 +2731,20 @@ class Checker(
                     // But still recurse into sub-expressions of the left side
                     // (e.g. for `this.a[this.b] = 0`, this.b IS a read)
                     val left = expr.left
-                    if (left is PropertyAccessExpression) {
+                    val right = expr.right
+                    if (left is ObjectLiteralExpression && right is Identifier && right.text == "this") {
+                        // Destructuring from this: ({ x, y } = this) reads this.x, this.y
+                        for (prop in left.properties) {
+                            when (prop) {
+                                is ShorthandPropertyAssignment -> names.add(prop.name.text)
+                                is PropertyAssignment -> {
+                                    val propName = prop.name
+                                    if (propName is Identifier) names.add(propName.text)
+                                }
+                                else -> {}
+                            }
+                        }
+                    } else if (left is PropertyAccessExpression) {
                         // this.x = ... → only recurse into the base (this), not the property name
                         collectPropertyAccessNamesInExpr(left.expression, names)
                     } else {
