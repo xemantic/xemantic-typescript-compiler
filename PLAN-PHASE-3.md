@@ -1196,10 +1196,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **16e. TS5055 — cannot write file (output overwrites input)** (~5 tests)
+- [x] **16e. TS5055/TS5056 — per-file output conflict detection** (+2 tests)
 
-  When output file path would overwrite an input source file, emit
-  TS5055. Check `outDir`/`outFile` against input file paths.
+  Extended TS5055 for multi-file compilations without outFile: checks
+  per-file JS output paths against input files. Added TS5056 when
+  multiple inputs (e.g., a.ts + a.js with allowJs, or a.ts + a.tsx)
+  would produce the same output file. Also checks declaration output
+  (.d.ts) against input files.
 
   **Files:** `TypeScriptCompiler.kt`
 
@@ -1211,10 +1214,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **16g. TS2695 — left side of comma operator is unused** (~5 tests)
+- [x] **16g. TS2695 — left side of comma operator is unused** (+6 tests)
 
-  Detect `expr, expr` where the left side has no side effects.
-  Only for comma operators in non-for-loop positions.
+  Walk BinaryExpressions with comma operator, flag left side when no
+  side effects. Handles indirect call pattern `(0, obj.prop)()` suppression,
+  function expression squiggle, and recursive side-effect detection.
 
   **Files:** `Checker.kt`
 
@@ -1226,31 +1230,35 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **16i. TS2450/TS2448 — block-scoped variable used before declaration** (~7 tests)
+- [x] **16i. TS2448/TS2450 — block-scoped variable used before declaration** (+9 tests)
 
-  Detect use of `let`/`const` variables before their declaration within
-  the same block scope. TS2448 for variables, TS2450 for block-scoped.
-
-  **Files:** `Checker.kt`
-
-- [ ] **16j. Fix false-positive TS7006 for rest parameters** (~3 tests)
-
-  Rest parameters shouldn't get TS7006 (should get TS7019 instead).
-  Currently both may be emitted. Fix the TS7006 check to skip `...` params.
+  Detect use of let/const variables and enums before their declaration.
+  Self-referencing initializers, cross-statement forward refs, for-loop
+  initializers. TS2728 related diagnostic for declaration site. Skips
+  const enums (inlined values).
 
   **Files:** `Checker.kt`
 
-- [ ] **16k. Fix false-positive TS6133 for type-only imports** (~3 tests)
+- [x] **16j. Fix false-positive TS7006 for rest parameters** (already correct)
 
-  `import type { X }` should not flag X as unused since it's type-only.
-  Also fix TS6133 for type parameters used only in type positions.
+  The TS7006/TS7019 separation for rest params was already correctly
+  implemented — `checkParamsForImplicitAny` uses `dotDotDotToken` check
+  to emit TS7019 for rest params and TS7006 for regular params.
 
   **Files:** `Checker.kt`
 
-- [ ] **16l. TS2802 — iterators/generators need target ES2015+** (~4 tests)
+- [x] **16k. Fix false-positive TS6133 for type-only imports** (already correct)
 
-  When target < ES2015 and code uses `for...of` with iterators or
-  `function*` generators, emit TS2802 if downlevelIteration is not set.
+  No false positives detected for `import type` declarations. The TS6133
+  checker already handles type imports correctly via `trackAllImportReferences`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **16l. TS2802 — iterators/generators need target ES2015+** (~4 tests) — *deferred*
+
+  Requires type inference to determine if for-of target is an iterable.
+  The type name appears in the error message. Too complex without full
+  type resolution.
 
   **Files:** `Checker.kt`
 
