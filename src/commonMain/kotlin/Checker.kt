@@ -3610,8 +3610,11 @@ class Checker(
             is BinaryExpression -> {
                 if (expr.operator == SyntaxKind.Equals) {
                     val left = expr.left
-                    if (left is Identifier) {
-                        uninitialized.remove(left.text)
+                    when (left) {
+                        is Identifier -> uninitialized.remove(left.text)
+                        is ObjectLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                        is ArrayLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                        else -> {}
                     }
                 }
                 // Recurse into both sides for compound expressions
@@ -3622,6 +3625,39 @@ class Checker(
                 expr.elements.forEach { markAssignmentsInExpr(it, uninitialized) }
             }
             is ParenthesizedExpression -> markAssignmentsInExpr(expr.expression, uninitialized)
+            else -> {}
+        }
+    }
+
+    /** Extract assigned variable names from destructuring assignment targets. */
+    private fun collectDestructuringTargets(expr: Expression, uninitialized: MutableSet<String>) {
+        when (expr) {
+            is Identifier -> uninitialized.remove(expr.text)
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is ShorthandPropertyAssignment -> uninitialized.remove(prop.name.text)
+                        is PropertyAssignment -> collectDestructuringTargets(prop.initializer, uninitialized)
+                        is SpreadAssignment -> collectDestructuringTargets(prop.expression, uninitialized)
+                        else -> {}
+                    }
+                }
+            }
+            is ArrayLiteralExpression -> {
+                for (elem in expr.elements) {
+                    when (elem) {
+                        is SpreadElement -> collectDestructuringTargets(elem.expression, uninitialized)
+                        is OmittedExpression -> {} // skip holes
+                        else -> collectDestructuringTargets(elem, uninitialized)
+                    }
+                }
+            }
+            is BinaryExpression -> {
+                // Default value: `x = defaultVal` — the target is `x`
+                if (expr.operator == SyntaxKind.Equals) {
+                    collectDestructuringTargets(expr.left, uninitialized)
+                }
+            }
             else -> {}
         }
     }
