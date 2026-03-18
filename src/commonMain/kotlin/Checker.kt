@@ -2983,6 +2983,9 @@ class Checker(
         if (typeParams.isNullOrEmpty() || !(options.noUnusedLocals || options.noUnusedParameters)) return
         // Skip if another declaration merges or if there are multiple interfaces with same name
         val ifaceName = iface.name.text
+        // Check cross-file merges via globals symbol table
+        val globalSymbol = globals[ifaceName]
+        if (globalSymbol != null && globalSymbol.declarations.size > 1) return
         if (siblingStatements != null) {
             val hasMerge = siblingStatements.any { stmt ->
                 stmt !== iface && when (stmt) {
