@@ -116,7 +116,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3e: Further Incremental Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300/TS2567 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), TS2309 (export assignment conflicts), TS1100 (strict mode identifiers), plus TS5101/TS5102/TS5107 (deprecation with tsconfig positions), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055 (option validation). **6,787 / 10,595 tests passing (64.1%)**, up from 6,767. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
+**Phase 3e: Further Incremental Improvements.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196 (unused declarations + type params), TS2454 (used before assigned), TS2564 (property no initializer), TS7006 (implicit any parameter), TS2304 (cannot find name), TS2300/TS2567 (duplicate identifier + class members + export=), TS7026 (JSX implicit any), TS2309 (export assignment conflicts), TS1100 (strict mode identifiers), plus TS5101/TS5102/TS5107 (deprecation with tsconfig positions), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055 (option validation). **6,813 / 10,595 tests passing (64.3%)**, up from 6,767. Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
