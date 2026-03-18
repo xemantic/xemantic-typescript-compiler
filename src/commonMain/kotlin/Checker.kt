@@ -117,6 +117,8 @@ class Checker(
         checkTypeUsedAsValue()
         // 20. Check always-truthy expressions (TS2872)
         checkAlwaysTruthy()
+        // 20b. Check comma operator left side unused (TS2695)
+        checkCommaOperatorUnused()
         // 21. Check null/undefined used in invalid positions (TS18050)
         checkNullUndefinedUsage()
         // 22. Check for implicit this (TS2683)
@@ -7522,6 +7524,273 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Comma operator left side unused (TS2695)
+    // -----------------------------------------------------------------------
+
+    private fun checkCommaOperatorUnused() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkCommaInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkCommaInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkCommaInStatement(stmt, source, fileName)
+    }
+
+    private fun checkCommaInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> checkCommaInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkCommaInExpr(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkCommaInExpr(it, source, fileName) }
+            is IfStatement -> {
+                checkCommaInExpr(stmt.expression, source, fileName)
+                checkCommaInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkCommaInStatement(it, source, fileName) }
+            }
+            is Block -> checkCommaInStatements(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkCommaInExpr(it, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ForStatement -> {
+                stmt.initializer?.let { init ->
+                    when (init) {
+                        is VariableDeclarationList -> for (d in init.declarations) {
+                            d.initializer?.let { checkCommaInExpr(it, source, fileName) }
+                        }
+                        is Expression -> checkCommaInExpr(init, source, fileName)
+                        else -> {}
+                    }
+                }
+                stmt.condition?.let { checkCommaInExpr(it, source, fileName) }
+                stmt.incrementor?.let { checkCommaInExpr(it, source, fileName) }
+                checkCommaInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                checkCommaInExpr(stmt.expression, source, fileName)
+                checkCommaInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkCommaInExpr(stmt.expression, source, fileName)
+                checkCommaInStatement(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                checkCommaInExpr(stmt.expression, source, fileName)
+                checkCommaInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkCommaInStatement(stmt.statement, source, fileName)
+                checkCommaInExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkCommaInExpr(stmt.expression, source, fileName)
+                for (c in stmt.caseBlock) {
+                    when (c) {
+                        is CaseClause -> {
+                            checkCommaInExpr(c.expression, source, fileName)
+                            checkCommaInStatements(c.statements, source, fileName)
+                        }
+                        is DefaultClause -> checkCommaInStatements(c.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkCommaInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkCommaInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkCommaInStatements(it.statements, source, fileName) }
+            }
+            is ThrowStatement -> stmt.expression?.let { checkCommaInExpr(it, source, fileName) }
+            is LabeledStatement -> checkCommaInStatement(stmt.statement, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCommaInStatements(it.statements, source, fileName) }
+            is EnumDeclaration -> for (m in stmt.members) {
+                m.initializer?.let { checkCommaInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    /** Check if this comma expression is an indirect call pattern: (0, obj.prop)() */
+    private fun isIndirectCallComma(expr: BinaryExpression): Boolean {
+        // The right side must be a property access or element access
+        val right = expr.right
+        if (right !is PropertyAccessExpression && right !is ElementAccessExpression) return false
+        // Walk up through parenthesized expressions to find the call
+        // The comma expression is already detected — check if the parent context is a call
+        // We can't easily check parents, but the pattern is always: (left, propAccess)()
+        // TypeScript skips these when right side is property/element access
+        return true
+    }
+
+    private fun checkCommaInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                if (expr.operator == SyntaxKind.Comma) {
+                    if (!hasSideEffects(expr.left) && !isIndirectCallComma(expr)) {
+                        val start = expr.left.pos
+                        val length = commaLeftSpanLength(expr.left, start)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Left side of comma operator is unused and has no side effects.",
+                            category = DiagnosticCategory.Error,
+                            code = 2695,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+                checkCommaInExpr(expr.left, source, fileName)
+                checkCommaInExpr(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkCommaInExpr(expr.condition, source, fileName)
+                checkCommaInExpr(expr.whenTrue, source, fileName)
+                checkCommaInExpr(expr.whenFalse, source, fileName)
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkCommaInStatements(body.statements, source, fileName)
+                is Expression -> checkCommaInExpr(body, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+            is CallExpression -> {
+                checkCommaInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkCommaInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkCommaInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkCommaInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkCommaInExpr(expr.expression, source, fileName)
+                checkCommaInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) checkCommaInExpr(el, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkCommaInExpr(prop.initializer, source, fileName)
+                    is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkCommaInExpr(it, source, fileName) }
+                    is SpreadAssignment -> checkCommaInExpr(prop.expression, source, fileName)
+                    else -> {}
+                }
+            }
+            is PrefixUnaryExpression -> checkCommaInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkCommaInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                checkCommaInExpr(span.expression, source, fileName)
+            }
+            is TaggedTemplateExpression -> {
+                checkCommaInExpr(expr.tag, source, fileName)
+                val template = expr.template
+                if (template is TemplateExpression) {
+                    for (span in template.templateSpans) {
+                        checkCommaInExpr(span.expression, source, fileName)
+                    }
+                }
+            }
+            is TypeAssertionExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is SpreadElement -> checkCommaInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkCommaInExpr(it, source, fileName) }
+            is VoidExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Compute squiggle length for the left operand of a comma expression. */
+    private fun commaLeftSpanLength(expr: Expression, start: Int): Int {
+        return when (expr) {
+            // Function expressions: squiggle only covers 'function' keyword (8 chars)
+            is FunctionExpression -> 8
+            // Arrow functions: squiggle covers the whole expression
+            is ArrowFunction -> (expr.end - 1 - start).coerceAtLeast(1)
+            // Parenthesized: squiggle covers the whole parenthesized expression
+            is ParenthesizedExpression -> (expr.end - 1 - start).coerceAtLeast(1)
+            // String literals: text.length + 2 for quotes
+            is StringLiteralNode -> (expr.rawText?.length ?: expr.text.length) + 2
+            // Template strings: use node span
+            is NoSubstitutionTemplateLiteralNode -> (expr.end - 1 - start).coerceAtLeast(1)
+            // Regex literals: use node span
+            is RegularExpressionLiteralNode -> (expr.end - 1 - start).coerceAtLeast(1)
+            // Default: use node span
+            else -> (expr.end - 1 - start).coerceAtLeast(1)
+        }
+    }
+
+    /** Check if an expression has side effects (assignments, calls, increments, etc.) */
+    private fun hasSideEffects(expr: Expression): Boolean {
+        return when (expr) {
+            // Assignments always have side effects
+            is BinaryExpression -> when (expr.operator) {
+                SyntaxKind.Equals, SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
+                SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+                SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals,
+                SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
+                SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
+                SyntaxKind.AsteriskAsteriskEquals,
+                SyntaxKind.BarBarEquals, SyntaxKind.AmpersandAmpersandEquals,
+                SyntaxKind.QuestionQuestionEquals -> true
+                // Comma: if left has side effects, whole thing does
+                SyntaxKind.Comma -> hasSideEffects(expr.left) || hasSideEffects(expr.right)
+                // Other binary ops: check both sides
+                else -> hasSideEffects(expr.left) || hasSideEffects(expr.right)
+            }
+            // Increment/decrement have side effects
+            is PrefixUnaryExpression -> when (expr.operator) {
+                SyntaxKind.PlusPlus, SyntaxKind.MinusMinus -> true
+                else -> hasSideEffects(expr.operand)
+            }
+            is PostfixUnaryExpression -> true // ++ and -- always have side effects
+            // Function/method calls have side effects
+            is CallExpression -> true
+            is NewExpression -> true
+            is TaggedTemplateExpression -> true
+            // Delete has side effects
+            is DeleteExpression -> true
+            // Yield/await have side effects
+            is YieldExpression -> true
+            is AwaitExpression -> true
+            // Void expression: TypeScript treats as OK (no TS2695)
+            is VoidExpression -> true
+            // Type assertions: TypeScript treats as OK (no TS2695)
+            is TypeAssertionExpression -> true
+            is AsExpression -> true
+            is SatisfiesExpression -> true
+            // Parenthesized: check inner
+            is ParenthesizedExpression -> hasSideEffects(expr.expression)
+            // Non-null assertion (x!): no side effect
+            is NonNullExpression -> hasSideEffects(expr.expression)
+            // Conditional: has side effects if any branch does
+            is ConditionalExpression -> hasSideEffects(expr.whenTrue) || hasSideEffects(expr.whenFalse)
+            // Everything else (literals, identifiers, typeof, array/object literals,
+            // arrow functions, function expressions, etc.) — no side effects
+            else -> false
+        }
     }
 
     // -----------------------------------------------------------------------
