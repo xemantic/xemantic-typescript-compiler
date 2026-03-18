@@ -147,6 +147,10 @@ class Checker(
         checkExportAssignmentInSystem()
         // 34. Check reserved name collisions in modules (TS2441)
         checkReservedModuleNames()
+        // 35. Check block-scoped function declarations in ES5 strict mode (TS1250)
+        if (options.target < ScriptTarget.ES2015) {
+            checkBlockScopedFunctionDeclarations()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -10580,6 +10584,112 @@ class Checker(
                     }
                 }
             }
+        }
+    }
+
+    // TS1250: Function declarations not allowed inside blocks in strict mode targeting ES5
+    private fun checkBlockScopedFunctionDeclarations() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            // Determine if file is in strict mode
+            val isStrict = options.alwaysStrict == true || options.strict ||
+                (result.sourceFile.statements.firstOrNull()?.let {
+                    it is ExpressionStatement && it.expression is StringLiteralNode &&
+                        ((it.expression as StringLiteralNode).text == "use strict")
+                } == true)
+            if (!isStrict) continue
+
+            checkBlockFuncDeclInStatements(result.sourceFile.statements, source, fileName, inBlock = false)
+        }
+    }
+
+    private fun checkBlockFuncDeclInStatements(
+        statements: List<Statement>, source: String, fileName: String, inBlock: Boolean
+    ) {
+        for (stmt in statements) {
+            if (inBlock && stmt is FunctionDeclaration) {
+                val name = stmt.name ?: continue
+                val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'.",
+                    category = DiagnosticCategory.Error,
+                    code = 1250,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = name.pos,
+                    length = name.text.length,
+                ))
+            }
+            // Recurse into blocks (but NOT function bodies — those create new scopes)
+            checkBlockFuncDeclInStatement(stmt, source, fileName)
+        }
+    }
+
+    private fun checkBlockFuncDeclInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is IfStatement -> {
+                val thenStmt = stmt.thenStatement
+                if (thenStmt is Block) {
+                    checkBlockFuncDeclInStatements(thenStmt.statements, source, fileName, inBlock = true)
+                }
+                val elseStmt = stmt.elseStatement
+                if (elseStmt is Block) {
+                    checkBlockFuncDeclInStatements(elseStmt.statements, source, fileName, inBlock = true)
+                } else if (elseStmt != null) {
+                    checkBlockFuncDeclInStatement(elseStmt, source, fileName)
+                }
+            }
+            is ForStatement -> {
+                val body = stmt.statement
+                if (body is Block) {
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                }
+            }
+            is ForInStatement -> {
+                val body = stmt.statement
+                if (body is Block) {
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                }
+            }
+            is ForOfStatement -> {
+                val body = stmt.statement
+                if (body is Block) {
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                }
+            }
+            is WhileStatement -> {
+                val body = stmt.statement
+                if (body is Block) {
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                }
+            }
+            is DoStatement -> {
+                val body = stmt.statement
+                if (body is Block) {
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                }
+            }
+            is Block -> {
+                // Standalone block
+                checkBlockFuncDeclInStatements(stmt.statements, source, fileName, inBlock = true)
+            }
+            is TryStatement -> {
+                checkBlockFuncDeclInStatements(stmt.tryBlock.statements, source, fileName, inBlock = true)
+                stmt.catchClause?.let { catch ->
+                    checkBlockFuncDeclInStatements(catch.block.statements, source, fileName, inBlock = true)
+                }
+                stmt.finallyBlock?.let { finally_ ->
+                    checkBlockFuncDeclInStatements(finally_.statements, source, fileName, inBlock = true)
+                }
+            }
+            is LabeledStatement -> {
+                checkBlockFuncDeclInStatement(stmt.statement, source, fileName)
+            }
+            // Don't recurse into functions/classes/modules — they create new scopes
+            else -> {}
         }
     }
 }
