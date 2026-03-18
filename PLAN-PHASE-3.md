@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,874 passing (64.9%), 3,721 failing
+- **10,595 tests**, 6,877 passing (64.9%), 3,718 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -977,11 +977,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **13c. TS2683 — 'this' implicitly has type 'any'** (~2 tests)
+- [x] **13c. TS2683 — 'this' implicitly has type 'any'** (+3 tests)
 
   When `noImplicitThis: true`, flag `this` expressions inside regular
   functions (not arrow functions, not class methods) that don't have
-  a `this:` parameter annotation. Only 2 testable TS2683-only tests.
+  a `this:` parameter annotation. Includes related TS2738 diagnostic
+  when a typed `this` (class) is shadowed by a regular function.
+  Object literal property function expressions have typed `this` (skip).
+  Arrow functions are transparent — inherit outer `this` context.
 
   **Files:** `Checker.kt`
 

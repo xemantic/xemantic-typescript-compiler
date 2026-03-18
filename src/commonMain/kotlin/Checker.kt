@@ -119,6 +119,10 @@ class Checker(
         checkAlwaysTruthy()
         // 21. Check null/undefined used in invalid positions (TS18050)
         checkNullUndefinedUsage()
+        // 22. Check for implicit this (TS2683)
+        if (options.noImplicitThis || options.strict) {
+            checkImplicitThis()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -8386,6 +8390,466 @@ class Checker(
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Implicit this checking (TS2683)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for `this` expressions in functions without a `this:` parameter annotation
+     * when noImplicitThis is enabled. Emits TS2683.
+     *
+     * The "this context" tracks whether `this` is typed (in a class member) or untyped
+     * (in a regular function without `this:` param). Arrow functions are transparent —
+     * they inherit the outer `this` context.
+     *
+     * @param shadowFunctionPos when non-null, the position of the function that shadows
+     *   an outer typed `this` (for the related TS2738 diagnostic)
+     */
+    private fun checkImplicitThis() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkThisInStatements(
+                result.sourceFile.statements, source, fileName,
+                thisIsTyped = false, // file level — this is 'any' but we don't error at file level
+                insideFunction = false, // not inside any function yet
+                shadowFunctionPos = -1
+            )
+        }
+    }
+
+    private fun checkThisInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        thisIsTyped: Boolean,
+        insideFunction: Boolean,
+        shadowFunctionPos: Int,
+    ) {
+        for (stmt in statements) {
+            checkThisInStatement(stmt, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+        }
+    }
+
+    private fun checkThisInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        thisIsTyped: Boolean,
+        insideFunction: Boolean,
+        shadowFunctionPos: Int,
+    ) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val hasThisParam = hasThisParameter(stmt.parameters)
+                val newThisIsTyped = hasThisParam
+                val newShadowPos = if (!hasThisParam && thisIsTyped) {
+                    // This function shadows a typed this context
+                    stmt.name?.pos ?: stmt.pos
+                } else if (!hasThisParam && !thisIsTyped) {
+                    shadowFunctionPos // keep existing shadow info
+                } else -1
+                stmt.body?.let {
+                    checkThisInStatements(
+                        it.statements, source, fileName,
+                        thisIsTyped = newThisIsTyped,
+                        insideFunction = true,
+                        shadowFunctionPos = newShadowPos
+                    )
+                }
+            }
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (member in stmt.members) {
+                    checkThisInClassElement(member, source, fileName)
+                }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let {
+                        checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    }
+                }
+            }
+            is ExpressionStatement -> {
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ReturnStatement -> {
+                stmt.expression?.let {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is IfStatement -> {
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatement(stmt.thenStatement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                stmt.elseStatement?.let {
+                    checkThisInStatement(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is Block -> {
+                checkThisInStatements(stmt.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ForStatement -> {
+                stmt.initializer?.let {
+                    when (it) {
+                        is Expression -> checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        is VariableDeclarationList -> {
+                            for (decl in it.declarations) {
+                                decl.initializer?.let { init ->
+                                    checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+                stmt.condition?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos) }
+                stmt.incrementor?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos) }
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ForInStatement -> {
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ForOfStatement -> {
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is WhileStatement -> {
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is DoStatement -> {
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is SwitchStatement -> {
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            checkThisInExpr(clause.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        }
+                        is DefaultClause -> {
+                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ThrowStatement -> {
+                stmt.expression?.let {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is TryStatement -> {
+                checkThisInStatements(stmt.tryBlock.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                stmt.catchClause?.let {
+                    checkThisInStatements(it.block.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+                stmt.finallyBlock?.let {
+                    checkThisInStatements(it.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is LabeledStatement -> {
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkThisInStatements(
+                        body.statements, source, fileName,
+                        thisIsTyped = false, insideFunction = false, shadowFunctionPos = -1
+                    )
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkThisInClassElement(
+        element: ClassElement,
+        source: String,
+        fileName: String,
+    ) {
+        // Inside class members, `this` is typed — no error
+        when (element) {
+            is MethodDeclaration -> {
+                element.body?.let {
+                    checkThisInStatements(
+                        it.statements, source, fileName,
+                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
+                    )
+                }
+            }
+            is Constructor -> {
+                element.body?.let {
+                    checkThisInStatements(
+                        it.statements, source, fileName,
+                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
+                    )
+                }
+            }
+            is GetAccessor -> {
+                element.body?.let {
+                    checkThisInStatements(
+                        it.statements, source, fileName,
+                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
+                    )
+                }
+            }
+            is SetAccessor -> {
+                element.body?.let {
+                    checkThisInStatements(
+                        it.statements, source, fileName,
+                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
+                    )
+                }
+            }
+            is PropertyDeclaration -> {
+                // Property initializers: `this` is typed (class context)
+                // but function expressions in property initializers create new `this` scope
+                element.initializer?.let {
+                    checkThisInExpr(
+                        it, source, fileName,
+                        thisIsTyped = true, insideFunction = false, shadowFunctionPos = -1
+                    )
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkThisInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        thisIsTyped: Boolean,
+        insideFunction: Boolean,
+        shadowFunctionPos: Int,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                if (expr.text == "this" && !thisIsTyped && insideFunction) {
+                    emitTS2683(expr, source, fileName, shadowFunctionPos)
+                }
+            }
+            is FunctionExpression -> {
+                val hasThisParam = hasThisParameter(expr.parameters)
+                val newThisIsTyped = hasThisParam
+                val newShadowPos = if (!hasThisParam && thisIsTyped) {
+                    // This function expression shadows a typed this context
+                    expr.name?.pos ?: expr.pos
+                } else if (!hasThisParam && !thisIsTyped) {
+                    shadowFunctionPos
+                } else -1
+                expr.body.let {
+                    checkThisInStatements(
+                        it.statements, source, fileName,
+                        thisIsTyped = newThisIsTyped,
+                        insideFunction = true,
+                        shadowFunctionPos = newShadowPos
+                    )
+                }
+            }
+            is ArrowFunction -> {
+                // Arrow functions are transparent — inherit outer this context
+                // insideFunction stays as-is: arrows don't create their own this
+                when (val body = expr.body) {
+                    is Block -> checkThisInStatements(
+                        body.statements, source, fileName,
+                        thisIsTyped, insideFunction,
+                        shadowFunctionPos
+                    )
+                    is Expression -> checkThisInExpr(
+                        body, source, fileName,
+                        thisIsTyped, insideFunction,
+                        shadowFunctionPos
+                    )
+                    else -> {}
+                }
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    checkThisInClassElement(member, source, fileName)
+                }
+            }
+            is CallExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                expr.arguments.forEach {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is NewExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                expr.arguments?.forEach {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is BinaryExpression -> {
+                checkThisInExpr(expr.left, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.right, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ParenthesizedExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is PropertyAccessExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ElementAccessExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.argumentExpression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ConditionalExpression -> {
+                checkThisInExpr(expr.condition, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.whenTrue, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.whenFalse, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> {
+                            val init = prop.initializer
+                            if (init is FunctionExpression) {
+                                // Function expressions as object literal property values have
+                                // typed this (TypeScript infers the object type)
+                                init.body.let {
+                                    checkThisInStatements(
+                                        it.statements, source, fileName,
+                                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
+                                    )
+                                }
+                            } else {
+                                checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            }
+                        }
+                        is MethodDeclaration -> {
+                            // Object literal methods have typed this (the object type)
+                            prop.body?.let {
+                                checkThisInStatements(
+                                    it.statements, source, fileName,
+                                    thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
+                                )
+                            }
+                        }
+                        is SpreadAssignment -> {
+                            checkThisInExpr(prop.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        }
+                        is ShorthandPropertyAssignment -> {
+                            prop.objectAssignmentInitializer?.let {
+                                checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) {
+                    checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is TaggedTemplateExpression -> {
+                checkThisInExpr(expr.tag, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                when (val template = expr.template) {
+                    is TemplateExpression -> {
+                        for (span in template.templateSpans) {
+                            checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            is PrefixUnaryExpression -> {
+                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is PostfixUnaryExpression -> {
+                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is TypeOfExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is VoidExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is DeleteExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is AwaitExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is SpreadElement -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is YieldExpression -> {
+                expr.expression?.let {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            is AsExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is NonNullExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            }
+            is CommaListExpression -> {
+                expr.elements.forEach {
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun hasThisParameter(parameters: List<Parameter>): Boolean {
+        val first = parameters.firstOrNull() ?: return false
+        val name = first.name
+        return name is Identifier && name.text == "this"
+    }
+
+    private fun emitTS2683(
+        thisExpr: Identifier,
+        source: String,
+        fileName: String,
+        shadowFunctionPos: Int,
+    ) {
+        val start = thisExpr.pos
+        val length = 4 // "this".length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        val related = if (shadowFunctionPos >= 0) {
+            val (shadowLine, shadowCol) = getLineAndCharacterOfPosition(source, shadowFunctionPos)
+            listOf(Diagnostic(
+                message = "An outer value of 'this' is shadowed by this container.",
+                category = DiagnosticCategory.Error,
+                code = 2738,
+                fileName = fileName,
+                line = shadowLine,
+                character = shadowCol,
+            ))
+        } else emptyList()
+
+        diagnostics.add(Diagnostic(
+            message = "'this' implicitly has type 'any' because it does not have a type annotation.",
+            category = DiagnosticCategory.Error,
+            code = 2683,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = related,
         ))
     }
 }
