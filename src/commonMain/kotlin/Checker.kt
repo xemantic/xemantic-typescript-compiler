@@ -107,6 +107,10 @@ class Checker(
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
         checkMissingImplementations()
+        // 18. Check unreachable code (TS7027)
+        if (options.allowUnreachableCode == false) {
+            checkUnreachableCode()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -6664,6 +6668,259 @@ class Checker(
             // Common global augmentations
             "Symbol",
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // Unreachable code checking (TS7027)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for unreachable code after return, throw, break, continue,
+     * and infinite loops.
+     */
+    private fun checkUnreachableCode() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkUnreachableInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkUnreachableInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        var termIdx = -1
+        for (i in statements.indices) {
+            val stmt = statements[i]
+            if (termIdx >= 0) {
+                // Skip hoisted declarations — they're not unreachable
+                if (stmt is FunctionDeclaration || stmt is ClassDeclaration ||
+                    stmt is InterfaceDeclaration || stmt is TypeAliasDeclaration ||
+                    stmt is EnumDeclaration || stmt is ModuleDeclaration ||
+                    stmt is ImportDeclaration || stmt is ImportEqualsDeclaration ||
+                    stmt is ExportDeclaration) {
+                    continue
+                }
+                // Found first unreachable non-hoisted statement
+                // Collect ALL remaining non-hoisted statements for the span
+                val unreachableStmts = mutableListOf(stmt)
+                for (j in i + 1 until statements.size) {
+                    val s = statements[j]
+                    if (s is FunctionDeclaration || s is ClassDeclaration ||
+                        s is InterfaceDeclaration || s is TypeAliasDeclaration ||
+                        s is EnumDeclaration || s is ModuleDeclaration ||
+                        s is ImportDeclaration || s is ImportEqualsDeclaration ||
+                        s is ExportDeclaration) continue
+                    unreachableStmts.add(s)
+                }
+                emitTS7027(unreachableStmts, source, fileName)
+                break // Only one TS7027 per block
+            }
+            // Check if this statement makes subsequent code unreachable
+            if (isDefinitelyTerminating(stmt)) {
+                termIdx = i
+            }
+            // Recurse into nested blocks
+            checkUnreachableInNestedStatement(stmt, source, fileName)
+        }
+    }
+
+    private fun isDefinitelyTerminating(stmt: Statement): Boolean {
+        return when (stmt) {
+            is ReturnStatement -> true
+            is ThrowStatement -> true
+            is BreakStatement -> true
+            is ContinueStatement -> true
+            is WhileStatement -> {
+                // while(true) with no break is an infinite loop
+                isAlwaysTrue(stmt.expression) && !containsBreak(stmt.statement)
+            }
+            is DoStatement -> {
+                // do {} while(true) with no break is an infinite loop
+                isAlwaysTrue(stmt.expression) && !containsBreak(stmt.statement)
+            }
+            is ForStatement -> {
+                // for(;;) with no break is infinite
+                stmt.condition == null && !containsBreak(stmt.statement)
+            }
+            is IfStatement -> {
+                // if (cond) { return } else { return } — both branches terminate
+                val thenTerm = isBlockTerminating(stmt.thenStatement)
+                val elseTerm = stmt.elseStatement?.let { isBlockTerminating(it) } ?: false
+                thenTerm && elseTerm
+            }
+            is SwitchStatement -> {
+                // All cases + default terminate → switch is terminating
+                val clauses = stmt.caseBlock
+                val hasDefault = clauses.any { it is DefaultClause }
+                if (!hasDefault) return false
+                clauses.all { clause ->
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    // Empty case clauses fall through to the next
+                    clauseStmts.isEmpty() || clauseStmts.any { isDefinitelyTerminating(it) }
+                }
+            }
+            is TryStatement -> {
+                // Try block terminates and there's no catch that doesn't terminate
+                isBlockTerminating(stmt.tryBlock) &&
+                    (stmt.catchClause == null || isBlockTerminating(stmt.catchClause!!.block))
+            }
+            else -> false
+        }
+    }
+
+    private fun isBlockTerminating(stmt: Statement): Boolean {
+        return when (stmt) {
+            is Block -> stmt.statements.any { isDefinitelyTerminating(it) }
+            else -> isDefinitelyTerminating(stmt)
+        }
+    }
+
+    private fun isAlwaysTrue(expr: Expression): Boolean {
+        return when (expr) {
+            is Identifier -> expr.text == "true"
+            is ParenthesizedExpression -> isAlwaysTrue(expr.expression)
+            else -> false
+        }
+    }
+
+    private fun containsBreak(stmt: Statement): Boolean {
+        return when (stmt) {
+            is BreakStatement -> true
+            is Block -> stmt.statements.any { containsBreak(it) }
+            is IfStatement -> containsBreak(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { containsBreak(it) } ?: false)
+            is LabeledStatement -> containsBreak(stmt.statement)
+            // Don't recurse into nested loops/switches — break applies to them, not the outer
+            else -> false
+        }
+    }
+
+    private fun checkUnreachableInNestedStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is Block -> checkUnreachableInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkUnreachableInNestedStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkUnreachableInNestedStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkUnreachableInStatements(clauseStmts, source, fileName)
+                }
+            }
+            is TryStatement -> {
+                checkUnreachableInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let {
+                    checkUnreachableInStatements(it.block.statements, source, fileName)
+                }
+                stmt.finallyBlock?.let {
+                    checkUnreachableInStatements(it.statements, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.body?.let { checkUnreachableInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let {
+                            checkUnreachableInStatements(it.statements, source, fileName)
+                        }
+                        is Constructor -> member.body?.let {
+                            checkUnreachableInStatements(it.statements, source, fileName)
+                        }
+                        is GetAccessor -> member.body?.let {
+                            checkUnreachableInStatements(it.statements, source, fileName)
+                        }
+                        is SetAccessor -> member.body?.let {
+                            checkUnreachableInStatements(it.statements, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is LabeledStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is ExpressionStatement -> {
+                // Check arrow/function expressions
+                when (val expr = stmt.expression) {
+                    is ArrowFunction -> when (val body = expr.body) {
+                        is Block -> checkUnreachableInStatements(body.statements, source, fileName)
+                        else -> {}
+                    }
+                    is FunctionExpression -> expr.body?.let {
+                        checkUnreachableInStatements(it.statements, source, fileName)
+                    }
+                    else -> {}
+                }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    when (val init = decl.initializer) {
+                        is ArrowFunction -> when (val body = init.body) {
+                            is Block -> checkUnreachableInStatements(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        is FunctionExpression -> init.body?.let {
+                            checkUnreachableInStatements(it.statements, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body as? ModuleBlock ?: return
+                checkUnreachableInStatements(body.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS7027(stmts: List<Statement>, source: String, fileName: String) {
+        if (stmts.isEmpty()) return
+        val first = stmts.first()
+        // Skip leading whitespace on first statement
+        var actualStart = first.pos
+        while (actualStart < source.length && source[actualStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+            actualStart++
+        }
+        // Span covers just the first unreachable line
+        var endOfLine = actualStart
+        while (endOfLine < source.length && source[endOfLine] != '\n' && source[endOfLine] != '\r') {
+            endOfLine++
+        }
+        val length = endOfLine - actualStart
+        val (line, character) = getLineAndCharacterOfPosition(source, actualStart)
+        diagnostics.add(Diagnostic(
+            message = "Unreachable code detected.",
+            category = DiagnosticCategory.Error,
+            code = 7027,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = actualStart,
+            length = length.coerceAtLeast(1),
+        ))
     }
 
     // -----------------------------------------------------------------------

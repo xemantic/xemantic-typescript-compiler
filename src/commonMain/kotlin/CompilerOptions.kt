@@ -135,6 +135,7 @@ data class CompilerOptions(
     val alwaysStrict: Boolean? = null,
     val newLine: String? = null,
     val fullEmitPaths: Boolean = false,
+    val allowUnreachableCode: Boolean? = null,
     val noResolve: Boolean = false,
     val noImplicitReferences: Boolean = false,
     val moduleDetection: String? = null,
@@ -404,6 +405,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "alwaysstrict" -> options.copy(alwaysStrict = boolValue)
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
+        "allowunreachablecode" -> options.copy(allowUnreachableCode = boolValue)
         "noresolve" -> options.copy(noResolve = boolValue)
         "noimplicitreferences" -> options.copy(noImplicitReferences = boolValue)
         "moduledetection" -> options.copy(moduleDetection = value.trim())
