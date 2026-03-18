@@ -1027,11 +1027,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **14c. Suppress false TS2304 for JSX namespace** (~33 tests)
+- [x] **14c. Suppress false TS2304 for JSX namespace** (+0 tests, correctness fix)
 
-  `JSX` is reported as unresolved 33 times. In TypeScript, `JSX` is a
-  well-known namespace from the JSX type definitions. Add `JSX` and
-  `ElementTagNameMap` to known globals or skip TS2304 in JSX contexts.
+  Added `JSX` to KNOWN_GLOBALS to prevent false TS2304 for JSX namespace
+  references like `keyof JSX.IntrinsicElements`. Tests that need this
+  also require other missing diagnostics.
 
   **Files:** `Checker.kt`
 

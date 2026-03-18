@@ -6891,6 +6891,8 @@ class Checker(
             "beforeAll", "afterAll",
             // Common global augmentations
             "Symbol",
+            // JSX namespace (available when JSX is enabled)
+            "JSX",
         )
 
         /**
