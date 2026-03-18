@@ -4931,7 +4931,9 @@ class Checker(
 
     /**
      * Check if a type reference name (Identifier or QualifiedName) resolves.
-     * For QualifiedName, only check the leftmost identifier.
+     * For Identifiers, checks scope resolution (TS2304).
+     * For QualifiedNames, checks leftmost identifier resolves AND that each
+     * segment exists in namespace exports (TS2694).
      */
     private fun checkTypeNameResolved(
         name: Node,
@@ -4944,15 +4946,123 @@ class Checker(
                 checkIdentifierResolved(name.text, name, scope, source, fileName)
             }
             is QualifiedName -> {
-                // Only check the leftmost part of A.B.C
+                // Check the leftmost part of A.B.C
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
                 if (leftmost is Identifier) {
                     checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName)
                 }
+                // Check QualifiedName segments for TS2694
+                checkQualifiedNameExports(name, source, fileName)
             }
             else -> {}
         }
+    }
+
+    /**
+     * Check that each segment of a QualifiedName resolves through namespace exports.
+     * Emits TS2694: "Namespace 'X' has no exported member 'Y'."
+     */
+    private fun checkQualifiedNameExports(
+        qn: QualifiedName,
+        source: String,
+        fileName: String,
+    ) {
+        // Build the namespace path segments and resolve through binder symbols
+        val segments = mutableListOf<String>()
+        val rightId = qn.right
+
+        // Collect all segments from left to right
+        fun collectSegments(node: Node) {
+            when (node) {
+                is Identifier -> segments.add(node.text)
+                is QualifiedName -> {
+                    collectSegments(node.left)
+                    segments.add(node.right.text)
+                }
+                else -> return
+            }
+        }
+        collectSegments(qn.left)
+        // segments now has all path segments except the rightmost
+
+        // Resolve through the namespace chain
+        var symbol = globals[segments.firstOrNull() ?: return]
+        if (symbol == null) {
+            // Also check file-level locals
+            for (result in binderResults) {
+                symbol = result.locals[segments.first()]
+                if (symbol != null) break
+            }
+        }
+        if (symbol == null) return // leftmost doesn't resolve — already flagged by TS2304
+
+        symbol = resolveAlias(symbol)
+
+        // Walk through intermediate segments (skip first, that's the root namespace)
+        for (i in 1 until segments.size) {
+            val exports = symbol!!.exports ?: return // not a namespace
+            val next = exports[segments[i]]
+            if (next == null) {
+                // Intermediate segment not found — emit TS2694
+                val namespacePath = segments.subList(0, i).joinToString(".")
+                emitTS2694(namespacePath, segments[i], rightId, source, fileName)
+                return
+            }
+            symbol = resolveAlias(next)
+        }
+
+        // Now check the final segment (rightmost identifier)
+        val exports = symbol!!.exports
+        if (exports == null) return // not a namespace, can't check
+        val member = exports[rightId.text]
+        val namespacePath = segments.joinToString(".")
+        if (member == null) {
+            // Member doesn't exist at all
+            emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
+        } else if (!isMemberAccessible(member, symbol!!)) {
+            // Member exists but is not exported from a non-declare namespace
+            emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
+        }
+    }
+
+    /**
+     * Check if a member symbol is accessible from outside its namespace.
+     * In `declare` namespaces, all members are implicitly exported.
+     * In regular namespaces, only members with ExportValue flag are accessible.
+     */
+    private fun isMemberAccessible(member: Symbol, namespace: Symbol): Boolean {
+        // If member has explicit export, always accessible
+        if (member.flags.hasAny(SymbolFlags.ExportValue)) return true
+        // In declare namespaces, all members are accessible
+        for (decl in namespace.declarations) {
+            if (decl is ModuleDeclaration && ModifierFlag.Declare in decl.modifiers) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun emitTS2694(
+        namespacePath: String,
+        memberName: String,
+        memberNode: Identifier,
+        source: String,
+        fileName: String,
+    ) {
+        val start = memberNode.pos
+        val length = memberName.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Namespace '$namespacePath' has no exported member '$memberName'.",
+            category = DiagnosticCategory.Error,
+            code = 2694,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /**
