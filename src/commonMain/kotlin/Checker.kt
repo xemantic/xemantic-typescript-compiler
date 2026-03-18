@@ -11707,6 +11707,48 @@ class Checker(
                             length = kw.length,
                         ))
                     }
+                    // Check ordering: visibility modifiers must precede static
+                    if ((kw == "public" || kw == "private" || kw == "protected") && "static" in seen) {
+                        val (line2, character2) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'$kw' modifier must precede 'static' modifier.",
+                            category = DiagnosticCategory.Error,
+                            code = 1029,
+                            fileName = fileName,
+                            line = line2,
+                            character = character2,
+                            start = pos,
+                            length = kw.length,
+                        ))
+                    }
+                    // export must precede default
+                    if (kw == "export" && "default" in seen) {
+                        val (line2, character2) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'export' modifier must precede 'default' modifier.",
+                            category = DiagnosticCategory.Error,
+                            code = 1029,
+                            fileName = fileName,
+                            line = line2,
+                            character = character2,
+                            start = pos,
+                            length = kw.length,
+                        ))
+                    }
+                    // export must precede declare
+                    if (kw == "export" && "declare" in seen) {
+                        val (line2, character2) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'export' modifier must precede 'declare' modifier.",
+                            category = DiagnosticCategory.Error,
+                            code = 1029,
+                            fileName = fileName,
+                            line = line2,
+                            character = character2,
+                            start = pos,
+                            length = kw.length,
+                        ))
+                    }
                     seen.add(kw)
                     pos += kw.length
                     matched = true
