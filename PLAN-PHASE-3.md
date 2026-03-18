@@ -1309,7 +1309,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **17c. TS1090 — parameter cannot have access modifier in setter** (~4 tests)
+- [x] **17c. TS1090 — parameter cannot have access modifier in setter** (+4 tests)
 
   "Parameter cannot have question mark and initializer" and related
   parameter modifier restrictions.
