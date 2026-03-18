@@ -169,6 +169,8 @@ class Checker(
         if (options.target < ScriptTarget.ES2015) {
             checkArgumentsCollision()
         }
+        // 43. Check initializers in ambient contexts (TS1039)
+        checkAmbientInitializers()
     }
 
     // -----------------------------------------------------------------------
@@ -12183,6 +12185,85 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Initializers in ambient contexts (TS1039)
+    // -----------------------------------------------------------------------
+
+    private fun checkAmbientInitializers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkAmbientInitInStatements(result.sourceFile.statements, source, fileName, isAmbient = false)
+        }
+    }
+
+    private fun checkAmbientInitInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
+        for (stmt in stmts) {
+            val isDeclare = when (stmt) {
+                is VariableStatement -> ModifierFlag.Declare in stmt.modifiers
+                is ClassDeclaration -> ModifierFlag.Declare in stmt.modifiers
+                is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
+                else -> false
+            }
+            val ambient = isAmbient || isDeclare
+            when (stmt) {
+                is VariableStatement -> {
+                    if (ambient) {
+                        for (d in stmt.declarationList.declarations) {
+                            val init = d.initializer
+                            if (init != null) {
+                                val start = init.pos
+                                val length = (init.end - 1 - start).coerceAtLeast(1)
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Initializers are not allowed in ambient contexts.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 1039,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
+                }
+                is ClassDeclaration -> {
+                    if (ambient) {
+                        for (m in stmt.members) {
+                            if (m is PropertyDeclaration && m.initializer != null) {
+                                val init = m.initializer!!
+                                val start = init.pos
+                                val length = (init.end - 1 - start).coerceAtLeast(1)
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Initializers are not allowed in ambient contexts.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 1039,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    (stmt.body as? ModuleBlock)?.let {
+                        checkAmbientInitInStatements(it.statements, source, fileName, ambient)
+                    }
+                }
+                is Block -> checkAmbientInitInStatements(stmt.statements, source, fileName, isAmbient)
+                is FunctionDeclaration -> stmt.body?.let { checkAmbientInitInStatements(it.statements, source, fileName, false) }
+                else -> {}
             }
         }
     }
