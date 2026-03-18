@@ -1134,7 +1134,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **15l. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+- [x] **15l. TS1359 — reserved word as identifier** (+0 tests net)
+
+  Flag `await` as parameter name in async functions. Infrastructure
+  for other reserved word checking. No net test gain (tests already
+  passing or offset by other changes).
+
+  **Files:** `Checker.kt`
+
+- [x] **15m. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
 
   Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep

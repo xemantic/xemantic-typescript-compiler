@@ -135,6 +135,8 @@ class Checker(
         checkSuperInNonDerived()
         // 28. Check const without initializer (TS1155)
         checkConstWithoutInitializer()
+        // 29. Check reserved words in wrong context (TS1359)
+        checkReservedWordIdentifiers()
     }
 
     // -----------------------------------------------------------------------
@@ -10075,4 +10077,135 @@ class Checker(
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Reserved word identifier checking (TS1359)
+    // -----------------------------------------------------------------------
+
+    private val reservedWords = setOf("await", "yield", "void", "delete", "typeof",
+        "instanceof", "in", "of", "new", "return", "throw", "case", "switch",
+        "if", "else", "for", "while", "do", "try", "catch", "finally",
+        "with", "debugger", "var", "let", "const", "class", "function",
+        "import", "export", "default", "extends", "implements", "enum",
+        "interface", "package", "private", "protected", "public", "static")
+
+    private fun checkReservedWordIdentifiers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForReservedWords(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForReservedWords(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Async in stmt.modifiers) {
+                        checkAwaitParams(stmt.parameters, source, fileName)
+                    }
+                    stmt.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> {
+                                if (ModifierFlag.Async in member.modifiers) {
+                                    checkAwaitParams(member.parameters, source, fileName)
+                                }
+                                member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                            }
+                            is Constructor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        when (val init = decl.initializer) {
+                            is ArrowFunction -> {
+                                if (ModifierFlag.Async in init.modifiers) {
+                                    checkAwaitParams(init.parameters, source, fileName)
+                                }
+                            }
+                            is FunctionExpression -> {
+                                if (ModifierFlag.Async in init.modifiers) {
+                                    checkAwaitParams(init.parameters, source, fileName)
+                                }
+                                walkForReservedWords(init.body.statements, source, fileName)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is ExpressionStatement -> walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                is Block -> walkForReservedWords(stmt.statements, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkForReservedWords(body.statements, source, fileName)
+                }
+                // Check enum names that are reserved words
+                is EnumDeclaration -> {
+                    val name = stmt.name.text
+                    if (name == "void" || name == "await" || name == "yield") {
+                        emitTS1359(stmt.name, source, fileName, name)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkForReservedWordsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                if (ModifierFlag.Async in expr.modifiers) {
+                    checkAwaitParams(expr.parameters, source, fileName)
+                }
+            }
+            is FunctionExpression -> {
+                if (ModifierFlag.Async in expr.modifiers) {
+                    checkAwaitParams(expr.parameters, source, fileName)
+                }
+                walkForReservedWords(expr.body.statements, source, fileName)
+            }
+            is BinaryExpression -> {
+                walkForReservedWordsInExpr(expr.left, source, fileName)
+                walkForReservedWordsInExpr(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is CallExpression -> {
+                walkForReservedWordsInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { walkForReservedWordsInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkAwaitParams(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            val name = param.name
+            if (name is Identifier && name.text == "await") {
+                emitTS1359(name, source, fileName, "await")
+            }
+        }
+    }
+
+    private fun emitTS1359(nameNode: Identifier, source: String, fileName: String, word: String) {
+        val start = nameNode.pos
+        val length = word.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Identifier expected. '$word' is a reserved word that cannot be used here.",
+            category = DiagnosticCategory.Error,
+            code = 1359,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
 }
