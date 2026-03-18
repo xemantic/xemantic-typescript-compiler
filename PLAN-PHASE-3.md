@@ -1008,6 +1008,45 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
+### 14. Phase 3i — False positive suppression
+
+- [x] **14a. Suppress false TS6133 for parameters used in typeof** (+0 tests, correctness fix)
+
+  Fixed: unused parameter checker now scans sibling parameter type
+  annotations and the return type for `typeof` references. Previously
+  `function f(a: number, b: typeof a)` flagged `a` as unused.
+
+  **Files:** `Checker.kt`
+
+- [ ] **14b. Suppress false TS6133 for destructuring reads from this** (~2-3 tests)
+
+  Pattern `({ x } = this)` — this destructuring assignment reads `this.x`
+  but our property access collector doesn't recognize destructuring
+  assignment as a read. Fix: in `collectPropertyAccessNamesInExpr`, when
+  seeing a `BinaryExpression` with `=` where the LEFT side is an
+  `ObjectLiteralExpression` (destructuring target) and the RIGHT side
+  involves `this`, add the destructured property names as reads.
+
+  **Files:** `Checker.kt`
+
+- [ ] **14c. Suppress false TS2304 for JSX namespace** (~33 tests)
+
+  `JSX` is reported as unresolved 33 times. In TypeScript, `JSX` is a
+  well-known namespace from the JSX type definitions. Add `JSX` and
+  `ElementTagNameMap` to known globals or skip TS2304 in JSX contexts.
+
+  **Files:** `Checker.kt`
+
+- [ ] **14d. TS6199 "All variables are unused"** (~3-5 tests)
+
+  TypeScript uses TS6199 instead of individual TS6133 when ALL declarations
+  in a `var`/`let`/`const` statement are unused. We currently emit
+  individual TS6133 for each. Fix: after collecting unused locals, check
+  if all declarations in a VariableStatement are unused, and emit TS6199
+  with span covering the entire declaration list instead of individual TS6133.
+
+  **Files:** `Checker.kt`
+
 ---
 
 ## BLOCKED — not planned for Phase 3
