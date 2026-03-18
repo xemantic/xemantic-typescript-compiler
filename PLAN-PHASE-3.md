@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,955 passing (65.6%), 3,640 failing
-- **Session 2026-03-18b**: +13 tests (6,942→6,955) — fix false-positive TS1005, add TS6131
+- **10,595 tests**, 6,958 passing (65.7%), 3,637 failing
+- **Session 2026-03-18b**: +16 tests (6,942→6,958) — fix false-positive TS1005, add TS6131, TS7019
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
@@ -1176,13 +1176,10 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **16b. TS2354 — cannot use importHelpers without tslib** (~7 tests)
+- [ ] **16b. TS2354 — cannot use importHelpers without tslib** (~7 tests) — *deferred*
 
-  When `importHelpers: true` but no tslib module available, emit
-  TS2354: "This syntax requires an imported helper named '__decorate',
-  but module 'tslib' cannot be found." Check at options validation level.
-
-  **Files:** `TypeScriptCompiler.kt` or `Checker.kt`
+  Complex: requires detecting helper-needing syntax (extends, decorators,
+  esModuleInterop default import/export) per target/module/options. Deferred.
 
 - [ ] **16c. TS1148 — cannot use imports with --module none** (~3 tests)
 
@@ -1205,10 +1202,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **16f. TS7019 — rest parameter implicitly has 'any[]' type** (~7 tests)
+- [x] **16f. TS7019 — rest parameter implicitly has 'any[]' type** (+3 tests)
 
-  When `noImplicitAny: true`, rest parameters without type annotation
-  produce TS7019 instead of TS7006. Check for `...` parameter prefix.
+  Rest parameters without type annotation now emit TS7019 instead of
+  being skipped. Span covers `...name`. Previously all rest params were
+  silently skipped with `if (param.dotDotDotToken) continue`.
 
   **Files:** `Checker.kt`
 

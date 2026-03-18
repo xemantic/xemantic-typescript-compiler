@@ -4175,31 +4175,48 @@ class Checker(
     ) {
         for (param in parameters) {
             if (param.isCommentPlaceholder) continue
-            // Skip if parameter has type annotation, initializer, or rest token
+            // Skip if parameter has type annotation or initializer
             if (param.type != null) continue
             if (param.initializer != null) continue
-            if (param.dotDotDotToken) continue
             // Skip `this` parameter
             val name = param.name
             if (name is Identifier && name.text == "this") continue
             // Skip destructured parameters (they get separate diagnostics)
             if (name !is Identifier) continue
 
-            val start = name.pos
-            // Include the `?` token in the span if present (e.g., `x?` → length 2)
-            val length = if (param.questionToken) name.text.length + 1 else name.text.length
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-
-            diagnostics.add(Diagnostic(
-                message = "Parameter '${name.text}' implicitly has an 'any' type.",
-                category = DiagnosticCategory.Error,
-                code = 7006,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
+            if (param.dotDotDotToken) {
+                // TS7019: Rest parameter implicitly has an 'any[]' type
+                // Span covers `...name` (3 chars for `...` + name length)
+                val start = name.pos - 3 // position of `...`
+                val length = 3 + name.text.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Rest parameter '${name.text}' implicitly has an 'any[]' type.",
+                    category = DiagnosticCategory.Error,
+                    code = 7019,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            } else {
+                // TS7006: Parameter implicitly has an 'any' type
+                val start = name.pos
+                // Include the `?` token in the span if present (e.g., `x?` → length 2)
+                val length = if (param.questionToken) name.text.length + 1 else name.text.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                    category = DiagnosticCategory.Error,
+                    code = 7006,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
         }
     }
 
