@@ -3027,7 +3027,10 @@ class Checker(
             // Also collect references from parameter defaults and types
             for (param in parameters) {
                 param.initializer?.let { collectRefsFromExpr(it, scope) }
+                param.type?.let { collectTypeRefs(it, scope) }
             }
+            // Scan return type for typeof references
+            returnType?.let { collectTypeRefs(it, scope) }
             // Report unused parameters
             for (decl in scope.declarations) {
                 if (decl.name in scope.referencedNames) continue
