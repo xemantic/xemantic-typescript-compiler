@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,800 passing (64.2%), 3,795 failing
+- **10,595 tests**, 6,802 passing (64.2%), 3,793 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -834,10 +834,12 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **11e. TS2554 — wrong argument count** (~17 tests)
+- [x] **11e. TS2554 — wrong argument count** (+2 tests)
 
-  "Expected N arguments, but got M." Check call expressions against
-  declared parameter counts. Only handle straightforward cases (no overloads).
+  Basic implementation for too-many-arguments: direct function calls and
+  class constructors without inheritance. Skips overloaded functions,
+  rest parameters, and classes with base constructors.
+  Depth-limited expression walker to prevent StackOverflow.
 
   **Files:** `Checker.kt`
 
