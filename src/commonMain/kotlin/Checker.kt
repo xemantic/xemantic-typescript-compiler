@@ -2638,7 +2638,6 @@ class Checker(
                 mr.memberName != pm.name && pm.name in mr.refs
             }
             if (isExternallyAccessed) continue
-            if (pm.name.startsWith("_")) continue
             val start = pm.nameNode.pos
             val length = pm.name.length
             val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -2727,7 +2726,20 @@ class Checker(
                 expr.arguments.forEach { collectPropertyAccessNamesInExpr(it, names) }
             }
             is BinaryExpression -> {
-                collectPropertyAccessNamesInExpr(expr.left, names)
+                if (expr.operator == SyntaxKind.Equals) {
+                    // Simple assignment: left side is write-only, don't count as read
+                    // But still recurse into sub-expressions of the left side
+                    // (e.g. for `this.a[this.b] = 0`, this.b IS a read)
+                    val left = expr.left
+                    if (left is PropertyAccessExpression) {
+                        // this.x = ... → only recurse into the base (this), not the property name
+                        collectPropertyAccessNamesInExpr(left.expression, names)
+                    } else {
+                        collectPropertyAccessNamesInExpr(left, names)
+                    }
+                } else {
+                    collectPropertyAccessNamesInExpr(expr.left, names)
+                }
                 collectPropertyAccessNamesInExpr(expr.right, names)
             }
             is PrefixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names)
