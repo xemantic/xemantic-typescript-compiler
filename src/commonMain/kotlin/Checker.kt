@@ -6244,15 +6244,33 @@ class Checker(
         }
     }
 
-    /** Emit a diagnostic for a statement, spanning the trimmed line content. */
+    /** Emit a diagnostic for a statement, spanning the statement text (excluding comments). */
     private fun emitStatementLineDiagnostic(
         stmt: Statement, source: String, fileName: String, code: Int, message: String,
     ) {
         var start = stmt.pos
         while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) start++
+        // Use the statement's end but find the last non-whitespace before it
+        // Also find the semicolon if present to end the span there
         val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-        var end = lineEnd
-        while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) end--
+        // Find the semicolon position (statement end) or trim trailing comment
+        var end = start
+        var i = start
+        while (i < lineEnd) {
+            val ch = source[i]
+            if (ch == ';') {
+                end = i + 1 // include the semicolon
+                break
+            }
+            if (ch == '/' && i + 1 < lineEnd && (source[i + 1] == '/' || source[i + 1] == '*')) {
+                // Comment starts — end before it
+                while (end > start && source[end - 1].let { it == ' ' || it == '\t' }) end--
+                break
+            }
+            end = i + 1
+            i++
+        }
+        if (end <= start) end = start + 1
         val length = end - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
