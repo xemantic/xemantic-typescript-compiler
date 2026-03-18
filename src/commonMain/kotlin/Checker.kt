@@ -4383,6 +4383,11 @@ class Checker(
                 val fnScope = scope.child(hasArguments = true)
                 addParamsToScope(stmt.parameters, fnScope)
                 stmt.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                // Check type parameter constraints
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                }
                 stmt.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
                 for (param in stmt.parameters) {
                     param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
@@ -4396,6 +4401,10 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 val classScope = scope.child()
                 stmt.typeParameters?.forEach { classScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+                }
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
@@ -4409,6 +4418,10 @@ class Checker(
             is InterfaceDeclaration -> {
                 val ifaceScope = scope.child()
                 stmt.typeParameters?.forEach { ifaceScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                }
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
@@ -4436,6 +4449,10 @@ class Checker(
             is TypeAliasDeclaration -> {
                 val typeScope = scope.child()
                 stmt.typeParameters?.forEach { typeScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
+                }
                 checkUnresolvedInType(stmt.type, typeScope, source, fileName)
             }
             is EnumDeclaration -> {

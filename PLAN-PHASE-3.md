@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,827 passing (64.4%), 3,765 failing
+- **10,595 tests**, 6,829 passing (64.5%), 3,763 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -891,6 +891,35 @@ Picking off tractable fixes to continue improving the pass rate.
   Emit TS2307 for ALL module specifiers in single-file compilations,
   including bare specifiers (previously only relative/empty were flagged).
   Remaining TS2304 gaps need type constraint and enum scope resolution.
+
+  **Files:** `Checker.kt`
+
+- [x] **12f. TS2304 in type parameter constraints** (+2 tests)
+
+  Check names in type parameter constraint (`extends X`) and default
+  positions for unresolved names. Applied to functions, classes,
+  interfaces, and type aliases.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12g. TS2314 — wrong type argument count** (~14 tests)
+
+  "Generic type 'X' requires N type argument(s)." Check type references
+  against declared type parameter counts.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12h. TS2694 — namespace has no exported member** (~11 tests)
+
+  "Namespace 'X' has no exported member 'Y'." Check qualified name
+  access against binder's namespace exports.
+
+  **Files:** `Checker.kt`
+
+- [ ] **12i. TS2305 — module has no exported member** (~11 tests)
+
+  "Module 'X' has no exported member 'Y'." Check named import bindings
+  against exported declarations.
 
   **Files:** `Checker.kt`
 
