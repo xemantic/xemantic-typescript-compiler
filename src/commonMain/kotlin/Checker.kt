@@ -163,6 +163,8 @@ class Checker(
         checkDuplicateModifiers()
         // 40. Check rest parameter is last (TS1014)
         checkRestParameterLast()
+        // 41. Check implementation in ambient context (TS1183)
+        checkAmbientImplementation()
     }
 
     // -----------------------------------------------------------------------
@@ -11833,5 +11835,153 @@ class Checker(
                 ))
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Implementation in ambient context (TS1183)
+    // -----------------------------------------------------------------------
+
+    private fun checkAmbientImplementation() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkAmbientInStatements(result.sourceFile.statements, source, fileName, isAmbient = false)
+        }
+    }
+
+    private fun checkAmbientInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
+        for (stmt in stmts) checkAmbientInStatement(stmt, source, fileName, isAmbient)
+    }
+
+    private fun checkAmbientInStatement(stmt: Statement, source: String, fileName: String, isAmbient: Boolean) {
+        val isDeclare = when (stmt) {
+            is ClassDeclaration -> ModifierFlag.Declare in stmt.modifiers
+            is FunctionDeclaration -> ModifierFlag.Declare in stmt.modifiers
+            is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
+            else -> false
+        }
+        val ambient = isAmbient || isDeclare
+
+        when (stmt) {
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> {
+                            if (ambient && m.body != null) {
+                                emitTS1183(m.body!!, source, fileName)
+                            }
+                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        }
+                        is Constructor -> {
+                            if (ambient && m.body != null) {
+                                emitTS1183(m.body!!, source, fileName)
+                            }
+                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        }
+                        is GetAccessor -> {
+                            if (ambient && m.body != null) {
+                                emitTS1183(m.body!!, source, fileName)
+                            }
+                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        }
+                        is SetAccessor -> {
+                            if (ambient && m.body != null) {
+                                emitTS1183(m.body!!, source, fileName)
+                            }
+                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is FunctionDeclaration -> {
+                if (ambient && stmt.body != null) {
+                    emitTS1183(stmt.body!!, source, fileName)
+                }
+                if (!ambient) stmt.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+            }
+            is InterfaceDeclaration -> {
+                // Interface members are always ambient
+                for (m in stmt.members) {
+                    when (m) {
+                        is GetAccessor -> if (m.body != null) emitTS1183(m.body!!, source, fileName)
+                        is SetAccessor -> if (m.body != null) emitTS1183(m.body!!, source, fileName)
+                        is MethodDeclaration -> if (m.body != null) emitTS1183(m.body!!, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TypeAliasDeclaration -> {
+                // Type literal members with bodies — walk the type
+                checkAmbientInType(stmt.type, source, fileName)
+            }
+            is ModuleDeclaration -> {
+                (stmt.body as? ModuleBlock)?.let { checkAmbientInStatements(it.statements, source, fileName, ambient) }
+            }
+            is Block -> checkAmbientInStatements(stmt.statements, source, fileName, isAmbient)
+            is IfStatement -> {
+                checkAmbientInStatement(stmt.thenStatement, source, fileName, isAmbient)
+                stmt.elseStatement?.let { checkAmbientInStatement(it, source, fileName, isAmbient) }
+            }
+            is VariableStatement -> {
+                for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { checkAmbientInExpr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> checkAmbientInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkAmbientInExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkAmbientInType(type: TypeNode, source: String, fileName: String) {
+        if (type is TypeLiteral) {
+            for (m in type.members) {
+                when (m) {
+                    is GetAccessor -> if (m.body != null) emitTS1183(m.body!!, source, fileName)
+                    is SetAccessor -> if (m.body != null) emitTS1183(m.body!!, source, fileName)
+                    is MethodDeclaration -> if (m.body != null) emitTS1183(m.body!!, source, fileName)
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun checkAmbientInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ClassExpression -> {
+                // Class expressions themselves are not ambient
+                for (m in expr.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        is Constructor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        else -> {}
+                    }
+                }
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkAmbientInStatements(body.statements, source, fileName, false)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+            else -> {}
+        }
+    }
+
+    private fun emitTS1183(body: Block, source: String, fileName: String) {
+        // Squiggle on the opening `{` only (1 char)
+        val start = body.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "An implementation cannot be declared in ambient contexts.",
+            category = DiagnosticCategory.Error,
+            code = 1183,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = 1,
+        ))
     }
 }
