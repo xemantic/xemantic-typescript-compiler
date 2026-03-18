@@ -7404,9 +7404,20 @@ class Checker(
                 d.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
             }
             is IfStatement -> {
-                checkAlwaysTruthyCondition(stmt.expression, source, fileName)
+                // Walk the if-else chain: only flag always-truthy conditions that are
+                // UNREACHABLE because a preceding branch was always-truthy
+                var prevTruthy = isAlwaysTruthyExpr(stmt.expression)
                 checkAlwaysTruthyInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkAlwaysTruthyInStatement(it, source, fileName) }
+                var elseStmt = stmt.elseStatement
+                while (elseStmt is IfStatement) {
+                    if (prevTruthy) {
+                        checkAlwaysTruthyCondition(elseStmt.expression, source, fileName)
+                    }
+                    if (isAlwaysTruthyExpr(elseStmt.expression)) prevTruthy = true
+                    checkAlwaysTruthyInStatement(elseStmt.thenStatement, source, fileName)
+                    elseStmt = elseStmt.elseStatement
+                }
+                elseStmt?.let { checkAlwaysTruthyInStatement(it, source, fileName) }
             }
             is Block -> checkAlwaysTruthyInStatements(stmt.statements, source, fileName)
             is ReturnStatement -> stmt.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
