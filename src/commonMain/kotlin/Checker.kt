@@ -3288,6 +3288,8 @@ class Checker(
                     if (decl.type != null && decl.initializer == null && !decl.exclamationToken) {
                         // Skip `var x: any` — `any` includes undefined, no assignment needed
                         if (isAnyType(decl.type)) continue
+                        // Skip if type annotation is a bare generic reference (TS2314 error type)
+                        if (isUnresolvedGenericType(decl.type)) continue
                         val name = decl.name
                         if (name is Identifier) {
                             uninitialized.add(name.text)
@@ -3758,6 +3760,9 @@ class Checker(
             if (member.type == null) continue
             // Skip `any` type — no assignment needed for any
             if (isAnyType(member.type)) continue
+            // Skip if type annotation is a bare generic reference (would trigger TS2314)
+            // TypeScript doesn't flag TS2564 on error types
+            if (isUnresolvedGenericType(member.type)) continue
 
             // Get property name
             val propName = when (val name = member.name) {
@@ -4408,6 +4413,7 @@ class Checker(
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
+                        checkHeritageTypeArgCount(type, classScope, source, fileName)
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
                     }
                 }
@@ -4425,6 +4431,7 @@ class Checker(
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
+                        checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
                         type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                     }
                 }
@@ -4679,6 +4686,7 @@ class Checker(
                 expr.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
+                        checkHeritageTypeArgCount(type, classScope, source, fileName)
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
                     }
                 }
@@ -4804,6 +4812,8 @@ class Checker(
             is TypeReference -> {
                 // Check the type name (Identifier or QualifiedName)
                 checkTypeNameResolved(type.typeName, scope, source, fileName)
+                // Check type argument count (TS2314)
+                checkTypeArgCount(type, scope, source, fileName)
                 type.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
             }
             is ArrayType -> checkUnresolvedInType(type.elementType, scope, source, fileName)
@@ -6693,6 +6703,239 @@ class Checker(
             // Common global augmentations
             "Symbol",
         )
+
+        /**
+         * Known built-in generic types from lib.d.ts with their type parameter counts
+         * and display names. Used for TS2314 checking when lib.d.ts isn't loaded.
+         */
+        private val KNOWN_GENERIC_BUILTINS: Map<String, Pair<Int, String>> = mapOf(
+            "Array" to (1 to "Array<T>"),
+            "ReadonlyArray" to (1 to "ReadonlyArray<T>"),
+            "Promise" to (1 to "Promise<T>"),
+            "PromiseLike" to (1 to "PromiseLike<T>"),
+            "ArrayLike" to (1 to "ArrayLike<T>"),
+            "Map" to (2 to "Map<K, V>"),
+            "ReadonlyMap" to (2 to "ReadonlyMap<K, V>"),
+            "Set" to (1 to "Set<T>"),
+            "ReadonlySet" to (1 to "ReadonlySet<T>"),
+            "WeakMap" to (2 to "WeakMap<K, V>"),
+            "WeakSet" to (1 to "WeakSet<T>"),
+            "WeakRef" to (1 to "WeakRef<T>"),
+            "Partial" to (1 to "Partial<T>"),
+            "Required" to (1 to "Required<T>"),
+            "Readonly" to (1 to "Readonly<T>"),
+            "Record" to (2 to "Record<K, T>"),
+            "Pick" to (2 to "Pick<T, K>"),
+            "Omit" to (2 to "Omit<T, K>"),
+            "Exclude" to (2 to "Exclude<T, U>"),
+            "Extract" to (2 to "Extract<T, U>"),
+            "NonNullable" to (1 to "NonNullable<T>"),
+            "Parameters" to (1 to "Parameters<T>"),
+            "ConstructorParameters" to (1 to "ConstructorParameters<T>"),
+            "ReturnType" to (1 to "ReturnType<T>"),
+            "InstanceType" to (1 to "InstanceType<T>"),
+            "ThisType" to (1 to "ThisType<T>"),
+            "ThisParameterType" to (1 to "ThisParameterType<T>"),
+            "OmitThisParameter" to (1 to "OmitThisParameter<T>"),
+            "Awaited" to (1 to "Awaited<T>"),
+            "NoInfer" to (1 to "NoInfer<T>"),
+            "Iterable" to (1 to "Iterable<T>"),
+            "IterableIterator" to (1 to "IterableIterator<T>"),
+            "AsyncIterable" to (1 to "AsyncIterable<T>"),
+            "AsyncIterableIterator" to (1 to "AsyncIterableIterator<T>"),
+            "Generator" to (3 to "Generator<T, TReturn, TNext>"),
+            "AsyncGenerator" to (3 to "AsyncGenerator<T, TReturn, TNext>"),
+            "TypedPropertyDescriptor" to (1 to "TypedPropertyDescriptor<T>"),
+            "ProxyHandler" to (1 to "ProxyHandler<T>"),
+            "FinalizationRegistry" to (1 to "FinalizationRegistry<T>"),
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Generic type argument count checking (TS2314)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Type parameter info: (minRequired, maxTotal, displayName).
+     * minRequired = count of type params without defaults.
+     * maxTotal = total type params count.
+     */
+    private data class TypeParamInfo(val minRequired: Int, val maxTotal: Int, val displayName: String)
+
+    /**
+     * Get type parameter info for a named type. Returns null if the type is not generic.
+     */
+    private fun getTypeParamInfo(name: String): TypeParamInfo? {
+        // Check binder symbols first (user-declared types)
+        for (result in binderResults) {
+            val symbol = result.locals[name] ?: continue
+            val info = getTypeParamInfoFromSymbol(symbol)
+            if (info != null) return info
+        }
+        val globalSymbol = globals[name]
+        if (globalSymbol != null) {
+            val info = getTypeParamInfoFromSymbol(globalSymbol)
+            if (info != null) return info
+        }
+        // Check known built-in generics (all required, no defaults)
+        val builtin = KNOWN_GENERIC_BUILTINS[name] ?: return null
+        return TypeParamInfo(builtin.first, builtin.first, builtin.second)
+    }
+
+    /**
+     * Extract type parameter info from a symbol's declarations.
+     */
+    private fun getTypeParamInfoFromSymbol(symbol: Symbol): TypeParamInfo? {
+        for (decl in symbol.declarations) {
+            val typeParams = when (decl) {
+                is ClassDeclaration -> decl.typeParameters
+                is InterfaceDeclaration -> decl.typeParameters
+                is TypeAliasDeclaration -> decl.typeParameters
+                else -> null
+            }
+            if (typeParams != null && typeParams.isNotEmpty()) {
+                val isTypeAlias = decl is TypeAliasDeclaration
+                val displayName = if (isTypeAlias) {
+                    symbol.name
+                } else {
+                    "${symbol.name}<${typeParams.joinToString(", ") { it.name.text }}>"
+                }
+                val minRequired = typeParams.count { it.default == null }
+                return TypeParamInfo(minRequired, typeParams.size, displayName)
+            }
+        }
+        return null
+    }
+
+    /**
+     * Check if a type annotation is a bare generic type reference that would trigger TS2314.
+     * Used to suppress false-positive TS2564 on error types.
+     */
+    private fun isUnresolvedGenericType(type: TypeNode?): Boolean {
+        if (type !is TypeReference) return false
+        val typeName = type.typeName
+        val name = when (typeName) {
+            is Identifier -> typeName.text
+            else -> return false
+        }
+        val info = getTypeParamInfo(name) ?: return false
+        if (info.minRequired != info.maxTotal) return false
+        val providedCount = type.typeArguments?.size ?: 0
+        return providedCount != info.maxTotal
+    }
+
+    /**
+     * Check type argument count for a TypeReference node.
+     * Emits TS2314: "Generic type 'X' requires N type argument(s)."
+     * Only fires when all type params are required (no defaults).
+     * Types with default type params need TS2707 (different code) — skipped.
+     */
+    private fun checkTypeArgCount(
+        typeRef: TypeReference,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        val typeName = typeRef.typeName
+        val name = when (typeName) {
+            is Identifier -> typeName.text
+            else -> return // QualifiedName — skip
+        }
+
+        // Only check if the name actually resolves (skip if it would be TS2304)
+        if (name.isEmpty()) return
+        if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
+        if (name in KEYWORD_IDENTIFIERS) return
+        if (!scope.has(name)) return
+
+        // Look up type parameter info
+        val info = getTypeParamInfo(name) ?: return
+
+        // Skip types with default type params — they need TS2707 not TS2314
+        if (info.minRequired != info.maxTotal) return
+
+        val providedCount = typeRef.typeArguments?.size ?: 0
+        if (providedCount == info.maxTotal) return // correct count
+
+        // Compute squiggle position
+        val start: Int
+        val length: Int
+        if (providedCount == 0) {
+            // No type args — squiggle on just the name
+            start = typeName.pos
+            length = name.length
+        } else {
+            // Wrong count — squiggle on the entire type reference including <args>
+            start = typeName.pos
+            val lastArgEnd = typeRef.typeArguments!!.last().end
+            val gtIdx = source.indexOf('>', lastArgEnd - 1)
+            length = if (gtIdx >= 0) gtIdx + 1 - start else name.length
+        }
+
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Generic type '${info.displayName}' requires ${info.maxTotal} type argument(s).",
+            category = DiagnosticCategory.Error,
+            code = 2314,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * Check type argument count for an ExpressionWithTypeArguments in heritage clauses.
+     * Emits TS2314 when extends/implements clause uses wrong number of type args.
+     * Only fires when all type params are required (no defaults).
+     */
+    private fun checkHeritageTypeArgCount(
+        exprWithArgs: ExpressionWithTypeArguments,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        val expression = exprWithArgs.expression
+        val name = when (expression) {
+            is Identifier -> expression.text
+            else -> return // PropertyAccessExpression — skip
+        }
+
+        // Only check if the name resolves
+        if (name.isEmpty()) return
+        if (!scope.has(name)) return
+
+        val info = getTypeParamInfo(name) ?: return
+
+        // Skip types with default type params — they need TS2707 not TS2314
+        if (info.minRequired != info.maxTotal) return
+
+        val providedCount = exprWithArgs.typeArguments?.size ?: 0
+        if (providedCount == info.maxTotal) return
+
+        val start = expression.pos
+        val length: Int
+        if (providedCount == 0) {
+            length = name.length
+        } else {
+            // Squiggle covers name + <args>
+            val lastArgEnd = exprWithArgs.typeArguments!!.last().end
+            val gtIdx = source.indexOf('>', lastArgEnd - 1)
+            length = if (gtIdx >= 0) gtIdx + 1 - start else name.length
+        }
+
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Generic type '${info.displayName}' requires ${info.maxTotal} type argument(s).",
+            category = DiagnosticCategory.Error,
+            code = 2314,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
