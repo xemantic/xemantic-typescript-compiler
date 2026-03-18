@@ -113,6 +113,8 @@ class Checker(
         }
         // 19. Check type used as value (TS2693)
         checkTypeUsedAsValue()
+        // 20. Check always-truthy expressions (TS2872)
+        checkAlwaysTruthy()
     }
 
     // -----------------------------------------------------------------------
@@ -6683,7 +6685,140 @@ class Checker(
     // Type used as value checking (TS2693)
     // -----------------------------------------------------------------------
 
-    // TYPE_ONLY_KEYWORDS is in the companion object to avoid init-order issues
+    // -----------------------------------------------------------------------
+    // Always-truthy expression checking (TS2872)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for expressions that are always truthy in logical OR and if conditions.
+     * Emits TS2872 "This kind of expression is always truthy."
+     */
+    private fun checkAlwaysTruthy() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkAlwaysTruthyInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkAlwaysTruthyInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkAlwaysTruthyInStatement(stmt, source, fileName)
+    }
+
+    private fun checkAlwaysTruthyInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> checkAlwaysTruthyInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+            }
+            is IfStatement -> {
+                checkAlwaysTruthyCondition(stmt.expression, source, fileName)
+                checkAlwaysTruthyInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkAlwaysTruthyInStatement(it, source, fileName) }
+            }
+            is Block -> checkAlwaysTruthyInStatements(stmt.statements, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ForStatement -> {
+                stmt.condition?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+                checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> for (c in stmt.caseBlock) {
+                val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                checkAlwaysTruthyInStatements(clauseStmts, source, fileName)
+            }
+            is TryStatement -> {
+                checkAlwaysTruthyInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkAlwaysTruthyInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkAlwaysTruthyInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                if (expr.operator == SyntaxKind.BarBar) {
+                    if (isAlwaysTruthyExpr(expr.left)) {
+                        emitTS2872(expr.left, source, fileName)
+                    }
+                }
+                checkAlwaysTruthyInExpr(expr.left, source, fileName)
+                checkAlwaysTruthyInExpr(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkAlwaysTruthyInExpr(expr.whenTrue, source, fileName)
+                checkAlwaysTruthyInExpr(expr.whenFalse, source, fileName)
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkAlwaysTruthyInStatements(body.statements, source, fileName)
+                is Expression -> checkAlwaysTruthyInExpr(body, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkAlwaysTruthyCondition(expr: Expression, source: String, fileName: String) {
+        if (expr is NumericLiteralNode) {
+            val value = expr.text.toDoubleOrNull() ?: return
+            if (value != 0.0 && !value.isNaN()) {
+                emitTS2872(expr, source, fileName)
+            }
+        }
+        if (expr is ParenthesizedExpression) {
+            checkAlwaysTruthyCondition(expr.expression, source, fileName)
+        }
+    }
+
+    /** Only flag simple literal expressions to avoid false positives. */
+    private fun isAlwaysTruthyExpr(expr: Expression): Boolean {
+        return when (expr) {
+            is StringLiteralNode -> expr.text.isNotEmpty()
+            is NumericLiteralNode -> {
+                val value = expr.text.toDoubleOrNull() ?: return false
+                value != 0.0 && !value.isNaN()
+            }
+            is ParenthesizedExpression -> isAlwaysTruthyExpr(expr.expression)
+            else -> false
+        }
+    }
+
+    private fun emitTS2872(expr: Expression, source: String, fileName: String) {
+        val start = expr.pos
+        // Use text length for literals to get accurate squiggle
+        val length = when (expr) {
+            is StringLiteralNode -> (expr.rawText?.length ?: expr.text.length) + 2 // +2 for quotes
+            is NumericLiteralNode -> expr.text.length
+            else -> (expr.end - 1 - start).coerceAtLeast(1)
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This kind of expression is always truthy.",
+            category = DiagnosticCategory.Error,
+            code = 2872,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
 
     /**
      * Check for type-only names used in value positions.
