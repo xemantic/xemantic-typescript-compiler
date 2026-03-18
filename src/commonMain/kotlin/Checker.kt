@@ -117,6 +117,8 @@ class Checker(
         checkTypeUsedAsValue()
         // 20. Check always-truthy expressions (TS2872)
         checkAlwaysTruthy()
+        // 21. Check null/undefined used in invalid positions (TS18050)
+        checkNullUndefinedUsage()
     }
 
     // -----------------------------------------------------------------------
@@ -7184,6 +7186,219 @@ class Checker(
             message = "This kind of expression is always truthy.",
             category = DiagnosticCategory.Error,
             code = 2872,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Null/undefined usage checking (TS18050)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for null/undefined used in invalid positions:
+     * property access base, binary operator operands, etc.
+     * Emits TS18050: "The value 'null'/'undefined' cannot be used here."
+     */
+    private fun checkNullUndefinedUsage() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkNullUndefinedInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkNullUndefinedInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkNullUndefinedInStatement(stmt, source, fileName)
+    }
+
+    private fun checkNullUndefinedInStatement(stmt: Statement, source: String, fileName: String) {
+        if (checkDepth > maxCheckDepth) return
+        checkDepth++
+        try {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let { checkNullUndefinedInExpr(it, source, fileName) }
+                    }
+                }
+                is ExpressionStatement -> checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                is ReturnStatement -> stmt.expression?.let { checkNullUndefinedInExpr(it, source, fileName) }
+                is IfStatement -> {
+                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                    checkNullUndefinedInStatement(stmt.thenStatement, source, fileName)
+                    stmt.elseStatement?.let { checkNullUndefinedInStatement(it, source, fileName) }
+                }
+                is Block -> checkNullUndefinedInStatements(stmt.statements, source, fileName)
+                is ForStatement -> {
+                    stmt.initializer?.let { if (it is Expression) checkNullUndefinedInExpr(it, source, fileName) }
+                    stmt.condition?.let { checkNullUndefinedInExpr(it, source, fileName) }
+                    stmt.incrementor?.let { checkNullUndefinedInExpr(it, source, fileName) }
+                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
+                }
+                is WhileStatement -> {
+                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
+                }
+                is DoStatement -> {
+                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
+                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                }
+                is SwitchStatement -> {
+                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> {
+                                checkNullUndefinedInExpr(clause.expression, source, fileName)
+                                checkNullUndefinedInStatements(clause.statements, source, fileName)
+                            }
+                            is DefaultClause -> {
+                                checkNullUndefinedInStatements(clause.statements, source, fileName)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    stmt.body?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let {
+                                checkNullUndefinedInStatements(it.statements, source, fileName)
+                            }
+                            is PropertyDeclaration -> member.initializer?.let {
+                                checkNullUndefinedInExpr(it, source, fileName)
+                            }
+                            is Constructor -> member.body?.let {
+                                checkNullUndefinedInStatements(it.statements, source, fileName)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkNullUndefinedInStatements(body.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is ThrowStatement -> stmt.expression?.let { checkNullUndefinedInExpr(it, source, fileName) }
+                else -> {}
+            }
+        } finally { checkDepth-- }
+    }
+
+    private fun checkNullUndefinedInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                // Check if null/undefined is used as operand of arithmetic/bitwise operators
+                val op = expr.operator
+                val isArithmeticOrBitwise = op in setOf(
+                    SyntaxKind.Plus, SyntaxKind.Minus,
+                    SyntaxKind.Asterisk, SyntaxKind.Slash, SyntaxKind.Percent,
+                    SyntaxKind.AsteriskAsterisk,
+                    SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
+                    SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
+                    SyntaxKind.GreaterThanGreaterThanGreaterThan,
+                    SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
+                    SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals,
+                    SyntaxKind.PercentEquals, SyntaxKind.AsteriskAsteriskEquals,
+                    SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals,
+                    SyntaxKind.CaretEquals, SyntaxKind.LessThanLessThanEquals,
+                    SyntaxKind.GreaterThanGreaterThanEquals,
+                    SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
+                )
+                if (isArithmeticOrBitwise) {
+                    // For '+' operator, null/undefined is valid when other side is a string
+                    val isPlus = op == SyntaxKind.Plus || op == SyntaxKind.PlusEquals
+                    val leftIsString = expr.left is StringLiteralNode || expr.left is TemplateExpression ||
+                            (expr.left is Identifier && (expr.left as Identifier).text.let { it != "null" && it != "undefined" } && false) // only literals
+                    val rightIsString = expr.right is StringLiteralNode || expr.right is TemplateExpression
+                    if (!(isPlus && rightIsString)) {
+                        checkNullUndefinedLiteral(expr.left, source, fileName)
+                    }
+                    if (!(isPlus && leftIsString)) {
+                        checkNullUndefinedLiteral(expr.right, source, fileName)
+                    }
+                }
+                // Recurse into both sides
+                checkNullUndefinedInExpr(expr.left, source, fileName)
+                checkNullUndefinedInExpr(expr.right, source, fileName)
+            }
+            is PropertyAccessExpression -> {
+                // null.foo or undefined.foo
+                checkNullUndefinedLiteral(expr.expression, source, fileName)
+                checkNullUndefinedInExpr(expr.expression, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                // null[x] or undefined[x]
+                checkNullUndefinedLiteral(expr.expression, source, fileName)
+                checkNullUndefinedInExpr(expr.expression, source, fileName)
+                checkNullUndefinedInExpr(expr.argumentExpression, source, fileName)
+            }
+            is CallExpression -> {
+                checkNullUndefinedInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkNullUndefinedInExpr(arg, source, fileName)
+            }
+            is ParenthesizedExpression -> checkNullUndefinedInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkNullUndefinedInExpr(expr.condition, source, fileName)
+                checkNullUndefinedInExpr(expr.whenTrue, source, fileName)
+                checkNullUndefinedInExpr(expr.whenFalse, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkNullUndefinedInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkNullUndefinedInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) {
+                    checkNullUndefinedInExpr(span.expression, source, fileName)
+                }
+            }
+            is ArrayLiteralExpression -> {
+                for (elem in expr.elements) checkNullUndefinedInExpr(elem, source, fileName)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkNullUndefinedInExpr(prop.initializer, source, fileName)
+                        is SpreadAssignment -> checkNullUndefinedInExpr(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkNullUndefinedInStatements(body.statements, source, fileName)
+                    is Expression -> checkNullUndefinedInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                expr.body?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkNullUndefinedLiteral(expr: Expression, source: String, fileName: String) {
+        // In our AST, null and undefined are parsed as Identifiers
+        val keyword = when {
+            expr is Identifier && expr.text == "null" -> "null"
+            expr is Identifier && expr.text == "undefined" -> "undefined"
+            else -> return
+        }
+        val start = expr.pos
+        val length = keyword.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "The value '$keyword' cannot be used here.",
+            category = DiagnosticCategory.Error,
+            code = 18050,
             fileName = fileName,
             line = line,
             character = character,

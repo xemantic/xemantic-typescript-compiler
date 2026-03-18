@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,854 passing (64.7%), 3,741 failing
+- **10,595 tests**, 6,863 passing (64.8%), 3,732 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -946,6 +946,16 @@ Picking off tractable fixes to continue improving the pass rate.
   one .ts file is parsed but other companion files exist.
 
   **Files:** `Checker.kt`, `TypeScriptCompiler.kt`
+
+- [x] **13a2. TS18050 — null/undefined cannot be used here** (+9 tests)
+
+  Detect null/undefined literals in invalid positions: property access
+  base (`null.foo`), element access (`undefined[x]`), and binary operator
+  operands (`4 | null`, `null + null`). Handles special case for `+`
+  operator where string concatenation with null/undefined is valid
+  (`"test" + null` is OK).
+
+  **Files:** `Checker.kt`
 
 - [ ] **13b. TS2451 — block-scoped variable redeclaration** (~17 tests)
 
