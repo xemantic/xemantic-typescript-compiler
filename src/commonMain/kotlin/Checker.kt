@@ -143,6 +143,8 @@ class Checker(
         checkConflictMarkers()
         // 32. Check module=none with imports/exports (TS1148)
         checkModuleNoneConflict()
+        // 33. Check export= in system modules (TS1218)
+        checkExportAssignmentInSystem()
     }
 
     // -----------------------------------------------------------------------
@@ -10485,6 +10487,36 @@ class Checker(
                 start = spanStart,
                 length = spanLength,
             ))
+        }
+    }
+
+    // TS1218: Export assignment is not supported when '--module' flag is 'system'
+    private fun checkExportAssignmentInSystem() {
+        if (options.effectiveModule != ModuleKind.System) return
+
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ExportAssignment && stmt.isExportEquals) {
+                    // Span covers the entire `export = expr;` statement
+                    var end = stmt.end
+                    while (end > stmt.pos && end - 1 < source.length && source[end - 1] in " \t\r\n") end--
+                    val length = (end - stmt.pos).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Export assignment is not supported when '--module' flag is 'system'.",
+                        category = DiagnosticCategory.Error,
+                        code = 1218,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = stmt.pos,
+                        length = length,
+                    ))
+                }
+            }
         }
     }
 }
