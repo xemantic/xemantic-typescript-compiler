@@ -103,6 +103,8 @@ class Checker(
         checkUnresolvedModules()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
+        // 16. Check call expression argument counts (TS2554)
+        checkArgumentCounts()
     }
 
     // -----------------------------------------------------------------------
@@ -6660,5 +6662,368 @@ class Checker(
             // Common global augmentations
             "Symbol",
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // Argument count checking (TS2554)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check call and new expressions for wrong argument counts.
+     * Only handles simple, direct function calls and class constructors
+     * in the same file. Skips overloaded functions and rest parameters.
+     */
+    private fun checkArgumentCounts() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+
+            // Build function/class declaration maps for this file
+            val funcParams = mutableMapOf<String, FuncParamInfo>()
+            val classCtorParams = mutableMapOf<String, FuncParamInfo>()
+            collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams)
+
+            // Walk statements checking call expressions
+            checkArgCountInStatements(result.sourceFile.statements, funcParams, classCtorParams, source, fileName)
+        }
+    }
+
+    private data class FuncParamInfo(
+        val minParams: Int,     // required params
+        val maxParams: Int,     // total params (required + optional)
+        val hasRest: Boolean,   // has ...rest param
+        val isOverloaded: Boolean, // has multiple declarations (skip checking)
+    )
+
+    private fun collectFuncDecls(
+        statements: List<Statement>,
+        funcParams: MutableMap<String, FuncParamInfo>,
+        classCtorParams: MutableMap<String, FuncParamInfo>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    val name = stmt.name?.text ?: continue
+                    if (stmt.body == null) {
+                        // Overload signature — mark as overloaded
+                        funcParams[name] = FuncParamInfo(0, Int.MAX_VALUE, hasRest = true, isOverloaded = true)
+                        continue
+                    }
+                    if (funcParams[name]?.isOverloaded == true) continue // already marked as overloaded
+                    val info = paramInfo(stmt.parameters)
+                    funcParams[name] = info
+                }
+                is ClassDeclaration -> {
+                    val name = stmt.name?.text ?: continue
+                    val ctor = stmt.members.filterIsInstance<Constructor>().firstOrNull()
+                    if (ctor != null) {
+                        val info = paramInfo(ctor.parameters)
+                        classCtorParams[name] = info
+                    } else if (stmt.heritageClauses.isNullOrEmpty()) {
+                        // No explicit constructor and no base class → 0 params
+                        classCtorParams[name] = FuncParamInfo(0, 0, hasRest = false, isOverloaded = false)
+                    }
+                    // Skip classes with base class but no explicit constructor —
+                    // they inherit the base constructor's param count which we can't resolve
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body as? ModuleBlock ?: continue
+                    collectFuncDecls(body.statements, funcParams, classCtorParams)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun paramInfo(parameters: List<Parameter>): FuncParamInfo {
+        var required = 0
+        var total = 0
+        var hasRest = false
+        for (p in parameters) {
+            if (p.dotDotDotToken) {
+                hasRest = true
+                continue
+            }
+            total++
+            if (p.questionToken == null && p.initializer == null) {
+                required++
+            }
+        }
+        return FuncParamInfo(required, total, hasRest, isOverloaded = false)
+    }
+
+    private fun checkArgCountInStatements(
+        statements: List<Statement>,
+        funcParams: Map<String, FuncParamInfo>,
+        classCtorParams: Map<String, FuncParamInfo>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            checkArgCountInStatement(stmt, funcParams, classCtorParams, source, fileName)
+        }
+    }
+
+    private fun checkArgCountInStatement(
+        stmt: Statement,
+        funcParams: Map<String, FuncParamInfo>,
+        classCtorParams: Map<String, FuncParamInfo>,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+            is IfStatement -> {
+                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+                checkArgCountInStatement(stmt.thenStatement, funcParams, classCtorParams, source, fileName)
+                stmt.elseStatement?.let { checkArgCountInStatement(it, funcParams, classCtorParams, source, fileName) }
+            }
+            is Block -> checkArgCountInStatements(stmt.statements, funcParams, classCtorParams, source, fileName)
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.initializer?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+                        }
+                    }
+                    is Expression -> checkArgCountInExpr(init, funcParams, classCtorParams, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+                stmt.incrementor?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            }
+            is ForInStatement -> checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            is ForOfStatement -> checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            is WhileStatement -> {
+                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            }
+            is DoStatement -> {
+                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkArgCountInStatements(clauseStmts, funcParams, classCtorParams, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.body?.let {
+                    checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let {
+                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                        }
+                        is Constructor -> member.body?.let {
+                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                        }
+                        is GetAccessor -> member.body?.let {
+                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                        }
+                        is SetAccessor -> member.body?.let {
+                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                        }
+                        is PropertyDeclaration -> member.initializer?.let {
+                            checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkArgCountInStatements(stmt.tryBlock.statements, funcParams, classCtorParams, source, fileName)
+                stmt.catchClause?.let {
+                    checkArgCountInStatements(it.block.statements, funcParams, classCtorParams, source, fileName)
+                }
+                stmt.finallyBlock?.let {
+                    checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private var argCountDepth = 0
+
+    private fun checkArgCountInExpr(
+        expr: Expression,
+        funcParams: Map<String, FuncParamInfo>,
+        classCtorParams: Map<String, FuncParamInfo>,
+        source: String,
+        fileName: String,
+    ) {
+        if (++argCountDepth > 200) { argCountDepth--; return }
+        try { checkArgCountInExprCore(expr, funcParams, classCtorParams, source, fileName) }
+        finally { argCountDepth-- }
+    }
+
+    private fun checkArgCountInExprCore(
+        expr: Expression,
+        funcParams: Map<String, FuncParamInfo>,
+        classCtorParams: Map<String, FuncParamInfo>,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is CallExpression -> {
+                // Check the callee
+                val calleeName = when (val e = expr.expression) {
+                    is Identifier -> e.text
+                    else -> null
+                }
+                if (calleeName != null) {
+                    val info = funcParams[calleeName]
+                    if (info != null && !info.isOverloaded && !info.hasRest) {
+                        val argCount = expr.arguments.size
+                        if (argCount > info.maxParams) {
+                            emitTS2554(info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+                        }
+                    }
+                }
+                // Recurse into arguments
+                for (arg in expr.arguments) {
+                    checkArgCountInExpr(arg, funcParams, classCtorParams, source, fileName)
+                }
+                checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            }
+            is NewExpression -> {
+                val className = when (val e = expr.expression) {
+                    is Identifier -> e.text
+                    else -> null
+                }
+                if (className != null) {
+                    val info = classCtorParams[className]
+                    if (info != null && !info.isOverloaded && !info.hasRest) {
+                        val argCount = expr.arguments?.size ?: 0
+                        if (argCount > info.maxParams) {
+                            val args = expr.arguments ?: emptyList()
+                            emitTS2554(info.maxParams, argCount, args, info.maxParams, source, fileName)
+                        }
+                    }
+                }
+                // Recurse
+                expr.arguments?.forEach { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+            }
+            is BinaryExpression -> {
+                // Iterative right-spine walk to prevent StackOverflow on deep chains
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkArgCountInExpr(current.left, funcParams, classCtorParams, source, fileName)
+                    current = current.right
+                }
+                checkArgCountInExpr(current, funcParams, classCtorParams, source, fileName)
+            }
+            is ParenthesizedExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is ConditionalExpression -> {
+                checkArgCountInExpr(expr.condition, funcParams, classCtorParams, source, fileName)
+                checkArgCountInExpr(expr.whenTrue, funcParams, classCtorParams, source, fileName)
+                checkArgCountInExpr(expr.whenFalse, funcParams, classCtorParams, source, fileName)
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkArgCountInStatements(body.statements, funcParams, classCtorParams, source, fileName)
+                    is Expression -> checkArgCountInExpr(body, funcParams, classCtorParams, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                expr.body?.let {
+                    checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                }
+            }
+            is ArrayLiteralExpression -> {
+                for (el in expr.elements) {
+                    checkArgCountInExpr(el, funcParams, classCtorParams, source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkArgCountInExpr(prop.initializer, funcParams, classCtorParams, source, fileName)
+                        is ShorthandPropertyAssignment -> {}
+                        is SpreadAssignment -> checkArgCountInExpr(prop.expression, funcParams, classCtorParams, source, fileName)
+                        is MethodDeclaration -> prop.body?.let {
+                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) {
+                    checkArgCountInExpr(span.expression, funcParams, classCtorParams, source, fileName)
+                }
+            }
+            is PropertyAccessExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is ElementAccessExpression -> {
+                checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+                checkArgCountInExpr(expr.argumentExpression, funcParams, classCtorParams, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkArgCountInExpr(expr.operand, funcParams, classCtorParams, source, fileName)
+            is PostfixUnaryExpression -> checkArgCountInExpr(expr.operand, funcParams, classCtorParams, source, fileName)
+            is TypeAssertionExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is AsExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is NonNullExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is SpreadElement -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is AwaitExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+            is VoidExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is TypeOfExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is DeleteExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkArgCountInExpr(expr.tag, funcParams, classCtorParams, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Emit TS2554 for too many arguments.
+     * Squiggle covers args[expectedCount] through args.last().
+     */
+    private fun emitTS2554(
+        expected: Int,
+        actual: Int,
+        args: List<Expression>,
+        firstExcessIdx: Int,
+        source: String,
+        fileName: String,
+    ) {
+        if (firstExcessIdx >= args.size) return
+        val firstExcess = args[firstExcessIdx]
+        val lastArg = args.last()
+        val start = firstExcess.pos
+        // Node.end includes the next token's scan position (always 1 char: ',' or ')'),
+        // so subtract 1 to get the actual end of the argument text.
+        val length = lastArg.end - 1 - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Expected $expected arguments, but got $actual.",
+            category = DiagnosticCategory.Error,
+            code = 2554,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 }
