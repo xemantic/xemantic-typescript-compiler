@@ -1090,9 +1090,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **15f. Suppress false-positive TS6133 cases** (~4 tests)
+- [x] **15f. TS1117 — duplicate object literal properties** (+6 tests)
 
-  Remaining TS6133 false positives from incorrect unused tracking.
+  Detect duplicate property names in object literals. Getter/setter pairs
+  are allowed (not flagged as duplicates). Destructuring assignment targets
+  (left side of `=`) are skipped to avoid false positives.
 
   **Files:** `Checker.kt`
 

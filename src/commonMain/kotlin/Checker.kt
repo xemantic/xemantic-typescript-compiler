@@ -123,6 +123,8 @@ class Checker(
         if (options.noImplicitThis || options.strict) {
             checkImplicitThis()
         }
+        // 23. Check duplicate object literal properties (TS1117)
+        checkDuplicateObjectLiteralProperties()
     }
 
     // -----------------------------------------------------------------------
@@ -9091,5 +9093,222 @@ class Checker(
             length = length,
             relatedInformation = related,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Duplicate object literal property checking (TS1117)
+    // -----------------------------------------------------------------------
+
+    private fun checkDuplicateObjectLiteralProperties() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForObjectLiterals(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForObjectLiterals(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            walkNodeForObjectLiterals(stmt, source, fileName)
+        }
+    }
+
+    private fun walkNodeForObjectLiterals(node: Node, source: String, fileName: String, depth: Int = 0) {
+        if (depth > 100) return
+        when (node) {
+            is ObjectLiteralExpression -> {
+                checkObjectLiteralDuplicates(node, source, fileName)
+                // Also recurse into property values
+                for (prop in node.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> walkNodeForObjectLiterals(prop.initializer, source, fileName, depth + 1)
+                        is SpreadAssignment -> walkNodeForObjectLiterals(prop.expression, source, fileName, depth + 1)
+                        else -> {}
+                    }
+                }
+            }
+            // Skip the left side of assignment expressions (destructuring patterns)
+            // but do check the right side
+            is VariableStatement -> {
+                for (decl in node.declarationList.declarations) {
+                    decl.initializer?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+                }
+            }
+            is ExpressionStatement -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is ReturnStatement -> node.expression?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            is FunctionDeclaration -> node.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in node.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                        is Constructor -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                        is GetAccessor -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                        is SetAccessor -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                        is PropertyDeclaration -> member.initializer?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> walkForObjectLiterals(node.statements, source, fileName)
+            is IfStatement -> {
+                walkNodeForObjectLiterals(node.thenStatement, source, fileName, depth + 1)
+                node.elseStatement?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            }
+            is ForStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
+            is ForInStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
+            is ForOfStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
+            is WhileStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
+            is DoStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
+            is SwitchStatement -> {
+                for (clause in node.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForObjectLiterals(clause.statements, source, fileName)
+                        is DefaultClause -> walkForObjectLiterals(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkForObjectLiterals(node.tryBlock.statements, source, fileName)
+                node.catchClause?.block?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                node.finallyBlock?.let { walkForObjectLiterals(it.statements, source, fileName) }
+            }
+            is ArrowFunction -> {
+                when (val body = node.body) {
+                    is Block -> walkForObjectLiterals(body.statements, source, fileName)
+                    else -> walkNodeForObjectLiterals(body, source, fileName, depth + 1)
+                }
+            }
+            is FunctionExpression -> node.body.let { walkForObjectLiterals(it.statements, source, fileName) }
+            is ParenthesizedExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is BinaryExpression -> {
+                // Skip left side of assignment if it's a destructuring pattern
+                if (node.operator == SyntaxKind.Equals && (node.left is ObjectLiteralExpression || node.left is ArrayLiteralExpression)) {
+                    // Only recurse into the right side
+                    walkNodeForObjectLiterals(node.right, source, fileName, depth + 1)
+                } else {
+                    walkNodeForObjectLiterals(node.left, source, fileName, depth + 1)
+                    walkNodeForObjectLiterals(node.right, source, fileName, depth + 1)
+                }
+            }
+            is ConditionalExpression -> {
+                walkNodeForObjectLiterals(node.whenTrue, source, fileName, depth + 1)
+                walkNodeForObjectLiterals(node.whenFalse, source, fileName, depth + 1)
+            }
+            is CallExpression -> {
+                walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+                node.arguments.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            }
+            is NewExpression -> {
+                node.arguments?.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            }
+            is ArrayLiteralExpression -> {
+                node.elements.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            }
+            is PropertyAccessExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is TemplateExpression -> {
+                node.templateSpans.forEach { walkNodeForObjectLiterals(it.expression, source, fileName, depth + 1) }
+            }
+            is LabeledStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
+            is ModuleDeclaration -> {
+                val body = node.body
+                if (body is ModuleBlock) walkForObjectLiterals(body.statements, source, fileName)
+            }
+            is ExportAssignment -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is SpreadElement -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is AsExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is TypeAssertionExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            else -> {}
+        }
+    }
+
+    private fun checkObjectLiteralDuplicates(obj: ObjectLiteralExpression, source: String, fileName: String) {
+        // Track what kind of property has been seen: 'p' = property/method, 'g' = getter, 's' = setter
+        val seen = mutableMapOf<String, Char>()
+        for (prop in obj.properties) {
+            val name = getPropertyName(prop) ?: continue
+            val kind = when (prop) {
+                is GetAccessor -> 'g'
+                is SetAccessor -> 's'
+                else -> 'p' // PropertyAssignment, ShorthandPropertyAssignment, MethodDeclaration
+            }
+            val prevKind = seen[name]
+            val isDuplicate = when {
+                prevKind == null -> false
+                // getter + setter or setter + getter is OK
+                prevKind == 'g' && kind == 's' -> false
+                prevKind == 's' && kind == 'g' -> false
+                else -> true
+            }
+            if (isDuplicate) {
+                val nameNode = getPropertyNameNode(prop) ?: continue
+                val start = nameNode.pos
+                val length = getPropertyNameLength(nameNode, name)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "An object literal cannot have multiple properties with the same name.",
+                    category = DiagnosticCategory.Error,
+                    code = 1117,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            } else {
+                seen[name] = kind
+            }
+        }
+    }
+
+    private fun getPropertyNameLength(nameNode: Node, name: String): Int {
+        return when (nameNode) {
+            is Identifier -> name.length
+            is StringLiteralNode -> name.length + 2 // quotes
+            is NumericLiteralNode -> name.length
+            is ComputedPropertyName -> nameNode.end - nameNode.pos // [expr]
+            else -> nameNode.end - nameNode.pos
+        }
+    }
+
+    private fun getPropertyName(prop: Node): String? {
+        return when (prop) {
+            is PropertyAssignment -> when (val name = prop.name) {
+                is Identifier -> name.text
+                is StringLiteralNode -> name.text
+                is NumericLiteralNode -> name.text
+                else -> null
+            }
+            is ShorthandPropertyAssignment -> prop.name.text
+            is MethodDeclaration -> when (val name = prop.name) {
+                is Identifier -> name.text
+                is StringLiteralNode -> name.text
+                is NumericLiteralNode -> name.text
+                else -> null
+            }
+            is GetAccessor -> when (val name = prop.name) {
+                is Identifier -> name.text
+                is StringLiteralNode -> name.text
+                else -> null
+            }
+            is SetAccessor -> when (val name = prop.name) {
+                is Identifier -> name.text
+                is StringLiteralNode -> name.text
+                else -> null
+            }
+            else -> null
+        }
+    }
+
+    private fun getPropertyNameNode(prop: Node): Node? {
+        return when (prop) {
+            is PropertyAssignment -> prop.name
+            is ShorthandPropertyAssignment -> prop.name
+            is MethodDeclaration -> prop.name
+            is GetAccessor -> prop.name
+            is SetAccessor -> prop.name
+            else -> null
+        }
     }
 }
