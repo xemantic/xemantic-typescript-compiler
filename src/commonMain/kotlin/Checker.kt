@@ -6058,32 +6058,40 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        data class MemberInfo(val name: String, val normalizedName: String, val kind: String, val nameNode: Node)
+        data class MemberInfo(val name: String, val groupKey: String, val kind: String, val nameNode: Node)
 
         val memberInfos = mutableListOf<MemberInfo>()
         for (member in members) {
+            val isStatic = when (member) {
+                is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                is GetAccessor -> ModifierFlag.Static in member.modifiers
+                is SetAccessor -> ModifierFlag.Static in member.modifiers
+                else -> false
+            }
+            val staticPrefix = if (isStatic) "static:" else ""
             when (member) {
                 is MethodDeclaration -> {
                     val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "method", member.name))
+                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "method", member.name))
                 }
                 is PropertyDeclaration -> {
                     val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "property", member.name))
+                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "property", member.name))
                 }
                 is GetAccessor -> {
                     val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "getter", member.name))
+                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "getter", member.name))
                 }
                 is SetAccessor -> {
                     val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, normalizeNumericKey(text), "setter", member.name))
+                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "setter", member.name))
                 }
                 else -> {}
             }
         }
 
-        val byName = memberInfos.groupBy { it.normalizedName }
+        val byName = memberInfos.groupBy { it.groupKey }
         for ((_, group) in byName) {
             if (group.size < 2) continue
             val kinds = group.map { it.kind }.toSet()
