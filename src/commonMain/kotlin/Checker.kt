@@ -1193,6 +1193,7 @@ class Checker(
         val isParameter: Boolean,
         val isTypeOnly: Boolean,  // interface, type alias
         val stmtIndex: Int = -1,  // index in parent statement list (for self-reference detection)
+        val parentVarStmt: VariableStatement? = null, // parent statement for TS6199 grouping
     )
 
     private fun checkUnusedDeclarations() {
@@ -1277,6 +1278,7 @@ class Checker(
         // A declaration is considered unused if:
         // - It's not referenced at all, OR
         // - It's only referenced from within its own declaration (self-reference)
+        val unusedDecls = mutableListOf<UnusedDecl>()
         for (decl in scope.declarations) {
             val isExternallyReferenced = if (decl.stmtIndex >= 0) {
                 refsPerStmt.withIndex().any { (idx, refs) ->
@@ -1294,6 +1296,41 @@ class Checker(
             } else {
                 if (!options.noUnusedLocals) continue
             }
+
+            unusedDecls.add(decl)
+        }
+
+        // Check for TS6199: if ALL declarations from a VariableStatement are unused,
+        // emit a single "All variables are unused" instead of individual TS6133
+        val ts6199Stmts = mutableSetOf<VariableStatement>()
+        val declsByVarStmt = unusedDecls.filter { it.parentVarStmt != null }
+            .groupBy { it.parentVarStmt!! }
+        for ((varStmt, decls) in declsByVarStmt) {
+            val totalDeclCount = varStmt.declarationList.declarations.size
+            if (decls.size == totalDeclCount && totalDeclCount > 1) {
+                ts6199Stmts.add(varStmt)
+                // Emit TS6199 for the entire statement
+                // Span covers from `var` keyword to the end of the statement line (including `;`)
+                val stmtStart = varStmt.pos
+                val lineEnd = source.indexOf('\n', stmtStart).let { if (it < 0) source.length else it }
+                val spanLength = source.substring(stmtStart, lineEnd).trimEnd().length
+                val (line, character) = getLineAndCharacterOfPosition(source, stmtStart)
+                diagnostics.add(Diagnostic(
+                    message = "All variables are unused.",
+                    category = DiagnosticCategory.Error,
+                    code = 6199,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = stmtStart,
+                    length = spanLength,
+                ))
+            }
+        }
+
+        for (decl in unusedDecls) {
+            // Skip declarations already handled by TS6199
+            if (decl.parentVarStmt != null && decl.parentVarStmt in ts6199Stmts) continue
 
             val nameNode = decl.nameNode
             val start = nameNode.pos
@@ -1350,7 +1387,7 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 val isExported = ModifierFlag.Export in stmt.modifiers
                 for (decl in stmt.declarationList.declarations) {
-                    collectVarDeclNames(decl.name, decl, isExported, scope, stmtIndex)
+                    collectVarDeclNames(decl.name, decl, isExported, scope, stmtIndex, parentVarStmt = stmt)
                 }
             }
             is FunctionDeclaration -> {
@@ -1508,6 +1545,7 @@ class Checker(
         isExported: Boolean,
         scope: UnusedScope,
         stmtIndex: Int = -1,
+        parentVarStmt: VariableStatement? = null,
     ) {
         when (name) {
             is Identifier -> {
@@ -1519,17 +1557,18 @@ class Checker(
                     isParameter = false,
                     isTypeOnly = false,
                     stmtIndex = stmtIndex,
+                    parentVarStmt = parentVarStmt,
                 ))
             }
             is ObjectBindingPattern -> {
                 for (element in name.elements) {
-                    collectVarDeclNames(element.name, element, isExported, scope, stmtIndex)
+                    collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt)
                 }
             }
             is ArrayBindingPattern -> {
                 for (element in name.elements) {
                     if (element is BindingElement) {
-                        collectVarDeclNames(element.name, element, isExported, scope, stmtIndex)
+                        collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt)
                     }
                 }
             }

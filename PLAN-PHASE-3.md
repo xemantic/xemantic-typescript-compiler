@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,881 passing (65.0%), 3,714 failing
+- **10,595 tests**, 6,883 passing (65.0%), 3,712 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -1035,13 +1035,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **14d. TS6199 "All variables are unused"** (~3-5 tests)
+- [x] **14d. TS6199 "All variables are unused"** (+2 tests)
 
-  TypeScript uses TS6199 instead of individual TS6133 when ALL declarations
-  in a `var`/`let`/`const` statement are unused. We currently emit
-  individual TS6133 for each. Fix: after collecting unused locals, check
-  if all declarations in a VariableStatement are unused, and emit TS6199
-  with span covering the entire declaration list instead of individual TS6133.
+  When ALL declarations in a multi-variable statement (`var x, y`) are
+  unused, emit TS6199 with span covering the entire statement instead
+  of individual TS6133 for each variable.
 
   **Files:** `Checker.kt`
 
