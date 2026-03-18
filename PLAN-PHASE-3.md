@@ -1018,14 +1018,12 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **14b. Suppress false TS6133 for destructuring reads from this** (~2-3 tests)
+- [x] **14b. Suppress false TS6133 for destructuring reads from this** (+0 tests, correctness fix)
 
-  Pattern `({ x } = this)` — this destructuring assignment reads `this.x`
-  but our property access collector doesn't recognize destructuring
-  assignment as a read. Fix: in `collectPropertyAccessNamesInExpr`, when
-  seeing a `BinaryExpression` with `=` where the LEFT side is an
-  `ObjectLiteralExpression` (destructuring target) and the RIGHT side
-  involves `this`, add the destructured property names as reads.
+  Fixed: `({ x } = this)` destructuring assignment now correctly counts
+  as a read of `this.x` for private member usage tracking. Previously
+  `private x` was falsely flagged as unused when only accessed via
+  destructuring.
 
   **Files:** `Checker.kt`
 
