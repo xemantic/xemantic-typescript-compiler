@@ -380,26 +380,94 @@ class TypeScriptCompiler {
             }
         }
 
-        // TS5055: outFile would overwrite input file
-        if (options.outFile != null && parsed.hasExplicitFilenames) {
-            val outJs = options.outFile
-            val outDts = options.outFile.substringBeforeLast('.') + ".d.ts"
-            val inputFiles = parsed.files.map { it.fileName }.toSet()
-            if (outJs in inputFiles) {
-                diagnostics.add(Diagnostic(
-                    message = "Cannot write file '$outJs' because it would overwrite input file.",
-                    category = DiagnosticCategory.Error,
-                    code = 5055,
-                    messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
-                ))
-            }
-            if (options.declaration && outDts in inputFiles) {
-                diagnostics.add(Diagnostic(
-                    message = "Cannot write file '$outDts' because it would overwrite input file.",
-                    category = DiagnosticCategory.Error,
-                    code = 5055,
-                    messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
-                ))
+        // TS5055: output would overwrite input file
+        // TS5056: multiple input files would produce the same output
+        if (parsed.hasExplicitFilenames) {
+            val inputFileSet = parsed.files.map { it.fileName }.toSet()
+            if (options.outFile != null) {
+                val outJs = options.outFile
+                val outDts = options.outFile.substringBeforeLast('.') + ".d.ts"
+                if (outJs in inputFileSet) {
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot write file '$outJs' because it would overwrite input file.",
+                        category = DiagnosticCategory.Error,
+                        code = 5055,
+                        messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
+                    ))
+                }
+                if (options.declaration && outDts in inputFileSet) {
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot write file '$outDts' because it would overwrite input file.",
+                        category = DiagnosticCategory.Error,
+                        code = 5055,
+                        messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
+                    ))
+                }
+            } else {
+                // No outFile — check per-file output conflicts
+                val outputToSources = mutableMapOf<String, MutableList<String>>()
+                for (file in parsed.files) {
+                    val fn = file.fileName
+                    // Compute output JS path for compilable files
+                    val jsOutput = when {
+                        fn.endsWith(".ts") && !fn.endsWith(".d.ts") -> fn.substringBeforeLast(".ts") + ".js"
+                        fn.endsWith(".tsx") -> fn.substringBeforeLast(".tsx") + ".js"
+                        fn.endsWith(".mts") -> fn.substringBeforeLast(".mts") + ".mjs"
+                        fn.endsWith(".cts") -> fn.substringBeforeLast(".cts") + ".cjs"
+                        fn.endsWith(".js") || fn.endsWith(".jsx") || fn.endsWith(".mjs") || fn.endsWith(".cjs") -> fn
+                        else -> null
+                    }
+                    if (jsOutput != null) {
+                        outputToSources.getOrPut(jsOutput) { mutableListOf() }.add(fn)
+                    }
+                }
+                // TS5055: output JS overwrites an input file
+                for ((jsOutput, sources) in outputToSources) {
+                    if (jsOutput in inputFileSet) {
+                        // Only flag if the input file is different from the source
+                        // (e.g., a.ts produces a.js, and a.js is also an input)
+                        val isOwnOutput = sources.size == 1 && sources[0] == jsOutput
+                        if (!isOwnOutput) {
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot write file '$jsOutput' because it would overwrite input file.",
+                                category = DiagnosticCategory.Error,
+                                code = 5055,
+                                messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
+                            ))
+                        }
+                    }
+                }
+                // TS5056: multiple inputs produce the same output
+                for ((jsOutput, sources) in outputToSources) {
+                    if (sources.size > 1) {
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot write file '$jsOutput' because it would be overwritten by multiple input files.",
+                            category = DiagnosticCategory.Error,
+                            code = 5056,
+                        ))
+                    }
+                }
+                // TS5055: declaration output overwrites input .d.ts file
+                if (options.declaration) {
+                    for (file in parsed.files) {
+                        val fn = file.fileName
+                        val dtsOutput = when {
+                            fn.endsWith(".ts") && !fn.endsWith(".d.ts") -> fn.substringBeforeLast(".ts") + ".d.ts"
+                            fn.endsWith(".tsx") -> fn.substringBeforeLast(".tsx") + ".d.ts"
+                            fn.endsWith(".mts") -> fn.substringBeforeLast(".mts") + ".d.mts"
+                            fn.endsWith(".cts") -> fn.substringBeforeLast(".cts") + ".d.cts"
+                            else -> null
+                        }
+                        if (dtsOutput != null && dtsOutput in inputFileSet) {
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot write file '$dtsOutput' because it would overwrite input file.",
+                                category = DiagnosticCategory.Error,
+                                code = 5055,
+                                messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
+                            ))
+                        }
+                    }
+                }
             }
         }
 
