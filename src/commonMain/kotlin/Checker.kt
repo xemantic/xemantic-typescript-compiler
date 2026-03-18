@@ -171,6 +171,10 @@ class Checker(
         }
         // 43. Check initializers in ambient contexts (TS1039)
         checkAmbientInitializers()
+        // 44. Check multiple defaults in switch (TS1113)
+        checkMultipleDefaults()
+        // 45. Check interface property initializers (TS1246)
+        checkInterfacePropertyInitializers()
     }
 
     // -----------------------------------------------------------------------
@@ -12265,6 +12269,138 @@ class Checker(
                 is FunctionDeclaration -> stmt.body?.let { checkAmbientInitInStatements(it.statements, source, fileName, false) }
                 else -> {}
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple defaults in switch (TS1113)
+    // -----------------------------------------------------------------------
+
+    private fun checkMultipleDefaults() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkMultiDefaultsInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkMultiDefaultsInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkMultiDefaultsInStatement(stmt, source, fileName)
+    }
+
+    private fun checkMultiDefaultsInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is SwitchStatement -> {
+                var defaultSeen = false
+                var errorEmitted = false
+                for (c in stmt.caseBlock) {
+                    if (c is DefaultClause) {
+                        if (defaultSeen && !errorEmitted) {
+                            val start = c.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "A 'default' clause cannot appear more than once in a 'switch' statement.",
+                                category = DiagnosticCategory.Error,
+                                code = 1113,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = 8, // "default:"
+                            ))
+                            errorEmitted = true
+                        }
+                        defaultSeen = true
+                        checkMultiDefaultsInStatements(c.statements, source, fileName)
+                    } else if (c is CaseClause) {
+                        checkMultiDefaultsInStatements(c.statements, source, fileName)
+                    }
+                }
+            }
+            is Block -> checkMultiDefaultsInStatements(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is IfStatement -> {
+                checkMultiDefaultsInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkMultiDefaultsInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
+            is TryStatement -> {
+                checkMultiDefaultsInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkMultiDefaultsInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+            }
+            is ExpressionStatement -> checkMultiDefaultsInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkMultiDefaultsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkMultiDefaultsInStatements(body.statements, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Interface property initializers (TS1246)
+    // -----------------------------------------------------------------------
+
+    private fun checkInterfacePropertyInitializers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                checkInterfacePropInit(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun checkInterfacePropInit(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is InterfaceDeclaration -> {
+                for (m in stmt.members) {
+                    if (m is PropertyDeclaration && m.initializer != null) {
+                        val init = m.initializer!!
+                        val start = init.pos
+                        val length = (init.end - 1 - start).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "An interface property cannot have an initializer.",
+                            category = DiagnosticCategory.Error,
+                            code = 1246,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                for (s in it.statements) checkInterfacePropInit(s, source, fileName)
+            }
+            is Block -> for (s in stmt.statements) checkInterfacePropInit(s, source, fileName)
+            else -> {}
         }
     }
 }
