@@ -988,10 +988,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **13d. Extend TS2554 range format for optional parameters** (~1 test)
+- [x] **13d. Extend TS2554 range format for optional parameters** (+0 tests, correctness fix)
 
-  The TS2554 message should use "Expected M-N arguments" format when
-  the function has optional parameters creating a valid range.
+  Fixed `questionToken` comparison bug (was always false), added
+  "Expected M-N arguments" range format for functions with optional
+  parameters, and added too-few-arguments detection. No tests flip
+  to passing yet since they also need TS2345/TS2393 etc, but the
+  diagnostic output is now correct.
 
   **Files:** `Checker.kt`
 
