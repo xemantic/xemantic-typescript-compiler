@@ -1353,9 +1353,22 @@ class Checker(
             val length = when {
                 decl.spanLength > 0 -> decl.spanLength
                 nameNode is ImportDeclaration -> {
-                    // Squiggle covers the entire import statement line
+                    // Squiggle covers the import statement up to semicolon (excluding comments)
                     val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-                    lineEnd - start
+                    var endPos = start
+                    var idx = start
+                    while (idx < lineEnd) {
+                        val ch = source[idx]
+                        if (ch == ';') { endPos = idx + 1; break }
+                        if (ch == '/' && idx + 1 < lineEnd && (source[idx + 1] == '/' || source[idx + 1] == '*')) {
+                            while (endPos > start && source[endPos - 1].let { it == ' ' || it == '\t' }) endPos--
+                            break
+                        }
+                        endPos = idx + 1
+                        idx++
+                    }
+                    if (endPos <= start) endPos = start + 1
+                    endPos - start
                 }
                 else -> decl.name.length
             }
