@@ -177,6 +177,8 @@ class Checker(
         checkInterfacePropertyInitializers()
         // 46. Check await in non-async context (TS1308)
         checkAwaitContext()
+        // 47. Check declaration name conflicts with built-in global (TS2397)
+        checkBuiltinGlobalConflict()
     }
 
     // -----------------------------------------------------------------------
@@ -6989,6 +6991,9 @@ class Checker(
     }
 
     companion object {
+        /** Built-in global identifiers that cannot be redeclared (TS2397). */
+        private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
+
         /** Type keywords that are only types, never values.
          * Excludes 'object' which can be used as a variable name in JS. */
         private val TYPE_ONLY_KEYWORDS = setOf(
@@ -12620,6 +12625,62 @@ class Checker(
             else -> {}
         }
     }
+
+    // -----------------------------------------------------------------------
+    // TS2397: Declaration name conflicts with built-in global identifier
+    // -----------------------------------------------------------------------
+
+    private fun checkBuiltinGlobalConflict() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkBuiltinGlobalInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkBuiltinGlobalInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = decl.name
+                        if (name is Identifier && name.text in BUILTIN_GLOBAL_CONFLICT_NAMES) {
+                            reportBuiltinGlobalConflict(name, source, fileName)
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val name = stmt.name
+                    if (name is Identifier && name.text in BUILTIN_GLOBAL_CONFLICT_NAMES) {
+                        reportBuiltinGlobalConflict(name, source, fileName)
+                    }
+                    (stmt.body as? ModuleBlock)?.let { checkBuiltinGlobalInStatements(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun reportBuiltinGlobalConflict(name: Identifier, source: String, fileName: String) {
+        val start = name.pos
+        val length = name.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Declaration name conflicts with built-in global identifier '${name.text}'.",
+            category = DiagnosticCategory.Error,
+            code = 2397,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Interface property initializer checking (TS1246)
+    // -----------------------------------------------------------------------
 
     private fun checkInterfacePropInit(stmt: Statement, source: String, fileName: String) {
         when (stmt) {

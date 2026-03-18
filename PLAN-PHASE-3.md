@@ -1316,15 +1316,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **17d. TS1039 — initializers not allowed in ambient context** (~3 tests)
+- [x] **17d. TS1039 — initializers not allowed in ambient context** (already implemented, remaining tests blocked by TS1036/TS2371/TS2403)
 
   Variables with initializers in declare contexts.
 
   **Files:** `Checker.kt`
 
-- [ ] **17e. TS2397 — missing properties in type** (~3 tests)
+- [x] **17e. TS2397 — declaration name conflicts with built-in global** (+3 tests)
 
-  "Variable 'X' implicitly has type 'any' in some locations where its type cannot be determined."
+  "Declaration name conflicts with built-in global identifier 'X'." for `undefined` and `globalThis`.
 
   **Files:** `Checker.kt`
 
