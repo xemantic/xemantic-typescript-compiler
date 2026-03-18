@@ -131,6 +131,10 @@ class Checker(
         checkConstAssignment()
         // 26. Check parameter properties outside constructor (TS2369)
         checkParameterProperties()
+        // 27. Check super in non-derived class (TS2335)
+        checkSuperInNonDerived()
+        // 28. Check const without initializer (TS1155)
+        checkConstWithoutInitializer()
     }
 
     // -----------------------------------------------------------------------
@@ -9841,6 +9845,232 @@ class Checker(
                     start = spanStart,
                     length = length,
                 ))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Super in non-derived class checking (TS2335)
+    // -----------------------------------------------------------------------
+
+    private fun checkSuperInNonDerived() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForSuperInNonDerived(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForSuperInNonDerived(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val isDerived = stmt.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true
+                    if (!isDerived) {
+                        // Check all methods/constructors for super references
+                        for (member in stmt.members) {
+                            val body = when (member) {
+                                is MethodDeclaration -> member.body
+                                is Constructor -> member.body
+                                is GetAccessor -> member.body
+                                is SetAccessor -> member.body
+                                else -> null
+                            }
+                            body?.let {
+                                findSuperRefsInStatements(it.statements, source, fileName)
+                            }
+                        }
+                    }
+                    // Recurse into nested classes (even in derived ones)
+                    for (member in stmt.members) {
+                        val body = when (member) {
+                            is MethodDeclaration -> member.body
+                            is Constructor -> member.body
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
+                            else -> null
+                        }
+                        body?.let { walkForSuperInNonDerived(it.statements, source, fileName) }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForSuperInNonDerived(it.statements, source, fileName) }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkForSuperInNonDerived(body.statements, source, fileName)
+                }
+                is Block -> walkForSuperInNonDerived(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun findSuperRefsInStatements(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            findSuperRefsInStatement(stmt, source, fileName)
+        }
+    }
+
+    private fun findSuperRefsInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> findSuperRefsInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { findSuperRefsInExpr(it, source, fileName) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { findSuperRefsInExpr(it, source, fileName) }
+            is IfStatement -> {
+                findSuperRefsInExpr(stmt.expression, source, fileName)
+                findSuperRefsInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { findSuperRefsInStatement(it, source, fileName) }
+            }
+            is Block -> findSuperRefsInStatements(stmt.statements, source, fileName)
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is Expression -> findSuperRefsInExpr(init, source, fileName)
+                    else -> {}
+                }
+                findSuperRefsInStatement(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                findSuperRefsInExpr(stmt.expression, source, fileName)
+                findSuperRefsInStatement(stmt.statement, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun findSuperRefsInExpr(expr: Expression, source: String, fileName: String) {
+        when {
+            isSuperIdentifier(expr) -> {
+                emitTS2335(expr as Identifier, source, fileName)
+            }
+            expr is PropertyAccessExpression -> {
+                if (isSuperIdentifier(expr.expression)) {
+                    emitTS2335(expr.expression as Identifier, source, fileName)
+                } else {
+                    findSuperRefsInExpr(expr.expression, source, fileName)
+                }
+            }
+            expr is CallExpression -> {
+                if (isSuperIdentifier(expr.expression)) {
+                    emitTS2335(expr.expression as Identifier, source, fileName)
+                } else {
+                    findSuperRefsInExpr(expr.expression, source, fileName)
+                }
+                expr.arguments.forEach { findSuperRefsInExpr(it, source, fileName) }
+            }
+            expr is BinaryExpression -> {
+                findSuperRefsInExpr(expr.left, source, fileName)
+                findSuperRefsInExpr(expr.right, source, fileName)
+            }
+            expr is ParenthesizedExpression -> findSuperRefsInExpr(expr.expression, source, fileName)
+            expr is ArrowFunction -> {} // Don't recurse into nested functions
+            expr is FunctionExpression -> {} // Don't recurse into nested functions
+            else -> {}
+        }
+    }
+
+    private fun emitTS2335(superRef: Identifier, source: String, fileName: String) {
+        val start = superRef.pos
+        val length = 5 // "super" is 5 characters
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'super' can only be referenced in a derived class.",
+            category = DiagnosticCategory.Error,
+            code = 2335,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Const without initializer checking (TS1155)
+    // -----------------------------------------------------------------------
+
+    private fun checkConstWithoutInitializer() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForConstWithoutInit(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForConstWithoutInit(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                        && ModifierFlag.Declare !in stmt.modifiers) {
+                        for (decl in stmt.declarationList.declarations) {
+                            if (decl.initializer == null) {
+                                // const without initializer
+                                val nameNode = decl.name
+                                if (nameNode is Identifier) {
+                                    val start = nameNode.pos
+                                    val length = nameNode.text.length
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "'const' declarations must be initialized.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 1155,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForConstWithoutInit(it.statements, source, fileName) }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        val body = when (member) {
+                            is MethodDeclaration -> member.body
+                            is Constructor -> member.body
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
+                            else -> null
+                        }
+                        body?.let { walkForConstWithoutInit(it.statements, source, fileName) }
+                    }
+                }
+                is Block -> walkForConstWithoutInit(stmt.statements, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkForConstWithoutInit(body.statements, source, fileName)
+                }
+                is IfStatement -> {
+                    walkForConstWithoutInit(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForConstWithoutInit(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        val stmts = when (clause) {
+                            is CaseClause -> clause.statements
+                            is DefaultClause -> clause.statements
+                            else -> emptyList()
+                        }
+                        walkForConstWithoutInit(stmts, source, fileName)
+                    }
+                }
+                is TryStatement -> {
+                    walkForConstWithoutInit(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { walkForConstWithoutInit(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForConstWithoutInit(it.statements, source, fileName) }
+                }
+                else -> {}
             }
         }
     }

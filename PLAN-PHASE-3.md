@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,892 passing (65.1%), 3,703 failing
+- **10,595 tests**, 6,925 passing (65.4%), 3,670 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -1122,7 +1122,19 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **15j. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+- [x] **15j. TS2335 — super in non-derived class** (+2 tests)
+
+  Flag `super` references in classes that don't extend anything.
+
+  **Files:** `Checker.kt`
+
+- [x] **15k. TS1155 — const without initializer** (+1 test)
+
+  Flag `const` declarations without initializers (except in `declare` context).
+
+  **Files:** `Checker.kt`
+
+- [x] **15l. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
 
   Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep
