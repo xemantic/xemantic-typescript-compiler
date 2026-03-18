@@ -1588,13 +1588,19 @@ class Checker(
                 ))
             }
             is ObjectBindingPattern -> {
+                // When a rest element exists, non-rest siblings are intentional
+                // extractions and should not be flagged as unused
+                val hasRest = name.elements.any { it.dotDotDotToken }
                 for (element in name.elements) {
+                    if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
                     collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt)
                 }
             }
             is ArrayBindingPattern -> {
+                val hasRest = name.elements.any { it is BindingElement && it.dotDotDotToken }
                 for (element in name.elements) {
                     if (element is BindingElement) {
+                        if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
                         collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt)
                     }
                 }
