@@ -5995,11 +5995,8 @@ class Checker(
                     is StringLiteralNode -> specifier.text
                     else -> continue
                 }
-                if (moduleName.isEmpty() || moduleName.startsWith("./") || moduleName.startsWith("../")) {
-                    // Relative or empty specifier in a single-file compilation = unresolved
-                    emitTS2307(specifier, moduleName, source, fileName)
-                }
-                // Bare specifiers: don't flag (could be node_modules)
+                // In single-file compilations, all module specifiers are unresolved
+                emitTS2307(specifier, moduleName, source, fileName)
             }
         }
     }

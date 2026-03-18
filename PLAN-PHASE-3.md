@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,818 passing (64.4%), 3,774 failing
+- **10,595 tests**, 6,827 passing (64.4%), 3,765 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -886,10 +886,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **12e. TS2304/TS2307 gap fixes** (~35 tests)
+- [x] **12e. TS2307 bare specifier support** (+9 tests)
 
-  Edge cases in existing checkers where these codes should fire
-  but don't. 15 TS2304 + 20 TS2307 tests.
+  Emit TS2307 for ALL module specifiers in single-file compilations,
+  including bare specifiers (previously only relative/empty were flagged).
+  Remaining TS2304 gaps need type constraint and enum scope resolution.
 
   **Files:** `Checker.kt`
 
