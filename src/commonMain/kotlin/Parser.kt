@@ -583,7 +583,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val postDotComments = if (dotDotDot) leadingComments() ?: scanner.getTrailingComments() else null
         // Detect computed property name [expr]: x or string/numeric property name "foo": x / 0: x
         val nameOrPropIsPropertyKey = when (token) {
-            SyntaxKind.OpenBracket -> lookAhead { parseComputedPropertyName(); token == SyntaxKind.Colon }
+            SyntaxKind.OpenBracket -> {
+                // Save diagnostics count — parseComputedPropertyName() inside lookAhead may
+                // report false TS1005 when [a = v, b = v] is a binding pattern (not computed property),
+                // because parseAssignmentExpression stops at comma, leaving ']' unfound.
+                val savedDiagCount = diagnostics.size
+                val result = lookAhead { parseComputedPropertyName(); token == SyntaxKind.Colon }
+                // Discard any diagnostics reported speculatively during the lookAhead
+                while (diagnostics.size > savedDiagCount) diagnostics.removeAt(diagnostics.lastIndex)
+                result
+            }
             SyntaxKind.StringLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
             SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
             else -> false
