@@ -1106,7 +1106,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **15h. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+- [x] **15h. TS2588 — assignment to const variable** (+1 test)
+
+  Detect assignment to const-declared variables (=, +=, ++, etc.).
+  Handles NonNullExpression wrapping (x!++). Simple local const
+  tracking per scope; namespace const members not tracked yet.
+
+  **Files:** `Checker.kt`
+
+- [x] **15i. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
 
   Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep

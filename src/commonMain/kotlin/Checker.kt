@@ -127,6 +127,8 @@ class Checker(
         checkDuplicateObjectLiteralProperties()
         // 24. Check super called before this in derived constructors (TS17009)
         checkSuperBeforeThis()
+        // 25. Check assignment to const variables (TS2540)
+        checkConstAssignment()
     }
 
     // -----------------------------------------------------------------------
@@ -9491,5 +9493,220 @@ class Checker(
             expr is FunctionExpression -> null
             else -> null
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Const assignment checking (TS2540)
+    // -----------------------------------------------------------------------
+
+    private fun checkConstAssignment() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkConstAssignmentInStatements(result.sourceFile.statements, source, fileName, mutableSetOf())
+        }
+    }
+
+    private fun checkConstAssignmentInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        constNames: MutableSet<String>,
+    ) {
+        for (stmt in statements) {
+            // Collect const declarations
+            if (stmt is VariableStatement) {
+                if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = decl.name
+                        if (name is Identifier) {
+                            constNames.add(name.text)
+                        }
+                    }
+                }
+            }
+            // Check for assignments to const variables
+            checkConstAssignmentInStatement(stmt, source, fileName, constNames)
+        }
+    }
+
+    private fun checkConstAssignmentInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        constNames: Set<String>,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+            is IfStatement -> {
+                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+                checkConstAssignmentInStatement(stmt.thenStatement, source, fileName, constNames)
+                stmt.elseStatement?.let { checkConstAssignmentInStatement(it, source, fileName, constNames) }
+            }
+            is Block -> checkConstAssignmentInStatements(stmt.statements, source, fileName, constNames.toMutableSet())
+            is ForStatement -> {
+                // Collect const in for init
+                val forConsts = constNames.toMutableSet()
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        if (init.flags == SyntaxKind.ConstKeyword) {
+                            for (decl in init.declarations) {
+                                val name = decl.name
+                                if (name is Identifier) forConsts.add(name.text)
+                            }
+                        }
+                    }
+                    is Expression -> checkConstAssignmentInExpr(init, source, fileName, constNames)
+                    else -> {}
+                }
+                stmt.condition?.let { checkConstAssignmentInExpr(it, source, fileName, forConsts) }
+                stmt.incrementor?.let { checkConstAssignmentInExpr(it, source, fileName, forConsts) }
+                checkConstAssignmentInStatement(stmt.statement, source, fileName, forConsts)
+            }
+            is ForInStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            is ForOfStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            is WhileStatement -> {
+                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            }
+            is DoStatement -> {
+                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+            }
+            is SwitchStatement -> {
+                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+                for (clause in stmt.caseBlock) {
+                    val stmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkConstAssignmentInStatements(stmts, source, fileName, constNames.toMutableSet())
+                }
+            }
+            is TryStatement -> {
+                checkConstAssignmentInStatements(stmt.tryBlock.statements, source, fileName, constNames.toMutableSet())
+                stmt.catchClause?.block?.let {
+                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableSet())
+                }
+                stmt.finallyBlock?.let {
+                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableSet())
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, mutableSetOf()) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, mutableSetOf()) }
+                }
+            }
+            is LabeledStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            else -> {}
+        }
+    }
+
+    private fun checkConstAssignmentInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        constNames: Set<String>,
+    ) {
+        when (expr) {
+            is BinaryExpression -> {
+                val op = expr.operator
+                // Check for assignment operators
+                if (op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals
+                    || op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals
+                    || op == SyntaxKind.PercentEquals || op == SyntaxKind.AmpersandEquals
+                    || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals
+                    || op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals
+                    || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+                    || op == SyntaxKind.AsteriskAsteriskEquals
+                    || op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals
+                    || op == SyntaxKind.QuestionQuestionEquals) {
+                    val left = expr.left
+                    if (left is Identifier && left.text in constNames) {
+                        emitTS2588(left, source, fileName)
+                    }
+                }
+                checkConstAssignmentInExpr(expr.left, source, fileName, constNames)
+                checkConstAssignmentInExpr(expr.right, source, fileName, constNames)
+            }
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    val operand = expr.operand
+                    if (operand is Identifier && operand.text in constNames) {
+                        emitTS2588(operand, source, fileName)
+                    }
+                }
+                checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
+            }
+            is PostfixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    val operand = unwrapNonNull(expr.operand)
+                    if (operand is Identifier && operand.text in constNames) {
+                        emitTS2588(operand, source, fileName)
+                    }
+                }
+                checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
+            }
+            is CallExpression -> {
+                checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+                expr.arguments.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+            }
+            is ParenthesizedExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is ConditionalExpression -> {
+                checkConstAssignmentInExpr(expr.condition, source, fileName, constNames)
+                checkConstAssignmentInExpr(expr.whenTrue, source, fileName, constNames)
+                checkConstAssignmentInExpr(expr.whenFalse, source, fileName, constNames)
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableSetOf())
+                    else -> {} // Arrow with expression body — const from outer scope may or may not apply
+                }
+            }
+            is FunctionExpression -> {
+                checkConstAssignmentInStatements(expr.body.statements, source, fileName, mutableSetOf())
+            }
+            else -> {}
+        }
+    }
+
+    private fun unwrapNonNull(expr: Expression): Expression {
+        var e = expr
+        while (e is NonNullExpression) e = e.expression
+        return e
+    }
+
+    private fun emitTS2588(id: Identifier, source: String, fileName: String) {
+        val start = id.pos
+        val length = id.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot assign to '${id.text}' because it is a constant.",
+            category = DiagnosticCategory.Error,
+            code = 2588,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 }
