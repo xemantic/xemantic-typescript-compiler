@@ -8107,12 +8107,14 @@ class Checker(
         var total = 0
         var hasRest = false
         for (p in parameters) {
+            // Skip `this` pseudo-parameter
+            if (p.name is Identifier && (p.name as Identifier).text == "this") continue
             if (p.dotDotDotToken) {
                 hasRest = true
                 continue
             }
             total++
-            if (p.questionToken == null && p.initializer == null) {
+            if (!p.questionToken && p.initializer == null) {
                 required++
             }
         }
@@ -8260,7 +8262,9 @@ class Checker(
                     if (info != null && !info.isOverloaded && !info.hasRest) {
                         val argCount = expr.arguments.size
                         if (argCount > info.maxParams) {
-                            emitTS2554(info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+                            emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+                        } else if (argCount < info.minParams) {
+                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName)
                         }
                     }
                 }
@@ -8281,7 +8285,9 @@ class Checker(
                         val argCount = expr.arguments?.size ?: 0
                         if (argCount > info.maxParams) {
                             val args = expr.arguments ?: emptyList()
-                            emitTS2554(info.maxParams, argCount, args, info.maxParams, source, fileName)
+                            emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
+                        } else if (argCount < info.minParams) {
+                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName)
                         }
                     }
                 }
@@ -8365,8 +8371,12 @@ class Checker(
      * Emit TS2554 for too many arguments.
      * Squiggle covers args[expectedCount] through args.last().
      */
-    private fun emitTS2554(
-        expected: Int,
+    private fun formatExpectedArgs(minParams: Int, maxParams: Int): String =
+        if (minParams != maxParams) "$minParams-$maxParams" else "$maxParams"
+
+    private fun emitTS2554TooMany(
+        minParams: Int,
+        maxParams: Int,
         actual: Int,
         args: List<Expression>,
         firstExcessIdx: Int,
@@ -8382,7 +8392,30 @@ class Checker(
         val length = lastArg.end - 1 - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
-            message = "Expected $expected arguments, but got $actual.",
+            message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
+            category = DiagnosticCategory.Error,
+            code = 2554,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTS2554TooFew(
+        minParams: Int,
+        maxParams: Int,
+        actual: Int,
+        calleeExpr: Expression,
+        source: String,
+        fileName: String,
+    ) {
+        val start = calleeExpr.pos
+        val length = calleeExpr.end - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
             category = DiagnosticCategory.Error,
             code = 2554,
             fileName = fileName,
