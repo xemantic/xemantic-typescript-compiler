@@ -151,6 +151,8 @@ class Checker(
         if (options.target < ScriptTarget.ES2015) {
             checkBlockScopedFunctionDeclarations()
         }
+        // 36. Check import declarations with modifiers (TS1191)
+        checkImportModifiers()
     }
 
     // -----------------------------------------------------------------------
@@ -10719,6 +10721,31 @@ class Checker(
             }
             // Don't recurse into functions/classes/modules — they create new scopes
             else -> {}
+        }
+    }
+
+    // TS1191: An import declaration cannot have modifiers
+    private fun checkImportModifiers() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ImportDeclaration && ModifierFlag.Export in stmt.modifiers) {
+                    // Squiggle covers the 'export' keyword
+                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "An import declaration cannot have modifiers.",
+                        category = DiagnosticCategory.Error,
+                        code = 1191,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = stmt.pos,
+                        length = 6, // "export"
+                    ))
+                }
+            }
         }
     }
 }
