@@ -8194,27 +8194,45 @@ class Checker(
         source: String,
         fileName: String,
     ) {
+        // Track methods with bodies for TS2393 duplicate implementation detection
+        val methodsWithBody = mutableMapOf<String, MethodDeclaration>()
+
         for (i in members.indices) {
             val member = members[i]
-            if (member is MethodDeclaration && member.body == null
-                && ModifierFlag.Abstract !in member.modifiers) {
+            if (member is MethodDeclaration) {
                 val name = when (val n = member.name) {
                     is Identifier -> n.text
                     is StringLiteralNode -> n.text
                     else -> continue
                 }
-                val displayName = when (member.name) {
-                    is StringLiteralNode -> "\"$name\""
-                    else -> name
-                }
-                val implResult = findMethodImplementation(members, i, name)
-                when (implResult) {
-                    is ImplResult.Found -> {} // Same name follows
-                    is ImplResult.WrongName -> {
-                        emitTS2389(implResult.nameNode, source, fileName, displayName)
+                // Include static qualifier in the key to distinguish instance vs static
+                val isStatic = ModifierFlag.Static in member.modifiers
+                val key = if (isStatic) "static:$name" else name
+
+                if (member.body != null) {
+                    val prev = methodsWithBody[key]
+                    if (prev != null) {
+                        // Duplicate implementation — TS2393 on both
+                        emitTS2393(prev.name, source, fileName)
+                        emitTS2393(member.name, source, fileName)
+                    } else {
+                        methodsWithBody[key] = member
                     }
-                    is ImplResult.Missing -> {
-                        emitTS2391(member.name, source, fileName)
+                } else if (ModifierFlag.Abstract !in member.modifiers) {
+                    // Overload without body — check for missing implementation
+                    val displayName = when (member.name) {
+                        is StringLiteralNode -> "\"$name\""
+                        else -> name
+                    }
+                    val implResult = findMethodImplementation(members, i, name)
+                    when (implResult) {
+                        is ImplResult.Found -> {} // Same name follows
+                        is ImplResult.WrongName -> {
+                            emitTS2389(implResult.nameNode, source, fileName, displayName)
+                        }
+                        is ImplResult.Missing -> {
+                            emitTS2391(member.name, source, fileName)
+                        }
                     }
                 }
             }
@@ -8226,6 +8244,27 @@ class Checker(
                 }
             }
         }
+    }
+
+    private fun emitTS2393(nameNode: Node, source: String, fileName: String) {
+        val start = nameNode.pos
+        val name = when (nameNode) {
+            is Identifier -> nameNode.text
+            is StringLiteralNode -> nameNode.text
+            else -> return
+        }
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Duplicate function implementation.",
+            category = DiagnosticCategory.Error,
+            code = 2393,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     private fun findMethodImplementation(
