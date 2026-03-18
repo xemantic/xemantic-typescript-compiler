@@ -4480,11 +4480,14 @@ class Checker(
                 // Enum member initializers can reference other members and the enum itself
                 val enumScope = scope.child()
                 // Add members from ALL merged enum declarations (via binder symbol)
+                // Only add EnumMember symbols, not namespace exports that merged with the same symbol
                 val enumResult = fileResults[fileName]
                 val enumSymbol = enumResult?.nodeToSymbol?.get(nodeKey(stmt))
                 if (enumSymbol?.exports != null) {
-                    for ((exportName, _) in enumSymbol.exports!!) {
-                        enumScope.names.add(exportName)
+                    for ((exportName, sym) in enumSymbol.exports!!) {
+                        if (sym.flags.hasAny(SymbolFlags.EnumMember)) {
+                            enumScope.names.add(exportName)
+                        }
                     }
                 }
                 // Also add members from this specific declaration (covers cases without binder symbol)
