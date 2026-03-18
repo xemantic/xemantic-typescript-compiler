@@ -8036,10 +8036,17 @@ class Checker(
                 is FunctionDeclaration -> {
                     if (stmt.body == null && ModifierFlag.Declare !in stmt.modifiers) {
                         val name = stmt.name?.text ?: continue
-                        // Check if next same-name function has a body
-                        val hasImpl = findImplementation(statements, i, name)
-                        if (!hasImpl) {
-                            emitTS2391(stmt.name!!, source, fileName)
+                        // Check what follows this overload signature
+                        val implResult = findImplementation(statements, i, name)
+                        when (implResult) {
+                            is ImplResult.Found -> {} // Same name follows
+                            is ImplResult.WrongName -> {
+                                // Next function has body but different name → TS2389
+                                emitTS2389(implResult.nameNode, source, fileName, name)
+                            }
+                            is ImplResult.Missing -> {
+                                emitTS2391(stmt.name!!, source, fileName)
+                            }
                         }
                     }
                 }
@@ -8059,22 +8066,32 @@ class Checker(
         }
     }
 
+    private sealed class ImplResult {
+        data object Found : ImplResult()
+        data class WrongName(val nameNode: Node) : ImplResult()
+        data object Missing : ImplResult()
+    }
+
     private fun findImplementation(
         statements: List<Statement>,
         fromIdx: Int,
         name: String,
-    ): Boolean {
+    ): ImplResult {
         // Look at subsequent statements for a same-name function.
-        // If the next same-name function exists (with or without body),
-        // this signature is still part of the chain — don't flag it.
         for (j in fromIdx + 1 until statements.size) {
             val next = statements[j]
-            if (next is FunctionDeclaration && next.name?.text == name) {
-                return true // Same name follows — either has body or chain continues
+            if (next is FunctionDeclaration) {
+                if (next.name?.text == name) {
+                    return ImplResult.Found // Same name follows
+                }
+                // Different name with body → TS2389
+                if (next.body != null && next.name != null) {
+                    return ImplResult.WrongName(next.name!!)
+                }
             }
             break // Different statement breaks the chain
         }
-        return false // No same-name function follows — missing impl
+        return ImplResult.Missing
     }
 
     private fun checkMissingImplInClass(
@@ -8091,10 +8108,19 @@ class Checker(
                     is StringLiteralNode -> n.text
                     else -> continue
                 }
-                // Check if the next same-name method has a body
-                val hasImpl = findMethodImplementation(members, i, name)
-                if (!hasImpl) {
-                    emitTS2391(member.name, source, fileName)
+                val displayName = when (member.name) {
+                    is StringLiteralNode -> "\"$name\""
+                    else -> name
+                }
+                val implResult = findMethodImplementation(members, i, name)
+                when (implResult) {
+                    is ImplResult.Found -> {} // Same name follows
+                    is ImplResult.WrongName -> {
+                        emitTS2389(implResult.nameNode, source, fileName, displayName)
+                    }
+                    is ImplResult.Missing -> {
+                        emitTS2391(member.name, source, fileName)
+                    }
                 }
             }
             // Recurse into nested class declarations
@@ -8111,7 +8137,7 @@ class Checker(
         members: List<ClassElement>,
         fromIdx: Int,
         name: String,
-    ): Boolean {
+    ): ImplResult {
         for (j in fromIdx + 1 until members.size) {
             val next = members[j]
             if (next is MethodDeclaration) {
@@ -8121,13 +8147,16 @@ class Checker(
                     else -> null
                 }
                 if (nextName == name) {
-                    return true // Same name follows — either has body or chain continues
+                    return ImplResult.Found
+                }
+                // Different name with body → TS2389
+                if (next.body != null && nextName != null) {
+                    return ImplResult.WrongName(next.name)
                 }
             }
-            // Any non-matching member breaks the chain
-            break
+            break // Non-matching member breaks the chain
         }
-        return false // No same-name method follows — missing impl
+        return ImplResult.Missing
     }
 
     private fun emitTS2391(nameNode: Node, source: String, fileName: String) {
@@ -8143,6 +8172,27 @@ class Checker(
             message = "Function implementation is missing or not immediately following the declaration.",
             category = DiagnosticCategory.Error,
             code = 2391,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTS2389(nameNode: Node, source: String, fileName: String, expectedName: String) {
+        val start = nameNode.pos
+        val name = when (nameNode) {
+            is Identifier -> nameNode.text
+            is StringLiteralNode -> "\"${nameNode.text}\""
+            else -> return
+        }
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Function implementation name must be '$expectedName'.",
+            category = DiagnosticCategory.Error,
+            code = 2389,
             fileName = fileName,
             line = line,
             character = character,

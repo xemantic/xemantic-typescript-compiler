@@ -1057,12 +1057,12 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **15b. TS2389 — function implementation name must be 'X'** (~4 tests)
+- [x] **15b. TS2389 — function implementation name must be 'X'** (+6 tests)
 
   When overload signatures have different names (e.g. `foo()` then `bar()`),
-  emit TS2389 on the mismatched implementation instead of TS2391. The fix
-  should only fire when overload signatures exist (consecutive function/method
-  declarations with the same name followed by one with a different name).
+  emit TS2389 on the mismatched implementation instead of TS2391. Handles
+  both file-level functions and class methods. String literal method names
+  use quoted display format (`"foo"` not `foo`).
 
   **Files:** `Checker.kt`
 
