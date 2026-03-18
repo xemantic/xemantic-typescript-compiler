@@ -1295,14 +1295,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
 ### 17. Phase 3l — New syntax and semantic diagnostics
 
-- [ ] **17a. TS2396 — duplicate 'arguments' in function** (~6 tests)
+- [x] **17a. TS2396 — duplicate 'arguments' in function** (+4 tests)
 
   Detect parameter named 'arguments' in functions targeting ES5.
   "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters."
 
   **Files:** `Checker.kt`
 
-- [ ] **17b. TS1029 — modifier order validation** (~4 tests)
+- [x] **17b. TS1029 — modifier order validation** (+2 tests)
 
   "'X' modifier must precede 'Y' modifier." Check that export precedes
   default, static precedes public/private, etc.
