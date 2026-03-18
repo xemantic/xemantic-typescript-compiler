@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,863 passing (64.8%), 3,732 failing
+- **10,595 tests**, 6,866 passing (64.8%), 3,729 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -957,27 +957,38 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **13b. TS2451 — block-scoped variable redeclaration** (~17 tests)
+- [ ] **13b. TS2451 — block-scoped variable redeclaration** (~1 test) — *deferred*
 
-  "Cannot redeclare block-scoped variable 'X'." Check `let`/`const`
-  declarations in the same scope with duplicate names. The binder already
-  tracks block-scoped declarations. Fire for `let`/`const` + `let`/`const`
-  conflicts within the same block scope.
+  Only ~1 test would gain from TS2451 alone. Most TS2451 tests also
+  need TS6203/TS6204 or other codes. Low ROI.
+
+- [x] **13b2. TS2304 gaps — type param constraints and index signatures** (+3 tests)
+
+  Add type parameter constraint/default checking for class methods,
+  interface methods, and TypeLiteral methods. Also check types in
+  IndexSignature declarations (both interface and class members).
 
   **Files:** `Checker.kt`
 
-- [ ] **13c. TS2683 — 'this' implicitly has type 'any'** (~9 tests)
+- [ ] **13c. TS2683 — 'this' implicitly has type 'any'** (~2 tests)
 
   When `noImplicitThis: true`, flag `this` expressions inside regular
   functions (not arrow functions, not class methods) that don't have
-  a `this:` parameter annotation.
+  a `this:` parameter annotation. Only 2 testable TS2683-only tests.
 
   **Files:** `Checker.kt`
 
-- [ ] **13d. Extend TS2554 to overloaded functions** (~12 tests)
+- [ ] **13d. Extend TS2554 range format for optional parameters** (~1 test)
 
-  Currently `checkArgumentCounts()` skips overloaded functions. For
-  overloads, check argument count against the implementation signature.
+  The TS2554 message should use "Expected M-N arguments" format when
+  the function has optional parameters creating a valid range.
+
+  **Files:** `Checker.kt`
+
+- [ ] **13e. TS6133 write-only private property detection** (~2-3 tests)
+
+  Private class properties that are only assigned (never read) should
+  be flagged as TS6133. Currently we miss write-only private members.
 
   **Files:** `Checker.kt`
 

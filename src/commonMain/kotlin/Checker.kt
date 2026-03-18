@@ -4447,11 +4447,21 @@ class Checker(
                         is MethodDeclaration -> {
                             val methodScope = ifaceScope.child()
                             member.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            member.typeParameters?.forEach { tp ->
+                                tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                                tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            }
                             addParamsToScope(member.parameters, methodScope)
                             for (param in member.parameters) {
                                 param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                             }
                             member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        }
+                        is IndexSignature -> {
+                            member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                            }
                         }
                         else -> {}
                     }
@@ -4533,6 +4543,10 @@ class Checker(
             is MethodDeclaration -> {
                 val methodScope = classScope.child(hasArguments = true)
                 element.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                element.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                }
                 addParamsToScope(element.parameters, methodScope)
                 for (param in element.parameters) {
                     param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -4541,6 +4555,12 @@ class Checker(
                 element.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                 element.body?.let {
                     checkUnresolvedInStatements(it.statements, methodScope, source, fileName)
+                }
+            }
+            is IndexSignature -> {
+                element.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+                for (param in element.parameters) {
+                    param.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
                 }
             }
             is Constructor -> {
@@ -4872,11 +4892,28 @@ class Checker(
                         is MethodDeclaration -> {
                             val methodScope = scope.child()
                             member.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            member.typeParameters?.forEach { tp ->
+                                tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                                tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            }
                             addParamsToScope(member.parameters, methodScope)
                             for (param in member.parameters) {
                                 param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                             }
                             member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        }
+                        is IndexSignature -> {
+                            member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                            }
+                        }
+                        is Constructor -> {
+                            val ctorScope = scope.child()
+                            addParamsToScope(member.parameters, ctorScope)
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
+                            }
                         }
                         else -> {}
                     }
