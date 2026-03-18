@@ -125,6 +125,8 @@ class Checker(
         }
         // 23. Check duplicate object literal properties (TS1117)
         checkDuplicateObjectLiteralProperties()
+        // 24. Check super called before this in derived constructors (TS17009)
+        checkSuperBeforeThis()
     }
 
     // -----------------------------------------------------------------------
@@ -9313,6 +9315,180 @@ class Checker(
             is MethodDeclaration -> prop.name
             is GetAccessor -> prop.name
             is SetAccessor -> prop.name
+            else -> null
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Super before this checking (TS17009)
+    // -----------------------------------------------------------------------
+
+    private fun checkSuperBeforeThis() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForDerivedConstructors(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForDerivedConstructors(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    // Check if class extends something (derived class)
+                    if (stmt.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true) {
+                        for (member in stmt.members) {
+                            if (member is Constructor && member.body != null) {
+                                checkConstructorThisBeforeSuper(member.body!!.statements, source, fileName)
+                            }
+                        }
+                    }
+                    // Recurse into class members for nested classes
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                            is PropertyDeclaration -> {
+                                val init = member.initializer
+                                if (init is ClassExpression && init.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true) {
+                                    for (m in init.members) {
+                                        if (m is Constructor && m.body != null) {
+                                            checkConstructorThisBeforeSuper(m.body!!.statements, source, fileName)
+                                        }
+                                    }
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkForDerivedConstructors(body.statements, source, fileName)
+                }
+                is Block -> walkForDerivedConstructors(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun isThisIdentifier(node: Node): Boolean =
+        node is Identifier && node.text == "this"
+
+    private fun isSuperIdentifier(node: Node): Boolean =
+        node is Identifier && node.text == "super"
+
+    private fun checkConstructorThisBeforeSuper(statements: List<Statement>, source: String, fileName: String) {
+        // Walk statements until we find super() call; any this reference before that is TS17009
+        for (stmt in statements) {
+            // Check for super(this) — this in super call arguments is also an error
+            val superCallThisRef = findThisInSuperCallArgs(stmt)
+            if (superCallThisRef != null) {
+                emitTS17009(superCallThisRef, source, fileName)
+                return
+            }
+            // Check if this statement contains a super() call (and stop if so)
+            if (containsSuperCall(stmt)) return
+            // Check if this statement references 'this' before super
+            val thisRef = findFirstThisReference(stmt)
+            if (thisRef != null) {
+                emitTS17009(thisRef, source, fileName)
+                return // Only report first occurrence
+            }
+        }
+    }
+
+    private fun emitTS17009(thisRef: Identifier, source: String, fileName: String) {
+        val start = thisRef.pos
+        val length = 4 // "this" is 4 characters
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'super' must be called before accessing 'this' in the constructor of a derived class.",
+            category = DiagnosticCategory.Error,
+            code = 17009,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** Find 'this' used in super() call arguments. */
+    private fun findThisInSuperCallArgs(node: Node): Identifier? {
+        if (node !is ExpressionStatement) return null
+        val expr = node.expression
+        if (expr is CallExpression && isSuperIdentifier(expr.expression)) {
+            for (arg in expr.arguments) {
+                findFirstThisInExpr(arg)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun containsSuperCall(node: Node): Boolean {
+        return when (node) {
+            is ExpressionStatement -> containsSuperCallInExpr(node.expression)
+            else -> false
+        }
+    }
+
+    private fun containsSuperCallInExpr(expr: Expression): Boolean {
+        return when (expr) {
+            is CallExpression -> isSuperIdentifier(expr.expression) || containsSuperCallInExpr(expr.expression)
+            is BinaryExpression -> containsSuperCallInExpr(expr.left) || containsSuperCallInExpr(expr.right)
+            is ParenthesizedExpression -> containsSuperCallInExpr(expr.expression)
+            else -> false
+        }
+    }
+
+    private fun findFirstThisReference(node: Node): Identifier? {
+        return when (node) {
+            is ExpressionStatement -> findFirstThisInExpr(node.expression)
+            is VariableStatement -> {
+                for (decl in node.declarationList.declarations) {
+                    decl.initializer?.let { findFirstThisInExpr(it) }?.let { return it }
+                }
+                null
+            }
+            is ReturnStatement -> node.expression?.let { findFirstThisInExpr(it) }
+            is IfStatement -> findFirstThisInExpr(node.expression)
+            else -> null
+        }
+    }
+
+    private fun findFirstThisInExpr(expr: Expression): Identifier? {
+        return when {
+            isThisIdentifier(expr) -> expr as Identifier
+            expr is PropertyAccessExpression -> findFirstThisInExpr(expr.expression)
+            expr is CallExpression -> {
+                // Check for super(this) — this in arguments is also flagged
+                if (isSuperIdentifier(expr.expression)) {
+                    // Check arguments for 'this'
+                    for (arg in expr.arguments) {
+                        findFirstThisInExpr(arg)?.let { return it }
+                    }
+                    return null
+                }
+                findFirstThisInExpr(expr.expression)
+                    ?: run { for (arg in expr.arguments) { findFirstThisInExpr(arg)?.let { return it } }; null }
+            }
+            expr is BinaryExpression -> findFirstThisInExpr(expr.left) ?: findFirstThisInExpr(expr.right)
+            expr is ParenthesizedExpression -> findFirstThisInExpr(expr.expression)
+            expr is ElementAccessExpression -> findFirstThisInExpr(expr.expression)
+            expr is ConditionalExpression -> findFirstThisInExpr(expr.condition)
+            expr is AsExpression -> findFirstThisInExpr(expr.expression)
+            expr is TypeAssertionExpression -> findFirstThisInExpr(expr.expression)
+            expr is SpreadElement -> findFirstThisInExpr(expr.expression)
+            expr is ArrayLiteralExpression -> {
+                for (elem in expr.elements) { findFirstThisInExpr(elem)?.let { return it } }
+                null
+            }
+            expr is ObjectLiteralExpression -> null // Object literal creates new scope for 'this'
+            expr is ArrowFunction -> null
+            expr is FunctionExpression -> null
             else -> null
         }
     }

@@ -1098,7 +1098,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **15g. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+- [x] **15g. TS17009 — super must be called before this** (+5 tests)
+
+  Check that `this` is not referenced before `super()` in constructors
+  of derived classes. Also handles `super(this)` — `this` in super call
+  arguments is also flagged.
+
+  **Files:** `Checker.kt`
+
+- [x] **15h. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
 
   Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep
