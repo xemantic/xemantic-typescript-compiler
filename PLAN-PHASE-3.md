@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,851 passing (64.7%), 3,744 failing
+- **10,595 tests**, 6,854 passing (64.7%), 3,741 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -925,10 +925,49 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **12i. TS2305 — module has no exported member** (~11 tests)
+- [ ] **12i. TS2305 — module has no exported member** (~11 tests) — *deferred*
 
   "Module 'X' has no exported member 'Y'." Check named import bindings
-  against exported declarations.
+  against exported declarations. Complex due to overlapping diagnostics:
+  TS2614 (default export suggestion), TS2616 (export= modules), and
+  incomplete binder `ExportValue` flag support for `export var`.
+  Needs deeper module resolution infrastructure.
+
+  **Files:** `Checker.kt`
+
+### 13. Phase 3h — False positive suppression and new diagnostics
+
+- [x] **13a. Suppress false-positive TS2307 for multi-file sources** (+3 tests)
+
+  Pass `isMultiFileSource` flag from TypeScriptCompiler to Checker when the
+  source has `@Filename` directives. Skip TS2307 checking entirely in
+  multi-file sources since companion files (.json, .js) may not have been
+  parsed but exist as siblings. Also applies to multi-file tests where only
+  one .ts file is parsed but other companion files exist.
+
+  **Files:** `Checker.kt`, `TypeScriptCompiler.kt`
+
+- [ ] **13b. TS2451 — block-scoped variable redeclaration** (~17 tests)
+
+  "Cannot redeclare block-scoped variable 'X'." Check `let`/`const`
+  declarations in the same scope with duplicate names. The binder already
+  tracks block-scoped declarations. Fire for `let`/`const` + `let`/`const`
+  conflicts within the same block scope.
+
+  **Files:** `Checker.kt`
+
+- [ ] **13c. TS2683 — 'this' implicitly has type 'any'** (~9 tests)
+
+  When `noImplicitThis: true`, flag `this` expressions inside regular
+  functions (not arrow functions, not class methods) that don't have
+  a `this:` parameter annotation.
+
+  **Files:** `Checker.kt`
+
+- [ ] **13d. Extend TS2554 to overloaded functions** (~12 tests)
+
+  Currently `checkArgumentCounts()` skips overloaded functions. For
+  overloads, check argument count against the implementation signature.
 
   **Files:** `Checker.kt`
 
