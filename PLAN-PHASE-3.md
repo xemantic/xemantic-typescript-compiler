@@ -1066,10 +1066,10 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **15c. TS5108 — option removed (ES3 target)** (+1 test)
+- [x] **15c. TS5108 — option removed (ES3 target)** (+1 test)
 
-  `target=ES3` should use TS5108 "has been removed" not TS5107 "deprecated".
-  TS5108 is the next level after TS5107 — the option no longer functions.
+  `target=ES3` uses TS5108 "has been removed" not TS5107 "deprecated".
+  ES3 was fully removed in TypeScript 5.5, not just deprecated.
 
   **Files:** `TypeScriptCompiler.kt`
 

@@ -231,7 +231,22 @@ class TypeScriptCompiler {
             ))
         }
         // Target deprecations — only when target is explicitly set
-        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) addDeprecation("target=ES3", tsconfigKey = "target", version = "5.5", deprecationVersion = "5.0")
+        // ES3 is fully removed (TS5108), not just deprecated
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) {
+            if (!isDeprecationSuppressed("5.0")) {
+                val pos = tsconfigPos["target"]
+                diagnostics.add(Diagnostic(
+                    message = "Option 'target=ES3' has been removed. Please remove it from your configuration.",
+                    category = DiagnosticCategory.Error,
+                    code = 5108,
+                    fileName = pos?.fileName,
+                    line = pos?.valueLine,
+                    character = pos?.valueCharacter,
+                    start = pos?.valueStart,
+                    length = pos?.valueLength,
+                ))
+            }
+        }
         if (options.targetExplicitlySet && options.target == ScriptTarget.ES5) addDeprecation("target=ES5", tsconfigKey = "target")
         // Module deprecations
         if (options.module == ModuleKind.AMD) addDeprecation("module=AMD", tsconfigKey = "module")
