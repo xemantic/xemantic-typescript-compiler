@@ -1043,6 +1043,57 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
+### 15. Phase 3j — Break/continue codes, TS2389, TS5108, false positives
+
+- [x] **15a. TS1105/TS1104/TS1116/TS1115 — break/continue not in loop** (+3 tests)
+
+  TS1107 is only for when break/continue crosses a function boundary.
+  At the top level (no function boundary crossed), use specific codes:
+  - TS1105: break not in iteration/switch
+  - TS1104: continue not in iteration
+  - TS1116: break can only jump to label of enclosing statement
+  - TS1115: continue can only jump to label of enclosing iteration
+  Added `crossedFunctionBoundary` parameter to jump target checking.
+
+  **Files:** `Checker.kt`
+
+- [ ] **15b. TS2389 — function implementation name must be 'X'** (~4 tests)
+
+  When overload signatures have different names (e.g. `foo()` then `bar()`),
+  emit TS2389 on the mismatched implementation instead of TS2391. The fix
+  should only fire when overload signatures exist (consecutive function/method
+  declarations with the same name followed by one with a different name).
+
+  **Files:** `Checker.kt`
+
+- [ ] **15c. TS5108 — option removed (ES3 target)** (+1 test)
+
+  `target=ES3` should use TS5108 "has been removed" not TS5107 "deprecated".
+  TS5108 is the next level after TS5107 — the option no longer functions.
+
+  **Files:** `TypeScriptCompiler.kt`
+
+- [ ] **15d. Suppress false-positive TS1005 from destructuring** (~10 tests)
+
+  Parser emits false TS1005 (']' expected) on array binding patterns with
+  default values in for-loop variable declarations. The parser is confused
+  by the `=` in `[x = defaultValue]` patterns.
+
+  **Files:** `Parser.kt`
+
+- [ ] **15e. Suppress false-positive TS2454 cases** (~4 tests)
+
+  Some TS2454 false positives where variables are actually assigned in
+  initializers or patterns that our checker doesn't track.
+
+  **Files:** `Checker.kt`
+
+- [ ] **15f. Suppress false-positive TS6133 cases** (~4 tests)
+
+  Remaining TS6133 false positives from incorrect unused tracking.
+
+  **Files:** `Checker.kt`
+
 ---
 
 ## BLOCKED — not planned for Phase 3
