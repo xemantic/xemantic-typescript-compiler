@@ -6260,10 +6260,31 @@ class Checker(
         val start = specifier.pos
         val length = specifier.end - specifier.pos - 1
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        // TS2792 fires when moduleResolution is not node-based (classic, or default for
+        // system/amd/es2015/esnext modules) — suggests switching to nodenext
+        val moduleRes = options.moduleResolution?.lowercase()
+        val effectiveModuleRes = moduleRes ?: run {
+            // Default moduleResolution based on module option
+            when (options.module) {
+                ModuleKind.CommonJS, ModuleKind.Node16, ModuleKind.NodeNext -> "node"
+                else -> "classic" // system, amd, es2015, esnext, null, etc.
+            }
+        }
+        val isNodeResolution = effectiveModuleRes in setOf("node", "node10", "node16", "nodenext", "bundler")
+        val code: Int
+        val message: String
+        if (isNodeResolution) {
+            code = 2307
+            message = "Cannot find module '$moduleName' or its corresponding type declarations."
+        } else {
+            code = 2792
+            message = "Cannot find module '$moduleName'. Did you mean to set the 'moduleResolution' option to 'nodenext', or to add aliases to the 'paths' option?"
+        }
         diagnostics.add(Diagnostic(
-            message = "Cannot find module '$moduleName' or its corresponding type declarations.",
+            message = message,
             category = DiagnosticCategory.Error,
-            code = 2307,
+            code = code,
             fileName = fileName,
             line = line,
             character = character,
