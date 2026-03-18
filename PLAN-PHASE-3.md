@@ -1142,7 +1142,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [x] **15m. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
+- [x] **15m. Fix squiggle lengths for TS2300 and TS2307/TS2792** (+5 tests)
+
+  Fixed string literal span in TS2300 (use text.length + 2 for quotes).
+  Fixed module specifier span in TS2307/TS2792 (use moduleName.length + 2).
+
+  **Files:** `Checker.kt`
+
+- [x] **15n. Fix default moduleResolution for TS2307 vs TS2792** (+2 tests)
 
   Updated default moduleResolution mapping: ES module kinds (es2015, esnext)
   and CommonJS default to node10 resolution in TS6+. System/AMD/UMD keep

@@ -6159,8 +6159,11 @@ class Checker(
         node: Node,
         source: String,
         fileName: String,
-        spanLength: Int = if (node is StringLiteralNode || node is NumericLiteralNode)
-            node.end - node.pos else name.length,
+        spanLength: Int = when (node) {
+            is StringLiteralNode -> name.length + 2 // quotes
+            is NumericLiteralNode -> node.text.length
+            else -> name.length
+        },
     ) {
         val start = node.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -6308,7 +6311,7 @@ class Checker(
 
     private fun emitTS2307(specifier: Expression, moduleName: String, source: String, fileName: String) {
         val start = specifier.pos
-        val length = specifier.end - specifier.pos - 1
+        val length = moduleName.length + 2 // +2 for quotes
         val (line, character) = getLineAndCharacterOfPosition(source, start)
 
         // TS2792 fires when moduleResolution is not node-based (classic, or default for
