@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,807 passing (64.2%), 3,785 failing
+- **10,595 tests**, 6,808 passing (64.3%), 3,784 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -862,12 +862,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **12b. TS7027 — unreachable code detected** (~10 tests)
+- [x] **12b. TS7027 — unreachable code detected** (+1 test, infrastructure for ~10)
 
-  Detect code after return/throw/break/continue statements.
-  Some control flow analysis already exists for TS2454.
+  Implemented unreachable code detection after return/throw/break/continue,
+  infinite loops, and terminating if/switch. Most TS7027 tests need
+  multi-line squiggle support in the formatter (not yet implemented).
 
-  **Files:** `Checker.kt`
+  **Files:** `Checker.kt`, `CompilerOptions.kt`
 
 - [ ] **12c. TS2693 — type used as value** (~7 tests)
 
