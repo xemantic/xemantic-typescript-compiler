@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,849 passing (64.6%), 3,746 failing
+- **10,595 tests**, 6,851 passing (64.7%), 3,744 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -914,10 +914,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **12h. TS2694 — namespace has no exported member** (~11 tests)
+- [x] **12h. TS2694 — namespace has no exported member** (+2 tests)
 
   "Namespace 'X' has no exported member 'Y'." Check qualified name
-  access against binder's namespace exports.
+  access against binder's namespace exports. Handles simple single-segment
+  namespaces. Dotted namespace names (`Foo.Bar`) and module-qualified paths
+  need deeper binder support (PropertyAccessExpression names). Also checks
+  member accessibility: non-exported members in regular namespaces produce
+  TS2694, while `declare namespace` members are implicitly accessible.
 
   **Files:** `Checker.kt`
 
