@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,958 passing (65.7%), 3,637 failing
-- **Session 2026-03-18b**: +16 tests (6,942→6,958) — fix false-positive TS1005, add TS6131, TS7019
+- **10,595 tests**, 6,962 passing (65.7%), 3,633 failing
+- **Session 2026-03-18b**: +20 tests (6,942→6,962) — fix false-positive TS1005, add TS6131, TS7019, TS1185
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
@@ -1217,12 +1217,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **16h. TS1185 — merge conflict markers** (~3 tests)
+- [x] **16h. TS1185 — merge conflict markers** (+4 tests)
 
-  Detect `<<<<<<<`, `=======`, `>>>>>>>` conflict markers in source.
-  Report TS1185: "Merge conflict marker encountered."
+  Scan source for `<<<<<<<`, `=======`, `>>>>>>>`, `|||||||` at the
+  start of lines. Report TS1185 with 7-char span. Handles both 2-way
+  and 3-way (diff3) merge conflict markers.
 
-  **Files:** `Parser.kt` or `Scanner.kt`
+  **Files:** `Checker.kt`
 
 - [ ] **16i. TS2450/TS2448 — block-scoped variable used before declaration** (~7 tests)
 
