@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,866 passing (64.8%), 3,729 failing
+- **10,595 tests**, 6,874 passing (64.9%), 3,721 failing
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
 - **Error baselines:** 4,035 tests, ~945 passing (~23.4%)
@@ -969,6 +969,13 @@ Picking off tractable fixes to continue improving the pass rate.
   IndexSignature declarations (both interface and class members).
 
   **Files:** `Checker.kt`
+
+- [x] **13b3. TS5110 — module must match moduleResolution** (+7 tests)
+
+  Emit TS5110 when moduleResolution is "nodenext" or "node16" but module
+  is not set to the matching value. Simple option validation check.
+
+  **Files:** `TypeScriptCompiler.kt`
 
 - [ ] **13c. TS2683 — 'this' implicitly has type 'any'** (~2 tests)
 

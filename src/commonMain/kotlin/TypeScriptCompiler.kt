@@ -351,6 +351,20 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS5110: module must match moduleResolution for nodenext/node16
+        val modRes = options.moduleResolution?.lowercase()
+        if (modRes == "nodenext" || modRes == "node16") {
+            val expectedModule = if (modRes == "nodenext") ModuleKind.NodeNext else ModuleKind.Node16
+            val displayModRes = if (modRes == "nodenext") "NodeNext" else "Node16"
+            if (options.module != expectedModule) {
+                diagnostics.add(Diagnostic(
+                    message = "Option 'module' must be set to '$displayModRes' when option 'moduleResolution' is set to '$displayModRes'.",
+                    category = DiagnosticCategory.Error,
+                    code = 5110,
+                ))
+            }
+        }
+
         // TS5055: outFile would overwrite input file
         if (options.outFile != null && parsed.hasExplicitFilenames) {
             val outJs = options.outFile
