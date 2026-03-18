@@ -33,6 +33,8 @@ import kotlin.math.pow
 class Checker(
     private val options: CompilerOptions,
     private val binderResults: List<BinderResult>,
+    /** True when the source had @Filename directives (multi-file test input). */
+    private val isMultiFileSource: Boolean = false,
 ) {
     /** Merged symbol tables from all files (global scope). */
     private val globals: SymbolTable = symbolTable()
@@ -6111,6 +6113,9 @@ class Checker(
         // Only check in single-file compilations to avoid false positives
         // in multi-file tests where we can't fully resolve module paths
         if (binderResults.size > 1) return
+        // Also skip when the source had @Filename directives — companion files
+        // (.json, .js) may not have been parsed but exist as siblings
+        if (isMultiFileSource) return
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
