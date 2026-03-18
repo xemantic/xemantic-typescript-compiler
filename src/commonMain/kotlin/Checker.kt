@@ -6307,7 +6307,8 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             checkJumpInStatements(result.sourceFile.statements, source, fileName,
-                inIteration = false, inSwitch = false, labelNames = emptySet())
+                inIteration = false, inSwitch = false, labelNames = emptySet(),
+                crossedFunctionBoundary = false)
         }
     }
 
@@ -6318,9 +6319,10 @@ class Checker(
         inIteration: Boolean,
         inSwitch: Boolean,
         labelNames: Set<String>,
+        crossedFunctionBoundary: Boolean,
     ) {
         for (stmt in statements) {
-            checkJumpInStatement(stmt, source, fileName, inIteration, inSwitch, labelNames)
+            checkJumpInStatement(stmt, source, fileName, inIteration, inSwitch, labelNames, crossedFunctionBoundary)
         }
     }
 
@@ -6331,6 +6333,7 @@ class Checker(
         inIteration: Boolean,
         inSwitch: Boolean,
         labelNames: Set<String>,
+        crossedFunctionBoundary: Boolean,
     ) {
         when (stmt) {
             is BreakStatement -> {
@@ -6338,48 +6341,71 @@ class Checker(
                 if (label != null) {
                     // Labeled break — check if label is in scope
                     if (label !in labelNames) {
-                        // Label is outside function boundary
-                        emitTS1107(stmt, source, fileName)
+                        if (crossedFunctionBoundary) {
+                            emitJumpDiagnostic(stmt, source, fileName, 1107,
+                                "Jump target cannot cross function boundary.")
+                        } else {
+                            emitJumpDiagnostic(stmt, source, fileName, 1116,
+                                "A 'break' statement can only jump to a label of an enclosing statement.")
+                        }
                     }
                 } else {
                     // Unlabeled break — needs to be in a loop or switch
                     if (!inIteration && !inSwitch) {
-                        emitTS1107(stmt, source, fileName)
+                        if (crossedFunctionBoundary) {
+                            emitJumpDiagnostic(stmt, source, fileName, 1107,
+                                "Jump target cannot cross function boundary.")
+                        } else {
+                            emitJumpDiagnostic(stmt, source, fileName, 1105,
+                                "A 'break' statement can only be used within an enclosing iteration or switch statement.")
+                        }
                     }
                 }
             }
             is ContinueStatement -> {
-                val label = (stmt as? ContinueStatement)?.label?.text
+                val label = stmt.label?.text
                 if (label != null) {
                     if (label !in labelNames) {
-                        emitTS1107(stmt, source, fileName)
+                        if (crossedFunctionBoundary) {
+                            emitJumpDiagnostic(stmt, source, fileName, 1107,
+                                "Jump target cannot cross function boundary.")
+                        } else {
+                            emitJumpDiagnostic(stmt, source, fileName, 1115,
+                                "A 'continue' statement can only jump to a label of an enclosing iteration statement.")
+                        }
                     }
                 } else {
                     if (!inIteration) {
-                        emitTS1107(stmt, source, fileName)
+                        if (crossedFunctionBoundary) {
+                            emitJumpDiagnostic(stmt, source, fileName, 1107,
+                                "Jump target cannot cross function boundary.")
+                        } else {
+                            emitJumpDiagnostic(stmt, source, fileName, 1104,
+                                "A 'continue' statement can only be used within an enclosing iteration statement.")
+                        }
                     }
                 }
             }
             // Loop statements: set inIteration = true
             is ForStatement -> {
                 checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames)
+                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
             }
             is ForInStatement -> {
                 checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames)
+                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
             }
             is ForOfStatement -> {
                 checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames)
+                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
             }
             is WhileStatement -> {
                 checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames)
+                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
             }
             is DoStatement -> {
                 checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames)
+                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
             }
             is SwitchStatement -> {
                 for (clause in stmt.caseBlock) {
@@ -6389,42 +6415,43 @@ class Checker(
                         else -> emptyList()
                     }
                     checkJumpInStatements(stmts, source, fileName,
-                        inIteration, inSwitch = true, labelNames)
+                        inIteration, inSwitch = true, labelNames, crossedFunctionBoundary)
                 }
             }
             is LabeledStatement -> {
                 val newLabels = labelNames + stmt.label.text
                 checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration, inSwitch, newLabels)
+                    inIteration, inSwitch, newLabels, crossedFunctionBoundary)
             }
             is Block -> {
                 checkJumpInStatements(stmt.statements, source, fileName,
-                    inIteration, inSwitch, labelNames)
+                    inIteration, inSwitch, labelNames, crossedFunctionBoundary)
             }
             is IfStatement -> {
                 checkJumpInStatement(stmt.thenStatement, source, fileName,
-                    inIteration, inSwitch, labelNames)
+                    inIteration, inSwitch, labelNames, crossedFunctionBoundary)
                 stmt.elseStatement?.let {
-                    checkJumpInStatement(it, source, fileName, inIteration, inSwitch, labelNames)
+                    checkJumpInStatement(it, source, fileName, inIteration, inSwitch, labelNames, crossedFunctionBoundary)
                 }
             }
             is TryStatement -> {
                 checkJumpInStatements(stmt.tryBlock.statements, source, fileName,
-                    inIteration, inSwitch, labelNames)
+                    inIteration, inSwitch, labelNames, crossedFunctionBoundary)
                 stmt.catchClause?.block?.let {
                     checkJumpInStatements(it.statements, source, fileName,
-                        inIteration, inSwitch, labelNames)
+                        inIteration, inSwitch, labelNames, crossedFunctionBoundary)
                 }
                 stmt.finallyBlock?.let {
                     checkJumpInStatements(it.statements, source, fileName,
-                        inIteration, inSwitch, labelNames)
+                        inIteration, inSwitch, labelNames, crossedFunctionBoundary)
                 }
             }
-            // Function boundaries: reset iteration/switch/label state
+            // Function boundaries: reset iteration/switch/label state, mark boundary crossed
             is FunctionDeclaration -> {
                 stmt.body?.let {
                     checkJumpInStatements(it.statements, source, fileName,
-                        inIteration = false, inSwitch = false, labelNames = emptySet())
+                        inIteration = false, inSwitch = false, labelNames = emptySet(),
+                        crossedFunctionBoundary = true)
                 }
             }
             is ClassDeclaration -> {
@@ -6438,7 +6465,8 @@ class Checker(
                     }
                     body?.let {
                         checkJumpInStatements(it.statements, source, fileName,
-                            inIteration = false, inSwitch = false, labelNames = emptySet())
+                            inIteration = false, inSwitch = false, labelNames = emptySet(),
+                            crossedFunctionBoundary = true)
                     }
                 }
             }
@@ -6458,13 +6486,15 @@ class Checker(
             is ArrowFunction -> {
                 when (val body = expr.body) {
                     is Block -> checkJumpInStatements(body.statements, source, fileName,
-                        inIteration = false, inSwitch = false, labelNames = emptySet())
+                        inIteration = false, inSwitch = false, labelNames = emptySet(),
+                        crossedFunctionBoundary = true)
                     else -> {}
                 }
             }
             is FunctionExpression -> {
                 checkJumpInStatements(expr.body.statements, source, fileName,
-                    inIteration = false, inSwitch = false, labelNames = emptySet())
+                    inIteration = false, inSwitch = false, labelNames = emptySet(),
+                    crossedFunctionBoundary = true)
             }
             is ClassExpression -> {
                 for (member in expr.members) {
@@ -6477,7 +6507,8 @@ class Checker(
                     }
                     body?.let {
                         checkJumpInStatements(it.statements, source, fileName,
-                            inIteration = false, inSwitch = false, labelNames = emptySet())
+                            inIteration = false, inSwitch = false, labelNames = emptySet(),
+                            crossedFunctionBoundary = true)
                     }
                 }
             }
@@ -6493,7 +6524,7 @@ class Checker(
         }
     }
 
-    private fun emitTS1107(stmt: Statement, source: String, fileName: String) {
+    private fun emitJumpDiagnostic(stmt: Statement, source: String, fileName: String, code: Int, message: String) {
         var start = stmt.pos
         while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) start++
         val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
@@ -6502,9 +6533,9 @@ class Checker(
         val length = end - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
-            message = "Jump target cannot cross function boundary.",
+            message = message,
             category = DiagnosticCategory.Error,
-            code = 1107,
+            code = code,
             fileName = fileName,
             line = line,
             character = character,
