@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 6,970 passing (65.8%), 3,625 failing
-- **Session 2026-03-18b**: +28 tests (6,942→6,970) — fix false-positive TS1005, add TS6131, TS7019, TS1185, TS1148, TS1218, TS2441
+- **10,595 tests**, 6,972 passing (65.8%), 3,623 failing
+- **Session 2026-03-18b**: +30 tests (6,942→6,972) — fix false-positive TS1005, add TS6131, TS7019, TS1185, TS1148, TS1218, TS2441, TS1250
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
 - **JS emit bare-name:** 5,413 tests, ~5,104 passing (~94.3%)
 - **JS emit parameterized:** 1,114 tests, ~522 passing (~46.9%)
@@ -1255,6 +1255,20 @@ Picking off tractable fixes to continue improving the pass rate.
   **Files:** `Checker.kt`
 
 - [x] **16m. TS2441 — reserved name collision with exports/require** (+4 tests)
+
+  Detect top-level declarations named `exports` or `require` in module
+  files with CJS/AMD/UMD/System module format. Skip ambient (`declare`)
+  declarations and `noEmit` mode.
+
+  **Files:** `Checker.kt`
+
+- [x] **16n. TS1250 — block-scoped function declaration in ES5 strict** (+2 tests)
+
+  Detect function declarations inside blocks (if/for/while/do/try) in
+  strict mode when targeting ES5. The squiggle covers the function name.
+  Walks the AST but doesn't recurse into functions/classes/modules.
+
+  **Files:** `Checker.kt`
 
   Detect top-level declarations named `exports` or `require` in module
   files with CJS/AMD/UMD/System module format. Skip ambient (`declare`)
