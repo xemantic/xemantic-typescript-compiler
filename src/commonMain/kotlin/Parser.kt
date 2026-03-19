@@ -482,7 +482,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
         } else {
             // Report error but produce empty declarations list (e.g. bare `let;`)
-            reportError("Identifier expected.", code = 1003)
+            reportError("Variable declaration list cannot be empty.", code = 1123)
         }
         return VariableDeclarationList(declarations = decls, flags = flags, pos = pos, end = getEnd())
     }
