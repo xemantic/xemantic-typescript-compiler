@@ -4344,17 +4344,26 @@ class Checker(
      * Scope for name resolution — tracks names declared at each scope level.
      * Lookup walks up the parent chain.
      */
+    private class ClassContext(
+        val className: String,
+        val staticMembers: Set<String>,
+        val instanceMembers: Set<String>,
+        val inStaticContext: Boolean = false,
+    )
+
     private class NameScope(
         val parent: NameScope?,
         val names: MutableSet<String> = mutableSetOf(),
         val hasArguments: Boolean = false,
+        val classContext: ClassContext? = null,
     ) {
         fun has(name: String): Boolean =
             name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
 
         fun child(
             hasArguments: Boolean = false,
-        ): NameScope = NameScope(parent = this, hasArguments = hasArguments)
+            classContext: ClassContext? = this.classContext,
+        ): NameScope = NameScope(parent = this, hasArguments = hasArguments, classContext = classContext)
     }
 
     /**
@@ -4664,7 +4673,8 @@ class Checker(
             }
             is FunctionDeclaration -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
-                val fnScope = scope.child(hasArguments = true)
+                // Regular functions break 'this' binding — clear class context
+                val fnScope = scope.child(hasArguments = true, classContext = null)
                 addParamsToScope(stmt.parameters, fnScope)
                 stmt.typeParameters?.forEach { fnScope.names.add(it.name.text) }
                 // Check type parameter constraints
@@ -4683,7 +4693,8 @@ class Checker(
             }
             is ClassDeclaration -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
-                val classScope = scope.child()
+                val classCtx = buildClassContext(stmt, scope, fileName)
+                val classScope = scope.child(classContext = classCtx)
                 stmt.typeParameters?.forEach { classScope.names.add(it.name.text) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
@@ -4813,13 +4824,27 @@ class Checker(
         source: String,
         fileName: String,
     ) {
+        // Determine class context with correct static flag for the member
+        val isStatic = when (element) {
+            is PropertyDeclaration -> ModifierFlag.Static in element.modifiers
+            is MethodDeclaration -> ModifierFlag.Static in element.modifiers
+            is GetAccessor -> ModifierFlag.Static in element.modifiers
+            is SetAccessor -> ModifierFlag.Static in element.modifiers
+            is ClassStaticBlockDeclaration -> true
+            else -> false
+        }
+        val memberClassCtx = classScope.classContext?.let {
+            if (it.inStaticContext != isStatic) ClassContext(it.className, it.staticMembers, it.instanceMembers, isStatic)
+            else it
+        }
         when (element) {
             is PropertyDeclaration -> {
-                element.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
-                element.initializer?.let { checkUnresolvedInExpr(it, classScope, source, fileName) }
+                val propScope = classScope.child(classContext = memberClassCtx)
+                element.type?.let { checkUnresolvedInType(it, propScope, source, fileName) }
+                element.initializer?.let { checkUnresolvedInExpr(it, propScope, source, fileName) }
             }
             is MethodDeclaration -> {
-                val methodScope = classScope.child(hasArguments = true)
+                val methodScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 element.typeParameters?.forEach { methodScope.names.add(it.name.text) }
                 element.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -4842,7 +4867,7 @@ class Checker(
                 }
             }
             is Constructor -> {
-                val ctorScope = classScope.child(hasArguments = true)
+                val ctorScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 addParamsToScope(element.parameters, ctorScope)
                 for (param in element.parameters) {
                     param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
@@ -4853,14 +4878,14 @@ class Checker(
                 }
             }
             is GetAccessor -> {
-                val getScope = classScope.child(hasArguments = true)
+                val getScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 element.type?.let { checkUnresolvedInType(it, getScope, source, fileName) }
                 element.body?.let {
                     checkUnresolvedInStatements(it.statements, getScope, source, fileName)
                 }
             }
             is SetAccessor -> {
-                val setScope = classScope.child(hasArguments = true)
+                val setScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 addParamsToScope(element.parameters, setScope)
                 for (param in element.parameters) {
                     param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
@@ -4870,7 +4895,8 @@ class Checker(
                 }
             }
             is ClassStaticBlockDeclaration -> {
-                checkUnresolvedInStatements(element.body.statements, classScope, source, fileName)
+                val staticBlockScope = classScope.child(classContext = memberClassCtx)
+                checkUnresolvedInStatements(element.body.statements, staticBlockScope, source, fileName)
             }
             else -> {}
         }
@@ -4973,7 +4999,8 @@ class Checker(
                 }
             }
             is FunctionExpression -> {
-                val fnScope = scope.child(hasArguments = true)
+                // Regular functions break 'this' binding — clear class context
+                val fnScope = scope.child(hasArguments = true, classContext = null)
                 expr.name?.let { fnScope.names.add(it.text) }
                 expr.typeParameters?.forEach { fnScope.names.add(it.name.text) }
                 addParamsToScope(expr.parameters, fnScope)
@@ -4985,7 +5012,8 @@ class Checker(
                 checkUnresolvedInStatements(expr.body.statements, fnScope, source, fileName)
             }
             is ClassExpression -> {
-                val classScope = scope.child()
+                val classCtx = buildClassContext(expr, scope, fileName)
+                val classScope = scope.child(classContext = classCtx)
                 // Class expression name is in scope within its own body
                 expr.name?.let { classScope.names.add(it.text) }
                 expr.typeParameters?.forEach { classScope.names.add(it.name.text) }
@@ -5457,8 +5485,104 @@ class Checker(
     }
 
     /**
+     * Build a ClassContext with static and instance member names for
+     * TS2662/TS2663 did-you-mean diagnostics.
+     */
+    private fun buildClassContext(
+        classLike: Node, // ClassDeclaration or ClassExpression
+        scope: NameScope,
+        fileName: String,
+    ): ClassContext? {
+        val className: String
+        val members: List<ClassElement>
+        val heritageClauses: List<HeritageClause>?
+        when (classLike) {
+            is ClassDeclaration -> {
+                className = classLike.name?.text ?: return null
+                members = classLike.members
+                heritageClauses = classLike.heritageClauses
+            }
+            is ClassExpression -> {
+                className = classLike.name?.text ?: return null
+                members = classLike.members
+                heritageClauses = classLike.heritageClauses
+            }
+            else -> return null
+        }
+        val staticMembers = mutableSetOf<String>()
+        val instanceMembers = mutableSetOf<String>()
+        collectClassMembers(members, staticMembers, instanceMembers)
+        // Collect inherited members from base class if resolvable
+        heritageClauses?.forEach { clause ->
+            if (clause.token == SyntaxKind.ExtendsKeyword) {
+                for (type in clause.types) {
+                    val baseName = when (val expr = type.expression) {
+                        is Identifier -> expr.text
+                        else -> null
+                    }
+                    if (baseName != null) {
+                        collectBaseClassMembers(baseName, scope, fileName, staticMembers, instanceMembers)
+                    }
+                }
+            }
+        }
+        return ClassContext(className, staticMembers, instanceMembers)
+    }
+
+    private fun collectClassMembers(
+        members: List<ClassElement>,
+        staticMembers: MutableSet<String>,
+        instanceMembers: MutableSet<String>,
+    ) {
+        for (member in members) {
+            val memberName = when (member) {
+                is PropertyDeclaration -> (member.name as? Identifier)?.text
+                is MethodDeclaration -> (member.name as? Identifier)?.text
+                is GetAccessor -> (member.name as? Identifier)?.text
+                is SetAccessor -> (member.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+            val isStatic = when (member) {
+                is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                is GetAccessor -> ModifierFlag.Static in member.modifiers
+                is SetAccessor -> ModifierFlag.Static in member.modifiers
+                else -> false
+            }
+            if (isStatic) staticMembers.add(memberName) else instanceMembers.add(memberName)
+        }
+    }
+
+    private fun collectBaseClassMembers(
+        baseName: String,
+        scope: NameScope,
+        fileName: String,
+        staticMembers: MutableSet<String>,
+        instanceMembers: MutableSet<String>,
+    ) {
+        // Try to find the base class in the binder
+        val result = fileResults[fileName] ?: return
+        val sym = result.locals[baseName] ?: return
+        if (!sym.flags.hasAny(SymbolFlags.Class)) return
+        // Find the class declaration node
+        val classDecl = sym.declarations?.filterIsInstance<ClassDeclaration>()?.firstOrNull() ?: return
+        collectClassMembers(classDecl.members, staticMembers, instanceMembers)
+        // Recurse into base's heritage
+        classDecl.heritageClauses?.forEach { clause ->
+            if (clause.token == SyntaxKind.ExtendsKeyword) {
+                for (type in clause.types) {
+                    val nextBaseName = (type.expression as? Identifier)?.text
+                    if (nextBaseName != null && nextBaseName != baseName) {
+                        collectBaseClassMembers(nextBaseName, scope, fileName, staticMembers, instanceMembers)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Check if an identifier name can be resolved in the current scope chain.
-     * If not, emit TS2304.
+     * If not, emit TS2662/TS2663 (did-you-mean) or TS2304.
      */
     private fun checkIdentifierResolved(
         name: String,
@@ -5478,6 +5602,38 @@ class Checker(
         val start = node.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        // Check for did-you-mean static/instance member suggestion
+        val classCtx = scope.classContext
+        if (classCtx != null) {
+            if (name in classCtx.staticMembers) {
+                diagnostics.add(Diagnostic(
+                    message = "Cannot find name '$name'. Did you mean the static member '${classCtx.className}.$name'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2662,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                return
+            }
+            // Only suggest instance members when NOT in static context
+            if (!classCtx.inStaticContext && name in classCtx.instanceMembers) {
+                diagnostics.add(Diagnostic(
+                    message = "Cannot find name '$name'. Did you mean the instance member 'this.$name'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2663,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                return
+            }
+        }
 
         diagnostics.add(Diagnostic(
             message = "Cannot find name '$name'.",

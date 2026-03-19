@@ -1513,11 +1513,14 @@ Picking off tractable fixes to continue improving the pass rate.
 
 - [x] **19m. TS1123 empty variable declaration list** (+1 test)
 
-- [ ] **19n. TS2662 — suggest static member** (~3 tests)
+- [x] **19n. TS2662/TS2663 — suggest static/instance member** (+4 tests)
 
-  When accessing a name inside a class method that doesn't exist locally but
-  exists as a static member of the class, emit TS2662 "Cannot find name 'X'.
-  Did you mean the static member 'C.X'?" instead of TS2304.
+  TS2662 "Cannot find name 'X'. Did you mean the static member 'C.X'?" when
+  unresolved name matches a static member of the enclosing class. TS2663
+  "Did you mean the instance member 'this.X'?" for instance members.
+  Handles: static vs instance context (no TS2663 in static methods),
+  function expressions break `this` binding (no suggestions), arrow
+  functions preserve it. Inherits members from base classes.
 
   **Files:** `Checker.kt`
 
