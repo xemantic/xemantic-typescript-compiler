@@ -197,6 +197,8 @@ class Checker(
         checkDerivedConstructorSuper()
         // 56. Check circular import alias definitions (TS2303)
         checkCircularImportAlias()
+        // 57. Check return statement outside function body (TS1108)
+        checkReturnOutsideFunction()
     }
 
     // -----------------------------------------------------------------------
@@ -13707,6 +13709,79 @@ class Checker(
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
                 else -> {}
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1108: A 'return' statement can only be used within a function body
+    // -----------------------------------------------------------------------
+
+    private fun checkReturnOutsideFunction() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkReturnInTopLevel(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkReturnInTopLevel(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ReturnStatement -> {
+                    val start = stmt.pos
+                    var spanStart = start
+                    while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                    // Span covers the keyword "return" + optional expression + semicolon
+                    var spanEnd = stmt.end
+                    while (spanEnd > spanStart && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanEnd--
+                    val length = (spanEnd - spanStart).coerceAtLeast(6) // at least "return"
+                    val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                    diagnostics.add(Diagnostic(
+                        message = "A 'return' statement can only be used within a function body.",
+                        category = DiagnosticCategory.Error,
+                        code = 1108,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = spanStart,
+                        length = length,
+                    ))
+                }
+                is IfStatement -> {
+                    checkReturnInTopLevelStmt(stmt.thenStatement, source, fileName)
+                    stmt.elseStatement?.let { checkReturnInTopLevelStmt(it, source, fileName) }
+                }
+                is Block -> checkReturnInTopLevel(stmt.statements, source, fileName)
+                // Don't recurse into functions/classes — returns are valid there
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkReturnInTopLevelStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ReturnStatement -> {
+                val start = stmt.pos
+                var spanStart = start
+                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                var spanEnd = stmt.end
+                while (spanEnd > spanStart && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanEnd--
+                val length = (spanEnd - spanStart).coerceAtLeast(6)
+                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                diagnostics.add(Diagnostic(
+                    message = "A 'return' statement can only be used within a function body.",
+                    category = DiagnosticCategory.Error,
+                    code = 1108,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = spanStart,
+                    length = length,
+                ))
+            }
+            is Block -> checkReturnInTopLevel(stmt.statements, source, fileName)
+            else -> {}
         }
     }
 }
