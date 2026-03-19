@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,023 passing (66.3%), 3,572 failing
+- **10,595 tests**, 7,054 passing (66.6%), 3,538 failing
+- **Session 2026-03-18d**: +31 tests (7,023→7,054) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name
 - **Session 2026-03-18c**: +47 tests (6,976→7,023) — TS5055/TS5056 per-file output, TS2695 comma operator, TS2448/TS2450 use before decl, TS1049/TS1030/TS1014 syntax, TS1183 ambient impl, TS2396 arguments collision, TS1029 modifier order, TS1039 ambient initializers, TS1113 switch defaults, TS1308 await context, const/let→var ES5 downlevel
 - **Session 2026-03-18b**: +34 tests (6,942→6,976) — fix FP TS1005/TS2872/TS6133, add TS6131/TS7019/TS1185/TS1148/TS1218/TS2441/TS1250/TS7010/TS1191
 - **Session 2026-03-18**: +47 tests (6,892→6,939) — new diagnostics TS1105/1104/1116/1115, TS2389, TS5108, TS1117, TS17009, TS2588, TS2369, TS2335, TS1155, TS2393, TS1359; squiggle fixes; FP reductions
@@ -1390,7 +1391,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18i. TS2414/TS2427 — class/interface name cannot be undefined** (~2 tests)
+- [x] **18i. TS2414/TS2427 — class/interface name cannot be undefined** (+1 test)
 
   "Class name cannot be 'undefined'." / "Interface name cannot be 'undefined'."
 
