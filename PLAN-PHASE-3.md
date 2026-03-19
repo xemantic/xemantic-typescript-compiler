@@ -1628,6 +1628,21 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
   **Files:** `Parser.kt`
 
+- [ ] **20i. CJS exports qualification for computed properties and calls** (~6 tests)
+
+  In CJS output, exported names used in computed property names (`[fieldName]`)
+  and function calls (`testRecFun()`) need `exports.` prefix. Computed
+  properties → `[exports.fieldName]`, function calls → `(0, exports.fn)()`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **20j. Triple-slash reference directive preservation** (~6 tests)
+
+  `/// <reference path="..." />` directives should be preserved in JS output.
+  Currently some tests expect them but they're stripped.
+
+  **Files:** `Emitter.kt` or `TypeScriptCompiler.kt`
+
 ---
 
 ## BLOCKED — not planned for Phase 3
