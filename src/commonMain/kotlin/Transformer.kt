@@ -1191,7 +1191,7 @@ class Transformer(
                                 needsImportDefault = true
                                 result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
                             } else {
-                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments))
+                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, trailingComments = stmt.trailingComments))
                             }
                             val importConstStmt = result.last()
                             // Rename: a → y_1.a, c → y_1.b
@@ -4556,6 +4556,7 @@ class Transformer(
         name: String,
         moduleSpecifier: Expression,
         comments: List<Comment>? = null,
+        trailingComments: List<Comment>? = null,
         useVar: Boolean = false, // TypeScript uses var for re-export requires, const for regular imports
     ): Statement {
         val normalizedSpecifier = normalizeModuleSpecifier(moduleSpecifier)
@@ -4574,6 +4575,7 @@ class Transformer(
                 ),
                 flags = if (useVar || options.effectiveTarget < ScriptTarget.ES2015) VarKeyword else ConstKeyword,
                 pos = -1, end = -1,
+                trailingComments = trailingComments,
             ),
             pos = -1, end = -1,
             leadingComments = comments,
