@@ -1274,6 +1274,8 @@ class Checker(
         val isTypeOnly: Boolean,  // interface, type alias
         val stmtIndex: Int = -1,  // index in parent statement list (for self-reference detection)
         val parentVarStmt: VariableStatement? = null, // parent statement for TS6199 grouping
+        val parentBindingPattern: Node? = null, // parent ObjectBindingPattern/ArrayBindingPattern for TS6198 grouping
+        val bindingElementCount: Int = 0, // total binding elements in parentBindingPattern
     )
 
     private fun checkUnusedDeclarations() {
@@ -1368,7 +1370,11 @@ class Checker(
                 decl.name in scope.referencedNames
             }
             if (isExternallyReferenced) continue
-            if (decl.name.startsWith("_")) continue
+            // Shorthand underscore elements in ObjectBindingPattern still contribute to TS6198
+            val isShorthandUnderscore = decl.name.startsWith("_") &&
+                decl.parentBindingPattern is ObjectBindingPattern &&
+                (decl.declNode as? BindingElement)?.propertyName == null
+            if (decl.name.startsWith("_") && !isShorthandUnderscore) continue
             if (decl.isExported) continue
 
             if (decl.isParameter) {
@@ -1408,15 +1414,56 @@ class Checker(
             }
         }
 
+        // Check for TS6198: if ALL elements from a destructuring pattern are unused,
+        // emit a single "All destructured elements are unused" instead of individual TS6133
+        // TS6198 only fires for ObjectBindingPattern, not ArrayBindingPattern
+        val ts6198Patterns = mutableSetOf<Node>()
+        val declsByPattern = unusedDecls.filter { it.parentBindingPattern is ObjectBindingPattern }
+            .groupBy { it.parentBindingPattern!! }
+        for ((pattern, decls) in declsByPattern) {
+            val totalCount = decls.first().bindingElementCount
+            // Count shorthand underscore-prefixed elements (e.g., `{ _a1 }` not `{ a: _a1 }`)
+            // These are unused by convention but count toward TS6198 "all unused"
+            val shorthandUnderscoreCount = if (pattern is ObjectBindingPattern) {
+                pattern.elements.count { elem ->
+                    elem.propertyName == null && (elem.name as? Identifier)?.text?.startsWith("_") == true
+                            && !elem.dotDotDotToken
+                }
+            } else 0
+            if (decls.size + shorthandUnderscoreCount == totalCount && totalCount > 1) {
+                ts6198Patterns.add(pattern)
+                val patStart = pattern.pos
+                val spanLength = computeBindingPatternSpan(source, patStart, pattern)
+                val (line, character) = getLineAndCharacterOfPosition(source, patStart)
+                diagnostics.add(Diagnostic(
+                    message = "All destructured elements are unused.",
+                    category = DiagnosticCategory.Error,
+                    code = 6198,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = patStart,
+                    length = spanLength,
+                ))
+            }
+        }
+
         for (decl in unusedDecls) {
             // Skip declarations already handled by TS6199
             if (decl.parentVarStmt != null && decl.parentVarStmt in ts6199Stmts) continue
+            // Skip declarations already handled by TS6198
+            if (decl.parentBindingPattern != null && decl.parentBindingPattern in ts6198Patterns) continue
+            // Underscore-prefixed names that made it through for TS6198 grouping: skip individual TS6133
+            if (decl.name.startsWith("_")) continue
 
             val nameNode = decl.nameNode
-            val start = nameNode.pos
+            // For single-element destructuring, use the pattern span instead of the name
+            val usePatternSpan = decl.parentBindingPattern is ObjectBindingPattern && decl.bindingElementCount == 1
+            val start = if (usePatternSpan) decl.parentBindingPattern!!.pos else nameNode.pos
             // Compute squiggle length: for imports using whole-statement node,
             // measure the line text; otherwise use identifier text length
             val length = when {
+                usePatternSpan -> computeBindingPatternSpan(source, start, decl.parentBindingPattern!!)
                 decl.spanLength > 0 -> decl.spanLength
                 nameNode is ImportDeclaration -> {
                     // Squiggle covers the import statement up to semicolon (excluding comments)
@@ -1639,6 +1686,8 @@ class Checker(
         scope: UnusedScope,
         stmtIndex: Int = -1,
         parentVarStmt: VariableStatement? = null,
+        parentBindingPattern: Node? = null,
+        bindingElementCount: Int = 0,
     ) {
         when (name) {
             is Identifier -> {
@@ -1651,23 +1700,30 @@ class Checker(
                     isTypeOnly = false,
                     stmtIndex = stmtIndex,
                     parentVarStmt = parentVarStmt,
+                    parentBindingPattern = parentBindingPattern,
+                    bindingElementCount = bindingElementCount,
                 ))
             }
             is ObjectBindingPattern -> {
                 // When a rest element exists, non-rest siblings are intentional
                 // extractions and should not be flagged as unused
                 val hasRest = name.elements.any { it.dotDotDotToken }
+                val count = if (hasRest) name.elements.count { it.dotDotDotToken } else name.elements.size
                 for (element in name.elements) {
                     if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
-                    collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt)
+                    collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt,
+                        parentBindingPattern = name, bindingElementCount = count)
                 }
             }
             is ArrayBindingPattern -> {
                 val hasRest = name.elements.any { it is BindingElement && it.dotDotDotToken }
+                val count = if (hasRest) name.elements.count { it is BindingElement && it.dotDotDotToken }
+                    else name.elements.count { it is BindingElement }
                 for (element in name.elements) {
                     if (element is BindingElement) {
                         if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
-                        collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt)
+                        collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt,
+                            parentBindingPattern = name, bindingElementCount = count)
                     }
                 }
             }
@@ -1684,40 +1740,44 @@ class Checker(
         param: Parameter,
         scope: UnusedScope,
     ) {
-        // For destructuring parameters, the squiggle covers the entire binding pattern
-        // (e.g., [a] or {a}). TypeScript uses the binding pattern node for the span.
+        // For destructuring parameters, the squiggle behavior depends on how many elements
+        // are unused: single-element → pattern span, all unused → TS6198 pattern span,
+        // some unused → individual name span.
         when (pattern) {
             is ArrayBindingPattern -> {
+                val count = pattern.elements.count { it is BindingElement && !it.dotDotDotToken }
                 for (element in pattern.elements) {
                     if (element is BindingElement) {
                         val name = element.name
-                        if (name is Identifier && !name.text.startsWith("_")) {
-                            // Span from '[' to ']' inclusive — end includes trailing trivia
+                        if (name is Identifier) {
                             scope.declarations.add(UnusedDecl(
                                 name = name.text,
-                                nameNode = pattern,
+                                nameNode = name,
                                 declNode = param,
-                                spanLength = pattern.end - pattern.pos - 1,
                                 isExported = false,
                                 isParameter = true,
                                 isTypeOnly = false,
+                                parentBindingPattern = pattern,
+                                bindingElementCount = count,
                             ))
                         }
                     }
                 }
             }
             is ObjectBindingPattern -> {
+                val count = pattern.elements.count { !it.dotDotDotToken }
                 for (element in pattern.elements) {
                     val name = element.name
-                    if (name is Identifier && !name.text.startsWith("_")) {
+                    if (name is Identifier) {
                         scope.declarations.add(UnusedDecl(
                             name = name.text,
-                            nameNode = pattern,
+                            nameNode = name,
                             declNode = param,
-                            spanLength = pattern.end - pattern.pos - 1,
                             isExported = false,
                             isParameter = true,
                             isTypeOnly = false,
+                            parentBindingPattern = pattern,
+                            bindingElementCount = count,
                         ))
                     }
                 }
@@ -3190,11 +3250,41 @@ class Checker(
             // Scan return type for typeof references
             returnType?.let { collectTypeRefs(it, scope) }
             // Report unused parameters
-            for (decl in scope.declarations) {
-                if (decl.name in scope.referencedNames) continue
+            // First check for TS6198: if ALL elements from a destructuring pattern are unused,
+            // emit a single "All destructured elements are unused" instead of individual TS6133
+            val unusedParams = scope.declarations.filter { it.name !in scope.referencedNames }
+            val paramTs6198Patterns = mutableSetOf<Node>()
+            val paramDeclsByPattern = unusedParams.filter { it.parentBindingPattern is ObjectBindingPattern }
+                .groupBy { it.parentBindingPattern!! }
+            for ((pattern, decls) in paramDeclsByPattern) {
+                val totalCount = decls.first().bindingElementCount
+                if (decls.size == totalCount && totalCount > 1) {
+                    paramTs6198Patterns.add(pattern)
+                    val patStart = pattern.pos
+                    val spanLength = computeBindingPatternSpan(source, patStart, pattern)
+                    val (line, character) = getLineAndCharacterOfPosition(source, patStart)
+                    diagnostics.add(Diagnostic(
+                        message = "All destructured elements are unused.",
+                        category = DiagnosticCategory.Error,
+                        code = 6198,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = patStart,
+                        length = spanLength,
+                    ))
+                }
+            }
+            for (decl in unusedParams) {
+                if (decl.parentBindingPattern != null && decl.parentBindingPattern in paramTs6198Patterns) continue
+                // Underscore-prefixed names don't get individual TS6133 (only TS6198 above)
+                if (decl.name.startsWith("_")) continue
                 val nameNode = decl.nameNode
-                val start = nameNode.pos
-                val length = if (decl.spanLength > 0) decl.spanLength else decl.name.length
+                // Single-element destructuring parameter: use pattern span for both { } and [ ]
+                val usePatternSpan = decl.parentBindingPattern != null && decl.bindingElementCount == 1
+                val start = if (usePatternSpan) decl.parentBindingPattern!!.pos else nameNode.pos
+                val length = if (usePatternSpan) computeBindingPatternSpan(source, start, decl.parentBindingPattern!!)
+                    else if (decl.spanLength > 0) decl.spanLength else decl.name.length
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
                     message = "'${decl.name}' is declared but its value is never read.",
@@ -3413,6 +3503,27 @@ class Checker(
             }
         }
         return line to (position - lineStart + 1)
+    }
+
+    /**
+     * Compute the span length for a binding pattern by finding the closing
+     * brace/bracket in the source. Our parser's `end` position is set after
+     * nextToken() so it extends past the closing delimiter.
+     */
+    private fun computeBindingPatternSpan(source: String, start: Int, pattern: Node): Int {
+        val closeChar = if (pattern is ObjectBindingPattern) '}' else ']'
+        var depth = 0
+        var i = start
+        while (i < source.length) {
+            val ch = source[i]
+            if (ch == '{' || ch == '[') depth++
+            else if (ch == '}' || ch == ']') {
+                depth--
+                if (depth == 0 && ch == closeChar) return i - start + 1
+            }
+            i++
+        }
+        return pattern.end - start
     }
 
     // -----------------------------------------------------------------------

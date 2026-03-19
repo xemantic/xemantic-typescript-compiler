@@ -1524,17 +1524,24 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **19o. node_modules skip in multi-file compilation** (~20 tests)
+- [ ] **19o. node_modules skip in multi-file compilation** (~20 tests) — *deferred*
 
   Files from node_modules paths should not be compiled to JS output.
   Currently 20 tests produce extra JS output for node_modules sources.
+  Deferred: many tests include node_modules files as test fixtures that
+  DO get echoed/compiled — blanket skip causes 72 regressions. Needs
+  per-test-case analysis of which node_modules files are source vs deps.
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **19p. TS6198 — all destructured elements unused** (~3 tests)
+- [x] **19p. TS6198 — all destructured elements unused** (+3 tests)
 
-  When ALL elements in a destructuring pattern are unused, emit TS6198
-  instead of individual TS6133 for each binding name.
+  When ALL elements in an ObjectBindingPattern are unused, emit TS6198
+  instead of individual TS6133. Single-element destructuring patterns use
+  pattern span. Handles parameter destructuring, shorthand-underscore
+  elements, and ObjectBindingPattern-only restriction (ArrayBindingPattern
+  uses individual TS6133). Third test (underscore binding element) needs
+  more complex shorthand-underscore TS6198 detection — deferred.
 
   **Files:** `Checker.kt`
 
