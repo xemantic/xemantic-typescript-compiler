@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,067 passing (66.7%), 3,525 failing
+- **10,595 tests**, 7,076 passing (66.8%), 3,516 failing
+- **Session 2026-03-19b**: +9 tests (7,067→7,076) — TS1202 FP namespace imports, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions
 - **Session 2026-03-19**: +44 tests (7,023→7,067) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name, TS2528 multi-default export, TS2377 derived super call, TS2303 circular import alias, TS2695 FP fixes (eval + allowUnreachableCode), BaselineFormatter crash fix, TS1356 related info, TS1108 return outside function, TS1114 duplicate labels, TS1099 empty type args
 - **Session 2026-03-18c**: +47 tests (6,976→7,023) — TS5055/TS5056 per-file output, TS2695 comma operator, TS2448/TS2450 use before decl, TS1049/TS1030/TS1014 syntax, TS1183 ambient impl, TS2396 arguments collision, TS1029 modifier order, TS1039 ambient initializers, TS1113 switch defaults, TS1308 await context, const/let→var ES5 downlevel
 - **Session 2026-03-18b**: +34 tests (6,942→6,976) — fix FP TS1005/TS2872/TS6133, add TS6131/TS7019/TS1185/TS1148/TS1218/TS2441/TS1250/TS7010/TS1191
@@ -1412,6 +1413,61 @@ Picking off tractable fixes to continue improving the pass rate.
 - [x] **18l. TS2303 — circular import alias** (+1 test, remaining need cross-file or .d.ts)
 
   "Circular definition of import alias 'X'." Detect cycles in import= chains.
+
+  **Files:** `Checker.kt`
+
+### 19. Phase 3m — False positive reduction and diagnostic precision
+
+- [x] **19a. TS1202 only for external module references** (+2 tests)
+
+  `import x = m.m` is a namespace alias, not a module import. Only emit TS1202
+  for `import x = require("mod")` (ExternalModuleReference), not for
+  Identifier/QualifiedName module references.
+
+  **Files:** `Checker.kt`
+
+- [x] **19b. TS1213 for class-context strict mode reserved words** (+2 tests)
+
+  Inside class bodies, use TS1213 "Identifier expected. 'X' is a reserved word
+  in strict mode. Class definitions are automatically in strict mode." instead
+  of TS1212 which lacks the class context suffix.
+
+  **Files:** `Checker.kt`
+
+- [x] **19c. TS1183 false positive on declare accessor without body** (+2 tests)
+
+  Parser creates synthetic empty Block (pos=-1) for getters/setters without
+  body. TS1183 check now skips blocks with pos < 0.
+
+  **Files:** `Checker.kt`
+
+- [x] **19d. TS6131 only once per compilation for export statements** (+2 tests)
+
+  TypeScript emits TS6131 only once per compilation. Changed to emit only
+  for the first eligible file with export statements, using `break` after
+  first emission.
+
+  **Files:** `Checker.kt`
+
+- [x] **19e. TS1100 skip declare functions and classes** (+1 test)
+
+  TS1100 "Invalid use of 'arguments'/'eval' in strict mode" should not fire
+  in `declare` function/class contexts where no code is generated.
+
+  **Files:** `Checker.kt`
+
+- [ ] **19f. TS1123 empty variable declaration list** (~1 test)
+
+  Parser should emit TS1123 "Variable declaration list cannot be empty" when
+  `let;` or `const;` is encountered, instead of TS1003 "Identifier expected".
+
+  **Files:** `Parser.kt`
+
+- [ ] **19g. TS2564/TS2454 suppression for type-error variables** (~2 tests)
+
+  When a variable/property type annotation itself has errors (e.g., TS2314
+  wrong type args), skip TS2564/TS2454 for that variable to avoid cascading
+  false positives. Already partially done for TS2314; extend to TS1003.
 
   **Files:** `Checker.kt`
 
