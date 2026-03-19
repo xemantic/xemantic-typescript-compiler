@@ -7595,6 +7595,8 @@ class Checker(
     // -----------------------------------------------------------------------
 
     private fun checkCommaOperatorUnused() {
+        // TypeScript suppresses TS2695 when allowUnreachableCode is explicitly true
+        if (options.allowUnreachableCode == true) return
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -7691,14 +7693,12 @@ class Checker(
 
     /** Check if this comma expression is an indirect call pattern: (0, obj.prop)() */
     private fun isIndirectCallComma(expr: BinaryExpression): Boolean {
-        // The right side must be a property access or element access
         val right = expr.right
-        if (right !is PropertyAccessExpression && right !is ElementAccessExpression) return false
-        // Walk up through parenthesized expressions to find the call
-        // The comma expression is already detected — check if the parent context is a call
-        // We can't easily check parents, but the pattern is always: (left, propAccess)()
-        // TypeScript skips these when right side is property/element access
-        return true
+        // (0, obj.method)() — indirect call pattern with property/element access
+        if (right is PropertyAccessExpression || right is ElementAccessExpression) return true
+        // (0, eval)("code") — indirect eval pattern
+        if (right is Identifier && right.text == "eval") return true
+        return false
     }
 
     private fun checkCommaInExpr(expr: Expression, source: String, fileName: String) {
