@@ -366,11 +366,21 @@ class TypeScriptCompiler {
             }
         }
 
-        // TS5110: module must match moduleResolution for nodenext/node16
+        // TS5110: module must match moduleResolution for nodenext/node16/node18/node20
         val modRes = options.moduleResolution?.lowercase()
-        if (modRes == "nodenext" || modRes == "node16") {
-            val expectedModule = if (modRes == "nodenext") ModuleKind.NodeNext else ModuleKind.Node16
-            val displayModRes = if (modRes == "nodenext") "NodeNext" else "Node16"
+        if (modRes in setOf("nodenext", "node16", "node18", "node20")) {
+            val expectedModule = when (modRes) {
+                "nodenext" -> ModuleKind.NodeNext
+                "node18" -> ModuleKind.Node18
+                "node20" -> ModuleKind.Node20
+                else -> ModuleKind.Node16
+            }
+            val displayModRes = when (modRes) {
+                "nodenext" -> "NodeNext"
+                "node18" -> "Node18"
+                "node20" -> "Node20"
+                else -> "Node16"
+            }
             if (options.module != expectedModule) {
                 diagnostics.add(Diagnostic(
                     message = "Option 'module' must be set to '$displayModRes' when option 'moduleResolution' is set to '$displayModRes'.",

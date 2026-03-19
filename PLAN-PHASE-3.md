@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,145 passing (67.4%), 3,447 failing
+- **10,595 tests**, 7,155 passing (67.5%), 3,437 failing
+- **Session 2026-03-19e**: +10 tests (7,145→7,155) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
@@ -1639,7 +1640,7 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **20j. Triple-slash reference directive preservation** (~6 tests)
+- [x] **20j. Triple-slash reference directive preservation** (~6 tests) — *superseded by 21a*
 
   `/// <reference path="..." />` directives should be preserved in JS output.
   Currently some tests expect them but they're stripped.
@@ -1661,13 +1662,17 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **21b. CJS __esModule for type-import-only module files** (~4 tests)
+- [x] **21b. CJS __esModule for type-import-only module files** (+6 tests)
 
-  Files that only import types still need `Object.defineProperty(exports,
-  "__esModule", { value: true })` in CJS output. Tests:
-  `tripleSlashTypesReferenceWithMissingExports` (4 module variants).
+  Root cause was threefold: (1) `ModuleKind` lacked `Node18`/`Node20` entries,
+  so `module: node18`/`node20` was silently ignored. (2) `isESModuleFormat`
+  incorrectly treated `.ts` files in node16+ as ESM instead of CJS. (3)
+  `isModuleFile` and CJS `forcedModule` didn't recognize node16+ modes.
+  Fix: added `Node18`/`Node20` to enum, added `isNodeNext` helper, updated
+  all node16/nodenext checks. Tests: `tripleSlashTypesReferenceWithMissingExports`
+  (4 JS variants), `sideEffectImports1` (2 nodenext JS variants).
 
-  **Files:** `Transformer.kt`
+  **Files:** `CompilerOptions.kt`, `Transformer.kt`, `Checker.kt`, `TypeScriptCompiler.kt`
 
 - [ ] **21c. CJS type-only import elision** (~6 tests)
 

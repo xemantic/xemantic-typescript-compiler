@@ -6666,9 +6666,8 @@ class Checker(
     private fun checkExportAssignmentInEsModule() {
         val effectiveModule = options.effectiveModule
         // ES module kinds: ES2015, ES2020, ES2022, ESNext
-        // Node16/NodeNext support import= require() via createRequire, so exclude them
-        val isEsModule = effectiveModule >= ModuleKind.ES2015 &&
-                effectiveModule != ModuleKind.Node16 && effectiveModule != ModuleKind.NodeNext
+        // Node16/Node18/Node20/NodeNext support import= require() via createRequire, so exclude them
+        val isEsModule = effectiveModule >= ModuleKind.ES2015 && !effectiveModule.isNodeNext
         if (!isEsModule) return
 
         for (result in binderResults) {
@@ -6795,7 +6794,7 @@ class Checker(
             // Default moduleResolution based on module option
             when (options.module) {
                 ModuleKind.CommonJS -> "node10"
-                ModuleKind.Node16 -> "node16"
+                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
                 ModuleKind.NodeNext -> "nodenext"
                 // System and AMD use classic resolution
                 ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"

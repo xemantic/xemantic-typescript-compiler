@@ -42,7 +42,10 @@ enum class ScriptTarget {
 }
 
 enum class ModuleKind {
-    None, CommonJS, AMD, UMD, System, ES2015, ES2020, ES2022, ESNext, Node16, NodeNext;
+    None, CommonJS, AMD, UMD, System, ES2015, ES2020, ES2022, ESNext, Node16, Node18, Node20, NodeNext;
+
+    /** True for Node16, Node18, Node20, NodeNext — all node-resolution module kinds. */
+    val isNodeNext: Boolean get() = this == Node16 || this == Node18 || this == Node20 || this == NodeNext
 
     companion object {
         fun fromString(value: String): ModuleKind? = when (value.lowercase()) {
@@ -56,6 +59,8 @@ enum class ModuleKind {
             "es2022" -> ES2022
             "esnext" -> ESNext
             "node16" -> Node16
+            "node18" -> Node18
+            "node20" -> Node20
             "nodenext" -> NodeNext
             else -> null
         }
@@ -180,8 +185,11 @@ fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
     if (fileName.endsWith(".mjs") || fileName.endsWith(".mts")) return true
     return when (module) {
         ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022, ModuleKind.ESNext -> true
-        ModuleKind.Node16, ModuleKind.NodeNext -> {
-            !fileName.endsWith(".cts")
+        ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20, ModuleKind.NodeNext -> {
+            // In node resolution modes, only .mts/.mjs files are ESM by default.
+            // Plain .ts files are CJS (we don't have package.json "type" context).
+            // .mts/.mjs already handled above, so only those reach here as true.
+            false
         }
         else -> false
     }
