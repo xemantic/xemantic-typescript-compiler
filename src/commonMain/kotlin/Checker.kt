@@ -306,6 +306,83 @@ class Checker(
     }
 
     /**
+     * Check if an import=require() resolves to a type-only module (only interfaces/types).
+     * Used by CJS transform to elide require() for type-only imports.
+     */
+    fun isTypeOnlyImportRequire(moduleSpecifier: String, sourceFileName: String): Boolean {
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        // Check all exports from the target file
+        for (stmt in targetResult.sourceFile.statements) {
+            when (stmt) {
+                is ExportAssignment -> {
+                    if (stmt.isExportEquals) {
+                        val expr = stmt.expression
+                        if (expr is Identifier) {
+                            val symbol = targetResult.locals[expr.text]
+                            if (symbol != null) {
+                                val resolved = resolveAlias(symbol)
+                                return !resolved.flags.hasAny(SymbolFlags.Value)
+                            }
+                        }
+                        return false // expression export = always value
+                    }
+                }
+                else -> {}
+            }
+        }
+        return false
+    }
+
+    /**
+     * Check if a name resolves to a type-only declaration across all files.
+     * Used for `export { X }` (no from) to decide if void 0 hoist is needed.
+     * Returns true if the name is a type-only symbol (interface, type alias,
+     * non-instantiated namespace). Returns false if it's a value or unknown.
+     */
+    fun isTypeOnlyGlobalName(name: String): Boolean {
+        // Check globals first
+        val globalSymbol = globals[name]
+        if (globalSymbol != null) {
+            val resolved = resolveAlias(globalSymbol)
+            if (resolved.flags.hasAny(SymbolFlags.Value)) return false
+            if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
+                for (br in binderResults) {
+                    for (decl in resolved.declarations) {
+                        if (decl is ModuleDeclaration) {
+                            val state = br.moduleInstanceStates[nodeKey(decl)]
+                            if (state == ModuleInstanceState.Instantiated) return false
+                        }
+                    }
+                }
+                return true
+            }
+            return resolved.flags.hasAny(SymbolFlags.Type) && !resolved.flags.hasAny(SymbolFlags.Value)
+        }
+        // Check all file locals
+        for (result in binderResults) {
+            val symbol = result.locals[name]
+            if (symbol != null) {
+                val resolved = resolveAlias(symbol)
+                if (resolved.flags.hasAny(SymbolFlags.Value)) return false
+                if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
+                    for (br in binderResults) {
+                        for (decl in resolved.declarations) {
+                            if (decl is ModuleDeclaration) {
+                                val state = br.moduleInstanceStates[nodeKey(decl)]
+                                if (state == ModuleInstanceState.Instantiated) return false
+                            }
+                        }
+                    }
+                    return true
+                }
+                return resolved.flags.hasAny(SymbolFlags.Type) && !resolved.flags.hasAny(SymbolFlags.Value)
+            }
+        }
+        return false // unknown name — conservative, keep the export
+    }
+
+    /**
      * Resolve a const enum member access like `E.A` to its constant value.
      * Returns null if `enumName` is not a const enum or `memberName` is not found.
      */

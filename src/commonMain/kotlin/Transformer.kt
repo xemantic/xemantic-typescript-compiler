@@ -1317,6 +1317,9 @@ class Transformer(
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
+                            // Skip type-only names (interfaces, type aliases, non-instantiated namespaces)
+                            if (localName in pureTypeNames) continue
+                            if (localName !in runtimeDeclaredNames && checker?.isTypeOnlyGlobalName(localName) == true) continue
                             if (localName != "undefined" && localName !in runtimeDeclaredNames) {
                                 // Name not declared locally — it's a global re-export.
                                 // TypeScript generates void 0 hoist only (no assignment needed for globals).
@@ -7180,6 +7183,14 @@ class Transformer(
         // `import x = require("mod")` → `const x = require("mod")`
         // `import x = 5` (invalid, literal RHS) → `5;` (expression statement, TypeScript's error-recovery output)
         val isRequire = ref is ExternalModuleReference
+
+        // Elide import=require() when the target module only exports types
+        if (isRequire && !isExported && ref is ExternalModuleReference) {
+            val specText = (ref.expression as? StringLiteralNode)?.text
+            if (specText != null && checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
+                return emptyList()
+            }
+        }
 
         // In ESM mode, `import x = require("mod")` is not valid — drop it entirely
         if (isRequire && isESModuleFormat(options.effectiveModule, currentFileName)) {
