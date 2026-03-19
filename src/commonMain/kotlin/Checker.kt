@@ -10927,12 +10927,12 @@ class Checker(
         }
     }
 
-    private fun walkForConstWithoutInit(statements: List<Statement>, source: String, fileName: String) {
+    private fun walkForConstWithoutInit(statements: List<Statement>, source: String, fileName: String, isAmbient: Boolean = false) {
         for (stmt in statements) {
             when (stmt) {
                 is VariableStatement -> {
                     if (stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                        && ModifierFlag.Declare !in stmt.modifiers) {
+                        && !isAmbient && ModifierFlag.Declare !in stmt.modifiers) {
                         for (decl in stmt.declarationList.declarations) {
                             if (decl.initializer == null) {
                                 // const without initializer
@@ -10972,7 +10972,8 @@ class Checker(
                 is Block -> walkForConstWithoutInit(stmt.statements, source, fileName)
                 is ModuleDeclaration -> {
                     val body = stmt.body
-                    if (body is ModuleBlock) walkForConstWithoutInit(body.statements, source, fileName)
+                    val childAmbient = isAmbient || ModifierFlag.Declare in stmt.modifiers
+                    if (body is ModuleBlock) walkForConstWithoutInit(body.statements, source, fileName, childAmbient)
                 }
                 is IfStatement -> {
                     walkForConstWithoutInit(listOf(stmt.thenStatement), source, fileName)
