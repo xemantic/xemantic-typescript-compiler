@@ -1700,11 +1700,27 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `CompilerOptions.kt`
 
-- [ ] **21f. CJS alias qualification for namespace re-exports** (~2 tests)
+- [ ] **21f. CJS alias qualification for namespace re-exports** (~2 tests) — *deferred*
 
-  `exports.bVal = b` should be `exports.bVal = exports.b`. Tests:
+  `exports.bVal = b` should be `exports.bVal = exports.b`. Requires deeper
+  CJS variable rewriting to track re-exported namespace members. Tests:
   `internalAliasVarInsideTopLevelModuleWithExport`,
   `internalAliasEnumInsideTopLevelModuleWithExport`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **21g. CJS first-statement comment hoisting** (~3 tests) — *deferred*
+
+  Comments on the first statement should move before `Object.defineProperty`
+  even without blank-line separation. Tests: `declarationEmitInferredUndefined*`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **21h. Namespace heritage clause qualification** (~2 tests) — *deferred*
+
+  Inside namespace IIFEs, heritage clause references to outer namespace
+  members need qualification (e.g. `extends B.EventManager` not
+  `extends EventManager`). Tests: `declFileWithExtendsClauseThat*`.
 
   **Files:** `Transformer.kt`
 
