@@ -203,6 +203,8 @@ class Checker(
         checkDuplicateLabels()
         // 59. Check empty type argument list (TS1099)
         checkEmptyTypeArguments()
+        // 60. Check TS2354: importHelpers without tslib
+        checkImportHelpersWithoutTslib()
     }
 
     // -----------------------------------------------------------------------
@@ -14533,5 +14535,104 @@ class Checker(
             start = start,
             length = 2, // "<>"
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2354: importHelpers without tslib
+    // -----------------------------------------------------------------------
+
+    private fun checkImportHelpersWithoutTslib() {
+        if (!options.importHelpers) return
+        if (!options.esModuleInterop) return
+        // Check if tslib is available in the compilation files
+        val hasTslib = binderResults.any { it.sourceFile.fileName.contains("tslib") }
+        if (hasTslib) return
+
+        val em = options.effectiveModule
+        // esModuleInterop helpers are needed for CJS/AMD/UMD (not System) modules
+        val needsHelpers = em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
+                em == ModuleKind.UMD || em.isNodeNext
+
+        if (!needsHelpers) return
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ExportDeclaration -> {
+                        if (stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
+                            val clause = stmt.exportClause
+                            // export { default } from "..." needs __importDefault helper
+                            if (clause is NamedExports) {
+                                for (spec in clause.elements) {
+                                    if (spec.isTypeOnly) continue
+                                    val importedName = (spec.propertyName ?: spec.name).text
+                                    if (importedName == "default") {
+                                        // Span: for "default as a" use propertyName.pos to name.end
+                                        // For plain "default" use name.pos to name.end (trimmed to text length)
+                                        val startNode = spec.propertyName ?: spec.name
+                                        val endNode = if (spec.propertyName != null) spec.name else spec.name
+                                        val spanStart = startNode.pos
+                                        // Use text length for simple case, full span for aliased
+                                        val spanLen = if (spec.propertyName != null) {
+                                            endNode.pos + endNode.text.length - spanStart
+                                        } else {
+                                            startNode.text.length
+                                        }
+                                        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                                        diagnostics.add(Diagnostic(
+                                            message = "This syntax requires an imported helper but module 'tslib' cannot be found.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2354,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = spanStart,
+                                            length = spanLen,
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    is ImportDeclaration -> {
+                        if (!stmt.importClause?.isTypeOnly.let { it == true }) {
+                            val bindings = stmt.importClause?.namedBindings
+                            if (bindings is NamedImports) {
+                                for (spec in bindings.elements) {
+                                    if (spec.isTypeOnly) continue
+                                    val importedName = (spec.propertyName ?: spec.name).text
+                                    if (importedName == "default") {
+                                        val startNode = spec.propertyName ?: spec.name
+                                        val endNode = if (spec.propertyName != null) spec.name else spec.name
+                                        val spanStart = startNode.pos
+                                        val spanLen = if (spec.propertyName != null) {
+                                            endNode.pos + endNode.text.length - spanStart
+                                        } else {
+                                            startNode.text.length
+                                        }
+                                        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                                        diagnostics.add(Diagnostic(
+                                            message = "This syntax requires an imported helper but module 'tslib' cannot be found.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2354,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = spanStart,
+                                            length = spanLen,
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 }
