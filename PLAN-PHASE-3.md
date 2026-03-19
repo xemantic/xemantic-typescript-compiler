@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,106 passing (67.1%), 3,486 failing
+- **10,595 tests**, 7,112 passing (67.2%), 3,483 failing
+- **Session 2026-03-19c**: +6 tests (7,106→7,112) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
 - **Session 2026-03-19**: +44 tests (7,023→7,067) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name, TS2528 multi-default export, TS2377 derived super call, TS2303 circular import alias, TS2695 FP fixes (eval + allowUnreachableCode), BaselineFormatter crash fix, TS1356 related info, TS1108 return outside function, TS1114 duplicate labels, TS1099 empty type args
 - **Session 2026-03-18c**: +47 tests (6,976→7,023) — TS5055/TS5056 per-file output, TS2695 comma operator, TS2448/TS2450 use before decl, TS1049/TS1030/TS1014 syntax, TS1183 ambient impl, TS2396 arguments collision, TS1029 modifier order, TS1039 ambient initializers, TS1113 switch defaults, TS1308 await context, const/let→var ES5 downlevel
@@ -1545,25 +1546,87 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **19q. Nested const enum inlining** (~4 tests)
+- [ ] **19q. Nested const enum inlining** (~4 tests) — *deferred*
 
-  Const enums defined inside function bodies need scoped collection
-  to avoid name conflicts with non-const enums in other functions.
+  Actually needs multiple const enum validation diagnostics (TS2651, TS2474,
+  TS2476, TS2475, TS2477, TS2478) in Checker, not just scoped collection.
+  Complex implementation with scoping risks.
 
-  **Files:** `Transformer.kt`
+  **Files:** `Checker.kt`, `Transformer.kt`
 
-  Parser should emit TS1123 "Variable declaration list cannot be empty" when
-  `let;` or `const;` is encountered, instead of TS1003 "Identifier expected".
+- [ ] **19g. TS2564/TS2454 suppression for type-error variables** (~2 tests) — *deferred*
 
-  **Files:** `Parser.kt`
-
-- [ ] **19g. TS2564/TS2454 suppression for type-error variables** (~2 tests)
-
-  When a variable/property type annotation itself has errors (e.g., TS2314
-  wrong type args), skip TS2564/TS2454 for that variable to avoid cascading
-  false positives. Already partially done for TS2314; extend to TS1003.
+  Many false-positive TS2454/TS2564 exist but they overlap with tests also
+  needing type inference diagnostics (TS2365, TS2362, etc.). No tests flip
+  by suppression alone. Existing TS2314 suppression is the main case.
 
   **Files:** `Checker.kt`
+
+### 20. Phase 3n — Priority improvements from failure analysis
+
+Based on analysis of 3,483 remaining failures (2026-03-19c session).
+
+- [ ] **20a. Reduce TS1155 false positives** (~10 tests)
+
+  `const` declarations without initializer in `declare` contexts, destructuring,
+  and for-of loops are producing false TS1155. Several specific patterns need
+  suppression: `declare const x: T`, `const { a } = ...` (destructuring always
+  has initializer), `for (const x of ...)`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20b. Reduce TS1212 false positives** (~10 tests)
+
+  "let is reserved word in strict mode" firing in non-strict contexts or where
+  `let` is used as a type name, not an identifier.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20c. Reduce TS2300 false positives (merged declarations)** (~10 tests)
+
+  Over-detection of duplicate identifiers for valid TypeScript merges:
+  class+namespace, function+namespace, interface+class. Specific patterns
+  like var+function (allowed in TS), and module-level duplicate detection.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20d. Reduce TS2693 false positives** (~15 tests)
+
+  "Type used as value" false positives for names that ARE valid values:
+  built-in constructors (String, Number, Boolean as values), class names
+  used in typeof, and names that merge type+value.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20e. Implement TS2591 — suggest require()** (~10 tests)
+
+  "Cannot find name 'X'. Do you need to install type definitions for node?
+  Try `npm i --save-dev @types/node`." for common Node.js globals (require,
+  module, exports, process, Buffer, etc.) in non-module files.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20f. Reduce TS2554 false positives** (~13 tests)
+
+  Over-detection of wrong argument count: need to skip overloaded functions,
+  handle rest parameters, and handle classes with base constructors.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20g. Reduce TS2391 false positives** (~14 tests)
+
+  "Function implementation missing" false positives for: abstract methods,
+  method signatures in interfaces, functions with JSDoc, and overload
+  declarations that are followed by a different name.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20h. Implement TS1128 — declaration or statement expected** (~15 tests)
+
+  Parser should emit TS1128 instead of TS1005 in certain recovery contexts
+  (after class body, at top level with unexpected tokens).
+
+  **Files:** `Parser.kt`
 
 ---
 
