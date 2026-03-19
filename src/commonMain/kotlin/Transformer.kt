@@ -1301,9 +1301,12 @@ class Transformer(
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
-                            // Skip if the local name is not declared or imported in this file.
-                            // Undeclared names are type-only globals (e.g. `declare namespace X` in another file).
-                            if (localName != "undefined" && localName !in runtimeDeclaredNames) continue
+                            if (localName != "undefined" && localName !in runtimeDeclaredNames) {
+                                // Name not declared locally — it's a global re-export.
+                                // TypeScript generates void 0 hoist only (no assignment needed for globals).
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                continue
+                            }
                             if (localName in functionOnlyNames) {
                                 // Function declaration (JS-hoisted): use stub placed before other code.
                                 // No void0 hoist needed (function is available immediately). Deduplicate.
@@ -1614,7 +1617,6 @@ class Transformer(
                 // Preserve detached (blank-line-separated) leading comments from elided imports.
                 // TypeScript keeps copyright/header blocks before Object.defineProperty even
                 // when the import they preceded is erased.
-                // Note: triple-slash directives (/// <reference>, etc.) are NEVER emitted in JS output.
                 val source = originalSourceFile.text
                 for (stmt in toElide) {
                     val allComments = stmt.leadingComments
