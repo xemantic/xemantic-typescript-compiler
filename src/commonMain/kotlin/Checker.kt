@@ -10943,6 +10943,32 @@ class Checker(
      * For class/function/enum/interface: span covers the name identifier.
      * For variable statements and imports: span covers the entire statement including export keyword.
      */
+    /** Get text span for a statement, stopping at semicolon or end of text content (before comments). */
+    private fun getStatementTextSpan(stmt: Statement, source: String): Pair<Int, Int> {
+        var start = stmt.pos
+        // Skip leading whitespace
+        while (start < source.length && source[start] in " \t\r\n") start++
+        // Find end: stop at semicolon or comment start
+        val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+        var end = start
+        var i = start
+        while (i < lineEnd) {
+            val ch = source[i]
+            if (ch == ';') {
+                end = i + 1
+                break
+            }
+            if (ch == '/' && i + 1 < lineEnd && (source[i + 1] == '/' || source[i + 1] == '*')) {
+                // Comment starts — end before it, trim trailing whitespace
+                while (end > start && source[end - 1] in " \t") end--
+                break
+            }
+            end = i + 1
+            i++
+        }
+        return Pair(start, (end - start).coerceAtLeast(1))
+    }
+
     private fun getModuleStatementSpan(stmt: Statement, source: String): Pair<Int, Int> {
         // For class/function declarations, use the name identifier position
         when (stmt) {
@@ -11054,11 +11080,9 @@ class Checker(
             val fileName = result.sourceFile.fileName
             for (stmt in result.sourceFile.statements) {
                 if (stmt is ExportAssignment && stmt.isExportEquals) {
-                    // Span covers the entire `export = expr;` statement
-                    var end = stmt.end
-                    while (end > stmt.pos && end - 1 < source.length && source[end - 1] in " \t\r\n") end--
-                    val length = (end - stmt.pos).coerceAtLeast(1)
-                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    // Span covers just `export = expr;` (skip comments/trailing whitespace)
+                    val (spanStart, spanLength) = getStatementTextSpan(stmt, source)
+                    val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
                     diagnostics.add(Diagnostic(
                         message = "Export assignment is not supported when '--module' flag is 'system'.",
                         category = DiagnosticCategory.Error,
@@ -11066,8 +11090,8 @@ class Checker(
                         fileName = fileName,
                         line = line,
                         character = character,
-                        start = stmt.pos,
-                        length = length,
+                        start = spanStart,
+                        length = spanLength,
                     ))
                 }
             }
