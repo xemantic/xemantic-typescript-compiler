@@ -11190,6 +11190,16 @@ class Checker(
                 checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
                 // Don't check body — it runs after condition, which may include the decl
             }
+            is ClassDeclaration -> {
+                // Check heritage (extends) clause for forward references
+                stmt.heritageClauses?.forEach { clause ->
+                    if (clause.token == SyntaxKind.ExtendsKeyword) {
+                        for (typeExpr in clause.types) {
+                            checkUBDForwardInExpr(typeExpr.expression, blockDecls, source, fileName)
+                        }
+                    }
+                }
+            }
             is SwitchStatement -> checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
             is LabeledStatement -> checkUBDForwardRefs(stmt.statement, blockDecls, source, fileName)
             else -> {}
@@ -11202,10 +11212,10 @@ class Checker(
             is Identifier -> {
                 val decl = blockDecls[expr.text]
                 if (decl != null && expr.pos < decl.pos) {
-                    if (decl.isEnum) {
-                        emitTS2450(expr, decl.pos, expr.text, source, fileName)
-                    } else {
-                        emitTS2448(expr, decl.pos, expr.text, source, fileName)
+                    when {
+                        decl.isEnum -> emitTS2450(expr, decl.pos, expr.text, source, fileName)
+                        decl.isClass -> emitTS2449(expr, decl.pos, expr.text, source, fileName)
+                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName)
                     }
                 }
             }
@@ -11259,7 +11269,7 @@ class Checker(
         }
     }
 
-    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false)
+    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false)
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
         val decls = mutableMapOf<String, BlockScopedDecl>()
@@ -11281,6 +11291,12 @@ class Checker(
                 // const enum values are inlined at compile time — no temporal dead zone
                 if (ModifierFlag.Const !in stmt.modifiers) {
                     decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true)
+                }
+            }
+            is ClassDeclaration -> {
+                val name = stmt.name
+                if (name != null) {
+                    decls[name.text] = BlockScopedDecl(name.pos, isClass = true)
                 }
             }
             else -> {}
@@ -11540,6 +11556,33 @@ class Checker(
             message = "Enum '$name' used before its declaration.",
             category = DiagnosticCategory.Error,
             code = 2450,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = fileName,
+                line = declLine,
+                character = declChar,
+                start = declPos,
+                length = name.length,
+            )),
+        ))
+    }
+
+    private fun emitTS2449(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String) {
+        val start = useNode.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+        diagnostics.add(Diagnostic(
+            message = "Class '$name' used before its declaration.",
+            category = DiagnosticCategory.Error,
+            code = 2449,
             fileName = fileName,
             line = line,
             character = character,
