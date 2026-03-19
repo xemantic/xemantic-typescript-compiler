@@ -195,6 +195,8 @@ class Checker(
         checkMultipleDefaultExports()
         // 55. Check derived class constructor must contain super call (TS2377)
         checkDerivedConstructorSuper()
+        // 56. Check circular import alias definitions (TS2303)
+        checkCircularImportAlias()
     }
 
     // -----------------------------------------------------------------------
@@ -13609,5 +13611,83 @@ class Checker(
         is ParenthesizedExpression -> exprContainsSuperCall(expr.expression)
         is ConditionalExpression -> exprContainsSuperCall(expr.whenTrue) || exprContainsSuperCall(expr.whenFalse)
         else -> false
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2303: Circular definition of import alias
+    // -----------------------------------------------------------------------
+
+    private fun checkCircularImportAlias() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkCircularAliasInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkCircularAliasInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        // Collect import= declarations with identifier references within this scope
+        val importMap = mutableMapOf<String, ImportEqualsDeclaration>()
+        for (stmt in stmts) {
+            if (stmt is ImportEqualsDeclaration && stmt.moduleReference is Identifier) {
+                importMap[stmt.name.text] = stmt
+            }
+        }
+
+        // For each import, follow the chain to detect cycles
+        val reported = mutableSetOf<String>()
+        for ((name, decl) in importMap) {
+            if (name in reported) continue
+            val visited = mutableListOf(name)
+            var current = (decl.moduleReference as Identifier).text
+            while (current in importMap && current !in reported) {
+                if (current in visited) {
+                    // Cycle detected — report on the first import in the cycle
+                    val cycleStart = visited.indexOf(current)
+                    for (i in cycleStart until visited.size) {
+                        val cycleName = visited[i]
+                        val cycleDecl = importMap[cycleName] ?: continue
+                        if (cycleName in reported) continue
+                        reported.add(cycleName)
+                        val start = cycleDecl.pos
+                        var spanStart = start
+                        while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                        // Find the semicolon at end of statement
+                        val semiIdx = source.indexOf(';', spanStart)
+                        val spanEnd = if (semiIdx in spanStart..cycleDecl.end) semiIdx + 1 else {
+                            var e = cycleDecl.end
+                            while (e > spanStart && e <= source.length && source[e - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) e--
+                            e
+                        }
+                        val length = (spanEnd - spanStart).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Circular definition of import alias '$cycleName'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2303,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = spanStart,
+                            length = length,
+                        ))
+                        break // TypeScript only reports on the first import in the cycle
+                    }
+                    break
+                }
+                visited.add(current)
+                val nextDecl = importMap[current] ?: break
+                current = (nextDecl.moduleReference as Identifier).text
+            }
+        }
+
+        // Recurse into namespaces
+        for (stmt in stmts) {
+            when (stmt) {
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
     }
 }
