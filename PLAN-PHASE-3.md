@@ -1328,9 +1328,51 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **17f. TS2497 — module has no default export** (~2 tests)
+- [ ] **17f. TS2497 — module has no default export** (~2 tests) — *deferred* (needs cross-module resolution)
 
   "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag."
+
+  **Files:** `Checker.kt`
+
+### 18. New diagnostic and false-positive reduction items (added 2026-03-18d)
+
+- [x] **18a. TS1015 — parameter cannot have question mark and initializer** (+2 tests)
+
+  Report TS1015 when a parameter has both `?` and `= initializer`.
+  "Parameter cannot have question mark and initializer."
+
+  **Files:** `Checker.kt`
+
+- [ ] **18b. TS1052 — set accessor parameter cannot have initializer** (~2 tests)
+
+  Report TS1052 on setter parameter with default value.
+  "A 'set' accessor parameter cannot have an initializer."
+
+  **Files:** `Checker.kt`
+
+- [ ] **18c. TS2300 FP: allow declare function + declare class merge** (~3 tests)
+
+  Suppress TS2300 when both declarations have `declare` modifier (legal merge).
+
+  **Files:** `Checker.kt`
+
+- [ ] **18d. noImplicitUseStrict support** (~5 tests)
+
+  Respect `noImplicitUseStrict` compiler option in emitter — skip "use strict" prologue when set.
+
+  **Files:** `Emitter.kt`
+
+- [ ] **18e. TS1036 — statements not allowed in ambient context** (~5 tests)
+
+  Detect statements inside `declare namespace` that aren't valid ambient declarations.
+  "Statements are not allowed in ambient contexts."
+
+  **Files:** `Checker.kt`
+
+- [ ] **18f. TS2371 — parameter initializer only in function/constructor** (~3 tests)
+
+  Report TS2371 on parameter initializers in declaration overloads (no body).
+  "A parameter initializer is only allowed in a function or constructor implementation."
 
   **Files:** `Checker.kt`
 
