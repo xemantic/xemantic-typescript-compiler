@@ -1343,7 +1343,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18b. TS1052 — set accessor parameter cannot have initializer** (~2 tests)
+- [x] **18b. TS1052 — set accessor parameter cannot have initializer** (+2 tests)
 
   Report TS1052 on setter parameter with default value.
   "A 'set' accessor parameter cannot have an initializer."
