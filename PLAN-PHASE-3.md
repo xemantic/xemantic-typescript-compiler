@@ -1574,12 +1574,13 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
   **Files:** `Checker.kt`
 
-- [ ] **20b. Reduce TS1212 false positives** (~10 tests)
+- [x] **20b. module:none CJS transform for module files** (+5 tests)
 
-  "let is reserved word in strict mode" firing in non-strict contexts or where
-  `let` is used as a type name, not an identifier.
+  When `module: none` is set, TypeScript still transforms module files
+  (files with imports/exports) using CJS-style output. Added
+  `ModuleKind.None` to the `useCJS` condition in Transformer.
 
-  **Files:** `Checker.kt`
+  **Files:** `Transformer.kt`
 
 - [ ] **20c. Reduce TS2300 false positives (merged declarations)** (~10 tests)
 
