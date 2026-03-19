@@ -376,7 +376,7 @@ fun formatErrorBaseline(
                     .sortedWith(compareBy({ it.character ?: 0 }, { it.code }))
 
                 for (diag in lineDiags) {
-                    val col = (diag.character ?: 1) - 1 // convert to 0-based
+                    val col = ((diag.character ?: 1) - 1).coerceAtLeast(0) // convert to 0-based
                     val len = diag.length ?: 1
 
                     // Squiggle line — preserve tab/space indentation from source
