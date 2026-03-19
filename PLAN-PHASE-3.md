@@ -1566,12 +1566,11 @@ Picking off tractable fixes to continue improving the pass rate.
 
 Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
-- [ ] **20a. Reduce TS1155 false positives** (~10 tests)
+- [x] **20a. Reduce TS1155 false positives** (+0 tests, correctness fix)
 
-  `const` declarations without initializer in `declare` contexts, destructuring,
-  and for-of loops are producing false TS1155. Several specific patterns need
-  suppression: `declare const x: T`, `const { a } = ...` (destructuring always
-  has initializer), `for (const x of ...)`.
+  Propagate `isAmbient` through `walkForConstWithoutInit` to skip TS1155
+  inside `declare namespace/module/global` blocks. No test gain — affected
+  tests also need type checking diagnostics (TS2540, TS2552).
 
   **Files:** `Checker.kt`
 
