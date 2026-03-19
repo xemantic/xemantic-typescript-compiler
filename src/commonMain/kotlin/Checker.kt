@@ -6491,6 +6491,7 @@ class Checker(
             val source = result.sourceFile.text
 
             for (stmt in result.sourceFile.statements) {
+                val isSideEffectImport = stmt is ImportDeclaration && stmt.importClause == null
                 val specifier = when (stmt) {
                     is ImportDeclaration -> stmt.moduleSpecifier
                     is ExportDeclaration -> stmt.moduleSpecifier
@@ -6505,8 +6506,12 @@ class Checker(
                     is StringLiteralNode -> specifier.text
                     else -> continue
                 }
-                // In single-file compilations, all module specifiers are unresolved
-                emitTS2307(specifier, moduleName, source, fileName)
+                if (isSideEffectImport) {
+                    // Side-effect imports use TS2882 instead of TS2307/TS2792
+                    emitTS2882(specifier, moduleName, source, fileName)
+                } else {
+                    emitTS2307(specifier, moduleName, source, fileName)
+                }
             }
         }
     }
@@ -6545,6 +6550,22 @@ class Checker(
             message = message,
             category = DiagnosticCategory.Error,
             code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTS2882(specifier: Expression, moduleName: String, source: String, fileName: String) {
+        val start = specifier.pos
+        val length = moduleName.length + 2 // +2 for quotes
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find module or type declarations for side-effect import of '$moduleName'.",
+            category = DiagnosticCategory.Error,
+            code = 2882,
             fileName = fileName,
             line = line,
             character = character,
