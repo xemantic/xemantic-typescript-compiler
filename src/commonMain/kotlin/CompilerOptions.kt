@@ -403,7 +403,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "emitdeclarationonly" -> options.copy(emitDeclarationOnly = boolValue)
         "maproot" -> options.copy(mapRoot = value.trim())
         "outfile" -> options.copy(outFile = value.trim())
-        "out" -> options.copy(outFile = value.trim(), out = value.trim())
+        "out" -> options.copy(out = value.trim()) // 'out' is removed (TS5102), don't set outFile
         "alwaysstrict" -> options.copy(alwaysStrict = boolValue)
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
