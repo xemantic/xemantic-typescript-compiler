@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,162 passing (67.6%), 3,430 failing
-- **Session 2026-03-19e**: +17 tests (7,145→7,162) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support
+- **10,595 tests**, 7,165 passing (67.6%), 3,427 failing
+- **Session 2026-03-19e**: +20 tests (7,145→7,165) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
@@ -1744,14 +1744,15 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `CompilerOptions.kt`, `Transformer.kt`, `Emitter.kt`, `TypeScriptCompiler.kt`
 
-- [ ] **22b. StackOverflow crash fixes** (~8 tests)
+- [x] **22b. StackOverflow crash fixes** (+3 tests)
 
-  Add recursion depth limiting in circular reference resolution for:
-  `binderBinaryExpressionStress`, `indirectSelfReference`,
-  `indirectSelfReferenceGeneric`, `recursiveBaseCheck3`,
-  `selfReferentialDefaultNoStackOverflow`.
+  Fixed circular inheritance in `collectBaseClassMembers` by adding a
+  `visited` set to break infinite recursion. Tests: `indirectSelfReference`,
+  `indirectSelfReferenceGeneric`, `recursiveBaseCheck3` (JS variants).
+  `selfReferentialDefaultNoStackOverflow` and `binderBinaryExpressionStress`
+  were already passing.
 
-  **Files:** `Checker.kt`, `Binder.kt`
+  **Files:** `Checker.kt`
 
 - [ ] **22c. TS2304 false positive reduction** (~10-20 tests)
 

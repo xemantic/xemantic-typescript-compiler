@@ -5747,7 +5747,9 @@ class Checker(
         fileName: String,
         staticMembers: MutableSet<String>,
         instanceMembers: MutableSet<String>,
+        visited: MutableSet<String> = mutableSetOf(),
     ) {
+        if (!visited.add(baseName)) return // circular inheritance
         // Try to find the base class in the binder
         val result = fileResults[fileName] ?: return
         val sym = result.locals[baseName] ?: return
@@ -5760,8 +5762,8 @@ class Checker(
             if (clause.token == SyntaxKind.ExtendsKeyword) {
                 for (type in clause.types) {
                     val nextBaseName = (type.expression as? Identifier)?.text
-                    if (nextBaseName != null && nextBaseName != baseName) {
-                        collectBaseClassMembers(nextBaseName, scope, fileName, staticMembers, instanceMembers)
+                    if (nextBaseName != null) {
+                        collectBaseClassMembers(nextBaseName, scope, fileName, staticMembers, instanceMembers, visited)
                     }
                 }
             }
