@@ -1356,13 +1356,13 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18d. noImplicitUseStrict support** (~5 tests)
+- [x] **18d. noImplicitUseStrict support** (already passing — removed option emits TS5102)
 
-  Respect `noImplicitUseStrict` compiler option in emitter — skip "use strict" prologue when set.
+  The option is marked as removed in TypeScript; tests already pass.
 
-  **Files:** `Emitter.kt`
+  **Files:** N/A
 
-- [ ] **18e. TS1036 — statements not allowed in ambient context** (~5 tests)
+- [x] **18e. TS1036 — statements not allowed in ambient context** (+2 tests)
 
   Detect statements inside `declare namespace` that aren't valid ambient declarations.
   "Statements are not allowed in ambient contexts."

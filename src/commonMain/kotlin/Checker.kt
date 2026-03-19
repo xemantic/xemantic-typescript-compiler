@@ -183,6 +183,8 @@ class Checker(
         checkOptionalParamWithInitializer()
         // 49. Check set accessor parameter initializer (TS1052)
         checkSetAccessorInitializer()
+        // 50. Check statements in ambient contexts (TS1036)
+        checkAmbientStatements()
     }
 
     // -----------------------------------------------------------------------
@@ -12914,6 +12916,77 @@ class Checker(
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorInit(it.statements, source, fileName) }
                 is Block -> walkForSetAccessorInit(stmt.statements, source, fileName)
                 else -> {}
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1036: Statements are not allowed in ambient contexts
+    // -----------------------------------------------------------------------
+
+    private fun checkAmbientStatements() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && ModifierFlag.Declare in stmt.modifiers) {
+                    val body = stmt.body
+                    if (body is ModuleBlock) checkStatementsInAmbient(body.statements, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun isValidAmbientStatement(stmt: Statement): Boolean = when (stmt) {
+        is VariableStatement -> true
+        is FunctionDeclaration -> true
+        is ClassDeclaration -> true
+        is InterfaceDeclaration -> true
+        is TypeAliasDeclaration -> true
+        is EnumDeclaration -> true
+        is ModuleDeclaration -> true
+        is ImportDeclaration -> true
+        is ImportEqualsDeclaration -> true
+        is ExportDeclaration -> true
+        is ExportAssignment -> true
+        else -> false
+    }
+
+    private fun checkStatementsInAmbient(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            if (!isValidAmbientStatement(stmt)) {
+                // Report TS1036 — squiggle on the first token of the statement
+                val start = stmt.pos
+                val stmtEnd = stmt.end
+                // Skip leading whitespace/trivia
+                var spanStart = start
+                while (spanStart < stmtEnd && spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                if (spanStart >= source.length) continue
+                // Find the length of the first token (keyword or semicolon)
+                var spanEnd = spanStart
+                if (source[spanEnd] == ';') {
+                    spanEnd++ // empty statement — just the semicolon
+                } else {
+                    while (spanEnd < source.length && source[spanEnd].isLetterOrDigit()) spanEnd++
+                }
+                val length = (spanEnd - spanStart).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                diagnostics.add(Diagnostic(
+                    message = "Statements are not allowed in ambient contexts.",
+                    category = DiagnosticCategory.Error,
+                    code = 1036,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = spanStart,
+                    length = length,
+                ))
+            }
+            // Recurse into nested namespaces (including non-declare ones inside declare)
+            if (stmt is ModuleDeclaration) {
+                val body = stmt.body
+                if (body is ModuleBlock) checkStatementsInAmbient(body.statements, source, fileName)
             }
         }
     }
