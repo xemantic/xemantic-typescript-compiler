@@ -1383,7 +1383,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18h. TS1212 — let is reserved word in strict mode** (~7 tests)
+- [x] **18h. TS1212 — let is reserved word in strict mode** (+7 tests)
 
   Detect `let` used as an identifier name in strict mode.
   "Identifier expected. 'let' is a reserved word in strict mode."
