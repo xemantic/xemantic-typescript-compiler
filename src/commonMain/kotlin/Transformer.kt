@@ -293,13 +293,14 @@ class Transformer(
 
         // Collect helpers to inject at top of file (order matters: __makeTemplateObject, __rest, __decorate, __param, __awaiter, __await, __asyncGenerator).
         val helpers = mutableListOf<RawStatement>()
-        if (needsMakeTemplateObjectHelper) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
-        if (needsRestHelper) helpers.add(RawStatement(code = REST_HELPER))
-        if (needsDecorateHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
-        if (needsMetadataHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
-        if (needsParamHelper && !options.noEmitHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
-        if (needsAwaiterHelper && !options.importHelpers) helpers.add(RawStatement(code = AWAITER_HELPER))
-        if (needsAsyncGeneratorHelper) {
+        val skipHelpers = options.noEmitHelpers || options.importHelpers
+        if (needsMakeTemplateObjectHelper && !skipHelpers) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
+        if (needsRestHelper && !skipHelpers) helpers.add(RawStatement(code = REST_HELPER))
+        if (needsDecorateHelper && !skipHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
+        if (needsMetadataHelper && !skipHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
+        if (needsParamHelper && !skipHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
+        if (needsAwaiterHelper && !skipHelpers) helpers.add(RawStatement(code = AWAITER_HELPER))
+        if (needsAsyncGeneratorHelper && !skipHelpers) {
             helpers.add(RawStatement(code = AWAIT_HELPER))
             helpers.add(RawStatement(code = ASYNC_GENERATOR_HELPER))
         }
