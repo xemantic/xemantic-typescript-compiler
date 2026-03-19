@@ -7192,9 +7192,18 @@ class Transformer(
             }
         }
 
-        // In ESM mode, `import x = require("mod")` is not valid — drop it entirely
+        // In ESM mode, `import x = require("mod")` handling depends on module kind:
+        // - preserve: keep if referenced, drop if unused
+        // - other ESM: drop entirely (not valid ESM syntax)
         if (isRequire && isESModuleFormat(options.effectiveModule, currentFileName)) {
-            return emptyList()
+            if (options.effectiveModule == ModuleKind.Preserve) {
+                // In preserve mode, only keep import=require() if it's referenced in value positions
+                if (checker?.isReferencedAliasDeclaration(decl) != true) {
+                    return emptyList()
+                }
+            } else {
+                return emptyList()
+            }
         }
 
         // Literal module references (numbers, strings, null keyword) are invalid and produce expression statements.

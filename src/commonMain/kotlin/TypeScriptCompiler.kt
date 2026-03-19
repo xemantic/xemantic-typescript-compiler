@@ -698,7 +698,15 @@ class TypeScriptCompiler {
                 val javascript = emitter.emit(transformed, sourceFile)
 
                 // Skip files that produce no meaningful output (e.g. empty .tsx/.ts files)
-                if (javascript.isBlank()) continue
+                // But keep blank files if the original had module statements (imports/exports)
+                // since they should still appear in the baseline with empty output sections.
+                if (javascript.isBlank()) {
+                    val hadModuleStmts = sourceFile.statements.any {
+                        it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
+                            (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference)
+                    }
+                    if (!hadModuleStmts) continue
+                }
 
                 // .tsx/.jsx → .jsx only when jsx=preserve; all other modes produce .js
                 val isJsxPreserveMulti = options.jsx?.lowercase() == "preserve"

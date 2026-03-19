@@ -42,7 +42,7 @@ enum class ScriptTarget {
 }
 
 enum class ModuleKind {
-    None, CommonJS, AMD, UMD, System, ES2015, ES2020, ES2022, ESNext, Node16, Node18, Node20, NodeNext;
+    None, CommonJS, AMD, UMD, System, ES2015, ES2020, ES2022, ESNext, Node16, Node18, Node20, NodeNext, Preserve;
 
     /** True for Node16, Node18, Node20, NodeNext — all node-resolution module kinds. */
     val isNodeNext: Boolean get() = this == Node16 || this == Node18 || this == Node20 || this == NodeNext
@@ -62,6 +62,7 @@ enum class ModuleKind {
             "node18" -> Node18
             "node20" -> Node20
             "nodenext" -> NodeNext
+            "preserve" -> Preserve
             else -> null
         }
     }
@@ -179,6 +180,8 @@ data class CompilerOptions(
  * but we don't have that context, so we default to ESM.)
  */
 fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
+    // module: preserve passes through all file formats as-is (ESM syntax)
+    if (module == ModuleKind.Preserve) return true
     // .cjs/.cts files are always CJS regardless of module setting
     if (fileName.endsWith(".cjs") || fileName.endsWith(".cts")) return false
     // .mjs/.mts files are always ESM regardless of module setting
