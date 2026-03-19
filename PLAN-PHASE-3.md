@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,076 passing (66.8%), 3,516 failing
-- **Session 2026-03-19b**: +9 tests (7,067→7,076) — TS1202 FP namespace imports, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions
+- **10,595 tests**, 7,077 passing (66.8%), 3,515 failing
+- **Session 2026-03-19b**: +10 tests (7,067→7,077) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains
 - **Session 2026-03-19**: +44 tests (7,023→7,067) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name, TS2528 multi-default export, TS2377 derived super call, TS2303 circular import alias, TS2695 FP fixes (eval + allowUnreachableCode), BaselineFormatter crash fix, TS1356 related info, TS1108 return outside function, TS1114 duplicate labels, TS1099 empty type args
 - **Session 2026-03-18c**: +47 tests (6,976→7,023) — TS5055/TS5056 per-file output, TS2695 comma operator, TS2448/TS2450 use before decl, TS1049/TS1030/TS1014 syntax, TS1183 ambient impl, TS2396 arguments collision, TS1029 modifier order, TS1039 ambient initializers, TS1113 switch defaults, TS1308 await context, const/let→var ES5 downlevel
 - **Session 2026-03-18b**: +34 tests (6,942→6,976) — fix FP TS1005/TS2872/TS6133, add TS6131/TS7019/TS1185/TS1148/TS1218/TS2441/TS1250/TS7010/TS1191
@@ -1456,7 +1456,22 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **19f. TS1123 empty variable declaration list** (~1 test)
+- [x] **19f. TS1202 exclude Node16/NodeNext from ESM check** (+1 test)
+
+  Node16/NodeNext modules support `import = require()` via `createRequire`.
+  Exclude them from TS1202 check (only fire for ES2015/ES2020/ES2022/ESNext).
+
+  **Files:** `Checker.kt`
+
+- [x] **19g. StackOverflow fix for deep binary expression chains** (+1 test)
+
+  `binderBinaryExpressionStress.ts` (4,971 lines) caused StackOverflow in ~20
+  checker functions that recursively traversed BinaryExpression left+right.
+  Converted all dual-recursion patterns to iterative left-spine walking.
+
+  **Files:** `Checker.kt`
+
+- [ ] **19h. TS1123 empty variable declaration list** (~1 test)
 
   Parser should emit TS1123 "Variable declaration list cannot be empty" when
   `let;` or `const;` is encountered, instead of TS1003 "Identifier expected".
