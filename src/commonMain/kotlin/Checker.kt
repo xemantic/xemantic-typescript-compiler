@@ -187,6 +187,8 @@ class Checker(
         checkAmbientStatements()
         // 51. Check parameter initializer in non-implementation context (TS2371)
         checkParameterInitializerInNonImpl()
+        // 52. Check strict mode reserved words as identifiers (TS1212)
+        checkStrictModeReservedWords()
     }
 
     // -----------------------------------------------------------------------
@@ -7015,6 +7017,12 @@ class Checker(
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
 
+        /** Words that are reserved as identifiers in strict mode (TS1212). */
+        private val STRICT_MODE_RESERVED_WORDS = setOf(
+            "let", "public", "private", "protected", "static",
+            "package", "yield", "interface", "implements",
+        )
+
         /** Type keywords that are only types, never values.
          * Excludes 'object' which can be used as a variable name in JS. */
         private val TYPE_ONLY_KEYWORDS = setOf(
@@ -13148,5 +13156,169 @@ class Checker(
                 length = length,
             ))
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1212: Strict mode reserved word as identifier
+    // -----------------------------------------------------------------------
+
+    private fun checkStrictModeReservedWords() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Determine if file is in strict mode:
+            // - target >= ES2015 (implicit strict)
+            // - "use strict" prologue directive
+            // - module file (ESM is strict)
+            val isStrict = options.target >= ScriptTarget.ES2015 ||
+                options.strict == true ||
+                options.alwaysStrict == true ||
+                result.sourceFile.statements.firstOrNull()?.let { stmt ->
+                    stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
+                        (stmt.expression as StringLiteralNode).text == "use strict"
+                } == true
+            if (!isStrict) continue
+            walkForStrictReserved(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName)
+    }
+
+    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    checkNodeForStrictReserved(decl.name, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                val name = stmt.name
+                if (name != null) checkIdentForStrictReserved(name, source, fileName)
+                // Check parameters
+                for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName)
+                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                val name = stmt.name
+                if (name != null) checkIdentForStrictReserved(name, source, fileName)
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName)
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName) }
+                        }
+                        is Constructor -> {
+                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName)
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                val name = stmt.name
+                checkExprForStrictReservedIdents(name, source, fileName)
+                val body = stmt.body
+                when (body) {
+                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName)
+                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is ForInStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName)
+                }
+                walkStmtForStrictReserved(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName)
+                }
+                walkStmtForStrictReserved(stmt.statement, source, fileName)
+            }
+            is Block -> walkForStrictReserved(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkStmtForStrictReserved(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName) }
+            }
+            is ExpressionStatement -> {
+                // Check for `let = 30;` style usage
+                checkExprForStrictReserved(stmt.expression, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkNodeForStrictReserved(node: Node, source: String, fileName: String) {
+        when (node) {
+            is Identifier -> checkIdentForStrictReserved(node, source, fileName)
+            is ObjectBindingPattern -> {
+                for (el in node.elements) {
+                    checkNodeForStrictReserved(el.name, source, fileName)
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (el in node.elements) {
+                    if (el is BindingElement) checkNodeForStrictReserved(el.name, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Check all identifiers in an expression tree for strict-mode reserved words */
+    private fun checkExprForStrictReservedIdents(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is Identifier -> checkIdentForStrictReserved(expr, source, fileName)
+            is PropertyAccessExpression -> {
+                checkExprForStrictReservedIdents(expr.expression, source, fileName)
+                checkIdentForStrictReserved(expr.name, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkExprForStrictReserved(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is Identifier -> {
+                if (expr.text in STRICT_MODE_RESERVED_WORDS) {
+                    // Only in assignment context (let = 30)
+                    // Actually, all uses of reserved words as identifiers in expressions count
+                    reportTS1212(expr, source, fileName)
+                }
+            }
+            is BinaryExpression -> {
+                checkExprForStrictReserved(expr.left, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String) {
+        if (id.text in STRICT_MODE_RESERVED_WORDS) {
+            reportTS1212(id, source, fileName)
+        }
+    }
+
+    private fun reportTS1212(id: Identifier, source: String, fileName: String) {
+        val start = id.pos
+        val length = id.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Identifier expected. '${id.text}' is a reserved word in strict mode.",
+            category = DiagnosticCategory.Error,
+            code = 1212,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 }
