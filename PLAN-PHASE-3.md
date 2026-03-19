@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,157 passing (67.6%), 3,435 failing
-- **Session 2026-03-19e**: +12 tests (7,145→7,157) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip
+- **10,595 tests**, 7,162 passing (67.6%), 3,430 failing
+- **Session 2026-03-19e**: +17 tests (7,145→7,162) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
@@ -1730,6 +1730,51 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
   `extends EventManager`). Tests: `declFileWithExtendsClauseThat*`.
 
   **Files:** `Transformer.kt`
+
+### 22. Phase 3p — New analysis batch (2026-03-19e session)
+
+- [x] **22a. `module: "preserve"` support** (+5 tests)
+
+  Added `Preserve` to `ModuleKind` enum. Preserve mode passes through ESM syntax,
+  converts `export = X` → `module.exports = X`, converts `import = require()` →
+  `const x = require()` (only if referenced), skips `"use strict"` for module files,
+  skips `export {}` marker. Empty-output module files now included in baselines.
+  Tests: `impliedNodeFormatEmit1-4` (preserve variants), `modulePreserve1`.
+  Remaining: `modulePreserve4` (complex multi-file), `modulePreserveImportHelpers` (decorators).
+
+  **Files:** `CompilerOptions.kt`, `Transformer.kt`, `Emitter.kt`, `TypeScriptCompiler.kt`
+
+- [ ] **22b. StackOverflow crash fixes** (~8 tests)
+
+  Add recursion depth limiting in circular reference resolution for:
+  `binderBinaryExpressionStress`, `indirectSelfReference`,
+  `indirectSelfReferenceGeneric`, `recursiveBaseCheck3`,
+  `selfReferentialDefaultNoStackOverflow`.
+
+  **Files:** `Checker.kt`, `Binder.kt`
+
+- [ ] **22c. TS2304 false positive reduction** (~10-20 tests)
+
+  Reduce spurious TS2304 "Cannot find name" for: type parameters in
+  erased contexts, names from imported/aliased modules, declaration
+  merging visibility, `arguments` in arrow functions (should be TS18004).
+
+  **Files:** `Checker.kt`
+
+- [ ] **22d. TS2300 merge compatibility** (~5-10 tests)
+
+  Implement declaration merge compatibility rules to stop false-positive
+  TS2300 "Duplicate identifier" for function+namespace, class+interface, etc.
+
+  **Files:** `Checker.kt`
+
+- [ ] **22e. TS2813/TS2814 merge diagnostics** (~12 tests)
+
+  TS2813 "Classes can only merge with other classes" and TS2814
+  "Functions with bodies can only merge with classes that are ambient."
+  Tests: `augmentedTypes*`, `callOverloads*`, `duplicateIdentifierEnum*`.
+
+  **Files:** `Checker.kt`
 
 ---
 

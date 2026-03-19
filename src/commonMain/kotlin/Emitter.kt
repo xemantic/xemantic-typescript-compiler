@@ -80,8 +80,11 @@ class Emitter(
     private fun emitEmptyExportIfNeeded(originalSourceFile: SourceFile, transformedSourceFile: SourceFile) {
         if (!hasModuleStatements(originalSourceFile)) return
 
-        // Only emit export {} for ES module format files
+        // module: preserve doesn't add synthetic export {} markers
         val effectiveModule = options.effectiveModule
+        if (effectiveModule == ModuleKind.Preserve) return
+
+        // Only emit export {} for ES module format files
         val isESModuleFormat = isESModuleFormat(effectiveModule, originalSourceFile.fileName)
         if (!isESModuleFormat) return
 
@@ -141,6 +144,8 @@ class Emitter(
     // ---------------------------------------------------------------------------
 
     private fun emitUseStrict(sourceFile: SourceFile) {
+        // module: preserve skips "use strict" for module files (ESM) but adds it for scripts
+        if (options.effectiveModule == ModuleKind.Preserve && hasModuleStatements(sourceFile)) return
         // When alwaysStrict is explicitly false, don't emit "use strict".
         // Note: `strict: false` does NOT suppress it — only explicit `alwaysStrict: false` does.
         if (options.alwaysStrict == false) return
@@ -1381,6 +1386,15 @@ class Emitter(
             // with isExportEquals=true, it must be in a non-top-level context (e.g. inside a
             // function body — a parse error that TypeScript emits as-is).
             val effectiveModule = options.effectiveModule
+            // module: preserve converts `export = X` to `module.exports = X`
+            if (effectiveModule == ModuleKind.Preserve) {
+                writeIndent()
+                write("module.exports = ")
+                emitExpression(node.expression)
+                write(";")
+                writeNewLine()
+                return
+            }
             val isESModuleFormat = effectiveModule == ModuleKind.ES2015 ||
                     effectiveModule == ModuleKind.ES2020 ||
                     effectiveModule == ModuleKind.ES2022 ||
