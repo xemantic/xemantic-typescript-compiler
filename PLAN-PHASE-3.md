@@ -1409,7 +1409,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18l. TS2303 — circular import alias** (~7 tests)
+- [x] **18l. TS2303 — circular import alias** (+1 test, remaining need cross-file or .d.ts)
 
   "Circular definition of import alias 'X'." Detect cycles in import= chains.
 
