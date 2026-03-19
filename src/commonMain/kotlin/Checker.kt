@@ -179,6 +179,8 @@ class Checker(
         checkAwaitContext()
         // 47. Check declaration name conflicts with built-in global (TS2397)
         checkBuiltinGlobalConflict()
+        // 48. Check parameter question mark with initializer (TS1015)
+        checkOptionalParamWithInitializer()
     }
 
     // -----------------------------------------------------------------------
@@ -12709,6 +12711,149 @@ class Checker(
             }
             is Block -> for (s in stmt.statements) checkInterfacePropInit(s, source, fileName)
             else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1015: Parameter cannot have question mark and initializer
+    // -----------------------------------------------------------------------
+
+    private fun checkOptionalParamWithInitializer() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForOptionalParams(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForOptionalParams(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkForOptionalParamsInStmt(stmt, source, fileName)
+    }
+
+    private fun walkForOptionalParamsInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                checkParamsForTS1015(stmt.parameters, source, fileName)
+                stmt.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        is Constructor -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        is GetAccessor -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        is SetAccessor -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    walkForOptionalParamsInExpr(decl.initializer, source, fileName)
+                }
+            }
+            is ExpressionStatement -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForOptionalParams(it.statements, source, fileName) }
+            is Block -> walkForOptionalParams(stmt.statements, source, fileName)
+            is ReturnStatement -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+            is IfStatement -> {
+                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+                walkForOptionalParamsInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkForOptionalParamsInStmt(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkForOptionalParamsInExpr(expr: Expression?, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
+            is FunctionExpression -> {
+                checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
+                walkForOptionalParams(expr.body.statements, source, fileName)
+            }
+            is ParenthesizedExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                walkForOptionalParamsInExpr(expr.left, source, fileName)
+                walkForOptionalParamsInExpr(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkForOptionalParamsInExpr(expr.condition, source, fileName)
+                walkForOptionalParamsInExpr(expr.whenTrue, source, fileName)
+                walkForOptionalParamsInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                walkForOptionalParamsInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkForOptionalParamsInExpr(arg, source, fileName)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is MethodDeclaration -> {
+                            checkParamsForTS1015(prop.parameters, source, fileName)
+                            prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        is PropertyAssignment -> walkForOptionalParamsInExpr(prop.initializer, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        is Constructor -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkParamsForTS1015(params: List<Parameter>, source: String, fileName: String, requireType: Boolean = true) {
+        for (param in params) {
+            if (param.questionToken && param.initializer != null) {
+                // In function/method/constructor declarations, TS1015 only fires when type annotation is present.
+                // In arrow/function expressions, it fires regardless.
+                if (requireType && param.type == null) continue
+                val name = param.name
+                val start = name.pos
+                val length = when (name) {
+                    is Identifier -> name.text.length
+                    else -> (name.end - 1 - start).coerceAtLeast(1)
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Parameter cannot have question mark and initializer.",
+                    category = DiagnosticCategory.Error,
+                    code = 1015,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
         }
     }
 }
