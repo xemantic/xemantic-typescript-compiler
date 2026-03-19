@@ -181,6 +181,8 @@ class Checker(
         checkBuiltinGlobalConflict()
         // 48. Check parameter question mark with initializer (TS1015)
         checkOptionalParamWithInitializer()
+        // 49. Check set accessor parameter initializer (TS1052)
+        checkSetAccessorInitializer()
     }
 
     // -----------------------------------------------------------------------
@@ -12853,6 +12855,52 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1052: A 'set' accessor parameter cannot have an initializer
+    // -----------------------------------------------------------------------
+
+    private fun checkSetAccessorInitializer() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForSetAccessorInit(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForSetAccessorInit(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is SetAccessor && member.parameters.any { it.initializer != null }) {
+                            val name = member.name
+                            val start = name.pos
+                            val length = when (name) {
+                                is Identifier -> name.text.length
+                                else -> (name.end - 1 - start).coerceAtLeast(1)
+                            }
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "A 'set' accessor parameter cannot have an initializer.",
+                                category = DiagnosticCategory.Error,
+                                code = 1052,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorInit(it.statements, source, fileName) }
+                is Block -> walkForSetAccessorInit(stmt.statements, source, fileName)
+                else -> {}
             }
         }
     }
