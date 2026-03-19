@@ -7263,6 +7263,17 @@ class Checker(
             "Symbol",
             // JSX namespace (available when JSX is enabled)
             "JSX",
+            // DOM interface maps (used in type positions for element tag name resolution)
+            "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
+            "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
+            "GlobalEventHandlers", "WindowOrWorkerGlobalScope",
+            // Additional DOM/lib types used in type positions
+            "NodeListOf", "HTMLCollectionOf",
+            "BodyInit", "HeadersInit", "RequestInit", "ResponseInit",
+            "EventListenerOrEventListenerObject",
+            "AddEventListenerOptions", "EventListenerOptions",
+            "PromiseSettledResult", "PromiseFulfilledResult", "PromiseRejectedResult",
+            "BufferSource", "BlobPart",
         )
 
         /**
