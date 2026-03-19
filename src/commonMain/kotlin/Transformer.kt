@@ -4867,7 +4867,9 @@ class Transformer(
 
     private fun generateModuleTempName(moduleSpecifier: Expression, counter: MutableMap<String, Int>? = null): String {
         val specText = (moduleSpecifier as? StringLiteralNode)?.text ?: "module"
-        val baseName = specText.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
+        var baseName = specText.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9_]"), "_")
+        // Identifiers can't start with a digit — prefix with underscore
+        if (baseName.isNotEmpty() && baseName[0].isDigit()) baseName = "_$baseName"
         return if (counter != null) {
             val n = (counter[baseName] ?: 0) + 1
             counter[baseName] = n
