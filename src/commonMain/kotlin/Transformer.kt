@@ -355,6 +355,7 @@ class Transformer(
         val fileName = sourceFile.fileName
         val useCJS = !isESModuleFormat(effectiveModule, fileName) &&
                 (effectiveModule == ModuleKind.CommonJS ||
+                effectiveModule == ModuleKind.None ||
                 (effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) ||
                 fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
         if (useCJS && isModuleFile(sourceFile)) {
