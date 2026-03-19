@@ -199,6 +199,10 @@ class Checker(
         checkCircularImportAlias()
         // 57. Check return statement outside function body (TS1108)
         checkReturnOutsideFunction()
+        // 58. Check duplicate labels (TS1114)
+        checkDuplicateLabels()
+        // 59. Check empty type argument list (TS1099)
+        checkEmptyTypeArguments()
     }
 
     // -----------------------------------------------------------------------
@@ -13783,5 +13787,195 @@ class Checker(
             is Block -> checkReturnInTopLevel(stmt.statements, source, fileName)
             else -> {}
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1114: Duplicate label
+    // -----------------------------------------------------------------------
+
+    private fun checkDuplicateLabels() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForDuplicateLabels(result.sourceFile.statements, source, fileName, mutableSetOf())
+        }
+    }
+
+    private fun walkForDuplicateLabels(stmts: List<Statement>, source: String, fileName: String, activeLabels: MutableSet<String>) {
+        for (stmt in stmts) walkStmtForDupLabels(stmt, source, fileName, activeLabels)
+    }
+
+    private fun walkStmtForDupLabels(stmt: Statement, source: String, fileName: String, activeLabels: MutableSet<String>) {
+        when (stmt) {
+            is LabeledStatement -> {
+                val label = stmt.label.text
+                if (label in activeLabels) {
+                    val start = stmt.label.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate label '$label'.",
+                        category = DiagnosticCategory.Error,
+                        code = 1114,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = label.length,
+                    ))
+                }
+                activeLabels.add(label)
+                walkStmtForDupLabels(stmt.statement, source, fileName, activeLabels)
+                activeLabels.remove(label)
+            }
+            is FunctionDeclaration -> {
+                // New label scope inside functions
+                stmt.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
+            }
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
+                        is Constructor -> m.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> walkForDuplicateLabels(stmt.statements, source, fileName, activeLabels)
+            is IfStatement -> {
+                walkStmtForDupLabels(stmt.thenStatement, source, fileName, activeLabels)
+                stmt.elseStatement?.let { walkStmtForDupLabels(it, source, fileName, activeLabels) }
+            }
+            is ForStatement -> walkStmtForDupLabels(stmt.statement, source, fileName, activeLabels)
+            is ForInStatement -> walkStmtForDupLabels(stmt.statement, source, fileName, activeLabels)
+            is ForOfStatement -> walkStmtForDupLabels(stmt.statement, source, fileName, activeLabels)
+            is WhileStatement -> walkStmtForDupLabels(stmt.statement, source, fileName, activeLabels)
+            is DoStatement -> walkStmtForDupLabels(stmt.statement, source, fileName, activeLabels)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) {
+                    when (c) {
+                        is CaseClause -> walkForDuplicateLabels(c.statements, source, fileName, activeLabels)
+                        is DefaultClause -> walkForDuplicateLabels(c.statements, source, fileName, activeLabels)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkForDuplicateLabels(stmt.tryBlock.statements, source, fileName, activeLabels)
+                stmt.catchClause?.let { walkForDuplicateLabels(it.block.statements, source, fileName, activeLabels) }
+                stmt.finallyBlock?.let { walkForDuplicateLabels(it.statements, source, fileName, activeLabels) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForDuplicateLabels(it.statements, source, fileName, activeLabels) }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1099: Type argument list cannot be empty
+    // -----------------------------------------------------------------------
+
+    private fun checkEmptyTypeArguments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForEmptyTypeArgs(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForEmptyTypeArgs(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkStmtForEmptyTypeArgs(stmt, source, fileName)
+    }
+
+    private fun walkStmtForEmptyTypeArgs(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is Block -> walkForEmptyTypeArgs(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+                walkStmtForEmptyTypeArgs(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkStmtForEmptyTypeArgs(it, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForEmptyTypeArgs(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is CallExpression -> {
+                if (expr.typeArguments != null && expr.typeArguments.isEmpty()) {
+                    reportEmptyTypeArgs(expr, source, fileName)
+                }
+                walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkExprForEmptyTypeArgs(arg, source, fileName)
+            }
+            is NewExpression -> {
+                if (expr.typeArguments != null && expr.typeArguments.isEmpty()) {
+                    reportEmptyTypeArgs(expr, source, fileName)
+                }
+                walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                walkExprForEmptyTypeArgs(expr.left, source, fileName)
+                walkExprForEmptyTypeArgs(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                walkExprForEmptyTypeArgs(expr.condition, source, fileName)
+                walkExprForEmptyTypeArgs(expr.whenTrue, source, fileName)
+                walkExprForEmptyTypeArgs(expr.whenFalse, source, fileName)
+            }
+            is PropertyAccessExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> walkForEmptyTypeArgs(body.statements, source, fileName)
+                    is Expression -> walkExprForEmptyTypeArgs(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> walkForEmptyTypeArgs(expr.body.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun reportEmptyTypeArgs(expr: Node, source: String, fileName: String) {
+        // Find the `<>` in source before the `(`
+        val exprEnd = when (expr) {
+            is CallExpression -> expr.expression.end
+            is NewExpression -> expr.expression.end
+            else -> expr.pos
+        }
+        // Search for `<>` after the expression
+        val ltIdx = source.indexOf('<', exprEnd)
+        if (ltIdx < 0) return
+        val gtIdx = source.indexOf('>', ltIdx)
+        if (gtIdx < 0 || gtIdx != ltIdx + 1) return
+        val start = ltIdx
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type argument list cannot be empty.",
+            category = DiagnosticCategory.Error,
+            code = 1099,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = 2, // "<>"
+        ))
     }
 }
