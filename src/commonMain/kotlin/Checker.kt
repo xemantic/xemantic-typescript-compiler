@@ -12535,86 +12535,101 @@ class Checker(
         }
     }
 
-    private fun checkAwaitInStatements(stmts: List<Statement>, source: String, fileName: String, isAsync: Boolean) {
-        for (stmt in stmts) checkAwaitInStatement(stmt, source, fileName, isAsync)
+    private fun checkAwaitInStatements(stmts: List<Statement>, source: String, fileName: String, isAsync: Boolean, enclosingFunc: Identifier? = null) {
+        for (stmt in stmts) checkAwaitInStatement(stmt, source, fileName, isAsync, enclosingFunc)
     }
 
-    private fun checkAwaitInStatement(stmt: Statement, source: String, fileName: String, isAsync: Boolean) {
+    private fun checkAwaitInStatement(stmt: Statement, source: String, fileName: String, isAsync: Boolean, enclosingFunc: Identifier? = null) {
         when (stmt) {
-            is ExpressionStatement -> checkAwaitInExpr(stmt.expression, source, fileName, isAsync)
+            is ExpressionStatement -> checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
+                d.initializer?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
             }
-            is ReturnStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
+            is ReturnStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
             is FunctionDeclaration -> {
                 val async = ModifierFlag.Async in stmt.modifiers
-                stmt.body?.let { checkAwaitInStatements(it.statements, source, fileName, async) }
+                val funcName = if (!async) stmt.name else null
+                stmt.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, funcName) }
             }
             is ClassDeclaration -> {
                 for (m in stmt.members) {
                     when (m) {
                         is MethodDeclaration -> {
                             val async = ModifierFlag.Async in m.modifiers
-                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async) }
+                            val mName = if (!async) m.name as? Identifier else null
+                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mName) }
                         }
-                        is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false) }
-                        is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false) }
-                        is GetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false) }
-                        is SetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false) }
+                        is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
+                        is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
+                        is GetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
+                        is SetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
                         else -> {}
                     }
                 }
             }
-            is Block -> checkAwaitInStatements(stmt.statements, source, fileName, isAsync)
+            is Block -> checkAwaitInStatements(stmt.statements, source, fileName, isAsync, enclosingFunc)
             is IfStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync)
-                checkAwaitInStatement(stmt.thenStatement, source, fileName, isAsync)
-                stmt.elseStatement?.let { checkAwaitInStatement(it, source, fileName, isAsync) }
+                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInStatement(stmt.thenStatement, source, fileName, isAsync, enclosingFunc)
+                stmt.elseStatement?.let { checkAwaitInStatement(it, source, fileName, isAsync, enclosingFunc) }
             }
             is ForStatement -> {
-                stmt.condition?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
-                stmt.incrementor?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync)
+                stmt.condition?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
+                stmt.incrementor?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
+                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
             }
             is WhileStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync)
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync)
+                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
             }
             is DoStatement -> {
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync)
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync)
+                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
             }
             is TryStatement -> {
-                checkAwaitInStatements(stmt.tryBlock.statements, source, fileName, isAsync)
-                stmt.catchClause?.let { checkAwaitInStatements(it.block.statements, source, fileName, isAsync) }
-                stmt.finallyBlock?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync) }
+                checkAwaitInStatements(stmt.tryBlock.statements, source, fileName, isAsync, enclosingFunc)
+                stmt.catchClause?.let { checkAwaitInStatements(it.block.statements, source, fileName, isAsync, enclosingFunc) }
+                stmt.finallyBlock?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync, enclosingFunc) }
             }
             is SwitchStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync)
+                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
                 for (c in stmt.caseBlock) {
                     when (c) {
                         is CaseClause -> {
-                            checkAwaitInExpr(c.expression, source, fileName, isAsync)
-                            checkAwaitInStatements(c.statements, source, fileName, isAsync)
+                            checkAwaitInExpr(c.expression, source, fileName, isAsync, enclosingFunc)
+                            checkAwaitInStatements(c.statements, source, fileName, isAsync, enclosingFunc)
                         }
-                        is DefaultClause -> checkAwaitInStatements(c.statements, source, fileName, isAsync)
+                        is DefaultClause -> checkAwaitInStatements(c.statements, source, fileName, isAsync, enclosingFunc)
                         else -> {}
                     }
                 }
             }
-            is ThrowStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
-            is LabeledStatement -> checkAwaitInStatement(stmt.statement, source, fileName, isAsync)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync) }
+            is ThrowStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
+            is LabeledStatement -> checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync, enclosingFunc) }
             else -> {}
         }
     }
 
-    private fun checkAwaitInExpr(expr: Expression, source: String, fileName: String, isAsync: Boolean) {
+    private fun checkAwaitInExpr(expr: Expression, source: String, fileName: String, isAsync: Boolean, enclosingFunc: Identifier? = null) {
         when (expr) {
             is AwaitExpression -> {
                 if (!isAsync) {
                     val start = expr.pos
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    val relatedInfo = if (enclosingFunc != null) {
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, enclosingFunc.pos)
+                        listOf(Diagnostic(
+                            message = "Did you mean to mark this function as 'async'?",
+                            category = DiagnosticCategory.Message,
+                            code = 1356,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = enclosingFunc.pos,
+                            length = enclosingFunc.text.length,
+                        ))
+                    } else emptyList()
                     diagnostics.add(Diagnostic(
                         message = "'await' expressions are only allowed within async functions and at the top levels of modules.",
                         category = DiagnosticCategory.Error,
@@ -12624,84 +12639,88 @@ class Checker(
                         character = character,
                         start = start,
                         length = 5, // "await"
+                        relatedInformation = relatedInfo,
                     ))
                 }
-                expr.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
+                expr.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
             }
             is ArrowFunction -> {
                 val async = ModifierFlag.Async in expr.modifiers
                 when (val body = expr.body) {
-                    is Block -> checkAwaitInStatements(body.statements, source, fileName, async)
-                    is Expression -> checkAwaitInExpr(body, source, fileName, async)
+                    is Block -> checkAwaitInStatements(body.statements, source, fileName, async, null)
+                    is Expression -> checkAwaitInExpr(body, source, fileName, async, null)
                     else -> {}
                 }
             }
             is FunctionExpression -> {
                 val async = ModifierFlag.Async in expr.modifiers
-                expr.body?.let { checkAwaitInStatements(it.statements, source, fileName, async) }
+                val fName = if (!async) expr.name else null
+                expr.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, fName) }
             }
             is ClassExpression -> {
                 for (m in expr.members) {
                     when (m) {
                         is MethodDeclaration -> {
                             val async = ModifierFlag.Async in m.modifiers
-                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async) }
+                            val mName = if (!async) m.name as? Identifier else null
+                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mName) }
                         }
-                        is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false) }
-                        is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false) }
+                        is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
+                        is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
                         else -> {}
                     }
                 }
             }
             is BinaryExpression -> {
-                checkAwaitInExpr(expr.left, source, fileName, isAsync)
-                checkAwaitInExpr(expr.right, source, fileName, isAsync)
+                checkAwaitInExpr(expr.left, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInExpr(expr.right, source, fileName, isAsync, enclosingFunc)
             }
             is CallExpression -> {
-                checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-                for (arg in expr.arguments) checkAwaitInExpr(arg, source, fileName, isAsync)
+                checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+                for (arg in expr.arguments) checkAwaitInExpr(arg, source, fileName, isAsync, enclosingFunc)
             }
             is NewExpression -> {
-                checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-                expr.arguments?.forEach { checkAwaitInExpr(it, source, fileName, isAsync) }
+                checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+                expr.arguments?.forEach { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
             }
-            is ParenthesizedExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
+            is ParenthesizedExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is ConditionalExpression -> {
-                checkAwaitInExpr(expr.condition, source, fileName, isAsync)
-                checkAwaitInExpr(expr.whenTrue, source, fileName, isAsync)
-                checkAwaitInExpr(expr.whenFalse, source, fileName, isAsync)
+                checkAwaitInExpr(expr.condition, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInExpr(expr.whenTrue, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInExpr(expr.whenFalse, source, fileName, isAsync, enclosingFunc)
             }
-            is PropertyAccessExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
+            is PropertyAccessExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is ElementAccessExpression -> {
-                checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-                checkAwaitInExpr(expr.argumentExpression, source, fileName, isAsync)
+                checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInExpr(expr.argumentExpression, source, fileName, isAsync, enclosingFunc)
             }
-            is ArrayLiteralExpression -> for (el in expr.elements) checkAwaitInExpr(el, source, fileName, isAsync)
+            is ArrayLiteralExpression -> for (el in expr.elements) checkAwaitInExpr(el, source, fileName, isAsync, enclosingFunc)
             is ObjectLiteralExpression -> for (prop in expr.properties) {
                 when (prop) {
-                    is PropertyAssignment -> checkAwaitInExpr(prop.initializer, source, fileName, isAsync)
-                    is SpreadAssignment -> checkAwaitInExpr(prop.expression, source, fileName, isAsync)
+                    is PropertyAssignment -> checkAwaitInExpr(prop.initializer, source, fileName, isAsync, enclosingFunc)
+                    is SpreadAssignment -> checkAwaitInExpr(prop.expression, source, fileName, isAsync, enclosingFunc)
                     is MethodDeclaration -> {
                         val async = ModifierFlag.Async in prop.modifiers
-                        prop.body?.let { checkAwaitInStatements(it.statements, source, fileName, async) }
+                        val pName = if (!async) prop.name as? Identifier else null
+                        prop.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, pName) }
                     }
                     else -> {}
                 }
             }
             is TemplateExpression -> for (span in expr.templateSpans) {
-                checkAwaitInExpr(span.expression, source, fileName, isAsync)
+                checkAwaitInExpr(span.expression, source, fileName, isAsync, enclosingFunc)
             }
-            is PrefixUnaryExpression -> checkAwaitInExpr(expr.operand, source, fileName, isAsync)
-            is PostfixUnaryExpression -> checkAwaitInExpr(expr.operand, source, fileName, isAsync)
-            is SpreadElement -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-            is NonNullExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-            is AsExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-            is TypeAssertionExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-            is YieldExpression -> expr.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync) }
-            is TaggedTemplateExpression -> checkAwaitInExpr(expr.tag, source, fileName, isAsync)
-            is VoidExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-            is DeleteExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
-            is TypeOfExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync)
+            is PrefixUnaryExpression -> checkAwaitInExpr(expr.operand, source, fileName, isAsync, enclosingFunc)
+            is PostfixUnaryExpression -> checkAwaitInExpr(expr.operand, source, fileName, isAsync, enclosingFunc)
+            is SpreadElement -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is NonNullExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is AsExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is TypeAssertionExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is YieldExpression -> expr.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
+            is TaggedTemplateExpression -> checkAwaitInExpr(expr.tag, source, fileName, isAsync, enclosingFunc)
+            is VoidExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is DeleteExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is TypeOfExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             else -> {}
         }
     }
