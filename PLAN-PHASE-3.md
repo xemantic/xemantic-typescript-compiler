@@ -1479,7 +1479,15 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Transformer.kt`
 
-- [ ] **19i. TS1123 empty variable declaration list** (~1 test)
+- [x] **19i. Add missing DOM type globals** (+0 tests, correctness fix)
+
+  Added `ElementTagNameMap`, `HTMLElementTagNameMap`, `SVGElementTagNameMap`,
+  and other DOM interface types to KNOWN_GLOBALS to prevent false TS2304.
+  No immediate test gain (affected tests also need other diagnostics).
+
+  **Files:** `Checker.kt`
+
+- [ ] **19j. TS1123 empty variable declaration list** (~1 test)
 
   Parser should emit TS1123 "Variable declaration list cannot be empty" when
   `let;` or `const;` is encountered, instead of TS1003 "Identifier expected".
