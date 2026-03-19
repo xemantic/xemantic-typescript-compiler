@@ -658,6 +658,9 @@ class Transformer(
         val deferredExportAssignments = mutableListOf<Statement>()
         // Track export names already emitted as function stubs (for deduplication)
         val functionStubExportedNames = mutableSetOf<String>()
+        // Track require statements originating from ImportDeclaration (not import=require).
+        // Used to distinguish regular imports from ImportEqualsDeclaration for reference directive preservation.
+        val regularImportRequires = mutableSetOf<VariableStatement>()
         // Track: imported local name → the import const statement (for re-export positioning)
         val importStmtForLocalName = mutableMapOf<String, Statement>()
         // Track: declared local name → the declaration statement (for export positioning)
@@ -1107,6 +1110,7 @@ class Transformer(
                     // Transform ES imports to require calls
                     val clause = stmt.importClause
                     val moduleSpecifier = stmt.moduleSpecifier
+                    val resultSizeBefore = result.size
 
                     if (clause == null) {
                         // Side-effect import: require("mod")
@@ -1206,6 +1210,11 @@ class Transformer(
                                 )
                             }
                         }
+                    }
+                    // Track require statements from regular ImportDeclaration (not import=require)
+                    for (i in resultSizeBefore..<result.size) {
+                        val added = result[i]
+                        if (added is VariableStatement) regularImportRequires.add(added)
                     }
                 }
 
@@ -1623,6 +1632,27 @@ class Transformer(
                 for (stmt in toElide) {
                     val allComments = stmt.leadingComments
                     if (!allComments.isNullOrEmpty()) {
+                        // Preserve DETACHED (blank-line-separated) /// <reference path> directives
+                        // from elided regular imports. TypeScript only preserves reference directives
+                        // when there is a blank line between the LAST directive and the import statement.
+                        // The blank-line check uses the LAST comment's end to ensure a contiguous block
+                        // of reference directives is not partially preserved.
+                        if (stmt in regularImportRequires) {
+                            val referenceDirectives = allComments.filter { c ->
+                                c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
+                            }
+                            if (referenceDirectives.isNotEmpty()) {
+                                val lastRef = referenceDirectives.last()
+                                val isDetached = lastRef.end >= 0 && run {
+                                    val afterEnd = source.substring(lastRef.end.coerceIn(0, source.length))
+                                    val leadingWs = afterEnd.takeWhile { it == '\n' || it == '\r' || it == ' ' || it == '\t' }
+                                    leadingWs.count { it == '\n' } >= 2
+                                }
+                                if (isDetached) {
+                                    prePreambleStatements.add(NotEmittedStatement(leadingComments = referenceDirectives))
+                                }
+                            }
+                        }
                         // Preserve detached (blank-line-separated) non-triple-slash comments when pos is valid
                         if (stmt.pos >= 0) {
                             val detached = allComments.filter { c ->
@@ -2025,6 +2055,10 @@ class Transformer(
         // Tracked separately and inserted into the body after the identifier rewrite step.
         val protectedExportAssignments = mutableListOf<Pair<String, Statement>>() // (name → statement)
 
+        // Track /// <reference path> directives on imports, keyed by paramName.
+        // Used after import elision to preserve directives from elided imports.
+        val importParamReferenceComments = mutableMapOf<String, List<Comment>>()
+
         // Pass 1: collect imports to build deps/params, build body for non-imports
         for (stmt in statementsWithoutStrict) {
             when (stmt) {
@@ -2051,6 +2085,9 @@ class Transformer(
                                 val localName = clause.name.text
                                 val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                                 namedModuleImports.add(specStr to tempName)
+                                stmt.leadingComments?.filter { c ->
+                                    c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
+                                }?.let { if (it.isNotEmpty()) importParamReferenceComments[tempName] = it }
                                 // Hoisted reassignment: mod_1 = __importDefault(mod_1)
                                 importReassignments.add(
                                     ExpressionStatement(
@@ -2080,6 +2117,9 @@ class Transformer(
                                 needsImportStar = true
                                 val paramName = bindings.name.text
                                 namedModuleImports.add(specStr to paramName)
+                                stmt.leadingComments?.filter { c ->
+                                    c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
+                                }?.let { if (it.isNotEmpty()) importParamReferenceComments[paramName] = it }
                                 importReassignments.add(
                                     ExpressionStatement(
                                         expression = BinaryExpression(
@@ -2106,6 +2146,9 @@ class Transformer(
                                     needsImportDefault = true
                                 }
                                 namedModuleImports.add(specStr to tempName)
+                                stmt.leadingComments?.filter { c ->
+                                    c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
+                                }?.let { if (it.isNotEmpty()) importParamReferenceComments[tempName] = it }
                                 // Rename each binding: a → mod_1.a, c → mod_1.b
                                 for (element in bindings.elements) {
                                     val importedName = (element.propertyName ?: element.name).text
@@ -2123,6 +2166,9 @@ class Transformer(
                                 val localName = clause.name.text
                                 val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                                 namedModuleImports.add(specStr to tempName)
+                                stmt.leadingComments?.filter { c ->
+                                    c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
+                                }?.let { if (it.isNotEmpty()) importParamReferenceComments[tempName] = it }
                                 importReassignments.add(
                                     ExpressionStatement(
                                         expression = BinaryExpression(
@@ -2576,15 +2622,36 @@ class Transformer(
         // Build result: [amdDepComments?, helpers?, defineCall]
         val result = mutableListOf<Statement>()
 
-        // Extract ONLY <amd-dependency> comments to emit FIRST (before helpers and define).
+        // Extract <amd-dependency> comments and /// <reference path> directives from
+        // elided imports to emit BEFORE the define() call.
         // <amd-module> comments stay on their statements and appear inside the body.
-        val amdDepComments = originalSourceFile.statements.flatMap { s ->
+        val preDefineComments = mutableListOf<Comment>()
+        // 1. <amd-dependency> directives (always emitted)
+        originalSourceFile.statements.forEach { s ->
             s.leadingComments?.filter { c ->
                 c.text.startsWith("///") && c.text.contains("<amd-dependency")
-            } ?: emptyList()
+            }?.let { preDefineComments.addAll(it) }
         }
-        if (amdDepComments.isNotEmpty()) {
-            result.add(NotEmittedStatement(leadingComments = amdDepComments, pos = -1, end = -1))
+        // 2. DETACHED (blank-line-separated) /// <reference path> directives from ELIDED imports
+        for (paramName in unusedParamNames) {
+            importParamReferenceComments[paramName]?.let { refs ->
+                // Only include references that are detached from the import statement
+                // (have a blank line between the reference and the import in the original source)
+                val detachedRefs = refs.filter { c ->
+                    c.end >= 0 && c.pos >= 0 &&
+                        // Find the original import statement pos by looking at the first
+                        // non-comment content after the reference
+                        originalSourceFile.text.let { src ->
+                            // Find next significant content after the comment
+                            val afterComment = src.substring(c.end).takeWhile { it == '\n' || it == '\r' || it == ' ' || it == '\t' }
+                            afterComment.count { it == '\n' } >= 2
+                        }
+                }
+                preDefineComments.addAll(detachedRefs)
+            }
+        }
+        if (preDefineComments.isNotEmpty()) {
+            result.add(NotEmittedStatement(leadingComments = preDefineComments, pos = -1, end = -1))
         }
 
         // Runtime helpers go OUTSIDE the define wrapper (after amd comments, before define)
@@ -5027,7 +5094,21 @@ class Transformer(
             )
 
             // --- Import / Export ---
-            is ImportDeclaration -> transformImportDeclaration(statement)
+            is ImportDeclaration -> {
+                val result = transformImportDeclaration(statement)
+                if (result.isEmpty()) {
+                    // Import was erased (type-only). Preserve DETACHED /// <reference path> directives
+                    // (blank-line-separated from the import statement in the source).
+                    val stmtPos = statement.pos.coerceIn(0, sourceText.length)
+                    val refComments = statement.leadingComments?.filter { c ->
+                        c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path") &&
+                            c.end >= 0 && sourceText.substring(c.end, stmtPos).count { it == '\n' } >= 2
+                    }
+                    if (!refComments.isNullOrEmpty()) {
+                        listOf(NotEmittedStatement(leadingComments = refComments, pos = statement.pos, end = statement.pos))
+                    } else result
+                } else result
+            }
             is ImportEqualsDeclaration -> transformImportEqualsDeclaration(statement)
             is ExportDeclaration -> transformExportDeclaration(statement)
             is ExportAssignment -> transformExportAssignment(statement)
