@@ -185,6 +185,8 @@ class Checker(
         checkSetAccessorInitializer()
         // 50. Check statements in ambient contexts (TS1036)
         checkAmbientStatements()
+        // 51. Check parameter initializer in non-implementation context (TS2371)
+        checkParameterInitializerInNonImpl()
     }
 
     // -----------------------------------------------------------------------
@@ -12988,6 +12990,120 @@ class Checker(
                 val body = stmt.body
                 if (body is ModuleBlock) checkStatementsInAmbient(body.statements, source, fileName)
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2371: A parameter initializer is only allowed in a function or
+    //         constructor implementation
+    // -----------------------------------------------------------------------
+
+    private fun checkParameterInitializerInNonImpl() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForParamInitNonImpl(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForParamInitNonImpl(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (stmt.body == null) {
+                        reportTS2371ForParams(stmt.parameters, source, fileName)
+                    }
+                    stmt.body?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> {
+                                if (member.body == null) {
+                                    reportTS2371ForParams(member.parameters, source, fileName)
+                                }
+                                member.body?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
+                            }
+                            is Constructor -> {
+                                if (member.body == null) {
+                                    reportTS2371ForParams(member.parameters, source, fileName)
+                                }
+                                member.body?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration) {
+                            reportTS2371ForParams(member.parameters, source, fileName)
+                        }
+                    }
+                }
+                is VariableStatement -> {
+                    // Check function type annotations in variable declarations
+                    // e.g., var f: (a = 3) => number
+                    for (decl in stmt.declarationList.declarations) {
+                        checkFunctionTypeParams(decl.type, source, fileName)
+                        // Also check initializers for type assertions with function types
+                        checkExprForFunctionTypeParams(decl.initializer, source, fileName)
+                    }
+                }
+                is TypeAliasDeclaration -> {
+                    checkFunctionTypeParams(stmt.type, source, fileName)
+                }
+                is ModuleDeclaration -> {
+                    (stmt.body as? ModuleBlock)?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
+                }
+                is Block -> walkForParamInitNonImpl(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkFunctionTypeParams(type: TypeNode?, source: String, fileName: String) {
+        when (type) {
+            is FunctionType -> reportTS2371ForParams(type.parameters, source, fileName)
+            is ParenthesizedType -> checkFunctionTypeParams(type.type, source, fileName)
+            is UnionType -> for (t in type.types) checkFunctionTypeParams(t, source, fileName)
+            is IntersectionType -> for (t in type.types) checkFunctionTypeParams(t, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkExprForFunctionTypeParams(expr: Expression?, source: String, fileName: String) {
+        when (expr) {
+            is TypeAssertionExpression -> checkFunctionTypeParams(expr.type, source, fileName)
+            is AsExpression -> checkFunctionTypeParams(expr.type, source, fileName)
+            is ParenthesizedExpression -> checkExprForFunctionTypeParams(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun reportTS2371ForParams(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            val init = param.initializer ?: continue
+            val nameStart = param.name.pos
+            // Span from name start to initializer end, trimming trailing trivia
+            var spanEnd = init.end
+            while (spanEnd > nameStart && spanEnd <= source.length &&
+                source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
+                spanEnd--
+            }
+            val length = (spanEnd - nameStart).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+            diagnostics.add(Diagnostic(
+                message = "A parameter initializer is only allowed in a function or constructor implementation.",
+                category = DiagnosticCategory.Error,
+                code = 2371,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = nameStart,
+                length = length,
+            ))
         }
     }
 }

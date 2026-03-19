@@ -1369,7 +1369,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18f. TS2371 — parameter initializer only in function/constructor** (~3 tests)
+- [x] **18f. TS2371 — parameter initializer only in function/constructor** (+3 tests)
 
   Report TS2371 on parameter initializers in declaration overloads (no body).
   "A parameter initializer is only allowed in a function or constructor implementation."
