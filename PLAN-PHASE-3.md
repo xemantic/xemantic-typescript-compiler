@@ -1511,7 +1511,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Transformer.kt`
 
-- [ ] **19m. TS1123 empty variable declaration list** (~1 test)
+- [x] **19m. TS1123 empty variable declaration list** (+1 test)
 
 - [ ] **19n. TS2662 — suggest static member** (~3 tests)
 
