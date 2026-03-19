@@ -6374,7 +6374,7 @@ class Checker(
                             "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead.",
                         )
                     }
-                    stmt is ImportEqualsDeclaration -> {
+                    stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference -> {
                         emitStatementLineDiagnostic(
                             stmt, source, fileName, 1202,
                             "Import assignment cannot be used when targeting ECMAScript modules. Consider using 'import * as ns from \"mod\"', 'import {a} from \"mod\"', 'import d from \"mod\"', or another module format instead.",
@@ -6803,15 +6803,21 @@ class Checker(
                 }
             }
             is FunctionDeclaration -> {
-                stmt.name?.let { checkStrictModeName(it, source, fileName, restricted) }
-                for (param in stmt.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                // Skip declare functions — no code gen, so no TS1100
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    stmt.name?.let { checkStrictModeName(it, source, fileName, restricted) }
+                    for (param in stmt.parameters) {
+                        checkStrictModeBindingName(param.name, source, fileName, restricted)
+                    }
+                    stmt.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
                 }
-                stmt.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
             }
             is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    checkStrictModeInClassElement(member, source, fileName, restricted)
+                // Skip declare classes — no code gen, so no TS1100
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    for (member in stmt.members) {
+                        checkStrictModeInClassElement(member, source, fileName, restricted)
+                    }
                 }
             }
             is ExpressionStatement -> checkStrictModeInExpr(stmt.expression, source, fileName, restricted)
@@ -10764,16 +10770,17 @@ class Checker(
             || effectiveModule == ModuleKind.UMD) return
         if (effectiveModule == ModuleKind.None) return
 
+        // TypeScript emits TS6131 only once per compilation (first eligible file with exports)
         for (result in binderResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
-            // Find the first module statement (import/export)
-            val firstModuleStmt = findFirstModuleStatement(result.sourceFile.statements)
+            // Find the first export module statement (not import-only)
+            val firstExportStmt = findFirstExportStatement(result.sourceFile.statements)
                 ?: continue
 
             // Determine diagnostic span based on statement type
-            val (spanStart, spanLength) = getModuleStatementSpan(firstModuleStmt, source)
+            val (spanStart, spanLength) = getModuleStatementSpan(firstExportStmt, source)
             val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
             diagnostics.add(Diagnostic(
                 message = "Cannot compile modules using option 'outFile' unless the '--module' flag is 'amd' or 'system'.",
@@ -10785,7 +10792,32 @@ class Checker(
                 start = spanStart,
                 length = spanLength,
             ))
+            break // Only emit once per compilation
         }
+    }
+
+    /** Find the first export statement (not import-only). Used for TS6131 which fires only on exports. */
+    private fun findFirstExportStatement(statements: List<Statement>): Statement? {
+        for (stmt in statements) {
+            when (stmt) {
+                is ExportDeclaration -> return stmt
+                is ExportAssignment -> return stmt
+                else -> {
+                    val modifiers = when (stmt) {
+                        is FunctionDeclaration -> stmt.modifiers
+                        is ClassDeclaration -> stmt.modifiers
+                        is VariableStatement -> stmt.modifiers
+                        is EnumDeclaration -> stmt.modifiers
+                        is InterfaceDeclaration -> stmt.modifiers
+                        is TypeAliasDeclaration -> stmt.modifiers
+                        is ModuleDeclaration -> stmt.modifiers
+                        else -> emptySet()
+                    }
+                    if (ModifierFlag.Export in modifiers) return stmt
+                }
+            }
+        }
+        return null
     }
 
     private fun findFirstModuleStatement(statements: List<Statement>): Statement? {
@@ -12179,6 +12211,8 @@ class Checker(
     }
 
     private fun emitTS1183(body: Block, source: String, fileName: String) {
+        // Skip synthetic empty bodies created by parser error recovery (pos = -1)
+        if (body.pos < 0) return
         // Squiggle on the opening `{` only (1 char)
         val start = body.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -13216,36 +13250,36 @@ class Checker(
         }
     }
 
-    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName)
+    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false) {
+        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass)
     }
 
-    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String) {
+    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false) {
         when (stmt) {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    checkNodeForStrictReserved(decl.name, source, fileName)
+                    checkNodeForStrictReserved(decl.name, source, fileName, inClass)
                 }
             }
             is FunctionDeclaration -> {
                 val name = stmt.name
-                if (name != null) checkIdentForStrictReserved(name, source, fileName)
+                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
                 // Check parameters
-                for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName)
-                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName) }
+                for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass)
+                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass) }
             }
             is ClassDeclaration -> {
                 val name = stmt.name
-                if (name != null) checkIdentForStrictReserved(name, source, fileName)
+                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
-                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName) }
+                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true) }
                         }
                         is Constructor -> {
-                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName) }
+                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true) }
                         }
                         else -> {}
                     }
@@ -13253,52 +13287,52 @@ class Checker(
             }
             is ModuleDeclaration -> {
                 val name = stmt.name
-                checkExprForStrictReservedIdents(name, source, fileName)
+                checkExprForStrictReservedIdents(name, source, fileName, inClass)
                 val body = stmt.body
                 when (body) {
-                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName)
-                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName)
+                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass)
+                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass)
                     else -> {}
                 }
             }
             is ForInStatement -> {
                 val init = stmt.initializer
                 if (init is VariableDeclarationList) {
-                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName)
+                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName, inClass)
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass)
             }
             is ForOfStatement -> {
                 val init = stmt.initializer
                 if (init is VariableDeclarationList) {
-                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName)
+                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName, inClass)
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass)
             }
-            is Block -> walkForStrictReserved(stmt.statements, source, fileName)
+            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass)
             is IfStatement -> {
-                walkStmtForStrictReserved(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName) }
+                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass)
+                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass) }
             }
             is ExpressionStatement -> {
                 // Check for `let = 30;` style usage
-                checkExprForStrictReserved(stmt.expression, source, fileName)
+                checkExprForStrictReserved(stmt.expression, source, fileName, inClass)
             }
             else -> {}
         }
     }
 
-    private fun checkNodeForStrictReserved(node: Node, source: String, fileName: String) {
+    private fun checkNodeForStrictReserved(node: Node, source: String, fileName: String, inClass: Boolean = false) {
         when (node) {
-            is Identifier -> checkIdentForStrictReserved(node, source, fileName)
+            is Identifier -> checkIdentForStrictReserved(node, source, fileName, inClass)
             is ObjectBindingPattern -> {
                 for (el in node.elements) {
-                    checkNodeForStrictReserved(el.name, source, fileName)
+                    checkNodeForStrictReserved(el.name, source, fileName, inClass)
                 }
             }
             is ArrayBindingPattern -> {
                 for (el in node.elements) {
-                    if (el is BindingElement) checkNodeForStrictReserved(el.name, source, fileName)
+                    if (el is BindingElement) checkNodeForStrictReserved(el.name, source, fileName, inClass)
                 }
             }
             else -> {}
@@ -13306,53 +13340,66 @@ class Checker(
     }
 
     /** Check all identifiers in an expression tree for strict-mode reserved words */
-    private fun checkExprForStrictReservedIdents(expr: Expression, source: String, fileName: String) {
+    private fun checkExprForStrictReservedIdents(expr: Expression, source: String, fileName: String, inClass: Boolean = false) {
         when (expr) {
-            is Identifier -> checkIdentForStrictReserved(expr, source, fileName)
+            is Identifier -> checkIdentForStrictReserved(expr, source, fileName, inClass)
             is PropertyAccessExpression -> {
-                checkExprForStrictReservedIdents(expr.expression, source, fileName)
-                checkIdentForStrictReserved(expr.name, source, fileName)
+                checkExprForStrictReservedIdents(expr.expression, source, fileName, inClass)
+                checkIdentForStrictReserved(expr.name, source, fileName, inClass)
             }
             else -> {}
         }
     }
 
-    private fun checkExprForStrictReserved(expr: Expression, source: String, fileName: String) {
+    private fun checkExprForStrictReserved(expr: Expression, source: String, fileName: String, inClass: Boolean = false) {
         when (expr) {
             is Identifier -> {
                 if (expr.text in STRICT_MODE_RESERVED_WORDS) {
                     // Only in assignment context (let = 30)
                     // Actually, all uses of reserved words as identifiers in expressions count
-                    reportTS1212(expr, source, fileName)
+                    reportTS1212(expr, source, fileName, inClass)
                 }
             }
             is BinaryExpression -> {
-                checkExprForStrictReserved(expr.left, source, fileName)
+                checkExprForStrictReserved(expr.left, source, fileName, inClass)
             }
             else -> {}
         }
     }
 
-    private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String) {
+    private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String, inClass: Boolean = false) {
         if (id.text in STRICT_MODE_RESERVED_WORDS) {
-            reportTS1212(id, source, fileName)
+            reportTS1212(id, source, fileName, inClass)
         }
     }
 
-    private fun reportTS1212(id: Identifier, source: String, fileName: String) {
+    private fun reportTS1212(id: Identifier, source: String, fileName: String, inClass: Boolean = false) {
         val start = id.pos
         val length = id.text.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "Identifier expected. '${id.text}' is a reserved word in strict mode.",
-            category = DiagnosticCategory.Error,
-            code = 1212,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-        ))
+        if (inClass) {
+            diagnostics.add(Diagnostic(
+                message = "Identifier expected. '${id.text}' is a reserved word in strict mode. Class definitions are automatically in strict mode.",
+                category = DiagnosticCategory.Error,
+                code = 1213,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } else {
+            diagnostics.add(Diagnostic(
+                message = "Identifier expected. '${id.text}' is a reserved word in strict mode.",
+                category = DiagnosticCategory.Error,
+                code = 1212,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
     }
 
     // -----------------------------------------------------------------------
