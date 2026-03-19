@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,112 passing (67.2%), 3,483 failing
-- **Session 2026-03-19c**: +6 tests (7,106→7,112) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused
+- **10,595 tests**, 7,117 passing (67.2%), 3,478 failing
+- **Session 2026-03-19c**: +11 tests (7,106→7,117) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
 - **Session 2026-03-19**: +44 tests (7,023→7,067) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name, TS2528 multi-default export, TS2377 derived super call, TS2303 circular import alias, TS2695 FP fixes (eval + allowUnreachableCode), BaselineFormatter crash fix, TS1356 related info, TS1108 return outside function, TS1114 duplicate labels, TS1099 empty type args
 - **Session 2026-03-18c**: +47 tests (6,976→7,023) — TS5055/TS5056 per-file output, TS2695 comma operator, TS2448/TS2450 use before decl, TS1049/TS1030/TS1014 syntax, TS1183 ambient impl, TS2396 arguments collision, TS1029 modifier order, TS1039 ambient initializers, TS1113 switch defaults, TS1308 await context, const/let→var ES5 downlevel
