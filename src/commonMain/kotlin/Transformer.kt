@@ -356,7 +356,7 @@ class Transformer(
         val useCJS = !isESModuleFormat(effectiveModule, fileName) &&
                 (effectiveModule == ModuleKind.CommonJS ||
                 effectiveModule == ModuleKind.None ||
-                (effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext) ||
+                effectiveModule.isNodeNext ||
                 fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
         if (useCJS && isModuleFile(sourceFile)) {
             // When importHelpers: true, inject `const tslib_1 = require("tslib")` instead of inlining helpers.
@@ -501,6 +501,9 @@ class Transformer(
         // .mts/.mjs/.cts/.cjs files are always module files
         val fn = sourceFile.fileName
         if (fn.endsWith(".mts") || fn.endsWith(".mjs") || fn.endsWith(".cts") || fn.endsWith(".cjs")) return true
+        // In Node16/NodeNext, all .ts files have an implied node format and are treated as CJS modules
+        val em = options.effectiveModule
+        if (em.isNodeNext) return true
         return sourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
@@ -617,8 +620,10 @@ class Transformer(
         // module declarations (import/export keywords) OR when the file extension forces module
         // treatment (.cts/.cjs) or moduleDetection: "force".
         val fn = originalSourceFile.fileName
+        val em = options.effectiveModule
         val forcedModule = fn.endsWith(".cts") || fn.endsWith(".cjs") ||
-                options.moduleDetection == "force"
+                options.moduleDetection == "force" ||
+                em.isNodeNext
         val hasStaticModuleDeclarations = forcedModule || originalSourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration || stmt is ExportAssignment ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
