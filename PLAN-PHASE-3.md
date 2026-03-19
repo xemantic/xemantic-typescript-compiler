@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,127 passing (67.3%), 3,465 failing
+- **10,595 tests**, 7,132 passing (67.3%), 3,460 failing
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
 - **Session 2026-03-19**: +44 tests (7,023→7,067) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name, TS2528 multi-default export, TS2377 derived super call, TS2303 circular import alias, TS2695 FP fixes (eval + allowUnreachableCode), BaselineFormatter crash fix, TS1356 related info, TS1108 return outside function, TS1114 duplicate labels, TS1099 empty type args
@@ -1582,23 +1582,25 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **20c. Reduce TS2300 false positives (merged declarations)** (~10 tests)
+- [x] **20c. Reduce TS2300 false positives (merged declarations)** (analyzed — 0 net tests)
 
-  Over-detection of duplicate identifiers for valid TypeScript merges:
-  class+namespace, function+namespace, interface+class. Specific patterns
-  like var+function (allowed in TS), and module-level duplicate detection.
-
-  **Files:** `Checker.kt`
-
-- [ ] **20d. Reduce TS2693 false positives** (~15 tests)
-
-  "Type used as value" false positives for names that ARE valid values:
-  built-in constructors (String, Number, Boolean as values), class names
-  used in typeof, and names that merge type+value.
+  Thorough analysis of 17 tests with FP TS2300. All tests also need more
+  specific diagnostics (TS2813/TS2814 for function+class, TS2384 for declare
+  class+function, TS2395 for export/local mismatch). No test would pass by
+  simply removing the false TS2300. Deferred to when TS2813/TS2814 are implemented.
 
   **Files:** `Checker.kt`
 
-- [ ] **20e. Implement TS2591 — suggest require()** (~10 tests)
+- [x] **20d. Reduce TS2693 false positives** (analyzed — 0 net tests)
+
+  Analysis of 15 tests with FP TS2693. Root causes: parser recovery cascade
+  (9 tests), variable shadowing TYPE_ONLY_KEYWORD (2 tests), import declarations
+  not tracked as values (4 tests). All tests have many other missing diagnostics.
+  No test would pass from TS2693 FP removal alone.
+
+  **Files:** `Checker.kt`
+
+- [ ] **20e. Implement TS2591 — suggest require()** (~10 tests) — *deferred*
 
   "Cannot find name 'X'. Do you need to install type definitions for node?
   Try `npm i --save-dev @types/node`." for common Node.js globals (require,
@@ -1606,14 +1608,14 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
   **Files:** `Checker.kt`
 
-- [ ] **20f. Reduce TS2554 false positives** (~13 tests)
+- [ ] **20f. Reduce TS2554 false positives** (~13 tests) — *deferred*
 
   Over-detection of wrong argument count: need to skip overloaded functions,
   handle rest parameters, and handle classes with base constructors.
 
   **Files:** `Checker.kt`
 
-- [ ] **20g. Reduce TS2391 false positives** (~14 tests)
+- [ ] **20g. Reduce TS2391 false positives** (~14 tests) — *deferred*
 
   "Function implementation missing" false positives for: abstract methods,
   method signatures in interfaces, functions with JSDoc, and overload
@@ -1621,7 +1623,7 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
 
   **Files:** `Checker.kt`
 
-- [ ] **20h. Implement TS1128 — declaration or statement expected** (~15 tests)
+- [ ] **20h. Implement TS1128 — declaration or statement expected** (~15 tests) — *deferred*
 
   Parser should emit TS1128 instead of TS1005 in certain recovery contexts
   (after class body, at top level with unexpected tokens).
@@ -1642,6 +1644,61 @@ Based on analysis of 3,483 remaining failures (2026-03-19c session).
   Currently some tests expect them but they're stripped.
 
   **Files:** `Emitter.kt` or `TypeScriptCompiler.kt`
+
+### 21. Phase 3o — Near-pass fixes (from 1-2 line diff analysis)
+
+Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
+
+- [x] **21a. Triple-slash reference directive preservation** (+5 tests)
+
+  DETACHED (blank-line-separated) `/// <reference path="..." />` directives
+  are preserved in CJS/AMD JS output when the import they precede is elided.
+  Three changes: (1) `transformStatement` preserves refs from erased type-only
+  imports. (2) CJS elision preserves refs from regular imports via
+  `regularImportRequires` set. (3) AMD tracks refs via `importParamReferenceComments`.
+  Tests: `bangInModuleName`, `moduleAugmentationInAmbientModule1-4`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **21b. CJS __esModule for type-import-only module files** (~4 tests)
+
+  Files that only import types still need `Object.defineProperty(exports,
+  "__esModule", { value: true })` in CJS output. Tests:
+  `tripleSlashTypesReferenceWithMissingExports` (4 module variants).
+
+  **Files:** `Transformer.kt`
+
+- [ ] **21c. CJS type-only import elision** (~6 tests)
+
+  CJS transform should not emit `require()` for ambient/type-only imports
+  and should not emit `exports.X = void 0` for type-only re-exports.
+  Tests: `errorsOnImportedSymbol` (2), `exportSpecifierReferencingOuterDeclaration2`,
+  `reExportGlobalDeclaration2`, `unusedImports13`, `unusedImports15`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **21d. Property-access comment preservation** (~6 tests)
+
+  Emitter needs to preserve comments between `.` and property name.
+  Expected: `point. /*2*/x = 30;` Actual: `point.x = 30;`.
+  Tests: `declFileObjectLiteralWith{OnlySetter,OnlyGetter,Accessors}` (es5, es2015).
+
+  **Files:** `Emitter.kt`
+
+- [ ] **21e. CJS const require for target >= ES2015** (~3 tests)
+
+  CJS transform uses `var` for require statements but should use `const`
+  when target >= ES2015. Tests: `declarationEmitReexportedSymlinkReference` (3).
+
+  **Files:** `Transformer.kt`
+
+- [ ] **21f. CJS alias qualification for namespace re-exports** (~2 tests)
+
+  `exports.bVal = b` should be `exports.bVal = exports.b`. Tests:
+  `internalAliasVarInsideTopLevelModuleWithExport`,
+  `internalAliasEnumInsideTopLevelModuleWithExport`.
+
+  **Files:** `Transformer.kt`
 
 ---
 
