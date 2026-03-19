@@ -1403,7 +1403,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18k. TS2377 — derived class constructor must call super** (~4 tests)
+- [x] **18k. TS2377 — derived class constructor must call super** (+4 tests)
 
   "Constructors for derived classes must contain a 'super' call."
 

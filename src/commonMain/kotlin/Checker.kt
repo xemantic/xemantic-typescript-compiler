@@ -193,6 +193,8 @@ class Checker(
         checkUndefinedClassInterfaceName()
         // 54. Check multiple default exports (TS2528)
         checkMultipleDefaultExports()
+        // 55. Check derived class constructor must contain super call (TS2377)
+        checkDerivedConstructorSuper()
     }
 
     // -----------------------------------------------------------------------
@@ -13474,5 +13476,138 @@ class Checker(
                 ))
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2377: Constructors for derived classes must contain a 'super' call
+    // -----------------------------------------------------------------------
+
+    private fun checkDerivedConstructorSuper() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForDerivedSuper(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForDerivedSuper(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    checkClassDerivedSuper(stmt.heritageClauses, stmt.members, source, fileName)
+                    // Recurse into class members for nested classes
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                            is Constructor -> m.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        when (val init = d.initializer) {
+                            is ClassExpression -> {
+                                checkClassDerivedSuper(init.heritageClauses, init.members, source, fileName)
+                            }
+                            is FunctionExpression -> walkForDerivedSuper(init.body.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                is Block -> walkForDerivedSuper(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkClassDerivedSuper(
+        heritageClauses: List<HeritageClause>?,
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Check if class extends something
+        val hasExtends = heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true
+        if (!hasExtends) return
+
+        // Find constructors with bodies that don't contain super()
+        for (member in members) {
+            if (member is Constructor && member.body != null) {
+                val hasSuperCall = statementsContainSuperCall(member.body!!.statements)
+                if (!hasSuperCall) {
+                    // Find "constructor" keyword position
+                    val ctorPos = member.pos
+                    var spanStart = ctorPos
+                    while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                    val idx = source.indexOf("constructor", spanStart)
+                    if (idx < 0 || idx > spanStart + 20) continue
+                    spanStart = idx
+                    // Span covers just "constructor" keyword (11 chars)
+                    val length = 11
+                    val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Constructors for derived classes must contain a 'super' call.",
+                        category = DiagnosticCategory.Error,
+                        code = 2377,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = spanStart,
+                        length = length,
+                    ))
+                }
+            }
+        }
+    }
+
+    private fun statementsContainSuperCall(stmts: List<Statement>): Boolean {
+        for (stmt in stmts) {
+            if (stmtContainsSuperCall(stmt)) return true
+        }
+        return false
+    }
+
+    private fun stmtContainsSuperCall(stmt: Statement): Boolean = when (stmt) {
+        is ExpressionStatement -> exprContainsSuperCall(stmt.expression)
+        is IfStatement -> {
+            exprContainsSuperCall(stmt.expression) ||
+                stmtContainsSuperCall(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { stmtContainsSuperCall(it) } == true)
+        }
+        is Block -> stmt.statements.any { stmtContainsSuperCall(it) }
+        is ForStatement -> stmtContainsSuperCall(stmt.statement)
+        is WhileStatement -> stmtContainsSuperCall(stmt.statement)
+        is SwitchStatement -> stmt.caseBlock.any { clause ->
+            when (clause) {
+                is CaseClause -> clause.statements.any { stmtContainsSuperCall(it) }
+                is DefaultClause -> clause.statements.any { stmtContainsSuperCall(it) }
+                else -> false
+            }
+        }
+        is TryStatement -> {
+            stmt.tryBlock.statements.any { stmtContainsSuperCall(it) } ||
+                (stmt.catchClause?.block?.statements?.any { stmtContainsSuperCall(it) } == true) ||
+                (stmt.finallyBlock?.statements?.any { stmtContainsSuperCall(it) } == true)
+        }
+        is ReturnStatement -> stmt.expression?.let { exprContainsSuperCall(it) } == true
+        is VariableStatement -> stmt.declarationList.declarations.any { d ->
+            d.initializer?.let { exprContainsSuperCall(it) } == true
+        }
+        else -> false
+    }
+
+    private fun exprContainsSuperCall(expr: Expression): Boolean = when (expr) {
+        is CallExpression -> {
+            val callee = expr.expression
+            (callee is Identifier && callee.text == "super") || exprContainsSuperCall(callee)
+        }
+        is BinaryExpression -> exprContainsSuperCall(expr.left) || exprContainsSuperCall(expr.right)
+        is ParenthesizedExpression -> exprContainsSuperCall(expr.expression)
+        is ConditionalExpression -> exprContainsSuperCall(expr.whenTrue) || exprContainsSuperCall(expr.whenFalse)
+        else -> false
     }
 }
