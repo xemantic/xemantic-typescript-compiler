@@ -4537,6 +4537,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseIdentifierName(): Identifier {
         val pos = getPos()
+        // Capture both scanner trailing comments (inline comments from previous token with no
+        // newline, e.g. point./*2*/x) and leading comments (comments after a newline).
+        val trailing = trailingComments()
+        val leading = leadingComments()
+        val comments = when {
+            trailing != null && leading != null -> trailing + leading
+            trailing != null -> trailing
+            else -> leading
+        }
         val value = scanner.getTokenValue()
         val raw = scanner.getTokenText()
         val rawText = if (raw != value) raw else null
@@ -4545,7 +4554,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             reportError("Invalid character.", code = 1127)
         }
         nextToken()
-        return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
+        return Identifier(text = value, rawText = rawText, leadingComments = comments, pos = pos, end = getEnd())
     }
 
     private fun parseStringLiteral(): StringLiteralNode {

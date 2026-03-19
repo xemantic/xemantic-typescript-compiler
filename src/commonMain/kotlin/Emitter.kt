@@ -2362,6 +2362,13 @@ class Emitter(
                 writeIndent()
             }
         }
+        // Emit inline leading comments on the property name (e.g. `point. /*2*/x`)
+        if (!options.removeComments) {
+            node.name.leadingComments?.forEach { c ->
+                write(" ")
+                write(c.text)
+            }
+        }
         write(node.name.emitText)
     }
 
