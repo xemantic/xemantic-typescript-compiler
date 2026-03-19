@@ -189,6 +189,8 @@ class Checker(
         checkParameterInitializerInNonImpl()
         // 52. Check strict mode reserved words as identifiers (TS1212)
         checkStrictModeReservedWords()
+        // 53. Check class/interface named 'undefined' (TS2414/TS2427)
+        checkUndefinedClassInterfaceName()
     }
 
     // -----------------------------------------------------------------------
@@ -13320,5 +13322,62 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2414/TS2427: Class/Interface name cannot be 'undefined'
+    // -----------------------------------------------------------------------
+
+    private fun checkUndefinedClassInterfaceName() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkUndefinedNamesInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkUndefinedNamesInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val name = stmt.name
+                    if (name != null && name.text == "undefined") {
+                        val start = name.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Class name cannot be 'undefined'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2414,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = 9, // "undefined"
+                        ))
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    if (stmt.name.text == "undefined") {
+                        val start = stmt.name.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Interface name cannot be 'undefined'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2427,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = 9, // "undefined"
+                        ))
+                    }
+                }
+                is ModuleDeclaration -> {
+                    (stmt.body as? ModuleBlock)?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+        }
     }
 }
