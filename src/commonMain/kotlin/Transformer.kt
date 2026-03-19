@@ -501,9 +501,14 @@ class Transformer(
         // .mts/.mjs/.cts/.cjs files are always module files
         val fn = sourceFile.fileName
         if (fn.endsWith(".mts") || fn.endsWith(".mjs") || fn.endsWith(".cts") || fn.endsWith(".cjs")) return true
-        // In Node16/NodeNext, all .ts files have an implied node format and are treated as CJS modules
+        // In Node16/NodeNext, files with /// <reference types> are also treated as modules
         val em = options.effectiveModule
-        if (em.isNodeNext) return true
+        if (em.isNodeNext) {
+            val hasTripleSlashRef = sourceFile.text.let { src ->
+                src.contains("/// <reference types=")
+            }
+            if (hasTripleSlashRef) return true
+        }
         return sourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||
@@ -621,9 +626,10 @@ class Transformer(
         // treatment (.cts/.cjs) or moduleDetection: "force".
         val fn = originalSourceFile.fileName
         val em = options.effectiveModule
+        val hasTripleSlashRef = originalSourceFile.text.contains("/// <reference types=")
         val forcedModule = fn.endsWith(".cts") || fn.endsWith(".cjs") ||
                 options.moduleDetection == "force" ||
-                em.isNodeNext
+                (em.isNodeNext && hasTripleSlashRef)
         val hasStaticModuleDeclarations = forcedModule || originalSourceFile.statements.any { stmt ->
             stmt is ImportDeclaration || stmt is ExportDeclaration || stmt is ExportAssignment ||
                     (stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference) ||

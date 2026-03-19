@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,165 passing (67.6%), 3,427 failing
-- **Session 2026-03-19e**: +20 tests (7,145→7,165) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix
+- **10,595 tests**, 7,170 passing (67.7%), 3,422 failing
+- **Session 2026-03-19e**: +25 tests (7,145→7,170) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix, node16 module detection refinement
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
