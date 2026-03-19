@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,155 passing (67.5%), 3,437 failing
-- **Session 2026-03-19e**: +10 tests (7,145→7,155) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files
+- **10,595 tests**, 7,157 passing (67.6%), 3,435 failing
+- **Session 2026-03-19e**: +12 tests (7,145→7,157) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
@@ -1674,14 +1674,16 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `CompilerOptions.kt`, `Transformer.kt`, `Checker.kt`, `TypeScriptCompiler.kt`
 
-- [ ] **21c. CJS type-only import elision** (~6 tests)
+- [x] **21c. CJS type-only import elision** (+2 tests)
 
-  CJS transform should not emit `require()` for ambient/type-only imports
-  and should not emit `exports.X = void 0` for type-only re-exports.
-  Tests: `errorsOnImportedSymbol` (2), `exportSpecifierReferencingOuterDeclaration2`,
-  `reExportGlobalDeclaration2`, `unusedImports13`, `unusedImports15`.
+  Three fixes: (1) `import = require()` for type-only modules elided via new
+  `Checker.isTypeOnlyImportRequire`. (2) `export { X }` skips void 0 hoist
+  when X is in `pureTypeNames` or `Checker.isTypeOnlyGlobalName` returns true.
+  (3) Added `Checker.isTypeOnlyGlobalName` for cross-file type-only name lookup.
+  Tests: `errorsOnImportedSymbol` (2 JS), `exportSpecifierReferencingOuterDeclaration2` (1 JS),
+  `reExportGlobalDeclaration2` (1 JS). Remaining: `unusedImports13`/`15` need JSX factory detection.
 
-  **Files:** `Transformer.kt`
+  **Files:** `Transformer.kt`, `Checker.kt`
 
 - [x] **21d. Property-access comment preservation** (+6 tests)
 
