@@ -1376,6 +1376,26 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
+- [x] **18g. TS2449 — class used before its declaration** (+7 tests)
+
+  Extend TS2448/TS2450 infrastructure to also track class declarations.
+  "Class 'X' used before its declaration."
+
+  **Files:** `Checker.kt`
+
+- [ ] **18h. TS1212 — let is reserved word in strict mode** (~7 tests)
+
+  Detect `let` used as an identifier name in strict mode.
+  "Identifier expected. 'let' is a reserved word in strict mode."
+
+  **Files:** `Checker.kt`
+
+- [ ] **18i. TS2414/TS2427 — class/interface name cannot be undefined** (~2 tests)
+
+  "Class name cannot be 'undefined'." / "Interface name cannot be 'undefined'."
+
+  **Files:** `Checker.kt`
+
 ---
 
 ## BLOCKED — not planned for Phase 3
