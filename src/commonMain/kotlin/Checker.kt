@@ -191,6 +191,8 @@ class Checker(
         checkStrictModeReservedWords()
         // 53. Check class/interface named 'undefined' (TS2414/TS2427)
         checkUndefinedClassInterfaceName()
+        // 54. Check multiple default exports (TS2528)
+        checkMultipleDefaultExports()
     }
 
     // -----------------------------------------------------------------------
@@ -13377,6 +13379,99 @@ class Checker(
                     (stmt.body as? ModuleBlock)?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
                 }
                 else -> {}
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2528: A module cannot have multiple default exports
+    // -----------------------------------------------------------------------
+
+    private fun checkMultipleDefaultExports() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+
+            // Collect all export default statements
+            data class DefaultExportInfo(val stmt: Statement, val start: Int, val length: Int)
+            val defaults = mutableListOf<DefaultExportInfo>()
+
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ExportAssignment -> {
+                        if (!stmt.isExportEquals) {
+                            val start = stmt.pos
+                            var spanStart = start
+                            while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                            // Span ends at expression end (trimmed) + optional semicolon
+                            val exprEnd = stmt.expression.end
+                            var spanEnd = exprEnd
+                            // Skip whitespace after expression
+                            while (spanEnd < source.length && source[spanEnd].let { it == ' ' || it == '\t' }) spanEnd++
+                            // Include semicolon if present
+                            if (spanEnd < source.length && source[spanEnd] == ';') spanEnd++
+                            val length = (spanEnd - spanStart).coerceAtLeast(1)
+                            defaults.add(DefaultExportInfo(stmt, spanStart, length))
+                        }
+                    }
+                    is FunctionDeclaration -> {
+                        if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default in stmt.modifiers) {
+                            // Find "export" keyword before the function keyword
+                            val funcPos = stmt.pos
+                            val searchStart = (funcPos - 30).coerceAtLeast(0)
+                            val exportIdx = source.lastIndexOf("export", funcPos)
+                            val spanStart = if (exportIdx >= searchStart) exportIdx else funcPos
+                            defaults.add(DefaultExportInfo(stmt, spanStart, 6))
+                        }
+                    }
+                    is ClassDeclaration -> {
+                        if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default in stmt.modifiers) {
+                            val classPos = stmt.pos
+                            val searchStart = (classPos - 30).coerceAtLeast(0)
+                            val exportIdx = source.lastIndexOf("export", classPos)
+                            val spanStart = if (exportIdx >= searchStart) exportIdx else classPos
+                            defaults.add(DefaultExportInfo(stmt, spanStart, 6))
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            if (defaults.size < 2) continue
+
+            // Report TS2528 on each default export with related info
+            for (i in defaults.indices) {
+                val d = defaults[i]
+                val (line, character) = getLineAndCharacterOfPosition(source, d.start)
+
+                // Related: point to the OTHER default export
+                val relatedIdx = if (i == 0) 1 else 0
+                val relD = defaults[relatedIdx]
+                val (relLine, relChar) = getLineAndCharacterOfPosition(source, relD.start)
+                val relCode = if (i == 0) 2752 else 2753
+                val relMessage = if (i == 0) "The first export default is here." else "Another export default is here."
+
+                diagnostics.add(Diagnostic(
+                    message = "A module cannot have multiple default exports.",
+                    category = DiagnosticCategory.Error,
+                    code = 2528,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = d.start,
+                    length = d.length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = relMessage,
+                        category = DiagnosticCategory.Message,
+                        code = relCode,
+                        fileName = fileName,
+                        line = relLine,
+                        character = relChar,
+                        start = relD.start,
+                        length = relD.length,
+                    )),
+                ))
             }
         }
     }
