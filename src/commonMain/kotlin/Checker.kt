@@ -2522,8 +2522,12 @@ class Checker(
             }
             is ParenthesizedExpression -> checkUnusedInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                checkUnusedInExpr(expr.left, source, fileName)
-                checkUnusedInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkUnusedInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkUnusedInExpr(current, source, fileName)
             }
             is ConditionalExpression -> {
                 checkUnusedInExpr(expr.condition, source, fileName)
@@ -3366,8 +3370,12 @@ class Checker(
             }
             is ParenthesizedExpression -> collectTypeRefsInExpr(expr.expression, scope)
             is BinaryExpression -> {
-                collectTypeRefsInExpr(expr.left, scope)
-                collectTypeRefsInExpr(expr.right, scope)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    collectTypeRefsInExpr(current.right, scope)
+                    current = current.left
+                }
+                collectTypeRefsInExpr(current, scope)
             }
             is ConditionalExpression -> {
                 collectTypeRefsInExpr(expr.condition, scope)
@@ -3622,8 +3630,17 @@ class Checker(
                     findUninitializedRefs(expr.right, uninitialized, source, fileName)
                     // Don't check left side for reads (it's a write target)
                 } else {
-                    findUninitializedRefs(expr.left, uninitialized, source, fileName)
-                    findUninitializedRefs(expr.right, uninitialized, source, fileName)
+                    // Iterative left spine to avoid StackOverflow
+                    var current: Expression = expr
+                    while (current is BinaryExpression && current.operator != SyntaxKind.Equals) {
+                        findUninitializedRefs(current.right, uninitialized, source, fileName)
+                        current = current.left
+                    }
+                    if (current is BinaryExpression) {
+                        findUninitializedRefs(current.right, uninitialized, source, fileName)
+                    } else {
+                        findUninitializedRefs(current, uninitialized, source, fileName)
+                    }
                 }
             }
             is ConditionalExpression -> {
@@ -3719,9 +3736,22 @@ class Checker(
                         else -> {}
                     }
                 }
-                // Recurse into both sides for compound expressions
-                markAssignmentsInExpr(expr.left, uninitialized)
-                markAssignmentsInExpr(expr.right, uninitialized)
+                // Iterative left spine to avoid StackOverflow
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    markAssignmentsInExpr(current.right, uninitialized)
+                    if (current.operator == SyntaxKind.Equals) {
+                        val left = current.left
+                        when (left) {
+                            is Identifier -> uninitialized.remove(left.text)
+                            is ObjectLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                            is ArrayLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                            else -> {}
+                        }
+                    }
+                    current = current.left
+                }
+                markAssignmentsInExpr(current, uninitialized)
             }
             is CommaListExpression -> {
                 expr.elements.forEach { markAssignmentsInExpr(it, uninitialized) }
@@ -4235,8 +4265,12 @@ class Checker(
                 expr.arguments.forEach { checkImplicitAnyInExpr(it, source, fileName) }
             }
             is BinaryExpression -> {
-                checkImplicitAnyInExpr(expr.left, source, fileName)
-                checkImplicitAnyInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkImplicitAnyInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkImplicitAnyInExpr(current, source, fileName)
             }
             is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
@@ -4889,8 +4923,12 @@ class Checker(
                 expr.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
             }
             is BinaryExpression -> {
-                checkUnresolvedInExpr(expr.left, scope, source, fileName)
-                checkUnresolvedInExpr(expr.right, scope, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkUnresolvedInExpr(current.right, scope, source, fileName)
+                    current = current.left
+                }
+                checkUnresolvedInExpr(current, scope, source, fileName)
             }
             is PrefixUnaryExpression -> {
                 checkUnresolvedInExpr(expr.operand, scope, source, fileName)
@@ -5608,8 +5646,12 @@ class Checker(
                 checkJsxInExpr(expr.whenFalse, source, fileName)
             }
             is BinaryExpression -> {
-                checkJsxInExpr(expr.left, source, fileName)
-                checkJsxInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkJsxInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkJsxInExpr(current, source, fileName)
             }
             is CallExpression -> {
                 checkJsxInExpr(expr.expression, source, fileName)
@@ -6356,9 +6398,10 @@ class Checker(
      */
     private fun checkExportAssignmentInEsModule() {
         val effectiveModule = options.effectiveModule
-        // ES module kinds: ES2015, ES2020, ES2022, ESNext, Node16, NodeNext
-        val isEsModule = effectiveModule >= ModuleKind.ES2015 ||
-                effectiveModule == ModuleKind.Node16 || effectiveModule == ModuleKind.NodeNext
+        // ES module kinds: ES2015, ES2020, ES2022, ESNext
+        // Node16/NodeNext support import= require() via createRequire, so exclude them
+        val isEsModule = effectiveModule >= ModuleKind.ES2015 &&
+                effectiveModule != ModuleKind.Node16 && effectiveModule != ModuleKind.NodeNext
         if (!isEsModule) return
 
         for (result in binderResults) {
@@ -6734,8 +6777,12 @@ class Checker(
             }
             is ParenthesizedExpression -> checkJumpInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                checkJumpInExpr(expr.left, source, fileName)
-                checkJumpInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkJumpInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkJumpInExpr(current, source, fileName)
             }
             else -> {}
         }
@@ -7538,8 +7585,18 @@ class Checker(
                         emitTS2872(expr.left, source, fileName)
                     }
                 }
-                checkAlwaysTruthyInExpr(expr.left, source, fileName)
-                checkAlwaysTruthyInExpr(expr.right, source, fileName)
+                // Iterative left spine to avoid StackOverflow
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    if (current.operator == SyntaxKind.BarBar && current !== expr) {
+                        if (isAlwaysTruthyExpr(current.left)) {
+                            emitTS2872(current.left, source, fileName)
+                        }
+                    }
+                    checkAlwaysTruthyInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkAlwaysTruthyInExpr(current, source, fileName)
             }
             is ParenthesizedExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
@@ -8002,9 +8059,13 @@ class Checker(
                         checkNullUndefinedLiteral(expr.right, source, fileName)
                     }
                 }
-                // Recurse into both sides
-                checkNullUndefinedInExpr(expr.left, source, fileName)
-                checkNullUndefinedInExpr(expr.right, source, fileName)
+                // Iteratively walk left spine to avoid StackOverflow on deep binary chains
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkNullUndefinedInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkNullUndefinedInExpr(current, source, fileName)
             }
             is PropertyAccessExpression -> {
                 // null.foo or undefined.foo
@@ -8219,8 +8280,13 @@ class Checker(
                 expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
             }
             is BinaryExpression -> {
-                checkTypeAsValueInExpr(expr.left, source, fileName, typeOnlyNames)
-                checkTypeAsValueInExpr(expr.right, source, fileName, typeOnlyNames)
+                // Iteratively walk binary chains to avoid StackOverflow on deep trees
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkTypeAsValueInExpr(current.right, source, fileName, typeOnlyNames)
+                    current = current.left
+                }
+                checkTypeAsValueInExpr(current, source, fileName, typeOnlyNames)
             }
             is TypeOfExpression -> {
                 // typeof T where T is a type param → TS2693
@@ -9446,8 +9512,12 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
-                checkThisInExpr(expr.left, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInExpr(expr.right, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkThisInExpr(current.right, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    current = current.left
+                }
+                checkThisInExpr(current, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
             }
             is ParenthesizedExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
@@ -10297,8 +10367,12 @@ class Checker(
             }
             is ParenthesizedExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                walkForParamPropsInExpr(expr.left, source, fileName)
-                walkForParamPropsInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkForParamPropsInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                walkForParamPropsInExpr(current, source, fileName)
             }
             is CallExpression -> {
                 walkForParamPropsInExpr(expr.expression, source, fileName)
@@ -10511,8 +10585,12 @@ class Checker(
                 expr.arguments.forEach { findSuperRefsInExpr(it, source, fileName) }
             }
             expr is BinaryExpression -> {
-                findSuperRefsInExpr(expr.left, source, fileName)
-                findSuperRefsInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    findSuperRefsInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                findSuperRefsInExpr(current, source, fileName)
             }
             expr is ParenthesizedExpression -> findSuperRefsInExpr(expr.expression, source, fileName)
             expr is ArrowFunction -> {} // Don't recurse into nested functions
@@ -10719,8 +10797,12 @@ class Checker(
                 walkForReservedWords(expr.body.statements, source, fileName)
             }
             is BinaryExpression -> {
-                walkForReservedWordsInExpr(expr.left, source, fileName)
-                walkForReservedWordsInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkForReservedWordsInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                walkForReservedWordsInExpr(current, source, fileName)
             }
             is ParenthesizedExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
             is CallExpression -> {
@@ -11274,8 +11356,13 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
-                checkUBDForwardInExpr(expr.left, blockDecls, source, fileName)
-                checkUBDForwardInExpr(expr.right, blockDecls, source, fileName)
+                // Iteratively walk left spine to avoid StackOverflow on deep binary chains
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkUBDForwardInExpr(current.right, blockDecls, source, fileName)
+                    current = current.left
+                }
+                checkUBDForwardInExpr(current, blockDecls, source, fileName)
             }
             is PrefixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName)
             is PostfixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName)
@@ -11498,8 +11585,12 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
-                checkUBDInInitializer(expr.left, selfNames, source, fileName)
-                checkUBDInInitializer(expr.right, selfNames, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkUBDInInitializer(current.right, selfNames, source, fileName)
+                    current = current.left
+                }
+                checkUBDInInitializer(current, selfNames, source, fileName)
             }
             is PrefixUnaryExpression -> checkUBDInInitializer(expr.operand, selfNames, source, fileName)
             is PostfixUnaryExpression -> checkUBDInInitializer(expr.operand, selfNames, source, fileName)
@@ -11744,8 +11835,12 @@ class Checker(
             }
             is ParenthesizedExpression -> checkSetterInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                checkSetterInExpr(expr.left, source, fileName)
-                checkSetterInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkSetterInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                checkSetterInExpr(current, source, fileName)
             }
             is ConditionalExpression -> {
                 checkSetterInExpr(expr.whenTrue, source, fileName)
@@ -12712,8 +12807,12 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
-                checkAwaitInExpr(expr.left, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInExpr(expr.right, source, fileName, isAsync, enclosingFunc)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkAwaitInExpr(current.right, source, fileName, isAsync, enclosingFunc)
+                    current = current.left
+                }
+                checkAwaitInExpr(current, source, fileName, isAsync, enclosingFunc)
             }
             is CallExpression -> {
                 checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
@@ -12924,8 +13023,12 @@ class Checker(
             }
             is ParenthesizedExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                walkForOptionalParamsInExpr(expr.left, source, fileName)
-                walkForOptionalParamsInExpr(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkForOptionalParamsInExpr(current.right, source, fileName)
+                    current = current.left
+                }
+                walkForOptionalParamsInExpr(current, source, fileName)
             }
             is ConditionalExpression -> {
                 walkForOptionalParamsInExpr(expr.condition, source, fileName)
@@ -13978,8 +14081,12 @@ class Checker(
                 expr.arguments?.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
             }
             is BinaryExpression -> {
-                walkExprForEmptyTypeArgs(expr.left, source, fileName)
-                walkExprForEmptyTypeArgs(expr.right, source, fileName)
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkExprForEmptyTypeArgs(current.right, source, fileName)
+                    current = current.left
+                }
+                walkExprForEmptyTypeArgs(current, source, fileName)
             }
             is ParenthesizedExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
             is ConditionalExpression -> {
