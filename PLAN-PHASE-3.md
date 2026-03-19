@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,132 passing (67.3%), 3,460 failing
+- **10,595 tests**, 7,135 passing (67.4%), 3,457 failing
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
 - **Session 2026-03-19b**: +39 tests (7,067→7,106) — TS1202 FP namespace imports + Node16/NodeNext, TS1213 class context reserved words, TS1183 FP declare accessor, TS6131 once per compilation, TS1100 skip declare functions, StackOverflow fix for deep binary chains, CJS void 0 hoist for global re-exports, DOM globals, TS1218 squiggle fix, TS2882 side-effect imports, noEmitHelpers suppresses all inline helpers
 - **Session 2026-03-19**: +44 tests (7,023→7,067) — TS1090 invalid modifier, TS2397 global conflict, TS1015 optional+init, TS1052 setter init, TS2300 FP declare merge, TS1036 ambient statements, TS2371 param init non-impl, TS2449 class before decl, TS1212 strict reserved words, TS2414/TS2427 undefined name, TS2528 multi-default export, TS2377 derived super call, TS2303 circular import alias, TS2695 FP fixes (eval + allowUnreachableCode), BaselineFormatter crash fix, TS1356 related info, TS1108 return outside function, TS1114 duplicate labels, TS1099 empty type args
@@ -1685,12 +1685,15 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Emitter.kt`
 
-- [ ] **21e. CJS const require for target >= ES2015** (~3 tests)
+- [x] **21e. CJS const require for target >= ES2015** (+3 tests)
 
-  CJS transform uses `var` for require statements but should use `const`
-  when target >= ES2015. Tests: `declarationEmitReexportedSymlinkReference` (3).
+  Root cause was tsconfig.json options overriding test directives. The
+  `applyTsconfigOptions` was applied AFTER `applyDirective`, so tsconfig's
+  `"target": "es5"` overwrote the test's `// @target: es2015`. Fixed by
+  applying tsconfig FIRST, then test directives override. Tests:
+  `declarationEmitReexportedSymlinkReference` (3 variants).
 
-  **Files:** `Transformer.kt`
+  **Files:** `CompilerOptions.kt`
 
 - [ ] **21f. CJS alias qualification for namespace re-exports** (~2 tests)
 

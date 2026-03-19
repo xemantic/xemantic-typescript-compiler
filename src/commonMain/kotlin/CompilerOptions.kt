@@ -322,14 +322,16 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     }
 
     var options = CompilerOptions()
-    for ((key, value) in directives) {
-        options = applyDirective(options, key, value)
-    }
 
-    // Apply options from tsconfig.json if present in the file entries
+    // Apply options from tsconfig.json FIRST (if present in the file entries).
+    // Test directives (// @target: etc.) are applied AFTER and take precedence.
     val tsconfigEntry = fileEntries.find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
     if (tsconfigEntry != null) {
         options = applyTsconfigOptions(options, tsconfigEntry.content, tsconfigEntry.fileName)
+    }
+
+    for ((key, value) in directives) {
+        options = applyDirective(options, key, value)
     }
 
     if (fileEntries.isEmpty()) {
