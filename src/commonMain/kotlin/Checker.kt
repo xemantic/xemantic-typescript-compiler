@@ -6059,8 +6059,21 @@ class Checker(
                     allNamespacesValueFree || allVarsDeclare
                 } else false
 
+                // declare function + declare class is a legal merge (function acts as constructor overload)
+                val classFuncConflict = if (hasClass && hasFunc) {
+                    val allFuncsDeclare = group.filter { it.kind == "function" }.all { decl ->
+                        val funcStmt = decl.stmt as? FunctionDeclaration ?: return@all false
+                        ModifierFlag.Declare in funcStmt.modifiers
+                    }
+                    val allClassesDeclare = group.filter { it.kind == "class" }.all { decl ->
+                        val classStmt = decl.stmt as? ClassDeclaration ?: return@all false
+                        ModifierFlag.Declare in classStmt.modifiers
+                    }
+                    !(allFuncsDeclare && allClassesDeclare)
+                } else false
+
                 val isDuplicate = (hasClass && classCount >= 2) ||
-                        (hasClass && hasFunc) ||
+                        classFuncConflict ||
                         (hasVar && (hasClass || hasFunc)) ||
                         (hasVar && hasNamespace && !namespaceVarAllowed)
 

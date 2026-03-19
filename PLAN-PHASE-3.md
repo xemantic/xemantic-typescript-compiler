@@ -1350,7 +1350,7 @@ Picking off tractable fixes to continue improving the pass rate.
 
   **Files:** `Checker.kt`
 
-- [ ] **18c. TS2300 FP: allow declare function + declare class merge** (~3 tests)
+- [x] **18c. TS2300 FP: allow declare function + declare class merge** (+0 tests, FP reduction)
 
   Suppress TS2300 when both declarations have `declare` modifier (legal merge).
 
