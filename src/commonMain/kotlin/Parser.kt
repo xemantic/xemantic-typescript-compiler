@@ -680,7 +680,17 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // This way `if (p) { } // err` captures the comment even when `else` follows on the next line.
         // We must read now because nextToken() in parseOptional/ElseKeyword will reset trailingComments.
         // Only capture if thenStmt didn't already capture them (e.g., block statements don't capture trailing).
-        val beforeElse = if (token == SyntaxKind.ElseKeyword) trailingComments() else null
+        val beforeElse = if (token == SyntaxKind.ElseKeyword) {
+            // Capture both trailing comments (inline, no newline) and leading comments
+            // (on their own line) before the `else` keyword.
+            val trailing = trailingComments()
+            val leading = leadingComments()
+            when {
+                trailing != null && leading != null -> trailing + leading
+                trailing != null -> trailing
+                else -> leading
+            }
+        } else null
         val thenTrailing = if (token != SyntaxKind.ElseKeyword && thenStmt.trailingComments == null) {
             trailingComments()
         } else null
