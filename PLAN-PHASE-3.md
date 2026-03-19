@@ -1513,6 +1513,35 @@ Picking off tractable fixes to continue improving the pass rate.
 
 - [ ] **19m. TS1123 empty variable declaration list** (~1 test)
 
+- [ ] **19n. TS2662 — suggest static member** (~3 tests)
+
+  When accessing a name inside a class method that doesn't exist locally but
+  exists as a static member of the class, emit TS2662 "Cannot find name 'X'.
+  Did you mean the static member 'C.X'?" instead of TS2304.
+
+  **Files:** `Checker.kt`
+
+- [ ] **19o. node_modules skip in multi-file compilation** (~20 tests)
+
+  Files from node_modules paths should not be compiled to JS output.
+  Currently 20 tests produce extra JS output for node_modules sources.
+
+  **Files:** `TypeScriptCompiler.kt`
+
+- [ ] **19p. TS6198 — all destructured elements unused** (~3 tests)
+
+  When ALL elements in a destructuring pattern are unused, emit TS6198
+  instead of individual TS6133 for each binding name.
+
+  **Files:** `Checker.kt`
+
+- [ ] **19q. Nested const enum inlining** (~4 tests)
+
+  Const enums defined inside function bodies need scoped collection
+  to avoid name conflicts with non-const enums in other functions.
+
+  **Files:** `Transformer.kt`
+
   Parser should emit TS1123 "Variable declaration list cannot be empty" when
   `let;` or `const;` is encountered, instead of TS1003 "Identifier expected".
 
