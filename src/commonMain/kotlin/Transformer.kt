@@ -11089,14 +11089,20 @@ class Transformer(
             body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is MethodDeclaration -> member.copy(
+            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
             parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
             body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
-        is PropertyDeclaration -> member.copy(initializer = member.initializer?.let { rewriteId(it, map, wrapCallsWithZero) })
+        is PropertyDeclaration -> member.copy(
+            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
+            initializer = member.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+        )
         is GetAccessor -> member.copy(
+            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
             body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is SetAccessor -> member.copy(
+            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
             body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
         )
         is ClassStaticBlockDeclaration -> member.copy(
@@ -11104,6 +11110,9 @@ class Transformer(
         )
         else -> member
     }
+
+    private fun rewriteComputedName(name: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Expression =
+        if (name is ComputedPropertyName) name.copy(expression = rewriteId(name.expression, map, wrapCallsWithZero)) else name
 
     private fun rewriteIdInParameter(p: Parameter, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Parameter =
         p.copy(
@@ -11211,7 +11220,10 @@ class Transformer(
         is ObjectLiteralExpression -> expr.copy(
             properties = expr.properties.map { prop ->
                 when (prop) {
-                    is PropertyAssignment -> prop.copy(initializer = rewriteId(prop.initializer, map, wrapCallsWithZero))
+                    is PropertyAssignment -> prop.copy(
+                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
+                        initializer = rewriteId(prop.initializer, map, wrapCallsWithZero),
+                    )
                     is ShorthandPropertyAssignment -> {
                         val replacement = map[prop.name.text]
                         if (replacement != null) {
@@ -11224,6 +11236,18 @@ class Transformer(
                         } else prop
                     }
                     is SpreadAssignment -> prop.copy(expression = rewriteId(prop.expression, map, wrapCallsWithZero))
+                    is MethodDeclaration -> prop.copy(
+                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
+                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+                    )
+                    is GetAccessor -> prop.copy(
+                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
+                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+                    )
+                    is SetAccessor -> prop.copy(
+                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
+                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+                    )
                     else -> prop
                 }
             }
