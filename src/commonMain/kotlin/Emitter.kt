@@ -447,8 +447,11 @@ class Emitter(
                 forceBlocksMultiLine = savedForce
                 if (blockToEmit.multiLine || (blockToEmit.statements.isEmpty() && blockToEmit.multiLine)) {
                     // } is on its own line, else goes on next line
+                    val hasBeforeElseComments = !options.removeComments && !node.beforeElseComments.isNullOrEmpty()
                     emitInnerComments(node.beforeElseComments)
-                    writeNewLine()
+                    // emitInnerComments already writes a newline after // comments,
+                    // so only add writeNewLine() when no comments were emitted.
+                    if (!hasBeforeElseComments) writeNewLine()
                     writeIndent()
                     write("else")
                 } else if (!node.beforeElseComments.isNullOrEmpty()) {
