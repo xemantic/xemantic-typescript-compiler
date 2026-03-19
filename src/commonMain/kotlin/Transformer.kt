@@ -8164,7 +8164,10 @@ class Transformer(
         }
 
         // Instance property initializers (only when not using define semantics)
+        // Increment functionScopeDepth so arrow functions in property initializers
+        // capture `this` correctly (they will be moved into the constructor body).
         if (!useDefineForClassFields) {
+            functionScopeDepth++
             for (prop in instanceProperties) {
                 // Skip private fields (#field) — they stay in the class body with their initializer
                 val nameNode = prop.name
@@ -8211,6 +8214,7 @@ class Transformer(
                     }
                 }
             }
+            functionScopeDepth--
         }
 
         // Build the transformed constructor
