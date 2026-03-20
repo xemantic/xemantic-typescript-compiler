@@ -25,6 +25,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`reScanGreaterToken`** (splitting `>>` to `>` for nested generics) was implemented but caused 4-test net regression — left disabled in the parser. The implementation in `Scanner.kt` is correct; the issue is likely subtle interaction with `tryScan` nesting. Re-enable cautiously.
 - **`getPos()` in Parser** = `scanner.getTokenPos()` (start of current token), **`getEnd()`** = `scanner.getPos()` (end of current token text). After `parseExpected()`, the scanner has ALREADY advanced to the next token — so `getPos()` is the start of the NEXT token.
 - **Case clause singleLine detection**: Check `source.substring(caseStartPos, firstStmtStart).contains('\n')` to determine if statements are on the same line as `case:`. Do NOT use `scanner.getPos()` after `parseExpected(Colon)` since the scanner has advanced past the colon into the next token's trivia.
+- **TS1007 related info for missing close delimiters**: Use `parseExpectedClosing()` (not `parseExpected`) when closing `)` in statement-level constructs (`if`, `while`, `with`, `do-while`). This provides `!!! related TS1007` pointing back to the opening `(`. DO NOT use this globally (in `parseExpected`) — it causes 59+ FP regressions in error recovery tests because the `openTokenStack` doesn't track delimiter types and pops incorrectly in complex error recovery scenarios. For general `parseExpected(CloseParen/CloseBrace)`, only emit TS1007 at EOF (current behavior).
 
 ### Emitter gotchas
 
