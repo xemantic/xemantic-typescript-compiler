@@ -1971,7 +1971,21 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
 **Error baseline missing (expected but not emitted):** TS2322 (877), TS1005 (353), TS2339 (203), TS2304 (200), TS2345 (179), TS1128 (145), TS7006 (135), TS2300 (128), TS2454 (120), TS2728 (111)
 
-**JS emit root causes:** var/let/const (298), comments (106), ES5 class/decorator helpers (92), CJS import helpers (36), CJS exports (34), CJS require (26), const enum inline (22), ES5 async (21), AMD (15), void0 hoist (12), sourcemap (11)
+**JS emit root causes (from agent analysis):**
+| Category | Tests | Small-diff |
+|----------|-------|------------|
+| ES5 class-to-IIFE | 194 | 0 |
+| ES5 arrow→function | ~55 | 5 |
+| ES5 var shadowing rename | 54 | 6 |
+| ES5 for-of downlevel | 34 | 3 |
+| Decorator metadata types | 43 | 9 |
+| AMD/System counter reset | 32 | 5 |
+| Inline sourcemap | 10 | 10 |
+| Const enum use-before-def | 5 | 5 |
+| CJS (0,exports.fn)() calls | 4 | 3 |
+| NodeNext createRequire | 4 | 4 |
+| CJS export-import qualify | 2 | 2 |
+| Parameter comment position | 6 | 1 |
 
 **Error tests with wrong code at same position (11 tests):**
 - TS2554 message format (0-1 vs 1 for JS file optional params) — 1 test
