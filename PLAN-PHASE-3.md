@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,185 passing (67.9%), 3,407 failing
+- **10,595 tests**, 7,194 passing (67.9%), 3,398 failing
+- **Session 2026-03-20b**: +9 tests (7,185→7,194) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356 for all function types
 - **Session 2026-03-20**: +5 tests (7,180→7,185) — trailing comments on object literal get/set accessors, numeric separator preservation for ES2021+ targets, `export * as ns` downlevel for ES2015 modules, TS2694/TS2693 false positive reductions (10+15 tests improved)
 - **Session 2026-03-19e**: +35 tests (7,145→7,180) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix, node16 module detection refinement, ES3 target→ES2015 effective target, TS2354 importHelpers without tslib
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
@@ -1760,7 +1761,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Checker.kt`
 
-- [ ] **22c. TS2304 false positive reduction** (~10-20 tests)
+- [x] **22c. TS2304 false positive reduction** (~10-20 tests) — implemented TS18004 for shorthand properties (+1 test); remaining FPs need type checker
 
   Reduce spurious TS2304 "Cannot find name" for: type parameters in
   erased contexts, names from imported/aliased modules, declaration
@@ -1768,7 +1769,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Checker.kt`
 
-- [ ] **22d. TS2300 merge compatibility** (~5-10 tests)
+- [ ] **22d. TS2300 merge compatibility** (~5-10 tests) — *deferred* (most cases need TS2813/TS2814/TS2451)
 
   Implement declaration merge compatibility rules to stop false-positive
   TS2300 "Duplicate identifier" for function+namespace, class+interface, etc.
@@ -1783,7 +1784,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Checker.kt`
 
-- [ ] **23a. `verbatimModuleSyntax` suppresses const enum inlining** (~4 tests)
+- [x] **23a. `verbatimModuleSyntax` suppresses const enum inlining** (~4 tests) — JS tests pass (+2), error tests still need TS2450
 
   When `verbatimModuleSyntax` is set, const enums should NOT be inlined —
   they should be emitted as regular enums (IIFE blocks) and references left
@@ -1791,7 +1792,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **23b. `export * as ns` downlevel transform** (~3 tests)
+- [ ] **23b. `export * as ns` downlevel transform** (~3 tests) — *deferred* (tests also need ES5 class/importHelpers)
 
   For targets < ES2020, `export * as ns from "./a"` should be downleveled to
   `import * as ns_1 from "./a"; export { ns_1 as ns }`.
@@ -1806,7 +1807,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **23d. TS1103 `for await` in non-async function** (~2 tests)
+- [x] **23d. TS1103 `for await` in non-async function** (~2 tests) — done (+2 tests)
 
   `for await` loops inside non-async functions should get TS1103 "only allowed
   within async functions and at top level". Currently not detected.
@@ -1814,12 +1815,65 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Checker.kt`
 
-- [ ] **23e. TS2694 false positive — enum members as namespace exports** (~10 tests)
+- [x] **23e. TS2694 false positive — enum members as namespace exports** (~10 tests) — mostly need TS2708/TS2724, not TS2694 fixes
 
   We emit false TS2694 "Namespace has no exported member" for `Kind.A` where
   `Kind` is an enum. Enum members should be accessible as if namespace-exported.
 
   **Files:** `Checker.kt`
+
+### 24. Quick JS emit fixes (session 2026-03-20b)
+
+- [ ] **24a. JSX import preservation** (~2+ tests) — *deferred* (elision happens in CJS transform, needs deeper investigation)
+
+  `require("react")` / `require("react")` imports are being elided even though
+  JSX usage needs them at runtime. Tests: `unusedImports13`, `unusedImports15`.
+  The `isTypeOnlyImportRequire` doesn't resolve `react` (no node_modules support),
+  so the elision must happen elsewhere in the CJS transform pipeline.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **24b. CJS void 0 hoist for global re-exports** (~2 tests)
+
+  Missing `exports.X = void 0` for re-exported declarations from other files.
+  Tests: `reExportGlobalDeclaration3`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **24c. `/// <reference path>` directive preservation in AMD** (~2 tests)
+
+  Triple-slash reference path directives should be preserved as comments in
+  AMD output. Tests: `moduleAugmentationsImports1`, `moduleAugmentationDuringSyntheticDefaultCheck`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **24d. Import alias variable preservation** (~3 tests)
+
+  `import R = N` should emit `var R = N;` when used. We're eliding it.
+  Tests: `aliasInaccessibleModule2`, `duplicateVarsAcrossFileBoundaries`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **24e. CJS `exports.X = require(...)` for re-exported modules** (~2 tests)
+
+  `export = require("./X")` should emit `exports.Math = require("./X")`.
+  Tests: `multiImportExport`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **24f. Detached comment preservation** (~2 tests)
+
+  Comments separated from their declaration by a blank line should be preserved.
+  Tests: `isolatedDeclarationErrorTypes1`.
+
+  **Files:** `Emitter.kt`
+
+- [ ] **24g. `var x;` for unused type-only variables** (~1 test)
+
+  Variables with type-only initializers still need `var x;` declaration.
+  Tests: `instantiateTypeParameter`.
+
+  **Files:** `Transformer.kt`
 
 ---
 
