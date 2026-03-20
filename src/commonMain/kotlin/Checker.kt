@@ -1538,7 +1538,12 @@ class Checker(
             val nameNode = decl.nameNode
             // For single-element destructuring, use the pattern span instead of the name
             val usePatternSpan = decl.parentBindingPattern is ObjectBindingPattern && decl.bindingElementCount == 1
-            val start = if (usePatternSpan) decl.parentBindingPattern!!.pos else nameNode.pos
+            // For import specifiers with aliases (e.g. `test2 as t2`), point to the local name `t2`
+            val start = when {
+                usePatternSpan -> decl.parentBindingPattern!!.pos
+                nameNode is ImportSpecifier && nameNode.propertyName != null -> nameNode.name.pos
+                else -> nameNode.pos
+            }
             // Compute squiggle length: for imports using whole-statement node,
             // measure the line text; otherwise use identifier text length
             val length = when {
