@@ -286,7 +286,7 @@ class Transformer(
         // Values are inlined even when preserveConstEnums is true (the enum body is kept,
         // but references are still replaced with literal values).
         // With isolatedModules, const enums can't be inlined (no cross-file info available).
-        if (!options.isolatedModules) {
+        if (!options.isolatedModules && !options.verbatimModuleSyntax) {
             collectConstEnumValues(sourceFile.statements)
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
@@ -399,8 +399,8 @@ class Transformer(
                 decl.moduleReference !is ExternalModuleReference && (
                     decl.isTypeOnly ||
                     // Elide import aliases to const enums (values are inlined at use sites)
-                    // Skip when isolatedModules is set (no cross-file const enum inlining)
-                    (!options.isolatedModules && !options.preserveConstEnums &&
+                    // Skip when isolatedModules or verbatimModuleSyntax is set
+                    (!options.isolatedModules && !options.preserveConstEnums && !options.verbatimModuleSyntax &&
                         checker?.isConstEnumAlias(decl.name.text, currentFileName) == true)
                 )
             }
@@ -784,7 +784,7 @@ class Transformer(
                 }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) &&
-                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
+                        (options.preserveConstEnums || options.isolatedModules || options.verbatimModuleSyntax || ModifierFlag.Const !in stmt.modifiers) ->
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
@@ -2020,7 +2020,7 @@ class Transformer(
                     extractIdentifierName(stmt.name)?.let { exportedNsEnumNames.add(it) }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) &&
-                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
+                        (options.preserveConstEnums || options.isolatedModules || options.verbatimModuleSyntax || ModifierFlag.Const !in stmt.modifiers) ->
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
@@ -3025,7 +3025,7 @@ class Transformer(
                 }
                 stmt is EnumDeclaration && ModifierFlag.Export in stmt.modifiers &&
                         !hasDeclareModifier(stmt) &&
-                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers) ->
+                        (options.preserveConstEnums || options.isolatedModules || options.verbatimModuleSyntax || ModifierFlag.Const !in stmt.modifiers) ->
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
@@ -3349,7 +3349,7 @@ class Transformer(
                 }
                 is EnumDeclaration -> {
                     if (!hasDeclareModifier(stmt) &&
-                        (options.preserveConstEnums || options.isolatedModules || ModifierFlag.Const !in stmt.modifiers)) {
+                        (options.preserveConstEnums || options.isolatedModules || options.verbatimModuleSyntax || ModifierFlag.Const !in stmt.modifiers)) {
                         val n = stmt.name.text
                         if (hoistedVarNamesSet.add(n)) hoistedVarNames.add(n)
                     }
@@ -5971,7 +5971,7 @@ class Transformer(
                 if (baseName != null) {
                     val commentLabel = "$baseName.$memberName"
                     val inlined = tryInlineConstEnumMember(baseName, memberName, commentLabel)
-                        ?: if (!options.isolatedModules) {
+                        ?: if (!options.isolatedModules && !options.verbatimModuleSyntax) {
                             checker?.resolveConstEnumMemberAccess(baseName, memberName, currentFileName)
                                 ?.let { constValueToExpression(it, commentLabel) }
                         } else null
@@ -5980,7 +5980,7 @@ class Transformer(
                     // Check for namespaced const enum: M.SomeConstEnum.X or A.B.C.E.V1
                     val commentLabel = "${accessChainText(expr.expression)}.$memberName"
                     // Try checker first for accurate namespace resolution (avoids name collisions)
-                    val result = if (!options.isolatedModules) {
+                    val result = if (!options.isolatedModules && !options.verbatimModuleSyntax) {
                         checker?.resolveConstEnumMemberAccess(
                             accessChainText(expr.expression), memberName, currentFileName
                         )?.let { constValueToExpression(it, commentLabel) }
@@ -6034,7 +6034,7 @@ class Transformer(
                         sourceText.substring(expr.pos, argEnd)
                     else """$baseName["$keyStr"]"""
                     val inlined = tryInlineConstEnumMember(baseName, keyStr, commentLabel)
-                        ?: if (!options.isolatedModules) {
+                        ?: if (!options.isolatedModules && !options.verbatimModuleSyntax) {
                             checker?.resolveConstEnumMemberAccess(baseName, keyStr, currentFileName)
                                 ?.let { constValueToExpression(it, commentLabel) }
                         } else null
@@ -8726,9 +8726,9 @@ class Transformer(
         nested: Boolean = false,
         parentNsName: String? = null,
     ): List<Statement> {
-        // const enum without preserveConstEnums (and not isolatedModules) → remove (it's inlined)
-        // With isolatedModules, const enums can't be inlined, so keep them as runtime objects.
-        if (ModifierFlag.Const in decl.modifiers && !options.preserveConstEnums && !options.isolatedModules) {
+        // const enum without preserveConstEnums (and not isolatedModules/verbatimModuleSyntax) → remove (it's inlined)
+        // With isolatedModules or verbatimModuleSyntax, const enums can't be inlined, so keep them as runtime objects.
+        if (ModifierFlag.Const in decl.modifiers && !options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax) {
             return emptyList()
         }
 
@@ -10563,8 +10563,8 @@ class Transformer(
             is ImportEqualsDeclaration -> ModifierFlag.Export !in stmt.modifiers
             is ModuleDeclaration -> isTypeOnlyNamespace(stmt)
             // A const enum is inlined and erased — it's type-only at runtime
-            // (unless preserveConstEnums or isolatedModules is set, in which case it produces a real object)
-            is EnumDeclaration -> ModifierFlag.Const in stmt.modifiers && !options.preserveConstEnums && !options.isolatedModules
+            // (unless preserveConstEnums, isolatedModules, or verbatimModuleSyntax is set)
+            is EnumDeclaration -> ModifierFlag.Const in stmt.modifiers && !options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax
             else -> false
         }
     }

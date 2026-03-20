@@ -5232,7 +5232,7 @@ class Checker(
                             checkUnresolvedInExpr(prop.initializer, scope, source, fileName)
                         }
                         is ShorthandPropertyAssignment -> {
-                            checkUnresolvedInExpr(prop.name, scope, source, fileName)
+                            checkShorthandPropertyResolved(prop, scope, source, fileName)
                         }
                         is SpreadAssignment -> {
                             checkUnresolvedInExpr(prop.expression, scope, source, fileName)
@@ -5833,6 +5833,38 @@ class Checker(
             message = "Cannot find name '$name'.",
             category = DiagnosticCategory.Error,
             code = 2304,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * Checks shorthand property assignment names. When the name is not in scope,
+     * emits TS18004 instead of TS2304.
+     */
+    private fun checkShorthandPropertyResolved(
+        prop: ShorthandPropertyAssignment,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        val name = prop.name.text
+        if (name.isEmpty()) return
+        if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
+        if (name in KEYWORD_IDENTIFIERS) return
+        if (scope.has(name)) return
+
+        val start = prop.name.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        diagnostics.add(Diagnostic(
+            message = "No value exists in scope for the shorthand property '$name'. Either declare one or provide an initializer.",
+            category = DiagnosticCategory.Error,
+            code = 18004,
             fileName = fileName,
             line = line,
             character = character,
