@@ -1365,8 +1365,7 @@ class Transformer(
                             // But still generate void 0 hoist for global re-exports of declare namespaces
                             if (localName in pureTypeNames) continue
                             if (localName !in runtimeDeclaredNames && checker?.isTypeOnlyGlobalName(localName) == true) {
-                                // Still add void 0 hoist for global re-exports
-                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                // Type-only global re-export: skip entirely (no void 0 hoist needed)
                                 continue
                             }
                             if (localName != "undefined" && localName !in runtimeDeclaredNames) {
