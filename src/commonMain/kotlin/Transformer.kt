@@ -465,8 +465,25 @@ class Transformer(
             }
             val hasUsedNamedImports = usedNamedElements != null && usedNamedElements.isNotEmpty()
 
-            // If nothing is used, drop this import entirely
-            if (!defaultUsed && !nsUsed && !hasUsedNamedImports) continue
+            // If nothing is used, drop this import entirely (preserving detached comments)
+            if (!defaultUsed && !nsUsed && !hasUsedNamedImports) {
+                // Preserve detached leading comments (separated by blank line from the import)
+                val comments = stmt.leadingComments
+                if (!comments.isNullOrEmpty() && stmt.pos >= 0) {
+                    val stmtPos = stmt.pos.coerceIn(0, sourceText.length)
+                    val detached = comments.filter { c ->
+                        c.end >= 0 && c.end <= stmtPos &&
+                            sourceText.substring(c.end, stmtPos).count { it == '\n' } >= 2
+                    }
+                    if (detached.isNotEmpty()) {
+                        result.add(NotEmittedStatement(
+                            leadingComments = detached,
+                            pos = stmt.pos, end = stmt.pos,
+                        ))
+                    }
+                }
+                continue
+            }
 
             // If namespace is unused but default is used, strip the namespace binding
             if (nsName != null && !nsUsed && defaultUsed) {
@@ -1165,7 +1182,7 @@ class Transformer(
                             needsImportDefault = true
                             val localName = clause.name.text
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             importStmtForLocalName[localName] = result.last()
                             // Rename: Namespace → b_1.default
                             renameMap[localName] = PropertyAccessExpression(
@@ -1177,7 +1194,7 @@ class Transformer(
                             // import * as x from "y" → const x = __importStar(require("y"))
                             needsImportStar = true
                             val localName = bindings.name.text
-                            result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments))
+                            result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             importStmtForLocalName[localName] = result.last()
                             // Namespace keeps its name, no rename needed
                         } else if (clause.name != null && bindings is NamedImports) {
@@ -1189,10 +1206,10 @@ class Transformer(
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                             if (hasNonDefaultNamedElement) {
                                 needsImportStar = true
-                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments))
+                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             } else {
                                 needsImportDefault = true
-                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             }
                             val importConstStmt = result.last()
                             importStmtForLocalName[localName] = importConstStmt
@@ -1222,12 +1239,12 @@ class Transformer(
                             if (hasDefaultElement && hasNonDefaultElement) {
                                 // Both default and named: need __importStar to preserve all exports
                                 needsImportStar = true
-                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments))
+                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             } else if (hasDefaultElement) {
                                 needsImportDefault = true
-                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments))
+                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             } else {
-                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, trailingComments = stmt.trailingComments))
+                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, trailingComments = stmt.trailingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             }
                             val importConstStmt = result.last()
                             // Rename: a → y_1.a, c → y_1.b
@@ -4677,6 +4694,8 @@ class Transformer(
         comments: List<Comment>? = null,
         trailingComments: List<Comment>? = null,
         useVar: Boolean = false, // TypeScript uses var for re-export requires, const for regular imports
+        sourcePos: Int = -1, // original import statement pos (for detached comment detection during elision)
+        sourceEnd: Int = -1,
     ): Statement {
         val normalizedSpecifier = normalizeModuleSpecifier(moduleSpecifier)
         return VariableStatement(
@@ -4696,7 +4715,7 @@ class Transformer(
                 pos = -1, end = -1,
                 trailingComments = trailingComments,
             ),
-            pos = -1, end = -1,
+            pos = sourcePos, end = sourceEnd,
             leadingComments = comments,
         )
     }
@@ -4708,7 +4727,9 @@ class Transformer(
         name: String,
         helperName: String,
         moduleSpecifier: Expression,
-        comments: List<Comment>? = null
+        comments: List<Comment>? = null,
+        sourcePos: Int = -1,
+        sourceEnd: Int = -1,
     ): Statement {
         val normalizedSpecifier = normalizeModuleSpecifier(moduleSpecifier)
         return VariableStatement(
@@ -4733,7 +4754,7 @@ class Transformer(
                 flags = if (options.effectiveTarget < ScriptTarget.ES2015) VarKeyword else ConstKeyword,
                 pos = -1, end = -1,
             ),
-            pos = -1, end = -1,
+            pos = sourcePos, end = sourceEnd,
             leadingComments = comments,
         )
     }
@@ -5149,16 +5170,11 @@ class Transformer(
             is ImportDeclaration -> {
                 val result = transformImportDeclaration(statement)
                 if (result.isEmpty()) {
-                    // Import was erased (type-only). Preserve DETACHED /// <reference path> directives
-                    // (blank-line-separated from the import statement in the source).
-                    val stmtPos = statement.pos.coerceIn(0, sourceText.length)
-                    val refComments = statement.leadingComments?.filter { c ->
-                        c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path") &&
-                            c.end >= 0 && sourceText.substring(c.end, stmtPos).count { it == '\n' } >= 2
-                    }
-                    if (!refComments.isNullOrEmpty()) {
-                        listOf(NotEmittedStatement(leadingComments = refComments, pos = statement.pos, end = statement.pos))
-                    } else result
+                    // Import was erased (type-only). Preserve detached comments
+                    // (blank-line-separated from the import statement in the source),
+                    // including regular comments and /// <reference path> directives.
+                    val orphaned = orphanedComments(statement)
+                    orphaned.ifEmpty { result }
                 } else result
             }
             is ImportEqualsDeclaration -> transformImportEqualsDeclaration(statement)
