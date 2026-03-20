@@ -5170,11 +5170,16 @@ class Transformer(
             is ImportDeclaration -> {
                 val result = transformImportDeclaration(statement)
                 if (result.isEmpty()) {
-                    // Import was erased (type-only). Preserve detached comments
-                    // (blank-line-separated from the import statement in the source),
-                    // including regular comments and /// <reference path> directives.
-                    val orphaned = orphanedComments(statement)
-                    orphaned.ifEmpty { result }
+                    // Import was erased (type-only). Preserve DETACHED comments
+                    // (blank-line-separated from the import statement in the source).
+                    val stmtPos = statement.pos.coerceIn(0, sourceText.length)
+                    val detachedComments = statement.leadingComments?.filter { c ->
+                        c.end >= 0 && c.end <= stmtPos &&
+                            sourceText.substring(c.end, stmtPos).count { it == '\n' } >= 2
+                    }
+                    if (!detachedComments.isNullOrEmpty()) {
+                        listOf(NotEmittedStatement(leadingComments = detachedComments, pos = statement.pos, end = statement.pos))
+                    } else result
                 } else result
             }
             is ImportEqualsDeclaration -> transformImportEqualsDeclaration(statement)
