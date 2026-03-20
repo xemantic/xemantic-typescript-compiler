@@ -4454,6 +4454,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Try to parse as a function type: (params) => returnType
         // Uses tryScan so scanner state is fully restored if this isn't a function type.
         // This handles cases like (number | string)[] which look like param lists but aren't.
+        // Save diagnostics count — parseParameter() inside tryScan may report false TS1003
+        // when (()=>c)[] is a parenthesized function type, not a parameter list.
+        val savedDiagCount = diagnostics.size
         val funcType = scanner.tryScan {
             if (token != SyntaxKind.OpenParen) return@tryScan null
             nextToken() // consume (
@@ -4470,6 +4473,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             FunctionType(parameters = params, type = returnType, pos = pos, end = getEnd())
         }
         if (funcType != null) return funcType
+        // Discard any diagnostics reported speculatively during the failed tryScan
+        while (diagnostics.size > savedDiagCount) diagnostics.removeAt(diagnostics.lastIndex)
         // Re-sync parser's token after tryScan restored scanner state (same pattern as line 1879)
         token = scanner.getToken()
         // Fall back to parenthesized type: (type)
