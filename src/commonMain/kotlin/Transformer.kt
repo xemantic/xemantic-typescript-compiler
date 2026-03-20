@@ -1324,8 +1324,13 @@ class Transformer(
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
                             // Skip type-only names (interfaces, type aliases, non-instantiated namespaces)
+                            // But still generate void 0 hoist for global re-exports of declare namespaces
                             if (localName in pureTypeNames) continue
-                            if (localName !in runtimeDeclaredNames && checker?.isTypeOnlyGlobalName(localName) == true) continue
+                            if (localName !in runtimeDeclaredNames && checker?.isTypeOnlyGlobalName(localName) == true) {
+                                // Still add void 0 hoist for global re-exports
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                continue
+                            }
                             if (localName != "undefined" && localName !in runtimeDeclaredNames) {
                                 // Name not declared locally — it's a global re-export.
                                 // TypeScript generates void 0 hoist only (no assignment needed for globals).
