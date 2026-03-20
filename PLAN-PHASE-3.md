@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,207 passing (68.0%), 3,388 failing
-- **Session 2026-03-20d**: +1 test (7,206→7,207) — TS2694 namespace name resolves through import aliases via symbol parent chain (+2 tests, but 1 variance from test ordering). Added `symbolToQualifiedName` helper and `currentContainer` tracking in Binder.
+- **10,595 tests**, 7,212 passing (68.1%), 3,383 failing
+- **Session 2026-03-20d**: +6 tests (7,206→7,212) — TS2694 namespace name resolves through import aliases via symbol parent chain (+2), TS1127 invalid unicode escape reports at escape position (+1), TS1003 incomplete dot access position fix (+1), TS1100 strict mode recurses into variable initializer functions (+3), TS1007 related info for missing close paren in if/while/with/do-while (+4), some test ordering overlap.
 - **Session 2026-03-20c**: +6 tests (7,200→7,206) — CJS `export import=require` emits `exports.X = require()` (+1), detached comment preservation on elided CJS imports via source pos propagation (+3), ImportDeclaration detached comment handling (+1), CJS require trailing comment fix (+1)
 - **Session 2026-03-20b**: +15 tests (7,185→7,200) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356, TS1127 zero-length span, TS1108 return keyword span, multi-line error squiggles, TS7027 span covering all unreachable stmts, TS6133 import alias position, import alias value reference collection
 - **Session 2026-03-20**: +5 tests (7,180→7,185) — trailing comments on object literal get/set accessors, numeric separator preservation for ES2021+ targets, `export * as ns` downlevel for ES2015 modules, TS2694/TS2693 false positive reductions (10+15 tests improved)
