@@ -1863,12 +1863,18 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **24f. Detached comment preservation** (~2 tests)
+- [x] **24f. Detached comment preservation** (+3 tests)
 
-  Comments separated from their declaration by a blank line should be preserved.
-  Tests: `isolatedDeclarationErrorTypes1`.
+  Comments separated from their declaration by a blank line should be preserved
+  when the declaration is elided. Root cause: `makeRequireConst` and
+  `makeImportHelperConst` created VariableStatements with `pos = -1`, so the
+  CJS elision code couldn't detect detached comments (it checked `stmt.pos >= 0`).
+  Fix: propagate original import statement's `pos`/`end` to synthesized require
+  statements. Also improved ESM import elision and the ImportDeclaration
+  handler to use `orphanedComments` for detached comment preservation.
+  Tests: `isolatedDeclarationErrorTypes1` and 2 others.
 
-  **Files:** `Emitter.kt`
+  **Files:** `Transformer.kt`
 
 - [ ] **24g. `var x;` for unused type-only variables** (~1 test) — *deferred* (parser error recovery in interfaces)
 
