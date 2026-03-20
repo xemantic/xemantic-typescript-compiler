@@ -72,11 +72,17 @@ class Scanner(private val text: String) {
     /** Whether the last scanned token had an invalid unicode escape sequence. */
     private var hasInvalidUnicodeEscape: Boolean = false
 
+    /** Position of the invalid unicode escape within the source (for error reporting). */
+    private var invalidUnicodeEscapePos: Int = -1
+
     /** Whether the last scanned template literal token was unterminated. */
     private var tokenIsUnterminated: Boolean = false
 
     /** Returns true if the last scanned identifier had an invalid unicode escape. */
     fun hasInvalidUnicodeEscapeInToken(): Boolean = hasInvalidUnicodeEscape
+
+    /** Returns the source position of the invalid unicode escape, or -1 if none. */
+    fun getInvalidUnicodeEscapePos(): Int = invalidUnicodeEscapePos
 
     /** Returns true if the last scanned template literal was unterminated. */
     fun isTokenUnterminated(): Boolean = tokenIsUnterminated
@@ -207,6 +213,7 @@ class Scanner(private val text: String) {
         tokenPos = pos
         tokenValue = ""
         hasInvalidUnicodeEscape = false
+        invalidUnicodeEscapePos = -1
 
         if (pos >= end) {
             token = SyntaxKind.EndOfFile
@@ -608,6 +615,7 @@ class Scanner(private val text: String) {
             val ch = text[pos]
             when {
                 ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' -> {
+                    val escapeStart = pos // position of '\'
                     pos += 2 // skip '\u'
                     val decoded = if (pos < end && text[pos] == '{') {
                         // \u{HHHH}
@@ -619,6 +627,7 @@ class Scanner(private val text: String) {
                         if (hasClosingBrace) pos++ // skip '}'
                         if (hexStr.isEmpty() || !hasClosingBrace) {
                             hasInvalidUnicodeEscape = true
+                            if (invalidUnicodeEscapePos < 0) invalidUnicodeEscapePos = escapeStart
                             if (hexStr.isEmpty()) "" else codePointToString(hexStr.toInt(16))
                         } else codePointToString(hexStr.toInt(16))
                     } else {
@@ -628,6 +637,7 @@ class Scanner(private val text: String) {
                         val hexStr = text.substring(hexStart, pos)
                         if (hexStr.length != 4) {
                             hasInvalidUnicodeEscape = true
+                            if (invalidUnicodeEscapePos < 0) invalidUnicodeEscapePos = escapeStart
                             if (hexStr.isEmpty()) "" else hexStr.toInt(16).toChar().toString()
                         } else hexStr.toInt(16).toChar().toString()
                     }
@@ -646,6 +656,7 @@ class Scanner(private val text: String) {
         // If the identifier starts with an escape and the decoded first char is not a valid identifier start, flag it
         if (prefixLen == 0 && firstDecodedChar != null && !isIdentifierStart(firstDecodedChar)) {
             hasInvalidUnicodeEscape = true
+            if (invalidUnicodeEscapePos < 0) invalidUnicodeEscapePos = tokenPos // start of escape at token start
         }
         tokenValue = sb.toString()
         val keywordKind = KEYWORDS[tokenValue]
