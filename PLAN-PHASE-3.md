@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,205 passing (68.0%), 3,390 failing
-- **Session 2026-03-20c**: +5 tests (7,200→7,205) — CJS `export import=require` emits `exports.X = require()` (+1), detached comment preservation on elided CJS imports via source pos propagation (+3), ImportDeclaration detached comment handling refinement (+1)
+- **10,595 tests**, 7,206 passing (68.0%), 3,389 failing
+- **Session 2026-03-20c**: +6 tests (7,200→7,206) — CJS `export import=require` emits `exports.X = require()` (+1), detached comment preservation on elided CJS imports via source pos propagation (+3), ImportDeclaration detached comment handling (+1), CJS require trailing comment fix (+1)
 - **Session 2026-03-20b**: +15 tests (7,185→7,200) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356, TS1127 zero-length span, TS1108 return keyword span, multi-line error squiggles, TS7027 span covering all unreachable stmts, TS6133 import alias position, import alias value reference collection
 - **Session 2026-03-20**: +5 tests (7,180→7,185) — trailing comments on object literal get/set accessors, numeric separator preservation for ES2021+ targets, `export * as ns` downlevel for ES2015 modules, TS2694/TS2693 false positive reductions (10+15 tests improved)
 - **Session 2026-03-19e**: +35 tests (7,145→7,180) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix, node16 module detection refinement, ES3 target→ES2015 effective target, TS2354 importHelpers without tslib
@@ -1881,6 +1881,76 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   Variables with type-only initializers still need `var x;` declaration.
   Tests: `instantiateTypeParameter`.
+
+  **Files:** `Transformer.kt`
+
+### 25. Session 2026-03-20c — CJS export and comment fixes
+
+- [x] **25a. CJS `export import=require` emits `exports.X = require()`** (+1 test)
+
+  `export import X = require("mod")` in CJS output now correctly emits
+  `exports.X = require("mod")` instead of `const X = require("mod")`.
+  Test: `multiImportExport`.
+
+  **Files:** `Transformer.kt`
+
+- [x] **25b. Detached comment preservation on elided CJS imports** (+3 tests)
+
+  Comments separated from their declaration by a blank line should be preserved
+  when the declaration is elided. Root cause: `makeRequireConst` and
+  `makeImportHelperConst` created VariableStatements with `pos = -1`, so the
+  CJS elision code couldn't detect detached comments. Fix: propagate original
+  import statement's `pos`/`end` to synthesized require statements.
+  Tests: `isolatedDeclarationErrorTypes1` and 2 others.
+
+  **Files:** `Transformer.kt`
+
+- [x] **25c. CJS require trailing comment on VariableStatement** (+1 test)
+
+  Trailing comments from import statements (e.g., `import {} from "./server"; // comment`)
+  were placed on the VariableDeclarationList instead of the VariableStatement,
+  causing them to be lost during emission. Moved to VariableStatement.
+  Tests: `es6ImportNamedImportWithTypesAndValues`, `declarationEmitForModuleImportingModuleAugmentationRetainsImport`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **25d. CJS import elision for `export = X` references** (~3 tests) — *deferred*
+
+  `import self = require("./X"); export = self;` — the import is elided because
+  `self` is not found in value references. Root cause: deferred export assignments
+  (`module.exports = self`) are not included in `collectValueReferences` during
+  the CJS elision step. But the circular self-reference also triggers
+  `isTypeOnlyImportRequire` in the Transformer, so the fix needs to be in both
+  places. Tests: `recursiveExportAssignmentAndFindAliasedType4/5/6`.
+
+  **Files:** `Transformer.kt`, `Checker.kt`
+
+- [ ] **25e. CJS self-referencing exported name `(0, exports.X)` form** (~2 tests) — *deferred*
+
+  `exports.Point.zero = () => (0, exports.Point)(0, 0)` — exported names referenced
+  inside their own module should use `(0, exports.X)` indirect call pattern for
+  correct `this` binding. Tests: `conflictingDeclarationsImportFromNamespace1/2`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **25f. TS2591 — suggest require() for Node.js globals** (~10 tests)
+
+  "Cannot find name 'X'. Do you need to install type definitions for node?
+  Try `npm i --save-dev @types/node`." for common Node.js globals (require,
+  module, exports, process, Buffer, etc.) in non-module files.
+
+  **Files:** `Checker.kt`
+
+- [ ] **25g. `createRequire` pattern for .mts import=require in node16** (~4 tests) — *deferred*
+
+  `.mts` files under node16/nodenext with `import = require()` should use the
+  `createRequire` pattern. Tests: `moduleNodeImportRequireEmit` (4 target variants).
+
+  **Files:** `Transformer.kt`
+
+- [ ] **25h. ES5 arrow→function downlevel** (~10+ tests) — *deferred* (major feature)
+
+  Arrow functions need `function` syntax in ES5 output. Affects many tests.
 
   **Files:** `Transformer.kt`
 
