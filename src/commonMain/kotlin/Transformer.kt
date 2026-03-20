@@ -2669,6 +2669,18 @@ class Transformer(
                 preDefineComments.addAll(detachedRefs)
             }
         }
+        // 3. File-top /// <reference path> directives that are standalone (not part of any import)
+        val firstStmt = originalSourceFile.statements.firstOrNull()
+        firstStmt?.leadingComments?.filter { c ->
+            c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path") &&
+                c !in preDefineComments && // not already collected
+                // Check this is detached (blank line between comment and statement)
+                c.end >= 0 && originalSourceFile.text.let { src ->
+                    val between = src.substring(c.end, firstStmt.pos.coerceAtMost(src.length))
+                    between.count { it == '\n' } >= 2
+                }
+        }?.let { preDefineComments.addAll(it) }
+
         if (preDefineComments.isNotEmpty()) {
             result.add(NotEmittedStatement(leadingComments = preDefineComments, pos = -1, end = -1))
         }
