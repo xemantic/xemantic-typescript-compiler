@@ -8561,7 +8561,7 @@ class Checker(
                     else -> {}
                 }
             }
-            checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames)
+            checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames, valueNames)
         }
     }
 
@@ -8570,9 +8570,10 @@ class Checker(
         source: String,
         fileName: String,
         typeOnlyNames: Set<String>,
+        valueNames: Set<String> = emptySet(),
     ) {
         for (stmt in statements) {
-            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames)
+            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames, valueNames)
         }
     }
 
@@ -8581,21 +8582,22 @@ class Checker(
         source: String,
         fileName: String,
         typeOnlyNames: Set<String>,
+        valueNames: Set<String> = emptySet(),
     ) {
         when (stmt) {
-            is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames)
-            is LabeledStatement -> checkTypeAsValueInStatement(stmt.statement, source, fileName, typeOnlyNames)
+            is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames)
+            is LabeledStatement -> checkTypeAsValueInStatement(stmt.statement, source, fileName, typeOnlyNames, valueNames)
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+                    decl.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
                 }
             }
-            is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
-            is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames)
+            is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
+            is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames, valueNames)
             is IfStatement -> {
-                checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames)
-                checkTypeAsValueInStatement(stmt.thenStatement, source, fileName, typeOnlyNames)
-                stmt.elseStatement?.let { checkTypeAsValueInStatement(it, source, fileName, typeOnlyNames) }
+                checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInStatement(stmt.thenStatement, source, fileName, typeOnlyNames, valueNames)
+                stmt.elseStatement?.let { checkTypeAsValueInStatement(it, source, fileName, typeOnlyNames, valueNames) }
             }
             is FunctionDeclaration -> {
                 // Collect type parameters as type-only within this function
@@ -8603,11 +8605,15 @@ class Checker(
                 val innerTypeOnly = typeOnlyNames.toMutableSet()
                 stmt.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
                 // Remove parameter names — they are values, not types
+                val innerValues = valueNames.toMutableSet()
                 for (p in stmt.parameters) {
                     val pName = p.name
-                    if (pName is Identifier) innerTypeOnly.remove(pName.text)
+                    if (pName is Identifier) {
+                        innerTypeOnly.remove(pName.text)
+                        innerValues.add(pName.text)
+                    }
                 }
-                stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly) }
+                stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues) }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
@@ -8615,13 +8621,13 @@ class Checker(
                         is MethodDeclaration -> {
                             val innerTypeOnly = typeOnlyNames.toMutableSet()
                             member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
-                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly) }
+                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, valueNames) }
                         }
                         is Constructor -> member.body?.let {
-                            checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames)
+                            checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames, valueNames)
                         }
                         is PropertyDeclaration -> member.initializer?.let {
-                            checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames)
+                            checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames)
                         }
                         else -> {}
                     }
@@ -8636,11 +8642,13 @@ class Checker(
         source: String,
         fileName: String,
         typeOnlyNames: Set<String>,
+        valueNames: Set<String> = emptySet(),
     ) {
         when (expr) {
             is Identifier -> {
                 val name = expr.text
-                if (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames) {
+                // Skip if the name is declared as a value (variable/parameter shadows type keyword)
+                if (name !in valueNames && (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames)) {
                     emitTS2693(name, expr, source, fileName)
                 }
             }
@@ -8649,46 +8657,46 @@ class Checker(
                 val ctorExpr = expr.expression
                 if (ctorExpr is Identifier) {
                     val name = ctorExpr.text
-                    if (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames) {
+                    if (name !in valueNames && (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames)) {
                         emitTS2693(name, ctorExpr, source, fileName)
                     }
                 }
                 // Recurse into arguments
-                expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+                expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
             }
             is CallExpression -> {
-                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
-                expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames) }
+                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
+                expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
             }
             is BinaryExpression -> {
                 // Iteratively walk binary chains to avoid StackOverflow on deep trees
                 var current: Expression = expr
                 while (current is BinaryExpression) {
-                    checkTypeAsValueInExpr(current.right, source, fileName, typeOnlyNames)
+                    checkTypeAsValueInExpr(current.right, source, fileName, typeOnlyNames, valueNames)
                     current = current.left
                 }
-                checkTypeAsValueInExpr(current, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(current, source, fileName, typeOnlyNames, valueNames)
             }
             is TypeOfExpression -> {
                 // typeof T where T is a type param → TS2693
                 val operand = expr.expression
                 if (operand is Identifier) {
                     val name = operand.text
-                    if (name in typeOnlyNames) {
+                    if (name !in valueNames && name in typeOnlyNames) {
                         emitTS2693(name, operand, source, fileName)
                     }
                 }
             }
-            is ParenthesizedExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
+            is ParenthesizedExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
             is ConditionalExpression -> {
-                checkTypeAsValueInExpr(expr.condition, source, fileName, typeOnlyNames)
-                checkTypeAsValueInExpr(expr.whenTrue, source, fileName, typeOnlyNames)
-                checkTypeAsValueInExpr(expr.whenFalse, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(expr.condition, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInExpr(expr.whenTrue, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInExpr(expr.whenFalse, source, fileName, typeOnlyNames, valueNames)
             }
-            is PropertyAccessExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
+            is PropertyAccessExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
             is ElementAccessExpression -> {
-                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames)
-                checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames)
+                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames, valueNames)
             }
             else -> {}
         }
