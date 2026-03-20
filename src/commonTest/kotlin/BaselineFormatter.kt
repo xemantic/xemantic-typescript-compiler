@@ -363,7 +363,9 @@ fun formatErrorBaseline(
             +"\r\n"
 
             val sourceLines = content.replace("\r\n", "\n").replace("\r", "\n").split('\n')
+            val skipLines = mutableSetOf<Int>() // line indices already emitted by multi-line spans
             for ((lineIdx, lineContent) in sourceLines.withIndex()) {
+                if (lineIdx in skipLines) continue
                 val lineNum = lineIdx + 1 // 1-based
 
                 +"    "
@@ -379,11 +381,41 @@ fun formatErrorBaseline(
                     val col = ((diag.character ?: 1) - 1).coerceAtLeast(0) // convert to 0-based
                     val len = diag.length ?: 1
 
-                    // Squiggle line — preserve tab/space indentation from source
-                    +"    "
-                    +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
-                    +"~".repeat(len)
-                    +"\r\n"
+                    if (len == 0) {
+                        // Zero-length span — empty squiggle line (just indentation, no ~)
+                        +"    "
+                        +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                        +"\r\n"
+                    } else {
+                        // First squiggle line
+                        val charsOnFirstLine = (lineContent.length - col).coerceAtLeast(1)
+                        val firstLineLen = len.coerceAtMost(charsOnFirstLine)
+                        +"    "
+                        +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                        +"~".repeat(firstLineLen)
+                        +"\r\n"
+                        // Multi-line span continuation
+                        var remaining = len - firstLineLen
+                        var nextLineIdx = lineIdx + 1
+                        while (remaining > 0 && nextLineIdx < sourceLines.size) {
+                            // Account for the newline character(s) between lines
+                            remaining-- // consume the \n between lines
+                            if (remaining <= 0) break
+                            val nextLine = sourceLines[nextLineIdx]
+                            skipLines.add(nextLineIdx)
+                            // Emit source line
+                            +"    "
+                            +nextLine
+                            +"\r\n"
+                            // Emit squiggles (cover entire line or remaining)
+                            val squiggleLen = remaining.coerceAtMost(nextLine.length.coerceAtLeast(1))
+                            +"    "
+                            +"~".repeat(squiggleLen)
+                            +"\r\n"
+                            remaining -= squiggleLen
+                            nextLineIdx++
+                        }
+                    }
 
                     // Error annotation
                     +"!!! "

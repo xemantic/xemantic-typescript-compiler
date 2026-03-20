@@ -8984,12 +8984,14 @@ class Checker(
         while (actualStart < source.length && source[actualStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
             actualStart++
         }
-        // Span covers just the first unreachable line
-        var endOfLine = actualStart
-        while (endOfLine < source.length && source[endOfLine] != '\n' && source[endOfLine] != '\r') {
-            endOfLine++
+        // Span covers all unreachable statements (from first to end of last)
+        val last = stmts.last()
+        var spanEnd = last.end
+        // Trim trailing whitespace from last statement
+        while (spanEnd > actualStart && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+            spanEnd--
         }
-        val length = endOfLine - actualStart
+        val length = spanEnd - actualStart
         val (line, character) = getLineAndCharacterOfPosition(source, actualStart)
         diagnostics.add(Diagnostic(
             message = "Unreachable code detected.",
