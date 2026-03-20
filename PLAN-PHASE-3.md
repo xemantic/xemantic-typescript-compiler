@@ -1854,9 +1854,11 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **24e. CJS `exports.X = require(...)` for re-exported modules** (~2 tests)
+- [x] **24e. CJS `exports.X = require(...)` for re-exported modules** (+1 test)
 
-  `export = require("./X")` should emit `exports.Math = require("./X")`.
+  `export import X = require("mod")` in CJS now emits `exports.X = require("mod")`
+  instead of `const X = require("mod")`. The CJS transform's exported-require path
+  now produces a direct `exports.X = ...` assignment.
   Tests: `multiImportExport`.
 
   **Files:** `Transformer.kt`
