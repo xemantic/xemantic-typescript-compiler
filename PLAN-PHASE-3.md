@@ -1847,7 +1847,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **24d. Import alias variable preservation** (~3 tests)
+- [ ] **24d. Import alias variable preservation** (~3 tests) — *deferred* (needs empty namespace IIFE emission)
 
   `import R = N` should emit `var R = N;` when used. We're eliding it.
   Tests: `aliasInaccessibleModule2`, `duplicateVarsAcrossFileBoundaries`.
@@ -1868,7 +1868,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Emitter.kt`
 
-- [ ] **24g. `var x;` for unused type-only variables** (~1 test)
+- [ ] **24g. `var x;` for unused type-only variables** (~1 test) — *deferred* (parser error recovery in interfaces)
 
   Variables with type-only initializers still need `var x;` declaration.
   Tests: `instantiateTypeParameter`.
