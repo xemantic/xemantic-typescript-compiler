@@ -47,6 +47,9 @@ class Binder(private val options: CompilerOptions) {
     /** The current symbol table where new declarations are added. */
     private var currentScope: SymbolTable = symbolTable()
 
+    /** The current container symbol (namespace/module/class) for setting parent references. */
+    private var currentContainer: Symbol? = null
+
     fun bind(sourceFile: SourceFile): BinderResult {
         val fileLocals = symbolTable()
         currentScope = fileLocals
@@ -219,13 +222,16 @@ class Binder(private val options: CompilerOptions) {
         if (body != null) {
             if (symbol.exports == null) symbol.exports = symbolTable()
             val savedScope = currentScope
+            val savedContainer = currentContainer
             currentScope = symbol.exports!!
+            currentContainer = symbol
             when (body) {
                 is ModuleBlock -> bindStatements(body.statements)
                 is ModuleDeclaration -> bindModuleDeclaration(body)
                 else -> { /* empty body */ }
             }
             currentScope = savedScope
+            currentContainer = savedContainer
         }
     }
 
@@ -325,6 +331,7 @@ class Binder(private val options: CompilerOptions) {
         if (flags.hasAny(SymbolFlags.Value)) {
             symbol.valueDeclaration = declarationNode
         }
+        symbol.parent = currentContainer
         scope[name] = symbol
         recordNodeSymbol(declarationNode, symbol)
         return symbol

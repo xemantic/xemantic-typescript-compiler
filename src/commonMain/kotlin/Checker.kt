@@ -5551,7 +5551,8 @@ class Checker(
             val next = exports[segments[i]]
             if (next == null) {
                 // Intermediate segment not found — emit TS2694
-                val namespacePath = segments.subList(0, i).joinToString(".")
+                // Use resolved symbol's qualified name, not source-level alias
+                val namespacePath = symbolToQualifiedName(symbol!!)
                 emitTS2694(namespacePath, segments[i], rightId, source, fileName)
                 return
             }
@@ -5562,7 +5563,8 @@ class Checker(
         val exports = symbol!!.exports
         if (exports == null) return // not a namespace, can't check
         val member = exports[rightId.text]
-        val namespacePath = segments.joinToString(".")
+        // Use resolved symbol's qualified name, not source-level alias
+        val namespacePath = symbolToQualifiedName(symbol!!)
         if (member == null) {
             // Member doesn't exist at all
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
@@ -5589,6 +5591,26 @@ class Checker(
             }
         }
         return false
+    }
+
+    /**
+     * Build a fully-qualified name for a symbol by walking up the parent chain.
+     * For `namespace foo { namespace bar { namespace baz {} } }`, returns "foo.bar.baz".
+     * For file-level module symbols (quoted names like '"file"'), returns the symbol name directly.
+     */
+    private fun symbolToQualifiedName(symbol: Symbol): String {
+        val parts = mutableListOf(symbol.name)
+        var current = symbol.parent
+        while (current != null && current.name.isNotEmpty() && !current.name.startsWith("\"")) {
+            parts.add(current.name)
+            current = current.parent
+        }
+        // For module-level symbols, include the quoted module name
+        if (current != null && current.name.startsWith("\"")) {
+            parts.add(current.name)
+        }
+        parts.reverse()
+        return parts.joinToString(".")
     }
 
     private fun emitTS2694(
