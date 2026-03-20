@@ -4341,21 +4341,7 @@ class Checker(
                     if (ModifierFlag.Declare !in stmt.modifiers) {
                         checkParamsForImplicitAny(stmt.parameters, source, fileName)
                         stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
-                        // TS7010: overload signature without return type annotation
-                        if (stmt.body == null && stmt.type == null && stmt.name != null) {
-                            val name = stmt.name
-                            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "'${name.text}', which lacks return-type annotation, implicitly has an 'any' return type.",
-                                category = DiagnosticCategory.Error,
-                                code = 7010,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = name.pos,
-                                length = name.text.length,
-                            ))
-                        }
+                        // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
                     }
                 }
                 is ClassDeclaration -> {
@@ -5343,6 +5329,11 @@ class Checker(
                 checkTypeNameResolved(type.typeName, scope, source, fileName)
                 // Check type argument count (TS2314)
                 checkTypeArgCount(type, scope, source, fileName)
+                // Check TS1099: empty type argument list
+                if (type.typeArguments != null && type.typeArguments.isEmpty()) {
+                    val ltIdx = source.indexOf("<>", type.typeName.pos)
+                    if (ltIdx >= 0 && ltIdx < type.end) emitTS1099(ltIdx, source, fileName)
+                }
                 type.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
             }
             is ArrayType -> checkUnresolvedInType(type.elementType, scope, source, fileName)
@@ -7863,10 +7854,15 @@ class Checker(
         // Compute squiggle position
         val start: Int
         val length: Int
-        if (providedCount == 0) {
-            // No type args — squiggle on just the name
+        if (providedCount == 0 && typeRef.typeArguments == null) {
+            // No type args at all — squiggle on just the name
             start = typeName.pos
             length = name.length
+        } else if (providedCount == 0 && typeRef.typeArguments != null) {
+            // Empty type arg list `<>` — squiggle covers `Name<>`
+            start = typeName.pos
+            val ltIdx = source.indexOf("<>", start)
+            length = if (ltIdx >= 0) ltIdx + 2 - start else name.length
         } else {
             // Wrong count — squiggle on the entire type reference including <args>
             start = typeName.pos
@@ -14665,18 +14661,19 @@ class Checker(
     }
 
     private fun reportEmptyTypeArgs(expr: Node, source: String, fileName: String) {
-        // Find the `<>` in source before the `(`
-        val exprEnd = when (expr) {
-            is CallExpression -> expr.expression.end
-            is NewExpression -> expr.expression.end
+        // Find the `<>` in source — search from the expression start (not end, which may
+        // overshoot past `<` due to parser position semantics after nextToken())
+        val searchStart = when (expr) {
+            is CallExpression -> expr.expression.pos
+            is NewExpression -> expr.expression.pos
             else -> expr.pos
         }
-        // Search for `<>` after the expression
-        val ltIdx = source.indexOf('<', exprEnd)
+        val ltIdx = source.indexOf("<>", searchStart)
         if (ltIdx < 0) return
-        val gtIdx = source.indexOf('>', ltIdx)
-        if (gtIdx < 0 || gtIdx != ltIdx + 1) return
-        val start = ltIdx
+        emitTS1099(ltIdx, source, fileName)
+    }
+
+    private fun emitTS1099(start: Int, source: String, fileName: String) {
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Type argument list cannot be empty.",
