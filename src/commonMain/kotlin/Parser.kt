@@ -143,6 +143,24 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 token == SyntaxKind.EndOfFile ||
                 scanner.hasPrecedingLineBreak()
 
+    /** Reports error at the end of the PREVIOUS token (e.g., at `)` after parsing parameter list). */
+    private fun reportErrorAtPrevTokenEnd(message: String, code: Int = 1005) {
+        val start = (scanner.getPrevTokenEnd() - 1).coerceAtLeast(0)
+        val (line, character) = getLineAndCharacterOfPosition(start)
+        diagnostics.add(
+            Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = 1,
+            )
+        )
+    }
+
     private fun reportError(message: String, code: Int = 1005) {
         val start = scanner.getTokenPos()
         val length = (scanner.getPos() - start).coerceAtLeast(0)
@@ -1382,7 +1400,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             // Error recovery: report missing '{' and create empty body
-            if (token != SyntaxKind.Semicolon) reportError("'{' expected.")
+            if (token != SyntaxKind.Semicolon) reportErrorAtPrevTokenEnd("'{' expected.")
             parseSemicolon()
             Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
@@ -1408,7 +1426,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             // Error recovery: report missing '{' and create empty body
-            if (token != SyntaxKind.Semicolon) reportError("'{' expected.")
+            if (token != SyntaxKind.Semicolon) reportErrorAtPrevTokenEnd("'{' expected.")
             parseSemicolon()
             Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
@@ -3646,7 +3664,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
-                    else { reportError("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
+                    else { reportErrorAtPrevTokenEnd("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
                 val trailing = trailingComments()
                 return GetAccessor(
                     name = name,
@@ -3669,7 +3687,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val params = parseParameterList()
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
-                    else { reportError("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
+                    else { reportErrorAtPrevTokenEnd("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
                 val trailing = trailingComments()
                 return SetAccessor(name = name, parameters = params, body = body, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
             }
