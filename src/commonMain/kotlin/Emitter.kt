@@ -2131,11 +2131,29 @@ class Emitter(
                     currEnd > 0 && nextStart > 0 && currEnd <= nextStart && nextStart <= sourceText.length &&
                         !sourceText.substring(currEnd, nextStart).contains('\n')
                 }
+                // For block-bodied elements (get/set/method), block comments go BEFORE the comma: `} /*trailing 1*/,`
+                // but line comments go AFTER: `}, // line comment` (since // consumes rest of line)
+                val isBlockBodied = prop is GetAccessor || prop is SetAccessor || prop is MethodDeclaration
+                val blockComments = if (isBlockBodied && !options.removeComments) {
+                    prop.trailingComments?.filter { it.kind == SyntaxKind.MultiLineComment }
+                } else null
+                val lineComments = if (isBlockBodied && !options.removeComments) {
+                    prop.trailingComments?.filter { it.kind == SyntaxKind.SingleLineComment }
+                } else null
+                if (!blockComments.isNullOrEmpty()) {
+                    emitTrailingComments(blockComments)
+                }
                 if (!isLast || node.hasTrailingComma) {
                     write(",")
                 }
                 if (!nextOnSameLine) {
-                    emitTrailingComments(prop)
+                    if (isBlockBodied) {
+                        if (!lineComments.isNullOrEmpty()) {
+                            emitTrailingComments(lineComments)
+                        }
+                    } else {
+                        emitTrailingComments(prop)
+                    }
                     writeNewLine()
                 }
             }
