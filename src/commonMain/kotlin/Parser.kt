@@ -161,8 +161,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         )
     }
 
-    private fun reportError(message: String, code: Int = 1005, overrideLength: Int? = null) {
-        val start = scanner.getTokenPos()
+    private fun reportError(message: String, code: Int = 1005, overrideLength: Int? = null, overrideStart: Int? = null) {
+        val start = overrideStart ?: scanner.getTokenPos()
         val length = overrideLength ?: (scanner.getPos() - start).coerceAtLeast(0)
         val (line, character) = getLineAndCharacterOfPosition(start)
         diagnostics.add(
@@ -4556,7 +4556,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val rawText = if (raw != value) raw else null
             // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
             if (scanner.hasInvalidUnicodeEscapeInToken()) {
-                reportError("Invalid character.", code = 1127, overrideLength = 0)
+                val escapePos = scanner.getInvalidUnicodeEscapePos()
+                reportError("Invalid character.", code = 1127, overrideLength = 0,
+                    overrideStart = if (escapePos >= 0) escapePos else null)
             }
             nextToken()
             return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
@@ -4582,7 +4584,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val rawText = if (raw != value) raw else null
         // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
         if (scanner.hasInvalidUnicodeEscapeInToken()) {
-            reportError("Invalid character.", code = 1127)
+            val escapePos = scanner.getInvalidUnicodeEscapePos()
+            reportError("Invalid character.", code = 1127, overrideLength = 0,
+                overrideStart = if (escapePos >= 0) escapePos else null)
         }
         nextToken()
         return Identifier(text = value, rawText = rawText, leadingComments = comments, pos = pos, end = getEnd())
