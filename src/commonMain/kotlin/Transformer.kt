@@ -868,8 +868,29 @@ class Transformer(
                                     ?.expression as? Identifier)?.text == "require"
 
                         if (isRequire) {
-                            // const x = require("y") — keep as-is but remove export modifier
-                            result.add(stmt.copy(modifiers = strippedModifiers))
+                            // export import X = require("mod") → exports.X = require("mod")
+                            val reqDecl = stmt.declarationList.declarations[0]
+                            val reqName = extractIdentifierName(reqDecl.name)
+                            if (reqName != null) {
+                                directExportedVarNames.add(reqName)
+                                result.add(ExpressionStatement(
+                                    expression = BinaryExpression(
+                                        left = PropertyAccessExpression(
+                                            expression = syntheticId("exports"),
+                                            name = Identifier(text = reqName, pos = -1, end = -1),
+                                            pos = -1, end = -1,
+                                        ),
+                                        operator = Equals,
+                                        right = reqDecl.initializer!!,
+                                        pos = -1, end = -1,
+                                    ),
+                                    leadingComments = stmt.leadingComments,
+                                    trailingComments = stmt.trailingComments,
+                                    pos = -1, end = -1,
+                                ))
+                            } else {
+                                result.add(stmt.copy(modifiers = strippedModifiers))
+                            }
                         } else {
                             // Exported variable: hoist exports.x = void 0 via exportedVarNames.
                             // TypeScript uses two different strategies depending on the initializer:
