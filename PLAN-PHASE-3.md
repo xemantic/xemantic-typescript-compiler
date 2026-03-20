@@ -1933,11 +1933,13 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **25f. TS2591 — suggest require() for Node.js globals** (~10 tests)
+- [ ] **25f. TS2591 — suggest require() for Node.js globals** (~10 tests) — *deferred*
 
-  "Cannot find name 'X'. Do you need to install type definitions for node?
-  Try `npm i --save-dev @types/node`." for common Node.js globals (require,
-  module, exports, process, Buffer, etc.) in non-module files.
+  "Cannot find name 'X'. Do you need to install type definitions for node?"
+  Requires moving Node.js names (require, process, Buffer, etc.) OUT of
+  KNOWN_GLOBALS and into a conditional scope (only for module files).
+  Risk: many tests reference these names and currently pass because they're
+  in KNOWN_GLOBALS. 36 baseline files mention TS2591.
 
   **Files:** `Checker.kt`
 
