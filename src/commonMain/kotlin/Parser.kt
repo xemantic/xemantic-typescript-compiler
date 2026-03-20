@@ -3647,6 +3647,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
                     else { reportError("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
+                val trailing = trailingComments()
                 return GetAccessor(
                     name = name,
                     parameters = params,
@@ -3654,7 +3655,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     body = body,
                     pos = pos,
                     end = getEnd(),
-                    leadingComments = comments
+                    leadingComments = comments,
+                    trailingComments = trailing,
                 )
             }
         }
@@ -3668,7 +3670,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
                     else { reportError("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
-                return SetAccessor(name = name, parameters = params, body = body, pos = pos, end = getEnd(), leadingComments = comments)
+                val trailing = trailingComments()
+                return SetAccessor(name = name, parameters = params, body = body, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
             }
         }
 
