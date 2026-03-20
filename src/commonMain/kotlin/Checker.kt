@@ -13096,8 +13096,28 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
-    // Await in non-async context (TS1308)
+    // Await in non-async context (TS1308) / for await in non-async (TS1103)
     // -----------------------------------------------------------------------
+
+    /**
+     * Tracks the enclosing function for the "Did you mean to mark this function as 'async'?" related info.
+     */
+    private data class FuncRef(val pos: Int, val length: Int)
+
+    private fun makeAsyncRelated(funcRef: FuncRef?, source: String, fileName: String): List<Diagnostic> {
+        if (funcRef == null) return emptyList()
+        val (relLine, relChar) = getLineAndCharacterOfPosition(source, funcRef.pos)
+        return listOf(Diagnostic(
+            message = "Did you mean to mark this function as 'async'?",
+            category = DiagnosticCategory.Message,
+            code = 1356,
+            fileName = fileName,
+            line = relLine,
+            character = relChar,
+            start = funcRef.pos,
+            length = funcRef.length,
+        ))
+    }
 
     private fun checkAwaitContext() {
         for (result in binderResults) {
@@ -13116,11 +13136,11 @@ class Checker(
         }
     }
 
-    private fun checkAwaitInStatements(stmts: List<Statement>, source: String, fileName: String, isAsync: Boolean, enclosingFunc: Identifier? = null) {
+    private fun checkAwaitInStatements(stmts: List<Statement>, source: String, fileName: String, isAsync: Boolean, enclosingFunc: FuncRef? = null) {
         for (stmt in stmts) checkAwaitInStatement(stmt, source, fileName, isAsync, enclosingFunc)
     }
 
-    private fun checkAwaitInStatement(stmt: Statement, source: String, fileName: String, isAsync: Boolean, enclosingFunc: Identifier? = null) {
+    private fun checkAwaitInStatement(stmt: Statement, source: String, fileName: String, isAsync: Boolean, enclosingFunc: FuncRef? = null) {
         when (stmt) {
             is ExpressionStatement -> checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
@@ -13129,16 +13149,16 @@ class Checker(
             is ReturnStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
             is FunctionDeclaration -> {
                 val async = ModifierFlag.Async in stmt.modifiers
-                val funcName = if (!async) stmt.name else null
-                stmt.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, funcName) }
+                val funcRef = if (!async && stmt.name != null) FuncRef(stmt.name.pos, stmt.name.text.length) else null
+                stmt.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, funcRef) }
             }
             is ClassDeclaration -> {
                 for (m in stmt.members) {
                     when (m) {
                         is MethodDeclaration -> {
                             val async = ModifierFlag.Async in m.modifiers
-                            val mName = if (!async) m.name as? Identifier else null
-                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mName) }
+                            val mRef = if (!async) { val mid = m.name as? Identifier; if (mid != null) FuncRef(mid.pos, mid.text.length) else null } else null
+                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mRef) }
                         }
                         is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
                         is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
@@ -13157,6 +13177,33 @@ class Checker(
             is ForStatement -> {
                 stmt.condition?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
                 stmt.incrementor?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
+                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
+            }
+            is ForOfStatement -> {
+                if (stmt.awaitModifier && !isAsync) {
+                    // TS1103: 'for await' loops are only allowed within async functions and at the top levels of modules.
+                    val forStart = stmt.pos
+                    val awaitIdx = source.indexOf("await", forStart)
+                    if (awaitIdx >= 0 && awaitIdx < forStart + 20) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, awaitIdx)
+                        diagnostics.add(Diagnostic(
+                            message = "'for await' loops are only allowed within async functions and at the top levels of modules.",
+                            category = DiagnosticCategory.Error,
+                            code = 1103,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = awaitIdx,
+                            length = 5, // "await"
+                            relatedInformation = makeAsyncRelated(enclosingFunc, source, fileName),
+                        ))
+                    }
+                }
+                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
+                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
+            }
+            is ForInStatement -> {
+                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
                 checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
             }
             is WhileStatement -> {
@@ -13192,25 +13239,13 @@ class Checker(
         }
     }
 
-    private fun checkAwaitInExpr(expr: Expression, source: String, fileName: String, isAsync: Boolean, enclosingFunc: Identifier? = null) {
+    private fun checkAwaitInExpr(expr: Expression, source: String, fileName: String, isAsync: Boolean, enclosingFunc: FuncRef? = null) {
         when (expr) {
             is AwaitExpression -> {
                 if (!isAsync) {
                     val start = expr.pos
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    val relatedInfo = if (enclosingFunc != null) {
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, enclosingFunc.pos)
-                        listOf(Diagnostic(
-                            message = "Did you mean to mark this function as 'async'?",
-                            category = DiagnosticCategory.Message,
-                            code = 1356,
-                            fileName = fileName,
-                            line = relLine,
-                            character = relChar,
-                            start = enclosingFunc.pos,
-                            length = enclosingFunc.text.length,
-                        ))
-                    } else emptyList()
+                    val relatedInfo = makeAsyncRelated(enclosingFunc, source, fileName)
                     diagnostics.add(Diagnostic(
                         message = "'await' expressions are only allowed within async functions and at the top levels of modules.",
                         category = DiagnosticCategory.Error,
@@ -13227,24 +13262,41 @@ class Checker(
             }
             is ArrowFunction -> {
                 val async = ModifierFlag.Async in expr.modifiers
+                // For the related info, point to the opening paren of the params
+                val arrowRef = if (!async) {
+                    val paramStart = if (expr.hasParenthesizedParameters) {
+                        // Find the '(' — typically at expr.pos or just before parameters
+                        val firstParam = expr.parameters.firstOrNull()
+                        if (firstParam != null) {
+                            // The '(' is right before the first parameter
+                            val searchStart = expr.pos
+                            val parenIdx = source.indexOf('(', searchStart)
+                            if (parenIdx >= 0 && parenIdx < firstParam.pos) parenIdx else expr.pos
+                        } else expr.pos
+                    } else expr.pos
+                    FuncRef(paramStart, 1) // just the '(' character
+                } else null
                 when (val body = expr.body) {
-                    is Block -> checkAwaitInStatements(body.statements, source, fileName, async, null)
-                    is Expression -> checkAwaitInExpr(body, source, fileName, async, null)
+                    is Block -> checkAwaitInStatements(body.statements, source, fileName, async, arrowRef)
+                    is Expression -> checkAwaitInExpr(body, source, fileName, async, arrowRef)
                     else -> {}
                 }
             }
             is FunctionExpression -> {
                 val async = ModifierFlag.Async in expr.modifiers
-                val fName = if (!async) expr.name else null
-                expr.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, fName) }
+                val fRef = if (!async) {
+                    if (expr.name != null) FuncRef(expr.name.pos, expr.name.text.length)
+                    else FuncRef(expr.pos, 8) // "function" keyword length
+                } else null
+                expr.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, fRef) }
             }
             is ClassExpression -> {
                 for (m in expr.members) {
                     when (m) {
                         is MethodDeclaration -> {
                             val async = ModifierFlag.Async in m.modifiers
-                            val mName = if (!async) m.name as? Identifier else null
-                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mName) }
+                            val mRef = if (!async) { val mid = m.name as? Identifier; if (mid != null) FuncRef(mid.pos, mid.text.length) else null } else null
+                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mRef) }
                         }
                         is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
                         is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
@@ -13286,8 +13338,8 @@ class Checker(
                     is SpreadAssignment -> checkAwaitInExpr(prop.expression, source, fileName, isAsync, enclosingFunc)
                     is MethodDeclaration -> {
                         val async = ModifierFlag.Async in prop.modifiers
-                        val pName = if (!async) prop.name as? Identifier else null
-                        prop.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, pName) }
+                        val pRef = if (!async) { val pid = prop.name as? Identifier; if (pid != null) FuncRef(pid.pos, pid.text.length) else null } else null
+                        prop.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, pRef) }
                     }
                     else -> {}
                 }
