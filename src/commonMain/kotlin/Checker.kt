@@ -13877,76 +13877,88 @@ class Checker(
                     stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                         (stmt.expression as StringLiteralNode).text == "use strict"
                 } == true
-            if (!isStrict) continue
-            walkForStrictReserved(result.sourceFile.statements, source, fileName)
+            // TS2480 runs unconditionally; TS1212 runs in let/const contexts even without global strict
+            walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict)
         }
     }
 
-    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false) {
-        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass)
+    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true) {
+        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict)
     }
 
-    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false) {
+    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true) {
         when (stmt) {
             is VariableStatement -> {
+                val isLetOrConst = stmt.declarationList.flags == SyntaxKind.LetKeyword || stmt.declarationList.flags == SyntaxKind.ConstKeyword
                 for (decl in stmt.declarationList.declarations) {
-                    checkNodeForStrictReserved(decl.name, source, fileName, inClass)
+                    // TS1212 fires in strict mode OR in let/const declarations (let/const implies strict for reserved words)
+                    if (isStrict || isLetOrConst) checkNodeForStrictReserved(decl.name, source, fileName, inClass)
+                    // TS2480 fires unconditionally for 'let' in let/const declarations
+                    checkLetInLetOrConst(decl.name, stmt.declarationList.flags, source, fileName)
                 }
             }
-            is FunctionDeclaration -> {
+            is FunctionDeclaration -> if (isStrict) {
                 val name = stmt.name
                 if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
                 // Check parameters
                 for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass)
-                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass) }
+                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict) }
             }
-            is ClassDeclaration -> {
+            is ClassDeclaration -> if (isStrict) {
                 val name = stmt.name
                 if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
                             for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true) }
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict) }
                         }
                         is Constructor -> {
                             for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true) }
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict) }
                         }
                         else -> {}
                     }
                 }
             }
-            is ModuleDeclaration -> {
+            is ModuleDeclaration -> if (isStrict) {
                 val name = stmt.name
                 checkExprForStrictReservedIdents(name, source, fileName, inClass)
                 val body = stmt.body
                 when (body) {
-                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass)
-                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass)
+                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict)
+                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict)
                     else -> {}
                 }
             }
             is ForInStatement -> {
                 val init = stmt.initializer
                 if (init is VariableDeclarationList) {
-                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName, inClass)
+                    val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
+                    for (d in init.declarations) {
+                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass)
+                        checkLetInLetOrConst(d.name, init.flags, source, fileName)
+                    }
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict)
             }
             is ForOfStatement -> {
                 val init = stmt.initializer
                 if (init is VariableDeclarationList) {
-                    for (d in init.declarations) checkNodeForStrictReserved(d.name, source, fileName, inClass)
+                    val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
+                    for (d in init.declarations) {
+                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass)
+                        checkLetInLetOrConst(d.name, init.flags, source, fileName)
+                    }
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict)
             }
-            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass)
+            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass, isStrict)
             is IfStatement -> {
-                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass)
-                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass) }
+                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass, isStrict)
+                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass, isStrict) }
             }
-            is ExpressionStatement -> {
+            is ExpressionStatement -> if (isStrict) {
                 // Check for `let = 30;` style usage
                 checkExprForStrictReserved(stmt.expression, source, fileName, inClass)
             }
@@ -14032,6 +14044,25 @@ class Checker(
                 length = length,
             ))
         }
+    }
+
+    /** TS2480: 'let' is not allowed to be used as a name in 'let' or 'const' declarations. */
+    private fun checkLetInLetOrConst(name: Node, flags: SyntaxKind, source: String, fileName: String) {
+        if (name !is Identifier || name.text != "let") return
+        if (flags != SyntaxKind.LetKeyword && flags != SyntaxKind.ConstKeyword) return
+        val start = name.pos
+        val length = name.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'let' is not allowed to be used as a name in 'let' or 'const' declarations.",
+            category = DiagnosticCategory.Error,
+            code = 2480,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
