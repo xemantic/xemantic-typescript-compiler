@@ -7299,6 +7299,45 @@ class Transformer(
             }
         }
 
+        // Downlevel `export * as ns from "m"` for ESM modules that don't support it
+        // ES2020+ modules support `export * as ns` natively; CJS/AMD/System handle it in their own transform
+        val isEsmModule = options.module?.let {
+            it == ModuleKind.ES2015 || it == ModuleKind.ES2020 || it == ModuleKind.ES2022 ||
+            it == ModuleKind.ESNext || it == ModuleKind.Preserve
+        } ?: true
+        val moduleSupportsExportStarAs = !isEsmModule || options.module?.let {
+            it >= ModuleKind.ES2020
+        } ?: (options.effectiveTarget >= ScriptTarget.ES2020)
+        if (clause is NamespaceExport && decl.moduleSpecifier != null && isEsmModule && !moduleSupportsExportStarAs) {
+            val nsName = clause.name.text
+            val tempName = "${nsName}_1"
+            val importDecl = ImportDeclaration(
+                importClause = ImportClause(
+                    name = null,
+                    namedBindings = NamespaceImport(name = Identifier(text = tempName)),
+                ),
+                moduleSpecifier = decl.moduleSpecifier!!,
+                pos = decl.pos,
+                end = decl.end,
+                leadingComments = decl.leadingComments,
+            )
+            val exportDecl = ExportDeclaration(
+                exportClause = NamedExports(
+                    elements = listOf(
+                        ExportSpecifier(
+                            propertyName = Identifier(text = tempName),
+                            name = Identifier(text = nsName),
+                        )
+                    )
+                ),
+                moduleSpecifier = null,
+                isTypeOnly = false,
+                pos = -1,
+                end = -1,
+            )
+            return listOf(importDecl, exportDecl)
+        }
+
         return listOf(decl)
     }
 
