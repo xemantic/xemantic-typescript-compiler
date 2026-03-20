@@ -8808,7 +8808,7 @@ class Transformer(
                         // Evaluate the ORIGINAL initializer (pre-type-erasure) so that type-only
                         // operators like `!` (non-null assertion), `satisfies`, and `as` prevent
                         // constant folding — matching TypeScript's emit behavior.
-                        var foldedValue = evaluateConstantExpression(member.initializer, memberValues)
+                        var foldedValue = evaluateConstantExpression(member.initializer, memberValues, enumName)
                         // Forward references to not-yet-defined members resolve to 0
                         // (TypeScript emits 0 for forward enum member references)
                         if (foldedValue == null && isForwardEnumRef(initExpr, enumName, memberName, knownMemberNames, processedMembers)) {
@@ -9515,7 +9515,7 @@ class Transformer(
      * parenthesized expressions, and references to previously-defined enum members.
      * Returns null if the expression cannot be statically evaluated.
      */
-    private fun evaluateConstantExpression(expr: Expression, memberValues: Map<String, Long>): Long? {
+    private fun evaluateConstantExpression(expr: Expression, memberValues: Map<String, Long>, currentEnumName: String? = null): Long? {
         return when (expr) {
             is NumericLiteralNode -> {
                 val text = expr.text.trim().replace("_", "")
@@ -9530,7 +9530,7 @@ class Transformer(
                 }
             }
             is PrefixUnaryExpression -> {
-                val operand = evaluateConstantExpression(expr.operand, memberValues) ?: return null
+                val operand = evaluateConstantExpression(expr.operand, memberValues, currentEnumName) ?: return null
                 when (expr.operator) {
                     Minus -> -operand
                     Plus -> operand
@@ -9539,8 +9539,8 @@ class Transformer(
                 }
             }
             is BinaryExpression -> {
-                val left = evaluateConstantExpression(expr.left, memberValues) ?: return null
-                val right = evaluateConstantExpression(expr.right, memberValues) ?: return null
+                val left = evaluateConstantExpression(expr.left, memberValues, currentEnumName) ?: return null
+                val right = evaluateConstantExpression(expr.right, memberValues, currentEnumName) ?: return null
                 // JS bitwise/shift ops work on 32-bit integers
                 when (expr.operator) {
                     Plus -> left + right
@@ -9566,7 +9566,8 @@ class Transformer(
                 when {
                     obj is Identifier -> allEnumMemberValues[obj.text]?.get(memberName)
                         // Fall back to Checker for cross-file enum references through import aliases
-                        ?: checker?.resolveEnumMemberValue(obj.text, memberName, currentFileName)
+                        // Skip for same-enum references to avoid resolving forward references
+                        ?: if (obj.text != currentEnumName) checker?.resolveEnumMemberValue(obj.text, memberName, currentFileName) else null
                     obj is PropertyAccessExpression -> allEnumMemberValues[obj.name.text]?.get(memberName)
                     else -> null
                 }
@@ -9580,7 +9581,7 @@ class Transformer(
                     memberValues[arg.text] ?: allEnumMemberValues[obj.text]?.get(arg.text)
                 } else null
             }
-            is ParenthesizedExpression -> evaluateConstantExpression(expr.expression, memberValues)
+            is ParenthesizedExpression -> evaluateConstantExpression(expr.expression, memberValues, currentEnumName)
             else -> null
         }
     }
