@@ -1958,6 +1958,23 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
 ---
 
+## Remaining failure analysis (session 2026-03-20c)
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Error "none produced" | 1,762 | 1,257 need single TS code; dominated by TS2322 (293), TS2339 (81), TS2345 (63) |
+| Error diff | 845 | Top FP: TS1109 (494x), TS1005 (430x), TS2304 (303x) |
+| JS emit | 784 | 84 with 1-2 line diffs |
+
+**JS emit root causes:** var/let/const (298), comments (106), ES5 class/decorator helpers (92), CJS import helpers (36), CJS exports (34), CJS require (26), const enum inline (22), ES5 async (21), AMD (15), void0 hoist (12), sourcemap (11)
+
+**Next major features needed:**
+- Type inference diagnostics (TS2322/TS2339/TS2345) → ~1,400 tests
+- ES5 downlevel transforms (destructuring, class, decorators, async) → ~300 tests
+- Inline sourcemap generation → ~11 tests
+
+---
+
 ## BLOCKED — not planned for Phase 3
 
 - **`.symbols` baselines** (14,015 tests) — require full symbol resolution display
