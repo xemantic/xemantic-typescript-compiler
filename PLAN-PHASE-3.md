@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,199 passing (67.9%), 3,396 failing
-- **Session 2026-03-20b**: +14 tests (7,185→7,199) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356, TS1127 zero-length span, TS1108 return keyword span, multi-line error squiggles, TS7027 span covering all unreachable stmts, TS6133 import alias position, import alias value reference collection
+- **10,595 tests**, 7,200 passing (67.9%), 3,395 failing
+- **Session 2026-03-20b**: +15 tests (7,185→7,200) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356, TS1127 zero-length span, TS1108 return keyword span, multi-line error squiggles, TS7027 span covering all unreachable stmts, TS6133 import alias position, import alias value reference collection
 - **Session 2026-03-20**: +5 tests (7,180→7,185) — trailing comments on object literal get/set accessors, numeric separator preservation for ES2021+ targets, `export * as ns` downlevel for ES2015 modules, TS2694/TS2693 false positive reductions (10+15 tests improved)
 - **Session 2026-03-19e**: +35 tests (7,145→7,180) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix, node16 module detection refinement, ES3 target→ES2015 effective target, TS2354 importHelpers without tslib
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
