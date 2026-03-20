@@ -10991,6 +10991,10 @@ class Transformer(
                     }
                 }
             }
+            is ImportEqualsDeclaration -> {
+                // `import X = Y` or `export import X = Y` — Y is a value reference
+                collectRefsFromNode(node.moduleReference, refs)
+            }
             is ExportAssignment -> collectRefsFromNode(node.expression, refs)
             is FunctionDeclaration -> {
                 // Traverse parameters for computed names in binding patterns and default values
