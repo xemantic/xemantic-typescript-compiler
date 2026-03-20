@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,206 passing (68.0%), 3,389 failing
+- **10,595 tests**, 7,207 passing (68.0%), 3,388 failing
+- **Session 2026-03-20d**: +1 test (7,206→7,207) — TS2694 namespace name resolves through import aliases via symbol parent chain (+2 tests, but 1 variance from test ordering). Added `symbolToQualifiedName` helper and `currentContainer` tracking in Binder.
 - **Session 2026-03-20c**: +6 tests (7,200→7,206) — CJS `export import=require` emits `exports.X = require()` (+1), detached comment preservation on elided CJS imports via source pos propagation (+3), ImportDeclaration detached comment handling (+1), CJS require trailing comment fix (+1)
 - **Session 2026-03-20b**: +15 tests (7,185→7,200) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356, TS1127 zero-length span, TS1108 return keyword span, multi-line error squiggles, TS7027 span covering all unreachable stmts, TS6133 import alias position, import alias value reference collection
 - **Session 2026-03-20**: +5 tests (7,180→7,185) — trailing comments on object literal get/set accessors, numeric separator preservation for ES2021+ targets, `export * as ns` downlevel for ES2015 modules, TS2694/TS2693 false positive reductions (10+15 tests improved)
@@ -1958,20 +1959,38 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
 ---
 
-## Remaining failure analysis (session 2026-03-20c)
+## Remaining failure analysis (session 2026-03-20d)
 
 | Category | Count | Notes |
 |----------|-------|-------|
 | Error "none produced" | 1,762 | 1,257 need single TS code; dominated by TS2322 (293), TS2339 (81), TS2345 (63) |
-| Error diff | 845 | Top FP: TS1109 (494x), TS1005 (430x), TS2304 (303x) |
-| JS emit | 784 | 84 with 1-2 line diffs |
+| Error diff | ~844 | Top FP: TS1109 (496x), TS1005 (458x), TS2304 (306x), TS7006 (264x) |
+| JS emit | ~782 | 64 with exactly 2-line diffs |
+
+**Error baseline FP breakdown (we emit but shouldn't):** TS1109 (496), TS1005 (458), TS2304 (306), TS7006 (264), TS1003 (182), TS2300 (130), TS2695 (80), TS2448 (61), TS2454 (60), TS1036 (54)
+
+**Error baseline missing (expected but not emitted):** TS2322 (877), TS1005 (353), TS2339 (203), TS2304 (200), TS2345 (179), TS1128 (145), TS7006 (135), TS2300 (128), TS2454 (120), TS2728 (111)
 
 **JS emit root causes:** var/let/const (298), comments (106), ES5 class/decorator helpers (92), CJS import helpers (36), CJS exports (34), CJS require (26), const enum inline (22), ES5 async (21), AMD (15), void0 hoist (12), sourcemap (11)
+
+**Error tests with wrong code at same position (11 tests):**
+- TS2554 message format (0-1 vs 1 for JS file optional params) — 1 test
+- TS2304→TS2301 (class member scoping) — 1 test
+- TS2397→TS4025 (private name export) — 1 test
+- TS2694→TS2724 (did-you-mean namespace member) — 1 test (4 diffs)
+- TS1109→TS2809 (declaration after block body) — 1 test (4 diffs)
+- Other parser/checker code mismatches — 5 tests
+
+**Tests failing only due to missing diagnostics (no FPs):** 6 tests
+- missingCloseParenStatements: needs TS1007 related info (4 lines, partially fixed for alwaysstrict=false)
+- arrayIterationLibES5TargetDifferent: needs TS2318 + TS5053
+- 4 large-diff tests (100+ lines each)
 
 **Next major features needed:**
 - Type inference diagnostics (TS2322/TS2339/TS2345) → ~1,400 tests
 - ES5 downlevel transforms (destructuring, class, decorators, async) → ~300 tests
 - Inline sourcemap generation → ~11 tests
+- Function-scoped const enum inlining (needs scope-aware collection) → ~8 tests
 
 ---
 
