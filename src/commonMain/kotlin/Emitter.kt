@@ -3613,7 +3613,13 @@ class Emitter(
         if (comments == null) return
         for (comment in comments) {
             write(" ")
-            write(comment.text)
+            // Strip trailing whitespace from each line of multi-line block comments
+            val text = if (comment.text.contains('\n')) {
+                comment.text.lines().joinToString("\n") { it.trimEnd() }
+            } else {
+                comment.text
+            }
+            write(text)
         }
     }
 
