@@ -7276,6 +7276,8 @@ class Checker(
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     checkStrictModeBindingName(decl.name, source, fileName, restricted)
+                    // Recurse into function/arrow initializers to check nested declarations
+                    decl.initializer?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
                 }
             }
             is FunctionDeclaration -> {
