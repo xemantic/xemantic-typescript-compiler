@@ -5575,6 +5575,8 @@ class Checker(
     private fun isMemberAccessible(member: Symbol, namespace: Symbol): Boolean {
         // If member has explicit export, always accessible
         if (member.flags.hasAny(SymbolFlags.ExportValue)) return true
+        // Enum members are always accessible through the enum name (Kind.A)
+        if (member.flags.hasAny(SymbolFlags.EnumMember)) return true
         // In declare namespaces, all members are accessible
         for (decl in namespace.declarations) {
             if (decl is ModuleDeclaration && ModifierFlag.Declare in decl.modifiers) {
