@@ -94,6 +94,30 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         return false
     }
 
+    /**
+     * Like [parseExpected] for closing tokens, but provides TS1007 related info
+     * pointing to [openPos] when the closing token is missing (not just at EOF).
+     */
+    private fun parseExpectedClosing(kind: SyntaxKind, openPos: Int): Boolean {
+        if (token == kind) {
+            if (openTokenStack.isNotEmpty()) openTokenStack.removeAt(openTokenStack.lastIndex)
+            nextToken(); return true
+        }
+        val openToken = when (kind) {
+            SyntaxKind.CloseBrace -> "{"
+            SyntaxKind.CloseBracket -> "["
+            else -> "("
+        }
+        val closeToken = tokenToString(kind)
+        if (openTokenStack.isNotEmpty()) openTokenStack.removeAt(openTokenStack.lastIndex)
+        reportErrorWithRelatedInfo(
+            "'$closeToken' expected.", 1005,
+            "The parser expected to find a '$closeToken' to match the '$openToken' token here.",
+            1007, openPos
+        )
+        return false
+    }
+
     private fun parseOptional(kind: SyntaxKind): Boolean {
         if (token == kind) {
             nextToken(); return true
@@ -687,11 +711,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val comments = leadingComments()
         parseExpected(SyntaxKind.IfKeyword)
         val afterKeyword = trailingComments()
+        val openParenPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
         val expr = parseExpression()
         val beforeCloseParen = trailingComments()
-        parseExpected(SyntaxKind.CloseParen)
+        parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
         val afterCloseParen = trailingComments()
         val thenStmt = parseStatement() ?: EmptyStatement()
         // Capture trailing comments from the then-block's closing brace BEFORE checking for else.
@@ -742,11 +767,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val beforeWhile = trailingComments()
         parseExpected(SyntaxKind.WhileKeyword)
         val afterWhile = trailingComments()
+        val doOpenParenPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
         val expr = parseExpression()
         val beforeCloseParen = trailingComments()
-        parseExpected(SyntaxKind.CloseParen)
+        parseExpectedClosing(SyntaxKind.CloseParen, doOpenParenPos)
         val afterCloseParen = trailingComments()
         parseSemicolon()
         val trailing = trailingComments()
@@ -765,11 +791,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val comments = leadingComments()
         parseExpected(SyntaxKind.WhileKeyword)
         val afterKeyword = trailingComments()
+        val openParenPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
         val expr = parseExpression()
         val beforeCloseParen = trailingComments()
-        parseExpected(SyntaxKind.CloseParen)
+        parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
         val afterCloseParen = trailingComments()
         val stmt = parseStatement() ?: EmptyStatement()
         return WhileStatement(
@@ -943,11 +970,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val comments = leadingComments()
         parseExpected(SyntaxKind.WithKeyword)
         val afterKeyword = trailingComments()
+        val openParenPos = scanner.getTokenPos()
         parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
         val expr = parseExpression()
         val beforeCloseParen = trailingComments()
-        parseExpected(SyntaxKind.CloseParen)
+        parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
         val afterCloseParen = trailingComments()
         val stmt = parseStatement() ?: EmptyStatement()
         return WithStatement(
