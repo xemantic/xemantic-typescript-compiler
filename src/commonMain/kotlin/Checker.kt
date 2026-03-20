@@ -5575,11 +5575,22 @@ class Checker(
         if (member.flags.hasAny(SymbolFlags.ExportValue)) return true
         // Enum members are always accessible through the enum name (Kind.A)
         if (member.flags.hasAny(SymbolFlags.EnumMember)) return true
-        // In declare namespaces, all members are accessible
-        for (decl in namespace.declarations) {
+        // In declare namespaces (or namespaces inside declare contexts), all members are accessible
+        if (isAmbientNamespace(namespace)) return true
+        return false
+    }
+
+    /** Check if a namespace symbol is in an ambient (declare) context. */
+    private fun isAmbientNamespace(symbol: Symbol): Boolean {
+        for (decl in symbol.declarations) {
             if (decl is ModuleDeclaration && ModifierFlag.Declare in decl.modifiers) {
                 return true
             }
+        }
+        // Check parent namespace — a namespace inside `declare module` is also ambient
+        val parent = symbol.parent
+        if (parent != null && parent.declarations.isNotEmpty()) {
+            return isAmbientNamespace(parent)
         }
         return false
     }
