@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,180 passing (67.8%), 3,412 failing
+- **10,595 tests**, 7,182 passing (67.8%), 3,410 failing
+- **Session 2026-03-20**: +2 tests (7,180→7,182) — trailing comments on object literal get/set accessors, numeric separator preservation for ES2021+ targets
 - **Session 2026-03-19e**: +35 tests (7,145→7,180) — Node16/Node18/Node20/NodeNext CJS module treatment, `isESModuleFormat` fix for .ts files, CJS type-only import elision, type-only export void 0 hoist skip, `module: "preserve"` support, circular inheritance StackOverflow fix, node16 module detection refinement, ES3 target→ES2015 effective target, TS2354 importHelpers without tslib
 - **Session 2026-03-19d**: +18 tests (7,127→7,145) — triple-slash reference path directive preservation (CJS/AMD), tsconfig vs directive precedence, property-access comment preservation, removed 'out' option no longer sets outFile, class property async arrow `this` capture, else-if comment preservation
 - **Session 2026-03-19c**: +21 tests (7,106→7,127) — TS1123 empty variable declaration list, TS2662/TS2663 suggest static/instance member, TS6198 all destructured elements unused, module:none CJS transform, TS1155 ambient context fix, CJS exports qualification for computed properties, CJS numeric identifier prefix, CJS trailing comment preservation
@@ -1774,11 +1775,49 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Checker.kt`
 
-- [ ] **22e. TS2813/TS2814 merge diagnostics** (~12 tests)
+- [ ] **22e. TS2813/TS2814 merge diagnostics** (~12 tests) — *deferred*
 
   TS2813 "Classes can only merge with other classes" and TS2814
   "Functions with bodies can only merge with classes that are ambient."
   Tests: `augmentedTypes*`, `callOverloads*`, `duplicateIdentifierEnum*`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **23a. `verbatimModuleSyntax` suppresses const enum inlining** (~4 tests)
+
+  When `verbatimModuleSyntax` is set, const enums should NOT be inlined —
+  they should be emitted as regular enums (IIFE blocks) and references left
+  as `E.A` instead of `0 /* E.A */`. Tests: `blockScopedEnumVariablesUseBeforeDef_verbatimModuleSyntax`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **23b. `export * as ns` downlevel transform** (~3 tests)
+
+  For targets < ES2020, `export * as ns from "./a"` should be downleveled to
+  `import * as ns_1 from "./a"; export { ns_1 as ns }`.
+  Tests: `importHelpersInIsolatedModules`, `importHelpersWithImportOrExportDefault`.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **23c. Multi-file node_modules file emission** (~20 tests) — *deferred*
+
+  Files from `node_modules/` should not be re-emitted as outputs in multi-file
+  baselines. Currently they're included in both source echoes and JS output.
+
+  **Files:** `TypeScriptCompiler.kt`
+
+- [ ] **23d. TS1103 `for await` in non-async function** (~2 tests)
+
+  `for await` loops inside non-async functions should get TS1103 "only allowed
+  within async functions and at top level". Currently not detected.
+  Tests: `awaitInNonAsyncFunction`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **23e. TS2694 false positive — enum members as namespace exports** (~10 tests)
+
+  We emit false TS2694 "Namespace has no exported member" for `Kind.A` where
+  `Kind` is an enum. Enum members should be accessible as if namespace-exported.
 
   **Files:** `Checker.kt`
 
