@@ -14384,10 +14384,8 @@ class Checker(
                     val start = stmt.pos
                     var spanStart = start
                     while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                    // Span covers the keyword "return" + optional expression + semicolon
-                    var spanEnd = stmt.end
-                    while (spanEnd > spanStart && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanEnd--
-                    val length = (spanEnd - spanStart).coerceAtLeast(6) // at least "return"
+                    // Span covers just the 'return' keyword
+                    val length = 6 // "return".length
                     val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
                     diagnostics.add(Diagnostic(
                         message = "A 'return' statement can only be used within a function body.",
@@ -14417,9 +14415,8 @@ class Checker(
                 val start = stmt.pos
                 var spanStart = start
                 while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                var spanEnd = stmt.end
-                while (spanEnd > spanStart && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanEnd--
-                val length = (spanEnd - spanStart).coerceAtLeast(6)
+                // Span covers just the 'return' keyword (6 chars), not the expression
+                val length = 6 // "return".length
                 val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
                 diagnostics.add(Diagnostic(
                     message = "A 'return' statement can only be used within a function body.",

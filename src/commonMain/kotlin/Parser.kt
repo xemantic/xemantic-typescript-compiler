@@ -161,9 +161,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         )
     }
 
-    private fun reportError(message: String, code: Int = 1005) {
+    private fun reportError(message: String, code: Int = 1005, overrideLength: Int? = null) {
         val start = scanner.getTokenPos()
-        val length = (scanner.getPos() - start).coerceAtLeast(0)
+        val length = overrideLength ?: (scanner.getPos() - start).coerceAtLeast(0)
         val (line, character) = getLineAndCharacterOfPosition(start)
         diagnostics.add(
             Diagnostic(
@@ -4556,7 +4556,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val rawText = if (raw != value) raw else null
             // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
             if (scanner.hasInvalidUnicodeEscapeInToken()) {
-                reportError("Invalid character.", code = 1127)
+                reportError("Invalid character.", code = 1127, overrideLength = 0)
             }
             nextToken()
             return Identifier(text = value, rawText = rawText, pos = pos, end = getEnd())
