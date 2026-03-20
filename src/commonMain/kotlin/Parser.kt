@@ -3088,6 +3088,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 Dot -> {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
                     nextToken()
+                    val afterDotPos = scanner.getPrevTokenEnd() // position right after dot (before trivia of next token)
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
                     // After `.`, only consume if the token is a valid property name.
                     // Non-name tokens (e.g. `}`) are left for the enclosing block to consume.
@@ -3100,7 +3101,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                             Identifier(text = "", pos = getPos(), end = getPos())
                         }
                         isIdentifier() || isKeyword() -> parseIdentifierName()
-                        else -> { reportError("Identifier expected.", code = 1003); Identifier(text = "", pos = getPos(), end = getPos()) }
+                        else -> { reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0); Identifier(text = "", pos = afterDotPos, end = afterDotPos) }
                     }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
