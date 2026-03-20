@@ -1659,13 +1659,19 @@ class Emitter(
             }
             is NumericLiteralNode -> {
                 // Strip numeric separators and convert non-decimal bases to decimal when separators present
+                // Numeric separators are natively supported starting ES2021 — preserve them as-is
                 val hasSeparators = '_' in node.text
-                val numText = node.text.replace("_", "")
-                val isLegacyOctal = numText.length >= 2 && numText[0] == '0' &&
-                        numText[1] in '0'..'7' && numText.all { it in '0'..'7' }
-                val emitText = if (isLegacyOctal) {
+                val preserveSeparators = hasSeparators && options.effectiveTarget >= ScriptTarget.ES2021
+                val numText = if (preserveSeparators) node.text else node.text.replace("_", "")
+                val noUnderscores = node.text.replace("_", "")
+                val isLegacyOctal = noUnderscores.length >= 2 && noUnderscores[0] == '0' &&
+                        noUnderscores[1] in '0'..'7' && noUnderscores.all { it in '0'..'7' }
+                val emitText = if (preserveSeparators) {
+                    // ES2021+: preserve numeric separators as-is
+                    node.text
+                } else if (isLegacyOctal) {
                     // Legacy octal (e.g. 02343) — always convert to decimal
-                    numText.substring(1).toULongOrNull(8)?.toString() ?: numText
+                    noUnderscores.substring(1).toULongOrNull(8)?.toString() ?: numText
                 } else if (hasSeparators && (numText.startsWith("0x", ignoreCase = true) ||
                             numText.startsWith("0o", ignoreCase = true) ||
                             numText.startsWith("0b", ignoreCase = true))) {
@@ -1700,6 +1706,12 @@ class Emitter(
                 }
             }
             is BigIntLiteralNode -> {
+                // Numeric separators are natively supported starting ES2021 — preserve them as-is
+                val hasBigIntSeparators = '_' in node.text
+                val preserveBigIntSeps = hasBigIntSeparators && options.effectiveTarget >= ScriptTarget.ES2021
+                if (preserveBigIntSeps) {
+                    write(node.text)
+                } else {
                 val text = node.text.replace("_", "")
                 // TypeScript converts binary/octal BigInt literals to decimal (e.g. 0b101n → 5n, 0o567n → 375n)
                 // and lowercases hex digits (e.g. 0xFFFFn → 0xffffn)
@@ -1720,6 +1732,7 @@ class Emitter(
                     else -> withoutN
                 }
                 write("${converted}n")
+                } // end else (not preserveBigIntSeps)
             }
             is RegularExpressionLiteralNode -> write(node.text)
             is NoSubstitutionTemplateLiteralNode -> emitNoSubstitutionTemplateLiteral(node)
