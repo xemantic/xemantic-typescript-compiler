@@ -4713,10 +4713,10 @@ class Transformer(
                 ),
                 flags = if (useVar || options.effectiveTarget < ScriptTarget.ES2015) VarKeyword else ConstKeyword,
                 pos = -1, end = -1,
-                trailingComments = trailingComments,
             ),
             pos = sourcePos, end = sourceEnd,
             leadingComments = comments,
+            trailingComments = trailingComments,
         )
     }
 
