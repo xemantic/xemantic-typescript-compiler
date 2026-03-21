@@ -837,6 +837,12 @@ class Transformer(
                     }
                 }
             }
+            // Exported import aliases (export import b = a.x) also use the Direct path
+            // and need identifier rewriting to exports.b
+            if (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers
+                && stmt.moduleReference !is ExternalModuleReference) {
+                directExportedVarNames.add(stmt.name.text)
+            }
         }
 
         // Detect and strip "use strict" prologue directives so they can be re-inserted at the
@@ -2112,6 +2118,11 @@ class Transformer(
                         if (n != null) directExportedVarNames.add(n)
                     }
                 }
+            }
+            // Exported import aliases (export import b = a.x) also use the Direct path
+            if (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers
+                && stmt.moduleReference !is ExternalModuleReference) {
+                directExportedVarNames.add(stmt.name.text)
             }
         }
 
