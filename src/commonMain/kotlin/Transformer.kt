@@ -1575,29 +1575,47 @@ class Transformer(
         // Early pre-preamble extraction: check result[1] for detached leading comments
         // BEFORE void0/stub insertions change positions.
         // result[0] is the esModule preamble (synthetic); result[1] is the first real stmt.
-        // Only handle NotEmittedStatement, FunctionDeclaration, ClassDeclaration here.
-        // VariableStatement/ExpressionStatement are handled by the post-elision extraction below.
+        // Also handles VariableStatement and ExpressionStatement (e.g., exported variable direct path
+        // produces ExpressionStatement with pos=-1 but carrying the original leading comments).
+        // For nodes with pos=-1, fall back to the original source file's first statement pos.
+        // Uses the same "split point" algorithm as the post-elision extraction to avoid
+        // incorrectly detaching comments that are only separated by OTHER comments (not blank lines).
         if (!hasExportEquals && result.size > 1 &&
-            (result[1] is NotEmittedStatement || result[1] is FunctionDeclaration || result[1] is ClassDeclaration)) {
+            (result[1] is NotEmittedStatement || result[1] is FunctionDeclaration || result[1] is ClassDeclaration
+             || result[1] is VariableStatement || result[1] is ExpressionStatement)) {
             val firstReal = result[1]
             val allComments = firstReal.leadingComments
-            if (!allComments.isNullOrEmpty() && firstReal.pos >= 0) {
+            // For synthetic nodes (pos=-1), use the original source file's first statement pos as fallback.
+            val stmtPosResolved = if (firstReal.pos >= 0) firstReal.pos
+                                  else originalSourceFile.statements.firstOrNull()?.pos ?: -1
+            if (!allComments.isNullOrEmpty() && stmtPosResolved >= 0) {
                 val source = originalSourceFile.text
-                val stmtPos = firstReal.pos
-                val detached = allComments.filter { c ->
-                    c.pos >= 0 && source.substring(c.end, stmtPos).count { it == '\n' } >= 2
+                val stmtPos = stmtPosResolved
+                // Split point algorithm: find the last comment blank-line-separated from the NEXT item
+                // (next comment or the statement). This avoids treating consecutive references as detached.
+                var splitIdx = -1
+                for (i in allComments.indices) {
+                    val c = allComments[i]
+                    if (c.pos < 0 || c.end < 0) continue
+                    val nextStart = if (i + 1 < allComments.size) allComments[i + 1].pos else stmtPos
+                    if (nextStart >= 0 && nextStart >= c.end &&
+                        source.substring(c.end, nextStart).count { it == '\n' } >= 2) {
+                        splitIdx = i
+                    }
                 }
-                if (detached.isNotEmpty()) {
-                    val attached = allComments - detached.toSet()
-                    val attachedOrNull = attached.ifEmpty { null }
+                if (splitIdx >= 0) {
+                    val detached = allComments.subList(0, splitIdx + 1)
+                    val attached = allComments.subList(splitIdx + 1, allComments.size).ifEmpty { null }
                     prePreambleStatements.add(NotEmittedStatement(leadingComments = detached))
                     when (firstReal) {
                         is NotEmittedStatement -> {
-                            if (attached.isEmpty()) result.removeAt(1)
-                            else result[1] = firstReal.copy(leadingComments = attachedOrNull)
+                            if (attached == null) result.removeAt(1)
+                            else result[1] = firstReal.copy(leadingComments = attached)
                         }
-                        is FunctionDeclaration -> result[1] = firstReal.copy(leadingComments = attachedOrNull)
-                        is ClassDeclaration -> result[1] = firstReal.copy(leadingComments = attachedOrNull)
+                        is FunctionDeclaration -> result[1] = firstReal.copy(leadingComments = attached)
+                        is ClassDeclaration -> result[1] = firstReal.copy(leadingComments = attached)
+                        is VariableStatement -> result[1] = firstReal.copy(leadingComments = attached)
+                        is ExpressionStatement -> result[1] = firstReal.copy(leadingComments = attached)
                         else -> {}
                     }
                 }
