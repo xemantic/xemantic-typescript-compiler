@@ -13748,8 +13748,10 @@ class Checker(
     }
 
     private fun checkStatementsInAmbient(stmts: List<Statement>, source: String, fileName: String) {
+        var reported = false
         for (stmt in stmts) {
-            if (!isValidAmbientStatement(stmt)) {
+            if (!reported && !isValidAmbientStatement(stmt)) {
+                reported = true
                 // Report TS1036 — squiggle on the first token of the statement
                 val start = stmt.pos
                 val stmtEnd = stmt.end
