@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,595 tests**, 7,212 passing (68.1%), 3,383 failing
+- **10,595 tests**, 7,237 passing (68.3%), 3,358 failing
+- **Session 2026-03-21**: +9 tests (7,228→7,237) — StackOverflow fix: iterative left-spine walk in checkConstAssignmentInExpr (+1), binding pattern element defaults TS2448 FP fix, top-level await parsing for ES2022+/NodeNext/System modules (+1), TS1215 'arguments' in module strict mode (+1), CJS void 0 hoist skip for type-only global re-exports (+1), /// reference types hoist before CJS preamble (+1), shebang stripping in outFile bundles (+1), CJS/AMD exports qualification for exported import aliases (+3)
 - **Session 2026-03-20d**: +6 tests (7,206→7,212) — TS2694 namespace name resolves through import aliases via symbol parent chain (+2), TS1127 invalid unicode escape reports at escape position (+1), TS1003 incomplete dot access position fix (+1), TS1100 strict mode recurses into variable initializer functions (+3), TS1007 related info for missing close paren in if/while/with/do-while (+4), some test ordering overlap.
 - **Session 2026-03-20c**: +6 tests (7,200→7,206) — CJS `export import=require` emits `exports.X = require()` (+1), detached comment preservation on elided CJS imports via source pos propagation (+3), ImportDeclaration detached comment handling (+1), CJS require trailing comment fix (+1)
 - **Session 2026-03-20b**: +15 tests (7,185→7,200) — TS18004 shorthand property diagnostic, `verbatimModuleSyntax` const enum suppression, TS1103 `for await` in non-async functions with related TS1356, TS1127 zero-length span, TS1108 return keyword span, multi-line error squiggles, TS7027 span covering all unreachable stmts, TS6133 import alias position, import alias value reference collection
