@@ -1953,11 +1953,7 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Transformer.kt`
 
-- [ ] **25h. ES5 arrow→function downlevel** (~10+ tests) — *deferred* (major feature)
-
-  Arrow functions need `function` syntax in ES5 output. Affects many tests.
-
-  **Files:** `Transformer.kt`
+- [x] **25h. ES5 arrow→function downlevel** — ~~*deferred*~~ **REMOVED**: ES5 target deprecated in TypeScript 6.0, removed in 7.0/tsgo. JS emit tests for `target=ES5/ES3` and `module=AMD/System/UMD` skipped in test generator. No downlevel transforms will be implemented.
 
 ---
 
