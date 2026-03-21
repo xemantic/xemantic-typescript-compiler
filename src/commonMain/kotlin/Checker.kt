@@ -324,6 +324,10 @@ class Checker(
                             val symbol = targetResult.locals[expr.text]
                             if (symbol != null) {
                                 val resolved = resolveAlias(symbol)
+                                // If resolveAlias couldn't fully resolve (e.g. cycle detected),
+                                // the symbol retains SymbolFlags.Alias — treat as NOT type-only
+                                // (unknown value status → keep the import to be safe).
+                                if (resolved.flags.hasAny(SymbolFlags.Alias)) return false
                                 return !resolved.flags.hasAny(SymbolFlags.Value)
                             }
                         }
@@ -1058,6 +1062,8 @@ class Checker(
             }
             // JSX expressions
             is JsxElement -> {
+                // The JSX factory namespace (e.g. React) is implicitly used for all JSX elements
+                markJsxFactoryReferenced(result)
                 trackReferencesInExpression(expr.openingElement.tagName, result)
                 for (child in expr.children) {
                     if (child is JsxExpressionContainer) {
@@ -1068,6 +1074,8 @@ class Checker(
                 }
             }
             is JsxSelfClosingElement -> {
+                // The JSX factory namespace (e.g. React) is implicitly used for all JSX elements
+                markJsxFactoryReferenced(result)
                 trackReferencesInExpression(expr.tagName, result)
                 for (attr in expr.attributes) {
                     when (attr) {
@@ -1085,6 +1093,8 @@ class Checker(
                 }
             }
             is JsxFragment -> {
+                // The JSX factory namespace (e.g. React) is implicitly used for all JSX elements
+                markJsxFactoryReferenced(result)
                 for (child in expr.children) {
                     if (child is JsxExpressionContainer) {
                         child.expression?.let { trackReferencesInExpression(it, result) }
@@ -1104,6 +1114,23 @@ class Checker(
         if (symbol.flags.hasAny(SymbolFlags.Alias)) {
             referencedAliases.add(symbol.id)
         }
+    }
+
+    /**
+     * Mark the JSX factory namespace import as referenced.
+     * When a file uses JSX elements, the JSX factory namespace (default: "React") is
+     * implicitly used at runtime, so its import must not be elided.
+     * This applies for all JSX modes including "preserve".
+     */
+    private fun markJsxFactoryReferenced(result: BinderResult) {
+        if (options.jsx == null) return
+        // Determine the factory namespace: first dotted segment of jsxFactory, or reactNamespace, or "React"
+        val factoryNamespace = when {
+            options.jsxFactory != null -> options.jsxFactory!!.substringBefore('.')
+            options.reactNamespace != null -> options.reactNamespace!!
+            else -> "React"
+        }
+        markAliasReferenced(factoryNamespace, result)
     }
 
     // -----------------------------------------------------------------------

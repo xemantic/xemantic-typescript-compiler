@@ -1739,11 +1739,19 @@ class Transformer(
             // e.g. `var y = x` counts as a reference to `x` in the require import `const x = require(...)`)
             val referenced = collectValueReferences(result)
             val toElide = mutableSetOf<VariableStatement>()
+            // When a file uses JSX (indicated by .tsx/.jsx extension and jsx option), the JSX factory
+            // namespace (e.g. "React") is implicitly referenced by all JSX elements, even when no
+            // explicit identifier reference appears in the source text.
+            val jsxFactoryNs = if (options.jsx != null &&
+                (currentFileName.endsWith(".tsx") || currentFileName.endsWith(".jsx"))) {
+                getJsxFactoryNamespace()
+            } else null
             for (stmt in importLikeStmts) {
                 val name = extractIdentifierName(stmt.declarationList.declarations[0].name) ?: continue
                 if (stmt in requireSet) {
-                    // Require imports: erase if name unused in value positions
-                    if (name !in referenced) toElide.add(stmt)
+                    // Require imports: erase if name unused in value positions.
+                    // Exception: JSX factory namespace is implicitly used by JSX elements.
+                    if (name !in referenced && name != jsxFactoryNs) toElide.add(stmt)
                 } else {
                     // Internal alias: erase only if eligible (namespace root known) and unused
                     if (name in unusedInternalAliasNames) toElide.add(stmt)
@@ -6635,6 +6643,18 @@ class Transformer(
         return buildQualifiedId(factory)
     }
 
+    /**
+     * Returns the JSX factory namespace name (the first part of the factory expression).
+     * E.g. for "React.createElement" → "React", for "h" → "h".
+     * Used to prevent elision of JSX factory imports when JSX is used in a file.
+     */
+    private fun getJsxFactoryNamespace(): String {
+        val raw = options.jsxFactory
+            ?: options.reactNamespace?.let { "$it.createElement" }
+            ?: "React.createElement"
+        return raw.substringBefore('.')
+    }
+
     /** Checks if a jsxFactory string is a valid identifier or dotted qualified name. */
     private fun isValidJsxFactory(name: String): Boolean {
         if (name.isEmpty()) return false
@@ -7418,10 +7438,14 @@ class Transformer(
         // `import x = 5` (invalid, literal RHS) → `5;` (expression statement, TypeScript's error-recovery output)
         val isRequire = ref is ExternalModuleReference
 
-        // Elide import=require() when the target module only exports types
+        // Elide import=require() when the target module only exports types.
+        // Exception: if the checker marks this import as explicitly referenced (e.g. JSX factory
+        // namespace imports like React), keep it even if the module appears type-only.
         if (isRequire && !isExported && ref is ExternalModuleReference) {
             val specText = (ref.expression as? StringLiteralNode)?.text
-            if (specText != null && checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
+            val isExplicitlyReferenced = checker?.isReferencedAliasDeclaration(decl) == true
+            if (!isExplicitlyReferenced && specText != null &&
+                checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
                 return emptyList()
             }
         }
