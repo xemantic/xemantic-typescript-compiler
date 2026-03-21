@@ -2486,12 +2486,6 @@ class Emitter(
             write("?.")
         }
         // type arguments erased
-        // Add space before ( when callee is an identifier that looks like a keyword
-        // to prevent `await(x)` or `yield(x)` from being parsed incorrectly
-        val callee = node.expression
-        if (callee is Identifier && (callee.text == "await" || callee.text == "yield")) {
-            write(" ")
-        }
         write("(")
         // Emit inner comments for empty argument lists, e.g. `a( /*1*/)` or multiline variants
         if (!options.removeComments && node.innerComments != null && node.arguments.isEmpty()) {

@@ -18,12 +18,12 @@
 
 package com.xemantic.typescript.compiler
 
-class Parser(private val source: String, private val fileName: String, forceJsx: Boolean = false) {
+class Parser(private val source: String, private val fileName: String, forceJsx: Boolean = false, topLevelAwait: Boolean = false) {
 
     private val scanner = Scanner(source)
     private var token: SyntaxKind = SyntaxKind.Unknown
     private val diagnostics = mutableListOf<Diagnostic>()
-    private var inAsyncContext = false
+    private var inAsyncContext = topLevelAwait
     private var disallowIn = false
     private var classBodyDepth = 0
 

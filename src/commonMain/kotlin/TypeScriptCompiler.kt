@@ -499,7 +499,11 @@ class TypeScriptCompiler {
             // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
             val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
             val forceJsxForJs = isPlainJsFile && (options.jsx != null || options.allowJs)
-            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs)
+            val topLevelAwait = options.effectiveModule.let { m ->
+                m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+                    m == ModuleKind.Preserve || m == ModuleKind.System
+            }
+            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
 
@@ -665,7 +669,11 @@ class TypeScriptCompiler {
                 // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
                 val isPlainJsFileMulti = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
                 val forceJsxForJsMulti = isPlainJsFileMulti && (options.jsx != null || options.allowJs)
-                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti)
+                val topLevelAwaitMulti = options.effectiveModule.let { m ->
+                    m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+                        m == ModuleKind.Preserve || m == ModuleKind.System
+                }
+                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti)
                 val sourceFile = parser.parse()
                 parsedSourceFiles[file.fileName] = sourceFile
 
