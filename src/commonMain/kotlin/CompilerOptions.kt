@@ -164,7 +164,7 @@ data class CompilerOptions(
 ) {
 
     val effectiveTarget: ScriptTarget
-        get() = if (target == ScriptTarget.ES3) ScriptTarget.ES2015 else target
+        get() = if (target <= ScriptTarget.ES5) ScriptTarget.ES2015 else target
 
     val effectiveModule: ModuleKind
         get() = module ?: when {
