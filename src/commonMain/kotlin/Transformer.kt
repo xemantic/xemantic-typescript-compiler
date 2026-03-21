@@ -1805,6 +1805,27 @@ class Transformer(
             ))
         }
 
+        // Hoist /// <reference types> and /// <reference lib> directives from any
+        // statement to before the preamble (TypeScript always hoists these)
+        for (i in result.indices) {
+            val stmt = result[i]
+            val comments = stmt.leadingComments ?: continue
+            val refTypes = comments.filter { c ->
+                c.text.startsWith("/// <reference types=") || c.text.startsWith("/// <reference lib=")
+            }
+            if (refTypes.isNotEmpty()) {
+                val remaining = comments.filter { it !in refTypes }.ifEmpty { null }
+                prePreambleStatements.add(NotEmittedStatement(leadingComments = refTypes))
+                result[i] = when (stmt) {
+                    is VariableStatement -> stmt.copy(leadingComments = remaining)
+                    is ExpressionStatement -> stmt.copy(leadingComments = remaining)
+                    is FunctionDeclaration -> stmt.copy(leadingComments = remaining)
+                    is ClassDeclaration -> stmt.copy(leadingComments = remaining)
+                    else -> stmt
+                }
+            }
+        }
+
         // Insert pre-preamble statements (orphaned module-level comments) between
         // "use strict" and Object.defineProperty, or at the start if no "use strict".
         if (prePreambleStatements.isNotEmpty() && !hasExportEquals) {
