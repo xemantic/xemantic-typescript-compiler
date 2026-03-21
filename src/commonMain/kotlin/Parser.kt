@@ -3834,7 +3834,13 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val asterisk = parseOptional(SyntaxKind.Asterisk)
         // Comments after '*' (e.g., `yield */*c*/ expr`)
         val trailingAfterAsterisk = if (asterisk) scanner.consumeTrailingComments() else null
-        val expr = if (!canParseSemicolon()) parseAssignmentExpression() else null
+        // TypeScript only parses a yield operand if:
+        // 1. There's an asterisk (yield* always has an operand), OR
+        // 2. No preceding line break AND the next token can start an expression
+        // This prevents `[yield]` from trying to parse `]` as a yield operand.
+        val expr = if (
+            !scanner.hasPrecedingLineBreak() && (asterisk || isStartOfExpression())
+        ) parseAssignmentExpression() else null
         val exprWithComments = if (expr != null) {
             // For `yield /*c*/ expr` (no asterisk): comments before expression
             // For `yield */*c*/ expr`: comments after '*', before expression
@@ -4650,6 +4656,24 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val text = scanner.getTokenText()
         nextToken()
         return NumericLiteralNode(text = text, pos = pos, end = getEnd())
+    }
+
+    /** Checks if the current token can start an expression. */
+    private fun isStartOfExpression(): Boolean = when (token) {
+        SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral,
+        SyntaxKind.StringLiteral, SyntaxKind.RegularExpressionLiteral,
+        SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.TemplateHead,
+        SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.OpenBrace,
+        SyntaxKind.Plus, SyntaxKind.Minus, SyntaxKind.Tilde,
+        SyntaxKind.Exclamation, SyntaxKind.PlusPlus, SyntaxKind.MinusMinus,
+        SyntaxKind.TypeOfKeyword, SyntaxKind.VoidKeyword, SyntaxKind.DeleteKeyword,
+        SyntaxKind.ThisKeyword, SyntaxKind.SuperKeyword, SyntaxKind.NewKeyword,
+        SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword,
+        SyntaxKind.ClassKeyword, SyntaxKind.FunctionKeyword,
+        SyntaxKind.YieldKeyword, SyntaxKind.AwaitKeyword,
+        SyntaxKind.ImportKeyword, SyntaxKind.Slash, SyntaxKind.SlashEquals,
+        SyntaxKind.LessThan, SyntaxKind.DotDotDot -> true
+        else -> isIdentifier()
     }
 
     private fun isIdentifier(): Boolean = isIdentifierToken(token)
