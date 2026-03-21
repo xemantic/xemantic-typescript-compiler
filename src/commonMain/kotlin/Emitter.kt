@@ -3567,12 +3567,30 @@ class Emitter(
      * For block comments like `/** ... */`, adjusts each continuation line's indentation
      * by the delta between the original source indentation and the current emit indentation.
      */
+    /** Expands tab characters to spaces using 4-column tab stops. */
+    private fun expandTabs(line: String): String {
+        if ('\t' !in line) return line
+        val sb = StringBuilder()
+        var col = 0
+        for (ch in line) {
+            if (ch == '\t') {
+                val spaces = 4 - (col % 4)
+                repeat(spaces) { sb.append(' ') }
+                col += spaces
+            } else {
+                sb.append(ch)
+                col++
+            }
+        }
+        return sb.toString()
+    }
+
     private fun reindentComment(comment: Comment): String {
         if (comment.kind != SyntaxKind.MultiLineComment) return comment.text
         val text = comment.text
         if (!text.contains('\n')) return text
 
-        // Compute original indentation: spaces/tabs before `/*` on its source line
+        // Compute original indentation: count leading space columns before `/*` on its source line
         val origIndent = if (comment.pos >= 0 && comment.pos <= sourceText.length) {
             var lineStart = comment.pos - 1
             while (lineStart >= 0 && sourceText[lineStart] != '\n') lineStart--
@@ -3593,24 +3611,31 @@ class Emitter(
         val targetIndent = indentLevel * 4
         val delta = targetIndent - origIndent
 
-        // Re-indent each line after the first and strip trailing whitespace from all lines.
-        // Convert tabs to 4 spaces (TypeScript emitter normalizes whitespace in block comments).
-        val lines = text.replace("\t", "    ").split('\n')
+        // Re-indent each line after the first. Convert tabs to spaces using column-aware
+        // expansion (tab stops at multiples of 4). Trim trailing whitespace on non-blank
+        // lines but preserve blank lines with only indentation spaces.
+        val lines = text.split('\n')
         return buildString {
-            append(lines[0].trimEnd())
+            append(expandTabs(lines[0]).trimEnd())
             for (i in 1 until lines.size) {
                 append('\n')
-                val line = lines[i]
+                val expanded = expandTabs(lines[i])
                 val adjusted = if (delta > 0) {
-                    " ".repeat(delta) + line
+                    " ".repeat(delta) + expanded
                 } else if (delta < 0) {
                     // Remove up to |delta| leading spaces
-                    val toRemove = minOf(-delta, line.length - line.trimStart().length)
-                    line.substring(toRemove)
+                    val toRemove = minOf(-delta, expanded.length - expanded.trimStart().length)
+                    expanded.substring(toRemove)
                 } else {
-                    line
+                    expanded
                 }
-                append(adjusted.trimEnd())
+                // Preserve blank/whitespace-only lines (for empty lines inside block comments)
+                // but trim trailing whitespace on content lines
+                if (adjusted.isBlank()) {
+                    append(adjusted)
+                } else {
+                    append(adjusted.trimEnd())
+                }
             }
         }
     }
