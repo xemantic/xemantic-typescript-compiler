@@ -1961,15 +1961,16 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
 ---
 
-## Remaining failure analysis (session 2026-03-20d)
+## Remaining failure analysis (session 2026-03-21b)
 
 | Category | Count | Notes |
 |----------|-------|-------|
-| Error "none produced" | 1,762 | 1,257 need single TS code; dominated by TS2322 (293), TS2339 (81), TS2345 (63) |
-| Error diff | ~844 | Top FP: TS1109 (496x), TS1005 (458x), TS2304 (306x), TS7006 (264x) |
-| JS emit | ~782 | 64 with exactly 2-line diffs |
+| Error "none produced" | 1,782 | Dominated by TS2322 (551), TS2339 (150), TS2345 (140) |
+| Error diff | ~799 | Top FP: TS1005 (286x), TS2304 (221x), TS1109 (217x), TS7006 (188x) |
+| JS emit | ~478 | ES5 downlevel 345, decorators 27, system 7, sourcemap 6 |
+| JS bare-name | ~12 | ES5, JSX, metadata — all need major features |
 
-**Error baseline FP breakdown (we emit but shouldn't):** TS1109 (496), TS1005 (458), TS2304 (306), TS7006 (264), TS1003 (182), TS2300 (130), TS2695 (80), TS2448 (61), TS2454 (60), TS1036 (54)
+**Error baseline FP breakdown (we emit but shouldn't):** TS1005 (286), TS2304 (221), TS1109 (217), TS7006 (188), TS2300 (123), TS2454 (46), TS7026 (44), TS1036 (42), TS1003 (40), TS2564 (40)
 
 **Error baseline missing (expected but not emitted):** TS2322 (877), TS1005 (353), TS2339 (203), TS2304 (200), TS2345 (179), TS1128 (145), TS7006 (135), TS2300 (128), TS2454 (120), TS2728 (111)
 
