@@ -293,7 +293,9 @@ class Transformer(
 
         // Collect helpers to inject at top of file (order matters: __makeTemplateObject, __rest, __decorate, __param, __awaiter, __await, __asyncGenerator).
         val helpers = mutableListOf<RawStatement>()
-        val skipHelpers = options.noEmitHelpers || options.importHelpers
+        // importHelpers: true only skips inline helpers for module files (where tslib can be require()'d).
+        // Script files (non-module) can't import tslib, so they still need inline helpers.
+        val skipHelpers = options.noEmitHelpers || (options.importHelpers && isCurrentFileModule)
         if (needsMakeTemplateObjectHelper && !skipHelpers) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
         if (needsRestHelper && !skipHelpers) helpers.add(RawStatement(code = REST_HELPER))
         if (needsDecorateHelper && !skipHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
@@ -1509,9 +1511,18 @@ class Transformer(
                         if (iifeNameForExport !in exportedVarNames) exportedVarNames.add(iifeNameForExport)
                         result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
                     } else {
-                        // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
-                        // TypeScript handles this as error recovery (export inside block is invalid JS).
-                        result.add(cjsRewriteNestedExportVars(stmt))
+                        // Check if this is a simple assignment `X = expr` where X is an exported
+                        // name (has a void0 hoist). This covers class decorator reassignment:
+                        //   `A = __decorate([dec], A)` → `exports.A = A = __decorate([dec], A)`
+                        // TypeScript prefixes with `exports.X = X =` to update both local and export.
+                        val assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
+                        if (assignedExportName != null) {
+                            result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
+                        } else {
+                            // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
+                            // TypeScript handles this as error recovery (export inside block is invalid JS).
+                            result.add(cjsRewriteNestedExportVars(stmt))
+                        }
                     }
                 }
             }
@@ -1856,6 +1867,12 @@ class Transformer(
         // These must be at position 0 (before everything else)
         // When importHelpers: true, don't emit inline helpers — use tslib instead.
         val needsAnyImportHelper = needsImportStar || needsImportDefault || needsExportStar
+        // Additional helpers that use tslib when importHelpers: true (decorators, rest, awaiter, etc.)
+        val needsAnyInlineHelper = options.importHelpers && (
+            needsDecorateHelper || needsParamHelper || needsMetadataHelper ||
+            needsRestHelper || needsAwaiterHelper || needsAsyncGeneratorHelper ||
+            needsMakeTemplateObjectHelper
+        )
         if (needsAnyImportHelper && !options.importHelpers) {
             val helpers = buildString {
                 // __createBinding is needed by both __importStar and __exportStar
@@ -1873,9 +1890,10 @@ class Transformer(
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(0, RawStatement(code = helpers))
-        } else if (needsAnyImportHelper && options.importHelpers) {
+        } else if ((needsAnyImportHelper || needsAnyInlineHelper) && options.importHelpers) {
             // importHelpers: true → add tslib require AFTER preamble+void0 hoists+function stubs,
-            // BEFORE actual require statements (if not already present from __awaiter)
+            // BEFORE actual require statements (if not already present from __awaiter).
+            // This covers both star/default/export helpers AND decorator/rest/awaiter/etc. helpers.
             val hasTslibAlready = result.any { stmt ->
                 stmt is VariableStatement && stmt.declarationList.declarations.any {
                     (it.name as? Identifier)?.text == "tslib_1"
@@ -4765,6 +4783,37 @@ class Transformer(
         return stmt.copy(expression = call.copy(arguments = listOf(newArg)))
     }
 
+    /**
+     * If [stmt] is a simple assignment `X = expr` where `X` is in [exportedNames],
+     * returns `X`. Used to detect class decorator reassignment that needs export prefix.
+     */
+    private fun extractExportedAssignmentName(stmt: Statement, exportedNames: Collection<String>): String? {
+        if (stmt !is ExpressionStatement) return null
+        val bin = stmt.expression as? BinaryExpression ?: return null
+        if (bin.operator != Equals) return null
+        val lhsName = (bin.left as? Identifier)?.text ?: return null
+        return if (lhsName in exportedNames) lhsName else null
+    }
+
+    /**
+     * Wraps `X = expr` as `exports.X = X = expr` for exported class decorator reassignment.
+     */
+    private fun wrapWithExportAssignment(stmt: ExpressionStatement, name: String): ExpressionStatement {
+        val bin = stmt.expression as BinaryExpression
+        val exportsProp = PropertyAccessExpression(
+            expression = syntheticId("exports"),
+            name = Identifier(text = name, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        val wrapped = BinaryExpression(
+            left = exportsProp,
+            operator = Equals,
+            right = bin,
+            pos = -1, end = -1,
+        )
+        return stmt.copy(expression = wrapped)
+    }
+
     private fun makeEsModulePreamble(): Statement {
         return ExpressionStatement(
             expression = CallExpression(
@@ -5556,15 +5605,7 @@ class Transformer(
             asteriskToken = true,
             pos = -1, end = -1,
         )
-        val awaiterExpr: Expression = if (options.importHelpers) {
-            PropertyAccessExpression(
-                expression = syntheticId("tslib_1"),
-                name = syntheticId("__awaiter"),
-                pos = -1, end = -1,
-            )
-        } else {
-            syntheticId("__awaiter")
-        }
+        val awaiterExpr: Expression = helperExpr("__awaiter")
         return CallExpression(
             expression = awaiterExpr,
             arguments = listOf(thisArg, secondArg ?: void0, void0, generatorFn),
@@ -5588,7 +5629,7 @@ class Transformer(
             pos = -1, end = -1,
         )
         return CallExpression(
-            expression = syntheticId("__asyncGenerator"),
+            expression = helperExpr("__asyncGenerator"),
             arguments = listOf(thisArg, argumentsArg, generatorFn),
             pos = -1, end = -1,
         )
@@ -5597,7 +5638,7 @@ class Transformer(
     /** Builds `__await(expr)`. */
     private fun makeAwaitCall(expr: Expression): CallExpression =
         CallExpression(
-            expression = syntheticId("__await"),
+            expression = helperExpr("__await"),
             arguments = listOf(expr),
             pos = -1, end = -1,
         )
@@ -5720,7 +5761,7 @@ class Transformer(
                 newDecls.add(VariableDeclaration(
                     name = restName,
                     initializer = CallExpression(
-                        expression = syntheticId("__rest"),
+                        expression = helperExpr("__rest"),
                         arguments = listOf(
                             sourceExpr,
                             ArrayLiteralExpression(
@@ -5908,7 +5949,7 @@ class Transformer(
 
         // Emit rest: rest = __rest(source, ["a", "b"])
         val restCall = CallExpression(
-            expression = syntheticId("__rest"),
+            expression = helperExpr("__rest"),
             arguments = listOf(
                 sourceExpr,
                 ArrayLiteralExpression(elements = excludedKeys, pos = -1, end = -1),
@@ -7149,7 +7190,7 @@ class Transformer(
         }
 
         val makeTemplateCall = CallExpression(
-            expression = syntheticId("__makeTemplateObject"),
+            expression = helperExpr("__makeTemplateObject"),
             arguments = listOf(
                 ArrayLiteralExpression(elements = cookedElements, pos = -1, end = -1),
                 ArrayLiteralExpression(elements = rawElements, pos = -1, end = -1)
@@ -7838,7 +7879,7 @@ class Transformer(
                     for (dec in paramDecs) {
                         decoratorExprs.add(
                             CallExpression(
-                                expression = syntheticId("__param"),
+                                expression = helperExpr("__param"),
                                 arguments = listOf(
                                     NumericLiteralNode(text = paramIndex.toString(), pos = -1, end = -1),
                                     transformExpression(dec.expression),
@@ -7906,7 +7947,7 @@ class Transformer(
             }
 
             val call = CallExpression(
-                expression = syntheticId("__decorate"),
+                expression = helperExpr("__decorate"),
                 arguments = listOf(
                     ArrayLiteralExpression(
                         elements = decoratorExprs,
@@ -7928,7 +7969,7 @@ class Transformer(
     /** Build `__metadata("key", value)` call expression. */
     private fun makeMetadataCall(key: String, value: Expression): Expression =
         CallExpression(
-            expression = syntheticId("__metadata"),
+            expression = helperExpr("__metadata"),
             arguments = listOf(StringLiteralNode(text = key, pos = -1, end = -1), value),
             pos = -1, end = -1,
         )
@@ -8066,7 +8107,7 @@ class Transformer(
         }
 
         val call = CallExpression(
-            expression = syntheticId("__decorate"),
+            expression = helperExpr("__decorate"),
             arguments = listOf(
                 ArrayLiteralExpression(
                     elements = decoratorExprs,
@@ -10970,7 +11011,9 @@ class Transformer(
      * Otherwise, returns the bare `__helperName` identifier.
      */
     private fun helperExpr(helperName: String): Expression {
-        return if (options.importHelpers) {
+        // importHelpers: true uses tslib only for module files (where require() is available).
+        // Script files can't import tslib, so they use bare helper identifiers.
+        return if (options.importHelpers && isCurrentFileModule) {
             PropertyAccessExpression(
                 expression = syntheticId("tslib_1"),
                 name = syntheticId(helperName),
