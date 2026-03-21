@@ -57,6 +57,10 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`isolatedModules: true` ≠ `moduleDetection: force`**: `isolatedModules` tells TypeScript to check each file independently but does NOT force module treatment for files without imports/exports. Adding `isModuleFile = true` for `isolatedModules` causes regressions.
 - **Node16/Node18/Node20/NodeNext are all CJS for `.ts` files**: `isESModuleFormat` must return `false` for plain `.ts` files — only `.mts`/`.mjs` are ESM. Use `ModuleKind.isNodeNext` helper for checks. Files only get `__esModule` if they have imports/exports or `/// <reference types>` directives — NOT all files in these modes.
 - **JSON files re-emitted with trailing comma stripping**: `TypeScriptCompiler.kt` strips trailing commas from JSON output using `stripJsonTrailingCommas()` since TypeScript parses and re-emits JSON, naturally removing them.
+- **`esModuleInterop` defaults to `true`**: TypeScript 5.5+ deprecated `esModuleInterop: false`. Test baselines without explicit `@esModuleInterop` expect helpers (`__importStar`, `__importDefault`). Only when `@esModuleInterop: false` is explicitly set should helpers be skipped for default/namespace imports.
+- **`__importStar`/`__importDefault` conditional on `esModuleInterop`**: These helpers wrap `require()` only when `esModuleInterop: true`. Without it, use plain `require()`. `__exportStar`/`__createBinding` are ALWAYS used for `export * from` regardless of `esModuleInterop`.
+- **Helper ordering depends on first usage**: When both `__importStar` and `__exportStar` are needed, TypeScript emits the one used first in the output before the other. Track `importStarUsedFirst` by checking which `needsXxx = true` is set first.
+- **`importHelpers: true` uses tslib**: When set, don't emit inline helper functions. Instead add `const tslib_1 = require("tslib")` (CJS) or `"tslib"` dep + `tslib_1` param (AMD), and use `tslib_1.__helperName(...)` instead of bare `__helperName(...)`. The `helperExpr()` method handles this.
 
 ### Checker gotchas
 
@@ -134,7 +138,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,237 / 10,595 tests passing (68.3%)**, up from 7,228 (session 2026-03-20d→2026-03-21). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, ES5 downlevel transforms.
+**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,260 / 10,595 tests passing (68.5%)**, up from 7,228 (session 2026-03-20d→2026-03-21). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, ES5 downlevel transforms.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -152,7 +156,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 7,237 currently passing tests must continue to pass after every change.
+- **No regressions** — the 7,260 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 

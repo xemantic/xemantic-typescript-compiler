@@ -119,7 +119,7 @@ data class CompilerOptions(
     val baseUrl: String? = null,
     val paths: Map<String, List<String>> = emptyMap(),
     val moduleResolution: String? = null,
-    val esModuleInterop: Boolean = false,
+    val esModuleInterop: Boolean = true,
     val esModuleInteropExplicitlyFalse: Boolean = false,
     val allowSyntheticDefaultImportsExplicitlyFalse: Boolean = false,
     val allowJs: Boolean = false,

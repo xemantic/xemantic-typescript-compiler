@@ -674,6 +674,10 @@ class Transformer(
         var needsImportStar = false
         var needsImportDefault = false
         var needsExportStar = false
+        // Track first-usage ordering: TypeScript emits helpers in the order they're first used.
+        // When both __importStar and __exportStar are needed, whichever is used first in the output
+        // gets its helper emitted first.
+        var importStarUsedFirst = true  // default: __importStar before __exportStar
 
         // Counter for generating unique temp names per module base name (e.g. b_1, b_2)
         val moduleNameCounter = mutableMapOf<String, Int>()
@@ -1206,12 +1210,17 @@ class Transformer(
                     } else {
                         val bindings = clause.namedBindings
                         if (clause.name != null && bindings == null) {
-                            // Default import only: const b_1 = __importDefault(require("./b"))
-                            // TypeScript uses the module specifier basename as temp name, not the local name
-                            needsImportDefault = true
+                            // Default import only: import d from "bar"
+                            // esModuleInterop: const bar_1 = __importDefault(require("./b")); d → bar_1.default
+                            // no esModuleInterop: const bar_1 = require("./b"); d → bar_1.default
                             val localName = clause.name.text
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            if (options.esModuleInterop) {
+                                needsImportDefault = true
+                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            } else {
+                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            }
                             importStmtForLocalName[localName] = result.last()
                             // Rename: Namespace → b_1.default
                             renameMap[localName] = PropertyAccessExpression(
@@ -1220,25 +1229,35 @@ class Transformer(
                                 pos = -1, end = -1,
                             )
                         } else if (bindings is NamespaceImport) {
-                            // import * as x from "y" → const x = __importStar(require("y"))
-                            needsImportStar = true
+                            // import * as x from "y"
+                            // esModuleInterop: const x = __importStar(require("y"))
+                            // no esModuleInterop: const x = require("y")
                             val localName = bindings.name.text
-                            result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            if (options.esModuleInterop) {
+                                needsImportStar = true
+                                result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            } else {
+                                result.add(makeRequireConst(localName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            }
                             importStmtForLocalName[localName] = result.last()
                             // Namespace keeps its name, no rename needed
                         } else if (clause.name != null && bindings is NamedImports) {
                             // Combined default + named: import c, { x, y } from "m"
-                            // If all named bindings are "default", use __importDefault.
-                            // If there are non-default named bindings, use __importStar.
-                            val hasNonDefaultNamedElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
                             val localName = clause.name.text
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            if (hasNonDefaultNamedElement) {
-                                needsImportStar = true
-                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            if (options.esModuleInterop) {
+                                // If all named bindings are "default", use __importDefault.
+                                // If there are non-default named bindings, use __importStar.
+                                val hasNonDefaultNamedElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
+                                if (hasNonDefaultNamedElement) {
+                                    needsImportStar = true
+                                    result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                } else {
+                                    needsImportDefault = true
+                                    result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                }
                             } else {
-                                needsImportDefault = true
-                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             }
                             val importConstStmt = result.last()
                             importStmtForLocalName[localName] = importConstStmt
@@ -1261,15 +1280,15 @@ class Transformer(
                             }
                         } else if (bindings is NamedImports) {
                             // import { a, b as c } from "y" → const y_1 = require("y")
-                            // import { default as x } → treated like a default import
+                            // import { default as x } → with esModuleInterop: __importDefault; without: plain require
                             val hasDefaultElement = bindings.elements.any { (it.propertyName ?: it.name).text == "default" }
                             val hasNonDefaultElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            if (hasDefaultElement && hasNonDefaultElement) {
+                            if (options.esModuleInterop && hasDefaultElement && hasNonDefaultElement) {
                                 // Both default and named: need __importStar to preserve all exports
                                 needsImportStar = true
                                 result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                            } else if (hasDefaultElement) {
+                            } else if (options.esModuleInterop && hasDefaultElement) {
                                 needsImportDefault = true
                                 result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             } else {
@@ -1303,13 +1322,14 @@ class Transformer(
                         when (val clause = stmt.exportClause) {
                             null -> {
                                 // export * from "x" → __exportStar(require("x"), exports)
+                                if (!needsExportStar && !needsImportStar) importStarUsedFirst = false
                                 needsExportStar = true
                                 // Note: __exportStar needs __createBinding (emitted via CREATE_BINDING_HELPER)
                                 // but does NOT need the full __importStar/__setModuleDefault helpers
                                 val normalizedSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
                                 result.add(ExpressionStatement(
                                     expression = CallExpression(
-                                        expression = syntheticId("__exportStar"),
+                                        expression = helperExpr("__exportStar"),
                                         arguments = listOf(
                                             CallExpression(
                                                 expression = syntheticId("require"),
@@ -1338,7 +1358,7 @@ class Transformer(
                                     for (spec in nonTypeSpecs) {
                                         val importedName = (spec.propertyName ?: spec.name).text
                                         val exportName = spec.name.text
-                                        if (importedName == "default") {
+                                        if (importedName == "default" && options.esModuleInterop) {
                                             needsImportDefault = true
                                             result.add(makeReExportGetter(exportName, tempName, importedName, useImportDefault = true))
                                         } else {
@@ -1348,11 +1368,27 @@ class Transformer(
                                 }
                             }
                             is NamespaceExport -> {
-                                // export * as ns from "m" → exports.ns = __importStar(require("m"))
-                                needsImportStar = true
+                                // export * as ns from "m"
+                                // esModuleInterop: exports.ns = __importStar(require("m"))
+                                // no esModuleInterop: exports.ns = require("m")
                                 val exportName = clause.name.text
                                 if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
                                 val normalizedSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
+                                val requireCall = CallExpression(
+                                    expression = syntheticId("require"),
+                                    arguments = listOf(normalizedSpec),
+                                    pos = -1, end = -1,
+                                )
+                                val rhs: Expression = if (options.esModuleInterop) {
+                                    needsImportStar = true
+                                    CallExpression(
+                                        expression = helperExpr("__importStar"),
+                                        arguments = listOf(requireCall),
+                                        pos = -1, end = -1,
+                                    )
+                                } else {
+                                    requireCall
+                                }
                                 result.add(
                                     ExpressionStatement(
                                         expression = BinaryExpression(
@@ -1362,17 +1398,7 @@ class Transformer(
                                                 pos = -1, end = -1,
                                             ),
                                             operator = Equals,
-                                            right = CallExpression(
-                                                expression = syntheticId("__importStar"),
-                                                arguments = listOf(
-                                                    CallExpression(
-                                                        expression = syntheticId("require"),
-                                                        arguments = listOf(normalizedSpec),
-                                                        pos = -1, end = -1,
-                                                    ),
-                                                ),
-                                                pos = -1, end = -1,
-                                            ),
+                                            right = rhs,
                                             pos = -1, end = -1,
                                         ),
                                         pos = -1, end = -1,
@@ -1802,26 +1828,50 @@ class Transformer(
 
         // Insert runtime helpers at the start (before Object.defineProperty preamble)
         // These must be at position 0 (before everything else)
-        if (needsImportStar || needsImportDefault || needsExportStar) {
+        // When importHelpers: true, don't emit inline helpers — use tslib instead.
+        val needsAnyImportHelper = needsImportStar || needsImportDefault || needsExportStar
+        if (needsAnyImportHelper && !options.importHelpers) {
             val helpers = buildString {
                 // __createBinding is needed by both __importStar and __exportStar
                 if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
                 // __setModuleDefault needed for __importStar
                 if (needsImportStar) append(SET_MODULE_DEFAULT_HELPER)
-                // __exportStar comes before __importStar in TypeScript's emit order
-                if (needsExportStar) append(EXPORT_STAR_HELPER)
-                // __importStar for namespace imports
-                if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
+                // TypeScript orders __importStar/__exportStar by first usage in the output
+                if (importStarUsedFirst) {
+                    if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
+                    if (needsExportStar) append(EXPORT_STAR_HELPER)
+                } else {
+                    if (needsExportStar) append(EXPORT_STAR_HELPER)
+                    if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
+                }
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(0, RawStatement(code = helpers))
+        } else if (needsAnyImportHelper && options.importHelpers) {
+            // importHelpers: true → add tslib require AFTER preamble+void0 hoists+function stubs,
+            // BEFORE actual require statements (if not already present from __awaiter)
+            val hasTslibAlready = result.any { stmt ->
+                stmt is VariableStatement && stmt.declarationList.declarations.any {
+                    (it.name as? Identifier)?.text == "tslib_1"
+                }
+            }
+            if (!hasTslibAlready) {
+                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
+                // Insert after preamble + void0 hoists + function stubs.
+                // The preamble is at 0 (if present), void0 hoists follow, then function stubs.
+                val preambleCount = if (!hasExportEquals && hasStaticModuleDeclarations) 1 else 0
+                val hoistCount = if (exportedVarNames.isEmpty()) 0 else ((exportedVarNames.size + 49) / 50)
+                val stubCount = functionExportStubs.size
+                val insertIdx = preambleCount + hoistCount + stubCount
+                result.add(insertIdx, tslibStmt)
+            }
         }
 
         // Insert passed-in leading helpers (e.g. __awaiter, __rest) after CJS import helpers.
         // TypeScript's ordering: "use strict" → CJS helpers (__createBinding/__importStar) →
         // other helpers (__awaiter, __await, __asyncGenerator) → preamble → statements.
         if (leadingHelpers.isNotEmpty()) {
-            val insertPos = if (needsImportStar || needsImportDefault || needsExportStar) 1 else 0
+            val insertPos = if (needsAnyImportHelper) 1 else 0
             result.addAll(insertPos, leadingHelpers)
         }
 
@@ -2053,6 +2103,7 @@ class Transformer(
         var needsImportStar = false
         var needsImportDefault = false
         var needsExportStar = false
+        var importStarUsedFirst = true
 
         // Counter for generating unique temp names
         val moduleNameCounter = mutableMapOf<String, Int>()
@@ -2212,30 +2263,31 @@ class Transformer(
                         when {
                             clause.name != null && bindings == null -> {
                                 // Default import: import d from "mod" → dep "mod", param mod_1
-                                // Body: mod_1 = __importDefault(mod_1)
-                                needsImportDefault = true
                                 val localName = clause.name.text
                                 val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                                 namedModuleImports.add(specStr to tempName)
                                 stmt.leadingComments?.filter { c ->
                                     c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
                                 }?.let { if (it.isNotEmpty()) importParamReferenceComments[tempName] = it }
-                                // Hoisted reassignment: mod_1 = __importDefault(mod_1)
-                                importReassignments.add(
-                                    ExpressionStatement(
-                                        expression = BinaryExpression(
-                                            left = syntheticId(tempName),
-                                            operator = Equals,
-                                            right = CallExpression(
-                                                expression = syntheticId("__importDefault"),
-                                                arguments = listOf(syntheticId(tempName)),
+                                if (options.esModuleInterop) {
+                                    // Body: mod_1 = __importDefault(mod_1)
+                                    needsImportDefault = true
+                                    importReassignments.add(
+                                        ExpressionStatement(
+                                            expression = BinaryExpression(
+                                                left = syntheticId(tempName),
+                                                operator = Equals,
+                                                right = CallExpression(
+                                                    expression = helperExpr("__importDefault"),
+                                                    arguments = listOf(syntheticId(tempName)),
+                                                    pos = -1, end = -1,
+                                                ),
                                                 pos = -1, end = -1,
                                             ),
                                             pos = -1, end = -1,
-                                        ),
-                                        pos = -1, end = -1,
+                                        )
                                     )
-                                )
+                                }
                                 // Rename: localName → tempName.default
                                 renameMap[localName] = PropertyAccessExpression(
                                     expression = syntheticId(tempName),
@@ -2245,28 +2297,30 @@ class Transformer(
                             }
                             bindings is NamespaceImport -> {
                                 // import * as ns from "mod" → dep "mod", param ns
-                                // Body: ns = __importStar(ns)
-                                needsImportStar = true
                                 val paramName = bindings.name.text
                                 namedModuleImports.add(specStr to paramName)
                                 stmt.leadingComments?.filter { c ->
                                     c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
                                 }?.let { if (it.isNotEmpty()) importParamReferenceComments[paramName] = it }
-                                importReassignments.add(
-                                    ExpressionStatement(
-                                        expression = BinaryExpression(
-                                            left = syntheticId(paramName),
-                                            operator = Equals,
-                                            right = CallExpression(
-                                                expression = syntheticId("__importStar"),
-                                                arguments = listOf(syntheticId(paramName)),
+                                if (options.esModuleInterop) {
+                                    // Body: ns = __importStar(ns)
+                                    needsImportStar = true
+                                    importReassignments.add(
+                                        ExpressionStatement(
+                                            expression = BinaryExpression(
+                                                left = syntheticId(paramName),
+                                                operator = Equals,
+                                                right = CallExpression(
+                                                    expression = helperExpr("__importStar"),
+                                                    arguments = listOf(syntheticId(paramName)),
+                                                    pos = -1, end = -1,
+                                                ),
                                                 pos = -1, end = -1,
                                             ),
                                             pos = -1, end = -1,
-                                        ),
-                                        pos = -1, end = -1,
+                                        )
                                     )
-                                )
+                                }
                             }
                             bindings is NamedImports -> {
                                 // import { a, b as c } from "mod" → dep "mod", param mod_1
@@ -2274,7 +2328,7 @@ class Transformer(
                                     (it.propertyName ?: it.name).text == "default"
                                 }
                                 val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                                if (hasDefaultElement) {
+                                if (hasDefaultElement && options.esModuleInterop) {
                                     needsImportDefault = true
                                 }
                                 namedModuleImports.add(specStr to tempName)
@@ -2294,28 +2348,30 @@ class Transformer(
                             }
                             clause.name != null && bindings != null -> {
                                 // Combined default + named: import d, { a } from "mod"
-                                needsImportDefault = true
                                 val localName = clause.name.text
                                 val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                                 namedModuleImports.add(specStr to tempName)
                                 stmt.leadingComments?.filter { c ->
                                     c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path")
                                 }?.let { if (it.isNotEmpty()) importParamReferenceComments[tempName] = it }
-                                importReassignments.add(
-                                    ExpressionStatement(
-                                        expression = BinaryExpression(
-                                            left = syntheticId(tempName),
-                                            operator = Equals,
-                                            right = CallExpression(
-                                                expression = syntheticId("__importDefault"),
-                                                arguments = listOf(syntheticId(tempName)),
+                                if (options.esModuleInterop) {
+                                    needsImportDefault = true
+                                    importReassignments.add(
+                                        ExpressionStatement(
+                                            expression = BinaryExpression(
+                                                left = syntheticId(tempName),
+                                                operator = Equals,
+                                                right = CallExpression(
+                                                    expression = helperExpr("__importDefault"),
+                                                    arguments = listOf(syntheticId(tempName)),
+                                                    pos = -1, end = -1,
+                                                ),
                                                 pos = -1, end = -1,
                                             ),
                                             pos = -1, end = -1,
-                                        ),
-                                        pos = -1, end = -1,
+                                        )
                                     )
-                                )
+                                }
                                 renameMap[localName] = PropertyAccessExpression(
                                     expression = syntheticId(tempName),
                                     name = syntheticId("default"),
@@ -2529,6 +2585,7 @@ class Transformer(
                         }
                     } else if (stmt.exportClause == null && stmt.moduleSpecifier != null) {
                         // export * from "mod"
+                        if (!needsExportStar && !needsImportStar) importStarUsedFirst = false
                         needsExportStar = true
                         val modSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
                         val modPath = (modSpec as? StringLiteralNode)?.text ?: "unknown"
@@ -2536,7 +2593,7 @@ class Transformer(
                         namedModuleImports.add(modPath to tempName)
                         bodyStatements.add(ExpressionStatement(
                             expression = CallExpression(
-                                expression = syntheticId("__exportStar"),
+                                expression = helperExpr("__exportStar"),
                                 arguments = listOf(
                                     syntheticId(tempName),
                                     syntheticId("exports"),
@@ -2622,7 +2679,7 @@ class Transformer(
         if (filteredReassignments.none { s ->
             s is ExpressionStatement && s.expression is BinaryExpression &&
                 (s.expression.right as? CallExpression)?.let {
-                    (it.expression as? Identifier)?.text == "__importStar"
+                    isHelperCall(it.expression, "__importStar")
                 } == true
         }) {
             needsImportStar = false
@@ -2631,7 +2688,7 @@ class Transformer(
         if (filteredReassignments.none { s ->
             s is ExpressionStatement && s.expression is BinaryExpression &&
                 (s.expression.right as? CallExpression)?.let {
-                    (it.expression as? Identifier)?.text == "__importDefault"
+                    isHelperCall(it.expression, "__importDefault")
                 } == true
         }) {
             needsImportDefault = false
@@ -2690,9 +2747,12 @@ class Transformer(
         fullBody.addAll(deferredExportAssignments)
 
         // Build dependency array: ["require", "exports", namedAmdDeps..., usedNamedModuleImports..., unnamedAmdDeps..., unnamedModuleImports...]
+        val needsAnyAmdHelper = needsImportStar || needsImportDefault || needsExportStar
         val depPaths = mutableListOf<String>()
         depPaths.add("require")
         depPaths.add("exports")
+        // When importHelpers: true, add "tslib" as a dependency after "exports"
+        if (options.importHelpers && needsAnyAmdHelper) depPaths.add("tslib")
         namedAmdDeps.forEach { (path, _) -> depPaths.add(path) }
         usedNamedModuleImports.forEach { (path, _) -> depPaths.add(path) }
         unnamedAmdDeps.forEach { path -> depPaths.add(path) }
@@ -2707,6 +2767,8 @@ class Transformer(
         val paramNames = mutableListOf<String>()
         paramNames.add("require")
         paramNames.add("exports")
+        // When importHelpers: true, add tslib_1 parameter
+        if (options.importHelpers && needsAnyAmdHelper) paramNames.add("tslib_1")
         namedAmdDeps.forEach { (_, name) -> paramNames.add(name) }
         usedNamedModuleImports.forEach { (_, name) -> paramNames.add(name) }
 
@@ -2799,12 +2861,19 @@ class Transformer(
         }
 
         // Runtime helpers go OUTSIDE the define wrapper (after amd comments, before define)
-        if (needsImportStar || needsImportDefault || needsExportStar) {
+        // When importHelpers: true, don't emit inline helpers — use tslib instead.
+        if (needsAnyAmdHelper && !options.importHelpers) {
             val helpers = buildString {
                 if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
                 if (needsImportStar) append(SET_MODULE_DEFAULT_HELPER)
-                if (needsExportStar) append(EXPORT_STAR_HELPER)
-                if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
+                // TypeScript orders __importStar/__exportStar by first usage in the output
+                if (importStarUsedFirst) {
+                    if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
+                    if (needsExportStar) append(EXPORT_STAR_HELPER)
+                } else {
+                    if (needsExportStar) append(EXPORT_STAR_HELPER)
+                    if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
+                }
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
             result.add(RawStatement(code = helpers))
@@ -4797,6 +4866,7 @@ class Transformer(
 
     /**
      * Creates `const name = helperFn(require("specifier"))` for `__importStar`/`__importDefault`.
+     * When `importHelpers: true`, uses `tslib_1.helperFn(require(...))` instead of bare `helperFn`.
      */
     private fun makeImportHelperConst(
         name: String,
@@ -4813,7 +4883,7 @@ class Transformer(
                     VariableDeclaration(
                         name = Identifier(text = name, pos = -1, end = -1),
                         initializer = CallExpression(
-                            expression = syntheticId(helperName),
+                            expression = helperExpr(helperName),
                             arguments = listOf(
                                 CallExpression(
                                     expression = syntheticId("require"),
@@ -4842,7 +4912,7 @@ class Transformer(
         val returnExpr: Expression = when {
             importedProp != null && useImportDefault -> PropertyAccessExpression(
                 expression = CallExpression(
-                    expression = syntheticId("__importDefault"),
+                    expression = helperExpr("__importDefault"),
                     arguments = listOf(syntheticId(sourceName)),
                     pos = -1, end = -1,
                 ),
@@ -4911,7 +4981,7 @@ class Transformer(
      */
     private fun buildCjsDynamicImport(spec: Expression): Expression {
         fun importStarCall(arg: Expression) = CallExpression(
-            expression = syntheticId("__importStar"),
+            expression = helperExpr("__importStar"),
             arguments = listOf(CallExpression(expression = syntheticId("require"), arguments = listOf(arg), pos = -1, end = -1)),
             pos = -1, end = -1,
         )
@@ -5069,17 +5139,23 @@ class Transformer(
     /** Returns true if the expression is `require(...)` or `__importStar/Default(require(...))`. */
     private fun isRequireImport(expr: Expression?): Boolean =
         isRequireCall(expr) || (expr is CallExpression &&
-                ((expr.expression as? Identifier)?.text?.let { it == "__importStar" || it == "__importDefault" } == true) &&
+                (isHelperCall(expr.expression, "__importStar") || isHelperCall(expr.expression, "__importDefault")) &&
                 isRequireCall(expr.arguments.firstOrNull()))
+
+    /** Returns true if [expr] is a reference to the named helper (`__importStar`, `tslib_1.__importStar`, etc.). */
+    private fun isHelperCall(expr: Expression?, helperName: String): Boolean =
+        (expr as? Identifier)?.text == helperName ||
+        (expr is PropertyAccessExpression && expr.name.text == helperName &&
+            (expr.expression as? Identifier)?.text == "tslib_1")
 
     private fun isImportStarWrapper(stmt: VariableStatement): Boolean {
         val init = stmt.declarationList.declarations.firstOrNull()?.initializer as? CallExpression
-        return (init?.expression as? Identifier)?.text == "__importStar"
+        return isHelperCall(init?.expression, "__importStar")
     }
 
     private fun isImportDefaultWrapper(stmt: VariableStatement): Boolean {
         val init = stmt.declarationList.declarations.firstOrNull()?.initializer as? CallExpression
-        return (init?.expression as? Identifier)?.text == "__importDefault"
+        return isHelperCall(init?.expression, "__importDefault")
     }
 
     private fun generateModuleTempName(moduleSpecifier: Expression, counter: MutableMap<String, Int>? = null): String {
@@ -10844,6 +10920,23 @@ class Transformer(
 
     private fun syntheticId(name: String): Identifier {
         return Identifier(text = name, pos = -1, end = -1)
+    }
+
+    /**
+     * Returns the expression for a CJS/AMD helper function reference.
+     * When `importHelpers: true`, returns `tslib_1.__helperName`.
+     * Otherwise, returns the bare `__helperName` identifier.
+     */
+    private fun helperExpr(helperName: String): Expression {
+        return if (options.importHelpers) {
+            PropertyAccessExpression(
+                expression = syntheticId("tslib_1"),
+                name = syntheticId(helperName),
+                pos = -1, end = -1,
+            )
+        } else {
+            syntheticId(helperName)
+        }
     }
 
     private fun extractIdentifierName(expr: Node): String? {
