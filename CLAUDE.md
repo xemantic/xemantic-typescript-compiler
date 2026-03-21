@@ -37,8 +37,12 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`emitPropertyAssignment` comment tracking**: After emitting `": "`, track `onNewLine` (bool). For each comment: if `hasPrecedingNewLine && !onNewLine` emit newline+indent first; then write comment; if `hasTrailingNewLine` emit newline+indent and set `onNewLine=true`, else write space and `onNewLine=false`. Never double-newline by emitting newline when already at line start.
 - **JSX self-closing `/>` spacing**: TypeScript emits a space before `/>` only when there are NO attributes (`<Foo />`) but NOT when attributes are present (`<Foo bar="x"/>`).
 
+- **Parameter comment comma-after format**: In `emitParameters`, the first parameter's leading JSDoc comment stays on the same line as `(` — only subsequent parameters get a newline before their comments. TypeScript emits `function foo(/** comment */ a,` not `function foo(\n/** comment */ a,`.
+- **Yield expression operand parsing**: Use `isStartOfExpression()` check (not `!canParseSemicolon()`) to determine if yield has an operand. `canParseSemicolon()` returns false for `]` and `)` which would cause yield to try parsing them as expressions. TypeScript checks `!hasPrecedingLineBreak() && (asterisk || isStartOfExpression())`.
+
 ### Transformer gotchas
 
+- **String enum syntactic reverse mapping**: Enum members with syntactically-string initializers (template literals, string concat, references to other string-valued members) skip reverse mapping: `Foo["A"] = value` instead of `Foo[Foo["A"] = value] = "A"`. The `isSyntacticallyStringEnum` function checks the expression form, not just constant evaluation.
 - **Namespace/enum var dedup**: `declaredNames` set only collects non-`declare` class/function names (NOT enum/variable). Enums and namespaces with the same name as each other need their own var declarations.
 - **Orphaned comments (erased declarations)**: Only preserve a leading comment from an erased declaration if there is a blank line (≥2 newlines) between the comment's `end` position and the declaration's `pos`. Adjacent comments (only one newline between them and the keyword) are considered part of the declaration and are dropped. Check: `source.substring(comment.end, stmt.pos).count { it == '\n' } >= 2`.
 - **CommonJS transform**: Applied AFTER all other transforms. The `transformToCommonJS` receives already-transformed statements (so `ImportEqualsDeclaration` is already a `VariableStatement` with `require()` call). The `isModuleFile` check uses the ORIGINAL source file statements to detect module files.
@@ -138,7 +142,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,260 / 10,595 tests passing (68.5%)**, up from 7,228 (session 2026-03-20d→2026-03-21). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, ES5 downlevel transforms.
+**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,259 / 10,595 tests passing (68.5%)**, up from 7,238 (session 2026-03-21→2026-03-21b). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, ES5 downlevel transforms.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -156,7 +160,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 7,260 currently passing tests must continue to pass after every change.
+- **No regressions** — the 7,259 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
