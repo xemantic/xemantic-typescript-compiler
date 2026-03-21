@@ -757,14 +757,29 @@ class TypeScriptCompiler {
                 // before all file content (including AMD define() wrappers).
                 // Strip it from each file's output, then prepend once if any file had it.
                 var anyUseStrict = false
-                val parts = jsOutputs.map { (_, js) ->
-                    if (js.trimStart().startsWith("\"use strict\"")) {
+                var anyShebang: String? = null
+                val parts = jsOutputs.mapIndexed { idx, (_, js) ->
+                    var result = js
+                    // Strip shebang from all files; keep first file's shebang for output
+                    if (result.startsWith("#!")) {
+                        val lineEnd = result.indexOf('\n')
+                        if (lineEnd >= 0) {
+                            if (anyShebang == null) anyShebang = result.substring(0, lineEnd + 1)
+                            result = result.substring(lineEnd + 1)
+                        }
+                    }
+                    if (result.trimStart().startsWith("\"use strict\"")) {
                         anyUseStrict = true
-                        js.replace(Regex("""^\s*"use strict";\n?"""), "")
-                    } else js
+                        result = result.replace(Regex("""^\s*"use strict";\n?"""), "")
+                    }
+                    result
                 }
                 val body = parts.joinToString("\n")
-                val concatenated = if (anyUseStrict) "\"use strict\";\n$body" else body
+                val prefix = buildString {
+                    if (anyShebang != null) append(anyShebang)
+                    if (anyUseStrict) append("\"use strict\";\n")
+                }
+                val concatenated = prefix + body
                 listOf(outFileName to concatenated)
             } else {
                 jsonOutputs + jsOutputs
