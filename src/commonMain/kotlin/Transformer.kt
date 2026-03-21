@@ -291,21 +291,23 @@ class Transformer(
         }
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
-        // Collect helpers to inject at top of file (order matters: __makeTemplateObject, __rest, __decorate, __param, __awaiter, __await, __asyncGenerator).
+        // Collect helpers to inject at top of file.
+        // Order matches TypeScript's emit order (by helper priority/dependency):
+        // __makeTemplateObject, __awaiter, __asyncGenerator/__await, __rest, __decorate, __metadata, __param
         val helpers = mutableListOf<RawStatement>()
         // importHelpers: true only skips inline helpers for module files (where tslib can be require()'d).
         // Script files (non-module) can't import tslib, so they still need inline helpers.
         val skipHelpers = options.noEmitHelpers || (options.importHelpers && isCurrentFileModule)
         if (needsMakeTemplateObjectHelper && !skipHelpers) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
-        if (needsRestHelper && !skipHelpers) helpers.add(RawStatement(code = REST_HELPER))
-        if (needsDecorateHelper && !skipHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
-        if (needsMetadataHelper && !skipHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
-        if (needsParamHelper && !skipHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
         if (needsAwaiterHelper && !skipHelpers) helpers.add(RawStatement(code = AWAITER_HELPER))
         if (needsAsyncGeneratorHelper && !skipHelpers) {
             helpers.add(RawStatement(code = AWAIT_HELPER))
             helpers.add(RawStatement(code = ASYNC_GENERATOR_HELPER))
         }
+        if (needsRestHelper && !skipHelpers) helpers.add(RawStatement(code = REST_HELPER))
+        if (needsDecorateHelper && !skipHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
+        if (needsMetadataHelper && !skipHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
+        if (needsParamHelper && !skipHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
 
         // When helpers are present, lift leading comments from the first transformed statement
         // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
@@ -6350,11 +6352,20 @@ class Transformer(
                         is Expression -> Block(statements = listOf(ReturnStatement(expression = transformedBody)), multiLine = false)
                         else -> Block(statements = emptyList(), multiLine = false)
                     }
+                    // If the async arrow has object rest params (e.g. async ({ a, ...rest }) => ...),
+                    // flatten rest parameters BEFORE generating the __awaiter wrapper.
+                    val hasRestParam = options.effectiveTarget < ScriptTarget.ES2018 &&
+                        expr.parameters.any { p -> p.name is ObjectBindingPattern && p.name.elements.any { it.dotDotDotToken } }
+                    val (finalParams, finalBody) = if (hasRestParam) {
+                        flattenRestParameters(expr.parameters, generatorBody)
+                    } else {
+                        Pair(transformParameters(expr.parameters), generatorBody)
+                    }
                     expr.copy(
                         typeParameters = null,
-                        parameters = transformParameters(expr.parameters),
+                        parameters = finalParams,
                         type = null,
-                        body = makeAwaiterCall(thisArg, body = generatorBody),
+                        body = makeAwaiterCall(thisArg, body = finalBody),
                         modifiers = strippedModifiers - ModifierFlag.Async,
                         hasParenthesizedParameters = true,
                     )
