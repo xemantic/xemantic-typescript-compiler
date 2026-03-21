@@ -614,7 +614,12 @@ class Transformer(
                 is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
                     collectBoundNames(decl.name).forEach { n -> earlyRuntimeNames.add(n) }
                 }
-                is EnumDeclaration -> earlyRuntimeNames.add(stmt.name.text)
+                is EnumDeclaration -> {
+                    val isErasedConstEnum = ModifierFlag.Const in stmt.modifiers
+                        && !options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax
+                    if (isErasedConstEnum) earlyTypeOnlyNames.add(stmt.name.text)
+                    else earlyRuntimeNames.add(stmt.name.text)
+                }
                 is ModuleDeclaration -> {
                     val n = extractIdentifierName(stmt.name)
                     if (n != null) {
@@ -746,7 +751,15 @@ class Transformer(
                 is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
                     collectBoundNames(decl.name).forEach { n -> runtimeDeclaredNames.add(n) }
                 }
-                is EnumDeclaration -> runtimeDeclaredNames.add(stmt.name.text)
+                is EnumDeclaration -> {
+                    val isErasedConstEnum = ModifierFlag.Const in stmt.modifiers
+                        && !options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax
+                    if (isErasedConstEnum) {
+                        typeOnlyDeclaredNames.add(stmt.name.text)
+                    } else {
+                        runtimeDeclaredNames.add(stmt.name.text)
+                    }
+                }
                 is ModuleDeclaration -> {
                     val n = extractIdentifierName(stmt.name)
                         ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
@@ -2000,7 +2013,12 @@ class Transformer(
                 is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
                     collectBoundNames(decl.name).forEach { n -> earlyRuntimeNames.add(n) }
                 }
-                is EnumDeclaration -> earlyRuntimeNames.add(stmt.name.text)
+                is EnumDeclaration -> {
+                    val isErasedConstEnum = ModifierFlag.Const in stmt.modifiers
+                        && !options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax
+                    if (isErasedConstEnum) earlyTypeOnlyNames.add(stmt.name.text)
+                    else earlyRuntimeNames.add(stmt.name.text)
+                }
                 is ModuleDeclaration -> {
                     val n = extractIdentifierName(stmt.name)
                     if (n != null) {
@@ -2075,7 +2093,16 @@ class Transformer(
                 is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
                     collectBoundNames(decl.name).forEach { n -> runtimeDeclaredNames.add(n) }
                 }
-                is EnumDeclaration -> runtimeDeclaredNames.add(stmt.name.text)
+                is EnumDeclaration -> {
+                    // Const enums without preservation are type-only (fully inlined)
+                    val isErasedConstEnum = ModifierFlag.Const in stmt.modifiers
+                        && !options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax
+                    if (isErasedConstEnum) {
+                        typeOnlyDeclaredNames.add(stmt.name.text)
+                    } else {
+                        runtimeDeclaredNames.add(stmt.name.text)
+                    }
+                }
                 is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { runtimeDeclaredNames.add(it) }
                 else -> {}
             }
