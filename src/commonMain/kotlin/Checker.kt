@@ -10659,24 +10659,28 @@ class Checker(
     ) {
         when (expr) {
             is BinaryExpression -> {
-                val op = expr.operator
-                // Check for assignment operators
-                if (op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals
-                    || op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals
-                    || op == SyntaxKind.PercentEquals || op == SyntaxKind.AmpersandEquals
-                    || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals
-                    || op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals
-                    || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
-                    || op == SyntaxKind.AsteriskAsteriskEquals
-                    || op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals
-                    || op == SyntaxKind.QuestionQuestionEquals) {
-                    val left = expr.left
-                    if (left is Identifier && left.text in constNames) {
-                        emitTS2588(left, source, fileName)
+                // Iteratively walk left spine to avoid StackOverflow on deep binary chains
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    val op = current.operator
+                    if (op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals
+                        || op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals
+                        || op == SyntaxKind.PercentEquals || op == SyntaxKind.AmpersandEquals
+                        || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals
+                        || op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals
+                        || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+                        || op == SyntaxKind.AsteriskAsteriskEquals
+                        || op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals
+                        || op == SyntaxKind.QuestionQuestionEquals) {
+                        val left = current.left
+                        if (left is Identifier && left.text in constNames) {
+                            emitTS2588(left, source, fileName)
+                        }
                     }
+                    checkConstAssignmentInExpr(current.right, source, fileName, constNames)
+                    current = current.left
                 }
-                checkConstAssignmentInExpr(expr.left, source, fileName, constNames)
-                checkConstAssignmentInExpr(expr.right, source, fileName, constNames)
+                checkConstAssignmentInExpr(current, source, fileName, constNames)
             }
             is PrefixUnaryExpression -> {
                 if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
@@ -12044,15 +12048,30 @@ class Checker(
 
     /** Check defaults in destructuring binding patterns for self-references */
     private fun checkUBDInBindingDefaults(name: Node, selfNames: Map<String, Int>, source: String, fileName: String) {
+        // For binding patterns, earlier elements are available in later element defaults.
+        // Only check each element's initializer against names that are NOT yet initialized
+        // (i.e. the current element's own name and later elements, but not earlier ones).
         when (name) {
-            is ObjectBindingPattern -> for (el in name.elements) {
-                el.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
-                checkUBDInBindingDefaults(el.name, selfNames, source, fileName)
+            is ObjectBindingPattern -> {
+                val remaining = selfNames.toMutableMap()
+                for (el in name.elements) {
+                    el.initializer?.let { checkUBDInInitializer(it, remaining, source, fileName) }
+                    checkUBDInBindingDefaults(el.name, remaining, source, fileName)
+                    val elNames = mutableMapOf<String, Int>()
+                    collectSelfRefNames(el.name, elNames)
+                    for (n in elNames.keys) remaining.remove(n)
+                }
             }
-            is ArrayBindingPattern -> for (el in name.elements) {
-                if (el is BindingElement) {
-                    el.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
-                    checkUBDInBindingDefaults(el.name, selfNames, source, fileName)
+            is ArrayBindingPattern -> {
+                val remaining = selfNames.toMutableMap()
+                for (el in name.elements) {
+                    if (el is BindingElement) {
+                        el.initializer?.let { checkUBDInInitializer(it, remaining, source, fileName) }
+                        checkUBDInBindingDefaults(el.name, remaining, source, fileName)
+                        val elNames = mutableMapOf<String, Int>()
+                        collectSelfRefNames(el.name, elNames)
+                        for (n in elNames.keys) remaining.remove(n)
+                    }
                 }
             }
             else -> {}
