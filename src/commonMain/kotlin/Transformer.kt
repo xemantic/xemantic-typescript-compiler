@@ -859,17 +859,26 @@ class Transformer(
             }
         }
 
-        // Detect and strip "use strict" prologue directives so they can be re-inserted at the
-        // very top of the transformed output (before helpers and preamble).
+        // Detect and strip prologue directives (string-literal expression statements at the
+        // start of the file). "use strict" is re-inserted at the very top; other prologue
+        // directives (like "hey!" or " use strict ") go after "use strict" but before preamble.
         var hasUseStrictPrologue = false
+        val otherPrologueDirectives = mutableListOf<ExpressionStatement>()
+        var pastPrologue = false
         val statementsRaw = statements.filter { stmt ->
-            if (stmt is ExpressionStatement) {
-                val expr = stmt.expression
-                if (expr is StringLiteralNode && expr.text == "use strict") {
+            if (!pastPrologue && stmt is ExpressionStatement && stmt.expression is StringLiteralNode) {
+                val text = (stmt.expression as StringLiteralNode).text
+                if (text == "use strict") {
                     hasUseStrictPrologue = true
                     false // strip from body
-                } else true
-            } else true
+                } else {
+                    otherPrologueDirectives.add(stmt)
+                    false // strip from body — will be re-inserted before preamble
+                }
+            } else {
+                pastPrologue = true
+                true
+            }
         }
 
         // Extract leading RawStatement helpers (e.g. __awaiter) so they can be placed BEFORE
@@ -1823,6 +1832,11 @@ class Transformer(
             result.add(0, ExpressionStatement(
                 expression = StringLiteralNode(text = "use strict"),
             ))
+        }
+
+        // Re-insert other prologue directives after "use strict" but before preamble
+        if (otherPrologueDirectives.isNotEmpty()) {
+            prePreambleStatements.addAll(0, otherPrologueDirectives)
         }
 
         // Hoist /// <reference types> and /// <reference lib> directives from any
