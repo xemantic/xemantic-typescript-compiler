@@ -111,6 +111,14 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`for await` in non-async (TS1103)**: `ForOfStatement` with `awaitModifier` in non-async functions gets TS1103. The related TS1356 uses `FuncRef(pos, length)` to track enclosing function position — supports named functions, anonymous function expressions, and arrow functions.
 - **`verbatimModuleSyntax` suppresses const enum inlining**: When set, skip `collectConstEnumValues`, skip checker's `resolveConstEnumMemberAccess`, keep const enum IIFE bodies, and don't treat const enums as type-only.
 
+### Top-level await gotchas
+
+- **Parser `topLevelAwait` parameter**: When `module` is ES2022+, NodeNext, Preserve, or System, the Parser's `topLevelAwait` flag must be set to `true`. This sets initial `inAsyncContext = true` at the file level, enabling `await` keyword recognition at the top level. Inside function bodies, `inAsyncContext` is still reset per-function based on `async` modifier. In sync functions, `await(x)` remains a call expression (identifier).
+
+### Const enum type-only treatment gotchas
+
+- **Erased const enums in pre-scans**: Const enums (without `preserveConstEnums`/`isolatedModules`/`verbatimModuleSyntax`) must be treated as type-only in ALL pre-scan passes: `earlyPureTypeNames` (for `hasExportEquals` detection), `pureTypeNames` (for export specifier elision), and `directExportedVarNames` (for identifier rewriting). Without this, `export = ConstEnum` incorrectly generates `return E` instead of `Object.defineProperty(exports, "__esModule", ...)`.
+
 ### TS2454/TS2564 gotchas
 
 - **`any` type skips TS2454/TS2564**: Variables and properties typed as `any` don't need definite assignment checking because `any` includes `undefined`.
@@ -126,7 +134,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,212 / 10,595 tests passing (68.1%)**, up from 7,206 (session 2026-03-20c→2026-03-20d). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, ES5 downlevel transforms.
+**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,237 / 10,595 tests passing (68.3%)**, up from 7,228 (session 2026-03-20d→2026-03-21). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, ES5 downlevel transforms.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -144,7 +152,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 7,067 currently passing tests must continue to pass after every change.
+- **No regressions** — the 7,237 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
