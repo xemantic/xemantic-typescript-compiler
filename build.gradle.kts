@@ -362,10 +362,25 @@ val generateTypeScriptTests by tasks.registering {
                 val directives = parseDirectives(source)
                 val variations = computeVariations(directives)
 
+                // Deprecated targets/modules (removed in TypeScript 7.0/tsgo):
+                // Skip JS emit tests for these since downlevel transforms won't be implemented.
+                // Error baseline tests are still generated (TS5107 deprecation diagnostics matter).
+                val deprecatedTargets = setOf("es3", "es5")
+                val deprecatedModules = setOf("amd", "system", "umd")
+
                 for (config in variations) {
                     val paramName = paramBaselineName(name, config, "js")
                     val paramBaseline = baselinesDir.resolve(paramName)
                     if (paramBaseline.exists()) {
+                        // Skip JS emit for deprecated target/module combinations
+                        val targetVal = config["target"]
+                        val moduleVal = config["module"]
+                        val isDeprecatedTarget = targetVal in deprecatedTargets
+                        val isDeprecatedModule = moduleVal in deprecatedModules
+                        if (isDeprecatedTarget || isDeprecatedModule) {
+                            // Don't generate JS emit test — downlevel transforms deprecated in TS7
+                            continue
+                        }
                         totalParamTests++
                         // Build config suffix for test function name (e.g., target_es5 or alwaysstrict_true_target_es2015)
                         val configId = config.entries.sortedBy { it.key }
