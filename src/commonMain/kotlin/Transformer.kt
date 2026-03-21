@@ -8888,6 +8888,8 @@ class Transformer(
 
         // Track which members have been processed (even if non-constant)
         val processedMembers = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf())
+        // Track which members are syntactically string-valued (for skipping reverse mapping)
+        val stringValuedMembers = mutableSetOf<String>()
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
             val memberNameExpr = memberNameToString(member.name)
@@ -8896,16 +8898,21 @@ class Transformer(
                 member.initializer != null -> {
                     val initExpr = transformExpression(member.initializer)
                     val constStringVal = evaluateConstantStringExpression(initExpr)
-                    if (constStringVal != null) {
-                        // String enum member: E["B"] = "hello" (no reverse mapping)
-                        // After a string member, auto-increment is disrupted; next numeric
-                        // member must have explicit initializer. We don't track further.
+                    // Check if the initializer is syntactically a string expression
+                    val isSyntacticallyStr = constStringVal != null
+                        || isSyntacticallyStringEnum(initExpr, enumName, stringValuedMembers)
+                    if (isSyntacticallyStr) {
+                        // String enum member: E["B"] = value (no reverse mapping)
                         autoIncrementValid = false
-                        // Always emit the folded string value as a double-quoted literal.
-                        val stringExpr = StringLiteralNode(
-                            text = constStringVal, singleQuote = false, rawText = null,
-                            pos = -1, end = -1,
-                        )
+                        stringValuedMembers.add(memberName)
+                        val emitRight = if (constStringVal != null) {
+                            StringLiteralNode(
+                                text = constStringVal, singleQuote = false, rawText = null,
+                                pos = -1, end = -1,
+                            )
+                        } else {
+                            qualifyEnumMemberRefs(initExpr, enumName, knownMemberNames)
+                        }
                         ExpressionStatement(
                             expression = BinaryExpression(
                                 left = ElementAccessExpression(
@@ -8914,7 +8921,7 @@ class Transformer(
                                     pos = -1, end = -1,
                                 ),
                                 operator = Equals,
-                                right = stringExpr,
+                                right = emitRight,
                                 pos = -1, end = -1,
                             ),
                             pos = -1, end = -1,
@@ -9345,6 +9352,33 @@ class Transformer(
             }
             else -> null
         }
+    }
+
+    /**
+     * Checks if an expression is syntactically known to produce a string value at runtime,
+     * even if the exact value can't be computed at compile time. Used to skip reverse
+     * mapping for enum members with string-valued initializers.
+     */
+    private fun isSyntacticallyStringEnum(
+        expr: Expression,
+        enumName: String,
+        stringValuedMembers: Set<String>,
+    ): Boolean = when (expr) {
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is TemplateExpression -> true
+        is ParenthesizedExpression -> isSyntacticallyStringEnum(expr.expression, enumName, stringValuedMembers)
+        is BinaryExpression -> {
+            expr.operator == SyntaxKind.Plus && (
+                isSyntacticallyStringEnum(expr.left, enumName, stringValuedMembers)
+                    || isSyntacticallyStringEnum(expr.right, enumName, stringValuedMembers)
+            )
+        }
+        is PropertyAccessExpression -> {
+            val obj = expr.expression
+            val prop = expr.name.text
+            obj is Identifier && obj.text == enumName && prop in stringValuedMembers
+        }
+        is Identifier -> expr.text in stringValuedMembers
+        else -> false
     }
 
     /**
