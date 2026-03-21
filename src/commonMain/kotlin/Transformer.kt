@@ -838,9 +838,10 @@ class Transformer(
                 }
             }
             // Exported import aliases (export import b = a.x) also use the Direct path
-            // and need identifier rewriting to exports.b
+            // and need identifier rewriting to exports.b (skip type-only aliases)
             if (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers
-                && stmt.moduleReference !is ExternalModuleReference) {
+                && stmt.moduleReference !is ExternalModuleReference
+                && stmt.name.text !in pureTypeNames) {
                 directExportedVarNames.add(stmt.name.text)
             }
         }
@@ -2121,7 +2122,8 @@ class Transformer(
             }
             // Exported import aliases (export import b = a.x) also use the Direct path
             if (stmt is ImportEqualsDeclaration && ModifierFlag.Export in stmt.modifiers
-                && stmt.moduleReference !is ExternalModuleReference) {
+                && stmt.moduleReference !is ExternalModuleReference
+                && stmt.name.text !in pureTypeNames) {
                 directExportedVarNames.add(stmt.name.text)
             }
         }
