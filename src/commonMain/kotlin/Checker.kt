@@ -12835,90 +12835,91 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkArgsCollisionInStatements(result.sourceFile.statements, source, fileName)
+            val isModule = isModuleFile(result.sourceFile.statements)
+            checkArgsCollisionInStatements(result.sourceFile.statements, source, fileName, isModule)
         }
     }
 
-    private fun checkArgsCollisionInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkArgsCollisionInStatement(stmt, source, fileName)
+    private fun checkArgsCollisionInStatements(stmts: List<Statement>, source: String, fileName: String, isModule: Boolean = false) {
+        for (stmt in stmts) checkArgsCollisionInStatement(stmt, source, fileName, isModule)
     }
 
-    private fun checkArgsCollisionInStatement(stmt: Statement, source: String, fileName: String) {
+    private fun checkArgsCollisionInStatement(stmt: Statement, source: String, fileName: String, isModule: Boolean = false) {
         when (stmt) {
             is FunctionDeclaration -> {
                 // Only check implementations (have body), skip overload signatures and declare
                 if (stmt.body != null && ModifierFlag.Declare !in stmt.modifiers) {
-                    checkArgsCollisionInParams(stmt.parameters, source, fileName)
+                    checkArgsCollisionInParams(stmt.parameters, source, fileName, isModule)
                 }
-                stmt.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                stmt.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
             }
             is ClassDeclaration -> {
                 val isDeclare = ModifierFlag.Declare in stmt.modifiers
                 for (m in stmt.members) {
                     when (m) {
                         is MethodDeclaration -> {
-                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName)
-                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
+                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                         }
                         is Constructor -> {
-                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName)
-                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
+                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                         }
-                        is GetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
+                        is SetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                         else -> {}
                     }
                 }
             }
-            is ExpressionStatement -> checkArgsCollisionInExpr(stmt.expression, source, fileName)
+            is ExpressionStatement -> checkArgsCollisionInExpr(stmt.expression, source, fileName, isModule)
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkArgsCollisionInExpr(it, source, fileName) }
+                d.initializer?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
             }
-            is ReturnStatement -> stmt.expression?.let { checkArgsCollisionInExpr(it, source, fileName) }
-            is Block -> checkArgsCollisionInStatements(stmt.statements, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
+            is Block -> checkArgsCollisionInStatements(stmt.statements, source, fileName, isModule)
             is IfStatement -> {
-                checkArgsCollisionInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkArgsCollisionInStatement(it, source, fileName) }
+                checkArgsCollisionInStatement(stmt.thenStatement, source, fileName, isModule)
+                stmt.elseStatement?.let { checkArgsCollisionInStatement(it, source, fileName, isModule) }
             }
-            is ForStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName)
+            is ForStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
+            is WhileStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
+            is DoStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
             is TryStatement -> {
-                checkArgsCollisionInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkArgsCollisionInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                checkArgsCollisionInStatements(stmt.tryBlock.statements, source, fileName, isModule)
+                stmt.catchClause?.let { checkArgsCollisionInStatements(it.block.statements, source, fileName, isModule) }
+                stmt.finallyBlock?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
             }
             is ModuleDeclaration -> {
                 if (ModifierFlag.Declare !in stmt.modifiers) {
-                    (stmt.body as? ModuleBlock)?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                    (stmt.body as? ModuleBlock)?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                 }
             }
             else -> {}
         }
     }
 
-    private fun checkArgsCollisionInExpr(expr: Expression, source: String, fileName: String) {
+    private fun checkArgsCollisionInExpr(expr: Expression, source: String, fileName: String, isModule: Boolean = false) {
         when (expr) {
             is ArrowFunction -> {
-                checkArgsCollisionInParams(expr.parameters, source, fileName)
+                checkArgsCollisionInParams(expr.parameters, source, fileName, isModule)
                 when (val body = expr.body) {
-                    is Block -> checkArgsCollisionInStatements(body.statements, source, fileName)
+                    is Block -> checkArgsCollisionInStatements(body.statements, source, fileName, isModule)
                     else -> {}
                 }
             }
             is FunctionExpression -> {
-                checkArgsCollisionInParams(expr.parameters, source, fileName)
-                expr.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                checkArgsCollisionInParams(expr.parameters, source, fileName, isModule)
+                expr.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
             }
             is ClassExpression -> for (m in expr.members) {
                 when (m) {
                     is MethodDeclaration -> {
-                        checkArgsCollisionInParams(m.parameters, source, fileName)
-                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
+                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                     }
                     is Constructor -> {
-                        checkArgsCollisionInParams(m.parameters, source, fileName)
-                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
+                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                     }
                     else -> {}
                 }
@@ -12926,20 +12927,22 @@ class Checker(
             is ObjectLiteralExpression -> for (prop in expr.properties) {
                 when (prop) {
                     is MethodDeclaration -> {
-                        checkArgsCollisionInParams(prop.parameters, source, fileName)
-                        prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName) }
+                        checkArgsCollisionInParams(prop.parameters, source, fileName, isModule)
+                        prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                     }
                     else -> {}
                 }
             }
-            is ParenthesizedExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName)
+            is ParenthesizedExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
             else -> {}
         }
     }
 
-    private fun checkArgsCollisionInParams(params: List<Parameter>, source: String, fileName: String) {
+    private fun checkArgsCollisionInParams(params: List<Parameter>, source: String, fileName: String, isModule: Boolean = false) {
         val hasRest = params.any { it.dotDotDotToken && !it.isCommentPlaceholder }
-        if (!hasRest) return
+        // In module files (strict mode), "arguments" is always invalid as a parameter name (TS1215)
+        // In non-module files, only check when rest params exist (TS2396)
+        if (!hasRest && !isModule) return
         // Check each parameter for "arguments" name
         for (param in params) {
             if (param.isCommentPlaceholder) continue
@@ -12957,16 +12960,29 @@ class Checker(
                 }
                 val length = (end - start).coerceAtLeast(1)
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters.",
-                    category = DiagnosticCategory.Error,
-                    code = 2396,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
+                if (isModule) {
+                    diagnostics.add(Diagnostic(
+                        message = "Invalid use of 'arguments'. Modules are automatically in strict mode.",
+                        category = DiagnosticCategory.Error,
+                        code = 1215,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                } else {
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters.",
+                        category = DiagnosticCategory.Error,
+                        code = 2396,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
             }
         }
     }
