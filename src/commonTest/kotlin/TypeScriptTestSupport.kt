@@ -161,6 +161,14 @@ private fun stripDtsSection(baseline: String): String {
             val fileName = trimmed.removePrefix("//// [").removeSuffix("]")
             val baseName = fileName.substringAfterLast('/')
             val isDtsFile = baseName.endsWith(".d.ts") || baseName.endsWith(".d.mts") || baseName.endsWith(".d.cts")
+            // A .js/.jsx/.mjs/.cjs file is output only if a .ts/.tsx/.mts/.cts file with the
+            // same basename was already seen (before adding the current file to the set).
+            // Must check BEFORE adding to sourceBaseNamesSoFar to avoid treating source echoes
+            // of allowJs .js input files as output (they set seenJsOutput prematurely otherwise).
+            val isOutputJs = (baseName.endsWith(".js") || baseName.endsWith(".jsx") ||
+                    baseName.endsWith(".mjs") || baseName.endsWith(".cjs")) &&
+                    baseName.substringBeforeLast('.') in sourceBaseNamesSoFar
+            if (isOutputJs) seenJsOutput = true
             // Track source files as we encounter them (.ts, .tsx, .mts, .cts, .js, .jsx, .mjs, .cjs)
             when {
                 baseName.endsWith(".ts") && !baseName.endsWith(".d.ts") ->
@@ -175,11 +183,6 @@ private fun stripDtsSection(baseline: String): String {
                 baseName.endsWith(".mjs") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".mjs"))
                 baseName.endsWith(".cjs") -> sourceBaseNamesSoFar.add(baseName.removeSuffix(".cjs"))
             }
-            // A .js file is output only if we've already seen a .ts file with the same basename
-            val isOutputJs = (baseName.endsWith(".js") || baseName.endsWith(".jsx") ||
-                    baseName.endsWith(".mjs") || baseName.endsWith(".cjs")) &&
-                    baseName.substringBeforeLast('.') in sourceBaseNamesSoFar
-            if (isOutputJs) seenJsOutput = true
             // Strip .d.ts sections that are compiler-generated output:
             // either after JS output, or matching a previously seen source file basename
             val dtsBaseName = when {
