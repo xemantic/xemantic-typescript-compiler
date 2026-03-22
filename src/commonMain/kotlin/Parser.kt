@@ -4123,6 +4123,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
         val dotTrailing = if (dotDotDot) trailingComments() else null
         val name = parseBindingNameOrPattern()
+        // Consume optional `!` (definite assignment assertion on parameter, e.g. `param!: Type`).
+        // This is a TypeScript-specific syntax; the `!` is consumed but not stored since it has no
+        // semantic effect after type erasure.
+        parseOptional(SyntaxKind.Exclamation)
         // Capture trailing comments after the name before type annotation, since they will be lost
         // when the type annotation is parsed and erased (e.g. `...restGreetings /* comment */: string[]`)
         val nameTrailing = if (token == SyntaxKind.Colon || token == SyntaxKind.Question) {
