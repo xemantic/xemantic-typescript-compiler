@@ -9583,8 +9583,8 @@ class Checker(
                                         emitTS7020WithSpan(member.pos, member.end - member.pos, source, fileName)
                                     }
                                     rawName == "new" -> {
-                                        // Construct signature `new()` — emit TS7021
-                                        emitTS7021WithSpan(member.pos, member.end - member.pos, source, fileName)
+                                        // Construct signature `new()` — emit TS7013
+                                        emitTS7013WithSpan(member.pos, member.end - member.pos, source, fileName)
                                     }
                                     else -> {
                                         // Named method signature — emit TS7010
@@ -9653,13 +9653,13 @@ class Checker(
         ))
     }
 
-    /** TS7021: Construct signature, which lacks return-type annotation, implicitly has an 'any' return type. */
-    private fun emitTS7021WithSpan(start: Int, length: Int, source: String, fileName: String) {
+    /** TS7013: Construct signature, which lacks return-type annotation, implicitly has an 'any' return type. */
+    private fun emitTS7013WithSpan(start: Int, length: Int, source: String, fileName: String) {
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type.",
             category = DiagnosticCategory.Error,
-            code = 7021,
+            code = 7013,
             fileName = fileName,
             line = line,
             character = character,
