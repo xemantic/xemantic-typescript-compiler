@@ -1389,15 +1389,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 parseSemicolon()
                 if (dotDotDotPos >= 0) {
                     // TS1017: An index signature cannot have a rest parameter.
+                    // Suppress TS1021 when TS1017 fires
                     reportError("An index signature cannot have a rest parameter.", code = 1017,
                         overrideStart = dotDotDotPos, overrideLength = 3)
-                }
-                if (questionPos >= 0) {
+                } else if (questionPos >= 0) {
                     // TS1019: An index signature parameter cannot have a question mark.
+                    // Suppress TS1021 when TS1019 fires
                     reportError("An index signature parameter cannot have a question mark.", code = 1019,
                         overrideStart = questionPos, overrideLength = 1)
-                }
-                if (type == null) {
+                } else if (type == null) {
                     // TS1021: An index signature must have a type annotation.
                     val nodeEnd = scanner.getPrevTokenEnd()
                     reportError("An index signature must have a type annotation.", code = 1021,
@@ -1744,11 +1744,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             // TS1017: An index signature cannot have a rest parameter.
             reportError("An index signature cannot have a rest parameter.", code = 1017,
                 overrideStart = dotDotDotPos, overrideLength = 3)
-            if (type == null) {
-                val nodeEnd = scanner.getPrevTokenEnd()
-                reportError("An index signature must have a type annotation.", code = 1021,
-                    overrideStart = pos, overrideLength = nodeEnd - pos)
-            }
+            // When TS1017 fires, suppress TS1021 (TypeScript doesn't emit both for the same sig)
             val param = Parameter(name = paramName, type = paramType)
             return IndexSignature(parameters = listOf(param), type = type, modifiers = modifiers, pos = pos, end = getEnd())
         }
@@ -1779,10 +1775,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             parseSemicolon() // consume trailing ; if present (extends span to include it for TS1021)
             if (questionPos >= 0) {
                 // TS1019: An index signature parameter cannot have a question mark.
+                // Suppress TS1021 when TS1019 fires (TypeScript doesn't emit both)
                 reportError("An index signature parameter cannot have a question mark.", code = 1019,
                     overrideStart = questionPos, overrideLength = 1)
-            }
-            if (!hasExtraParams && type == null) {
+            } else if (!hasExtraParams && type == null) {
                 // TS1021: An index signature must have a type annotation.
                 val nodeEnd = scanner.getPrevTokenEnd()
                 reportError("An index signature must have a type annotation.", code = 1021,
