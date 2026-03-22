@@ -202,6 +202,8 @@ class Checker(
         checkCircularImportAlias()
         // 57. Check return statement outside function body (TS1108)
         checkReturnOutsideFunction()
+        // 57b. Check with statements (TS1101 in strict mode, TS2410 always)
+        checkWithStatements()
         // 58. Check duplicate labels (TS1114)
         checkDuplicateLabels()
         // 59. Check empty type argument list (TS1099)
@@ -7381,6 +7383,22 @@ class Checker(
                 }
             }
             is LabeledStatement -> {
+                // TS1344: A label is not allowed on declaration statements (strict mode only)
+                val isStrict = options.alwaysStrict != false
+                if (isStrict && isDeclarationStatement(stmt.statement)) {
+                    val labelStart = stmt.label.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, labelStart)
+                    diagnostics.add(Diagnostic(
+                        message = "'A label is not allowed here.",
+                        category = DiagnosticCategory.Error,
+                        code = 1344,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = labelStart,
+                        length = stmt.label.text.length,
+                    ))
+                }
                 val newLabels = labelNames + stmt.label.text
                 checkJumpInStatement(stmt.statement, source, fileName,
                     inIteration, inSwitch, newLabels, crossedFunctionBoundary)
@@ -7430,6 +7448,19 @@ class Checker(
                             inIteration = false, inSwitch = false, labelNames = emptySet(),
                             crossedFunctionBoundary = true)
                     }
+                }
+            }
+            is ModuleDeclaration -> {
+                // Recurse into namespace bodies with same iteration/switch context.
+                // Note: TypeScript fires TS1104 (continue not in iteration) and TS1108 (return
+                // outside function) inside namespaces, but does NOT fire TS1105 (break not in
+                // iteration/switch) because TS1036 (ambient statement) covers break statements.
+                // We suppress TS1105 for break inside namespace by noting the namespace context.
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    checkJumpInStatements(body.statements, source, fileName,
+                        inIteration, inSwitch = true /* suppress TS1105 for break */,
+                        labelNames, crossedFunctionBoundary)
                 }
             }
             is VariableStatement -> {
@@ -7489,6 +7520,15 @@ class Checker(
             else -> {}
         }
     }
+
+    /**
+     * Returns true if this statement is a "declaration statement" that cannot be the body
+     * of a labeled statement. TS1344 fires for labels on these statement types.
+     */
+    private fun isDeclarationStatement(stmt: Statement): Boolean = stmt is VariableStatement ||
+        stmt is FunctionDeclaration || stmt is ClassDeclaration || stmt is EnumDeclaration ||
+        stmt is ModuleDeclaration || stmt is InterfaceDeclaration || stmt is TypeAliasDeclaration ||
+        stmt is ImportDeclaration || stmt is ExportDeclaration || stmt is ExportAssignment
 
     private fun emitJumpDiagnostic(stmt: Statement, source: String, fileName: String, code: Int, message: String) {
         var start = stmt.pos
@@ -15091,6 +15131,11 @@ class Checker(
                     stmt.elseStatement?.let { checkReturnInTopLevelStmt(it, source, fileName) }
                 }
                 is Block -> checkReturnInTopLevel(stmt.statements, source, fileName)
+                is ModuleDeclaration -> {
+                    // Return inside namespace body is also invalid
+                    val body = stmt.body
+                    if (body is ModuleBlock) checkReturnInTopLevel(body.statements, source, fileName)
+                }
                 // Don't recurse into functions/classes — returns are valid there
                 else -> {}
             }
@@ -15118,6 +15163,157 @@ class Checker(
                 ))
             }
             is Block -> checkReturnInTopLevel(stmt.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1101: 'with' statements are not allowed in strict mode
+    // TS2410: The 'with' statement is not supported
+    // -----------------------------------------------------------------------
+
+    private fun checkWithStatements() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Strict mode: fires when alwaysStrict is not explicitly false
+            val isStrict = options.alwaysStrict != false
+            walkForWithStatements(result.sourceFile.statements, source, fileName, isStrict)
+        }
+    }
+
+    private fun walkForWithStatements(stmts: List<Statement>, source: String, fileName: String, isStrict: Boolean) {
+        for (stmt in stmts) {
+            walkStmtForWithStatements(stmt, source, fileName, isStrict)
+        }
+    }
+
+    private fun walkStmtForWithStatements(stmt: Statement, source: String, fileName: String, isStrict: Boolean) {
+        when (stmt) {
+            is WithStatement -> {
+                var spanStart = stmt.pos
+                while (spanStart < source.length && source[spanStart].isWhitespace()) spanStart++
+                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                if (isStrict) {
+                    // TS1101: span = just the 'with' keyword (4 chars)
+                    diagnostics.add(Diagnostic(
+                        message = "'with' statements are not allowed in strict mode.",
+                        category = DiagnosticCategory.Error,
+                        code = 1101,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = spanStart,
+                        length = 4, // "with".length
+                    ))
+                }
+                // TS2410: span = from 'with' to closing ')' of the condition.
+                // Find the matching ')' by scanning forward from 'with ' and tracking depth.
+                var spanEnd2 = spanStart + 4 // skip 'with'
+                while (spanEnd2 < source.length && source[spanEnd2] != '(') spanEnd2++
+                var depth = 0
+                while (spanEnd2 < source.length) {
+                    when (source[spanEnd2]) {
+                        '(' -> { depth++; spanEnd2++ }
+                        ')' -> {
+                            spanEnd2++ // include the ')'
+                            if (--depth == 0) break
+                        }
+                        else -> spanEnd2++
+                    }
+                }
+                val ts2410Length = spanEnd2 - spanStart
+                diagnostics.add(Diagnostic(
+                    message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2410,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = spanStart,
+                    length = ts2410Length,
+                ))
+                // Recurse into the body statement
+                walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            }
+            is Block -> walkForWithStatements(stmt.statements, source, fileName, isStrict)
+            is IfStatement -> {
+                walkStmtForWithStatements(stmt.thenStatement, source, fileName, isStrict)
+                stmt.elseStatement?.let { walkStmtForWithStatements(it, source, fileName, isStrict) }
+            }
+            is ForStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            is ForInStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            is ForOfStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            is WhileStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            is DoStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    val stmts2 = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    walkForWithStatements(stmts2, source, fileName, isStrict)
+                }
+            }
+            is TryStatement -> {
+                walkForWithStatements(stmt.tryBlock.statements, source, fileName, isStrict)
+                stmt.catchClause?.block?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                stmt.finallyBlock?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+            }
+            is LabeledStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            // Function bodies: recurse (with becomes valid JS-wise inside them, but TS still checks)
+            is FunctionDeclaration -> {
+                stmt.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) walkForWithStatements(body.statements, source, fileName, isStrict)
+            }
+            is ExpressionStatement -> walkExprForWithStatements(stmt.expression, source, fileName, isStrict)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkExprForWithStatements(it, source, fileName, isStrict) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForWithStatements(expr: Expression, source: String, fileName: String, isStrict: Boolean) {
+        when (expr) {
+            is FunctionExpression -> {
+                walkForWithStatements(expr.body.statements, source, fileName, isStrict)
+            }
+            is ArrowFunction -> {
+                val body = expr.body
+                if (body is Block) walkForWithStatements(body.statements, source, fileName, isStrict)
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                }
+            }
             else -> {}
         }
     }
