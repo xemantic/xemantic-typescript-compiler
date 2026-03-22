@@ -9156,6 +9156,17 @@ class Checker(
                         (decl.name as? Identifier)?.text?.let { valueNames.add(it) }
                     }
                     is EnumDeclaration -> valueNames.add(stmt.name.text)
+                    // Import declarations create value bindings (aliases), not type-only names
+                    is ImportDeclaration -> {
+                        val clause = stmt.importClause ?: continue
+                        clause.name?.text?.let { valueNames.add(it) }
+                        when (val nb = clause.namedBindings) {
+                            is NamespaceImport -> valueNames.add(nb.name.text)
+                            is NamedImports -> nb.elements.forEach { spec -> valueNames.add(spec.name.text) }
+                            else -> {}
+                        }
+                    }
+                    is ImportEqualsDeclaration -> valueNames.add(stmt.name.text)
                     else -> {}
                 }
             }
