@@ -6519,6 +6519,7 @@ class Checker(
             is InterfaceDeclaration -> decl.name.pos
             is TypeAliasDeclaration -> decl.name.pos
             is EnumDeclaration -> decl.name.pos
+            is ModuleDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
             is ImportSpecifier -> decl.name.pos
             is NamespaceImport -> decl.name.pos
             else -> decl.pos
