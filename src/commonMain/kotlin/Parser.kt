@@ -419,7 +419,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             // Access modifier keywords in statement context (e.g. `private y = x;` in constructor).
             // TypeScript treats these as property declarations; skip the modifier and parse the rest.
             // Also handle `public this.p1 = 0;` pattern (modifier before `this`).
+            // When NOT in a class body (e.g., in a namespace), report TS1128 and parse the rest.
             val hasModifier = lookAhead { nextToken(); isIdentifier() || token == SyntaxKind.ThisKeyword }
+            if (hasModifier && classBodyDepth == 0) {
+                // Outside a class, `private`/`public`/`protected` starts are invalid declarations
+                reportError("Declaration or statement expected.", code = 1128)
+            }
             if (hasModifier) nextToken()
             val stmt = parseExpressionStatement()
             // When inside a class body and the modifier was followed by a bare identifier assignment
@@ -1273,7 +1278,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val types = mutableListOf<ExpressionWithTypeArguments>()
             do {
                 types.add(parseExpressionWithTypeArguments())
-            } while (parseOptional(SyntaxKind.Comma))
+                val commaPos = getPos() // position of potential comma
+                if (!parseOptional(SyntaxKind.Comma)) break
+                // If comma is followed by `{` (class body), it's a trailing comma error.
+                // Report at the comma position (before we consumed it).
+                if (token == SyntaxKind.OpenBrace || token == SyntaxKind.ExtendsKeyword ||
+                    token == SyntaxKind.ImplementsKeyword || token == SyntaxKind.EndOfFile) {
+                    reportError("Trailing comma not allowed.", code = 1009, overrideStart = commaPos, overrideLength = 1)
+                    break
+                }
+            } while (true)
             clauses.add(HeritageClause(token = clauseToken, types = types, pos = pos, end = getEnd()))
         }
         return clauses.ifEmpty { null }
@@ -2228,7 +2242,17 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         parseExpected(SyntaxKind.OpenBrace)
         val elements = mutableListOf<ExportSpecifier>()
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+            // If we encounter `from` keyword here (before any specifier), it means the `}` was missing.
+            // Stop — parseExpected(CloseBrace) will report '}' expected at `from`.
+            if (token == SyntaxKind.FromKeyword) break
             elements.add(parseExportSpecifier())
+            if (token == SyntaxKind.CloseBrace || token == SyntaxKind.EndOfFile) break
+            // If we see `from` keyword after a specifier (no comma before it),
+            // report ',' expected at the `from` position (matching TypeScript behavior).
+            if (token == SyntaxKind.FromKeyword) {
+                parseExpected(SyntaxKind.Comma) // reports ',' expected at current (from) position
+                break
+            }
             if (!parseOptional(SyntaxKind.Comma)) break
         }
         parseExpected(SyntaxKind.CloseBrace)
@@ -3235,14 +3259,25 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     // Non-name tokens (e.g. `}`) are left for the enclosing block to consume.
                     // Error recovery (TypeScript-compatible): newline after dot + reserved keyword +
                     // next token is identifier/keyword → the keyword starts a new statement.
+                    // TypeScript error position rules:
+                    //   - If next token starts a new statement (e.g. `var`, `let`, identifier after newline)
+                    //     → report at afterDotPos (right after the dot, on the same line)
+                    //   - If next token closes enclosing context (e.g. `}`, EOF)
+                    //     → report at the next token's position (getPos())
                     val name = when {
                         newLineAfterDot && isKeyword() && !isIdentifier() &&
                                 lookAhead { nextToken(); isIdentifier() || isKeyword() } -> {
+                            // Statement-starting keyword (var, let, function, etc.) → report at afterDotPos
+                            reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0)
+                            Identifier(text = "", pos = afterDotPos, end = afterDotPos)
+                        }
+                        isIdentifier() || isKeyword() -> parseIdentifierName()
+                        else -> {
+                            // Closing token (}, EOF, ), ], etc.) or non-keyword token →
+                            // TypeScript reports at the current token position.
                             reportError("Identifier expected.", code = 1003)
                             Identifier(text = "", pos = getPos(), end = getPos())
                         }
-                        isIdentifier() || isKeyword() -> parseIdentifierName()
-                        else -> { reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0); Identifier(text = "", pos = afterDotPos, end = afterDotPos) }
                     }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
@@ -3752,17 +3787,27 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 continue
             }
             properties.add(parseObjectLiteralElement())
-            // TypeScript allows semicolons as property separators in object literals
+            // Object literals use commas, NOT semicolons, as property separators.
+            // Semicolons are errors — TypeScript reports ',' expected at each `;`.
             val hadComma = parseOptional(SyntaxKind.Comma)
-            val hadSemi = !hadComma && parseOptional(SyntaxKind.Semicolon)
-            if (hadComma || hadSemi) {
+            if (!hadComma && token == SyntaxKind.Semicolon) {
+                // Error: TypeScript reports ',' expected at the `;` position, but still
+                // consumes the semicolon to allow error recovery and parse remaining properties.
+                parseExpected(SyntaxKind.Comma) // reports ',' expected at `;`
+                nextToken() // consume the semicolon for recovery
+                // Capture any same-line trailing comments
+                val postSemiTrailing = scanner.getTrailingComments()
+                if (postSemiTrailing != null && properties.isNotEmpty()) {
+                    properties[properties.size - 1] = withTrailingComments(properties.last(), postSemiTrailing)
+                }
+                hasTrailingComma = false
+            } else if (hadComma) {
                 // Capture any same-line trailing comments that appeared after the comma
                 val postCommaTrailing = scanner.getTrailingComments()
                 if (postCommaTrailing != null && properties.isNotEmpty()) {
                     val last = properties.last()
                     properties[properties.size - 1] = withTrailingComments(last, postCommaTrailing)
                 }
-                // Semicolons are not treated as trailing commas (TypeScript emits no trailing comma)
                 hasTrailingComma = hadComma && (token == SyntaxKind.CloseBrace)
             } else {
                 hasTrailingComma = false
@@ -3851,7 +3896,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val typeParams = parseTypeParametersOpt()
             val params = parseParameterList()
             val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
-            val body = if (token == SyntaxKind.OpenBrace) parseBlock() else null
+            val body = if (token == SyntaxKind.OpenBrace) parseBlock()
+                       else { parseExpected(SyntaxKind.OpenBrace); null }
             val trailingComments = scanner.getTrailingComments()
             return MethodDeclaration(
                 name = name,
@@ -4123,6 +4169,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 args.add(OmittedExpression(pos = getPos(), end = getPos()))
                 nextToken()
                 continue
+            }
+            // Closing brace encountered inside argument list — error recovery.
+            // TypeScript reports TS1135 "Argument expression expected." and breaks.
+            if (token == SyntaxKind.CloseBrace) {
+                reportError("Argument expression expected.", code = 1135)
+                break
             }
             // Capture inline comments before each argument (e.g. /*label*/ before string arg).
             // Comments on the same line as `(` or `,` are classified as trailingComments by the
