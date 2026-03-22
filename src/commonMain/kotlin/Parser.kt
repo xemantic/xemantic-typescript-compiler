@@ -3709,10 +3709,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // also capture them as inlineCmts (which would cause double-emission).
         val openBracketComments = scanner.consumeTrailingComments()
         val elements = mutableListOf<Expression>()
+        // Per-element post-comma comments: postCommaPerElem[i] holds same-line comments that
+        // appeared after element[i]'s comma (e.g. `elem, // comment\n`). These should be emitted
+        // AFTER the comma rather than before it (unlike normal element trailing comments).
+        val postCommaPerElem = mutableListOf<List<Comment>?>()
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
             if (token == SyntaxKind.Comma) {
                 elements.add(OmittedExpression(pos = getPos(), end = getPos()))
+                // No post-comma comments for omitted elements; add null placeholder to keep alignment.
+                postCommaPerElem.add(null)
                 nextToken()
                 hasTrailingComma = (token == SyntaxKind.CloseBracket)
                 continue
@@ -3740,6 +3746,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
             if (parseOptional(SyntaxKind.Comma)) {
                 hasTrailingComma = (token == SyntaxKind.CloseBracket)
+                // Capture same-line comments that appeared AFTER the comma but BEFORE the next line.
+                // These must be emitted after the comma (e.g. `elem, // comment\n`), not before it.
+                // For trailing-comma cases (next token is `]`), these are captured later as
+                // closingComments / node.trailingComments via the hasTrailingComma branch below.
+                val postCommaTrailing = if (!hasTrailingComma) scanner.consumeTrailingComments() else null
+                postCommaPerElem.add(postCommaTrailing)
             } else {
                 hasTrailingComma = false
                 break
@@ -3759,6 +3771,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             if (openBracketPos in 0..<closeBracketPos && closeBracketPos <= source.length) {
                 source.substring(openBracketPos, closeBracketPos).contains('\n')
             } else false
+        // Only populate postCommaComments if there's at least one non-null entry
+        val postCommaComments = postCommaPerElem.takeIf { list -> list.any { it != null } }
         return ArrayLiteralExpression(
             elements = elements,
             multiLine = multiLine,
@@ -3768,6 +3782,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             trailingComments = closingComments,
             openBracketComments = openBracketComments,
             closeBracketPos = closeBracketPos,
+            postCommaComments = postCommaComments,
         )
     }
 
