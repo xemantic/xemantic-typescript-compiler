@@ -3275,9 +3275,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                         isIdentifier() || isKeyword() -> parseIdentifierName()
                         else -> {
                             // Closing token (}, EOF, ), ], etc.) or non-keyword token →
-                            // TypeScript reports at the current token position.
-                            reportError("Identifier expected.", code = 1003)
-                            Identifier(text = "", pos = getPos(), end = getPos())
+                            // TypeScript reports at the position right after the dot (afterDotPos),
+                            // not at the current token position. This handles trailing whitespace:
+                            // `window. ` should report at col after `.`, not after the space.
+                            reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0)
+                            Identifier(text = "", pos = afterDotPos, end = afterDotPos)
                         }
                     }
                     PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
