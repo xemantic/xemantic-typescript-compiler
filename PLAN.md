@@ -65,15 +65,15 @@ The full history of Phase 1 fixes is in the git log. Key files and line counts:
 
 The biggest infrastructure gap. Currently `resolveAlias` handles `ImportEqualsDeclaration` and `ImportSpecifier`, but NOT `NamespaceImport` (`import * as Foo from "./mod"`). The checker can't follow namespace imports to resolve module exports, which blocks const enum inlining and import elision for cross-file cases.
 
-- [ ] **7a. Add NamespaceImport resolution to Checker.resolveAlias()** — When the alias declaration is a `NamespaceImport`, resolve the module specifier to a file, create a synthetic "module" symbol whose `exports` are the target file's `locals`. This lets `resolveNamePath("Foo.ConstEnum", ...)` traverse `Foo` → module exports → `ConstEnum`.
+- [x] **7a. Add NamespaceImport resolution to Checker.resolveAlias()** — When the alias declaration is a `NamespaceImport`, resolve the module specifier to a file, create a synthetic "module" symbol whose `exports` are the target file's `locals`. This lets `resolveNamePath("Foo.ConstEnum", ...)` traverse `Foo` → module exports → `ConstEnum`.
   - **Key test:** `constEnumNamespaceReferenceCausesNoImport2` — `import * as Foo from "./reexport"` then `Foo.ConstFooEnum.Some` should inline to `0`
   - **Fix area:** `Checker.kt: resolveAlias()`, add `is NamespaceImport` branch
   - **Also fixes:** `constEnumExternalModule`, `constEnumNoEmitReexport`, `constEnumNoPreserveDeclarationReexport`, `amdModuleConstEnumUsage`
 
-- [ ] **7b. Add default import resolution** — `import Foo from "./mod"` creates a symbol for the default binding. Resolve it to the target module's `default` export.
+- [x] **7b. Add default import resolution** — `import Foo from "./mod"` creates a symbol for the default binding. Resolve it to the target module's `default` export.
   - **Fix area:** `Checker.kt: resolveAlias()`, handle `ImportDeclaration` with `clause.name` (default import)
 
-- [ ] **7c. Export re-export type elision** — `export { i } from "./server"` where `i` is an interface should be elided. The Transformer needs to check if re-exported names are value or type in the source module.
+- [x] **7c. Export re-export type elision** — `export { i } from "./server"` where `i` is an interface should be elided. The Transformer needs to check if re-exported names are value or type in the source module.
   - **Key test:** `es6ExportClauseWithoutModuleSpecifier` — `export { i, m as instantiatedModule }` should drop `i` (interface) and `uninstantiated` (type-only namespace)
   - **Fix area:** `Transformer.kt: transformExportDeclaration()` — call `checker.isValueAliasDeclaration()` or a new method to check if re-exported specifier is type-only
   - **Requires:** 7a/7b for cross-file symbol lookup
@@ -82,26 +82,17 @@ The biggest infrastructure gap. Currently `resolveAlias` handles `ImportEqualsDe
 
 The CommonJS transform (`transformToCommonJS`) rewrites identifier references to use `require()` bindings, but misses some contexts.
 
-- [ ] **8a. Binding pattern computed property rewriting** — `import { a } from "./a"; function fn({ [a]: value })` — the `[a]` computed property key should become `[a_1.a]` in CommonJS output.
-  - **Key test:** `computedPropertyNameWithImportedKey`
-  - **Fix area:** `Transformer.kt: transformToCommonJS()` — the identifier rewriting visitor needs to traverse function parameter binding patterns
-  - **Also affects:** `declarationEmitComputedNameConstEnumAlias`
+- [x] **8a. Binding pattern computed property rewriting** — key test `computedPropertyNameWithImportedKey` already passes.
 
-- [ ] **8b. Export alias qualification** — `export const pick = () => (0, exports.pick)()` — some exports need `(0, exports.X)` form for correct `this` binding.
-  - **Key tests:** `conflictingDeclarationsImportFromNamespace1`, `conflictingDeclarationsImportFromNamespace2`
-  - **Fix area:** `Transformer.kt: transformToCommonJS()` — self-referencing exported names need qualification
+- [x] **8b. Export alias qualification** — key JS emit test `conflictingDeclarationsImportFromNamespace1_ts compiles` already passes. The `.errors.txt` variants need type inference (TS2300).
 
 ### 9. Class property transform fixes (~10 tests)
 
 Several tests fail because class properties aren't correctly handled.
 
-- [ ] **9a. Static property with modifier keyword name** — `static f = 3;` is parsed as `ExpressionStatement("static")` + `ExpressionStatement(f = 3)` instead of `PropertyDeclaration(static, f, 3)`.
-  - **Key test:** `class2` — expects `foo.f = 3;` outside class, gets `static; f = 3;` inside constructor
-  - **Fix area:** `Parser.kt: parseClassElement()` — need to recognize `static` followed by identifier as a property declaration, not two expression statements. This is a parser error recovery issue.
+- [x] **9a. Static property with modifier keyword name** — key test `class2` already passes.
 
-- [ ] **9b. Non-`this`-prefixed property initializers** — `p1 = 0;` in constructor instead of `this.p1 = 0;`
-  - **Key test:** `classUpdateTests` — property-to-constructor move missing `this.` prefix
-  - **Fix area:** `Transformer.kt: movePropertyToConstructor()` or equivalent
+- [x] **9b. Non-`this`-prefixed property initializers** — key test `classUpdateTests` already passes.
 
 ### 10. Parser error recovery (~45 tests)
 
