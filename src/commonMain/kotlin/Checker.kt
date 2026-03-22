@@ -312,6 +312,9 @@ class Checker(
         val targetResult = fileResults[targetFile] ?: return true
         val symbol = targetResult.locals[name] ?: return true // safe default: keep
         val resolved = resolveAlias(symbol)
+        // Const enums without preserveConstEnums are type-only (inlined at use sites)
+        if (!options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax &&
+            resolved.flags.hasAny(SymbolFlags.ConstEnum)) return false
         // Check if the symbol has value flags
         if (resolved.flags.hasAny(SymbolFlags.Value)) return true
         // Non-instantiated namespaces (no value content) are type-only
@@ -1277,10 +1280,47 @@ class Checker(
                         // Default import: import Foo from "mod"
                         if (decl.importClause?.name != null &&
                             symbol.name == decl.importClause?.name?.text) {
-                            // Look for "default" export in target
-                            val target = targetResult.locals["default"] ?: continue
-                            symbol.target = target
-                            return resolveAlias(target, visited)
+                            // Look for "default" export in target — first check locals["default"]
+                            val defaultSymbol = targetResult.locals["default"]
+                            if (defaultSymbol != null) {
+                                symbol.target = defaultSymbol
+                                return resolveAlias(defaultSymbol, visited)
+                            }
+                            // Scan for `export default X` (ExportAssignment without isExportEquals)
+                            for (stmt in targetResult.sourceFile.statements) {
+                                if (stmt is ExportAssignment && !stmt.isExportEquals) {
+                                    val resolved = resolveExpressionToSymbol(stmt.expression, targetResult, visited)
+                                    if (resolved != null) {
+                                        symbol.target = resolved
+                                        return resolveAlias(resolved, visited)
+                                    }
+                                }
+                            }
+                            // Scan for `export { X as default } from "mod"` re-exports
+                            for (stmt in targetResult.sourceFile.statements) {
+                                if (stmt is ExportDeclaration) {
+                                    val clause = stmt.exportClause
+                                    if (clause is NamedExports) {
+                                        val defaultSpec = clause.elements.find { it.name.text == "default" }
+                                        if (defaultSpec != null) {
+                                            val originalName = defaultSpec.propertyName?.text ?: "default"
+                                            val fromSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                                            val resolvedTarget: Symbol? = if (fromSpec != null) {
+                                                val fromFile = resolveModuleSpecifier(fromSpec, stmt)
+                                                val fromResult = fromFile?.let { fileResults[it] }
+                                                fromResult?.locals?.get(originalName)
+                                            } else {
+                                                targetResult.locals[originalName]
+                                            }
+                                            if (resolvedTarget != null) {
+                                                symbol.target = resolvedTarget
+                                                return resolveAlias(resolvedTarget, visited)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            continue
                         }
 
                         // Named import: import { X } from "mod"
@@ -1349,14 +1389,35 @@ class Checker(
     }
 
     /**
-     * Create a synthetic module symbol whose exports are the target file's locals.
-     * Used for namespace imports (`import * as Foo from "mod"`).
+     * Create a synthetic module symbol whose exports are the target file's effective exports.
+     * For `.d.ts` files with ambient module declarations (`declare module "foo" {...}`), the
+     * exports come from the inner ambient module, not from file-level locals.
+     * For regular `.ts` files, uses the file-level locals directly.
      */
     private fun createModuleSymbol(name: String, targetResult: BinderResult): Symbol {
         val moduleSymbol = Symbol(
             name = name,
             flags = SymbolFlags.Module,
         )
+        // For .d.ts files, check if there's a single ambient module declaration.
+        // If so, use its exports rather than the file-level locals.
+        val targetFile = targetResult.sourceFile.fileName
+        if (targetFile.endsWith(".d.ts")) {
+            val ambientModules = targetResult.sourceFile.statements
+                .filterIsInstance<ModuleDeclaration>()
+                .filter { ModifierFlag.Declare in it.modifiers }
+            if (ambientModules.size == 1) {
+                val ambientSymbol = targetResult.locals[when (val n = ambientModules[0].name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> ""
+                }]
+                if (ambientSymbol != null && ambientSymbol.exports != null) {
+                    moduleSymbol.exports = ambientSymbol.exports
+                    return moduleSymbol
+                }
+            }
+        }
         moduleSymbol.exports = targetResult.locals
         return moduleSymbol
     }
@@ -1424,6 +1485,13 @@ class Checker(
             "./$baseName.ts",
             "./$baseName.tsx",
         )
+        // Only try .d.ts for relative specifiers (./X or ../X) to avoid matching ambient module
+        // declarations in non-relative imports like "foo" → "foo.d.ts" (which may have augmentations
+        // from other files that we can't account for).
+        if (isRelative) {
+            candidates.add("$baseName.d.ts")
+            candidates.add("./$baseName.d.ts")
+        }
         // For non-relative specifiers, also try baseUrl-prefixed paths
         if (!isRelative && options.baseUrl != null) {
             val baseUrl = options.baseUrl.trimEnd('/')
@@ -1436,7 +1504,12 @@ class Checker(
         }
         // Try matching by base filename (strips common path prefix)
         for (fileName in fileResults.keys) {
-            val fileBase = fileName.removePrefix("./").removeSuffix(".ts").removeSuffix(".tsx")
+            // Only strip .d.ts for relative specifiers (./X); skip .d.ts files for non-relative
+            val fileBase = if (isRelative) {
+                fileName.removePrefix("./").removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
+            } else {
+                fileName.removePrefix("./").removeSuffix(".ts").removeSuffix(".tsx")
+            }
             if (fileBase == baseName) return fileName
             // For non-relative specifiers: check if file ends with baseName
             if (!isRelative && (fileBase.endsWith("/$baseName") || fileBase == baseName)) return fileName

@@ -304,6 +304,16 @@ class Binder(private val options: CompilerOptions) {
             is NamedExports -> {
                 for (spec in clause.elements) {
                     val localName = spec.propertyName?.text ?: spec.name.text
+                    // For local re-exports (no `from` clause), don't overwrite existing value symbols.
+                    // The existing symbol already captures the declaration; we just record the node.
+                    if (decl.moduleSpecifier == null) {
+                        val existing = currentScope[localName]
+                        if (existing != null) {
+                            // Already declared as a value — just record the node → existing symbol
+                            recordNodeSymbol(spec, existing)
+                            continue
+                        }
+                    }
                     val symbol = declareSymbol(currentScope, localName, SymbolFlags.Alias, spec)
                     recordNodeSymbol(spec, symbol)
                 }
