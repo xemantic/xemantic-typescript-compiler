@@ -248,6 +248,7 @@ class Transformer(
                     // E.g.: `export default interface Foo {}; import Foo from "./b"` — Foo is runtime.
                     val clause = stmt.importClause
                     if (clause != null) {
+                        val erasedConstEnum = !options.isolatedModules && !options.preserveConstEnums && !options.verbatimModuleSyntax
                         if (clause.isTypeOnly) {
                             // Entire import clause is type-only: add all bindings to type-only names
                             clause.name?.text?.let { topLevelTypeOnlyNames.add(it) }
@@ -261,9 +262,18 @@ class Transformer(
                             clause.name?.text?.let { topLevelRuntimeNames.add(it) }
                             val bindings = clause.namedBindings
                             when (bindings) {
-                                is NamespaceImport -> topLevelRuntimeNames.add(bindings.name.text)
+                                is NamespaceImport -> {
+                                    val nsName = bindings.name.text
+                                    if (erasedConstEnum && checker?.isConstEnumAlias(nsName, currentFileName) == true) {
+                                        topLevelTypeOnlyNames.add(nsName)
+                                    } else {
+                                        topLevelRuntimeNames.add(nsName)
+                                    }
+                                }
                                 is NamedImports -> bindings.elements.forEach { spec ->
                                     if (spec.isTypeOnly) {
+                                        topLevelTypeOnlyNames.add(spec.name.text)
+                                    } else if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
                                         topLevelTypeOnlyNames.add(spec.name.text)
                                     } else {
                                         topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
@@ -813,15 +823,28 @@ class Transformer(
                 }
                 // Imports are runtime values — include them so local `export { name }` can distinguish
                 // imported runtime values from undeclared type-only globals.
+                // Exception: imports of const enums (without preserveConstEnums) are type-only.
                 is ImportDeclaration -> {
                     val clause = stmt.importClause
                     if (clause != null && !clause.isTypeOnly) {
                         clause.name?.text?.let { runtimeDeclaredNames.add(it) }
+                        val erasedConstEnum = !options.isolatedModules && !options.preserveConstEnums && !options.verbatimModuleSyntax
                         when (val bindings = clause.namedBindings) {
-                            is NamespaceImport -> runtimeDeclaredNames.add(bindings.name.text)
+                            is NamespaceImport -> {
+                                val nsName = bindings.name.text
+                                if (erasedConstEnum && checker?.isConstEnumAlias(nsName, currentFileName) == true) {
+                                    typeOnlyDeclaredNames.add(nsName)
+                                } else {
+                                    runtimeDeclaredNames.add(nsName)
+                                }
+                            }
                             is NamedImports -> bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
-                                runtimeDeclaredNames.add(spec.name.text)
-                                namedImportLocalNames.add(spec.name.text)
+                                if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
+                                    typeOnlyDeclaredNames.add(spec.name.text)
+                                } else {
+                                    runtimeDeclaredNames.add(spec.name.text)
+                                    namedImportLocalNames.add(spec.name.text)
+                                }
                             }
                             else -> {}
                         }
