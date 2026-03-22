@@ -745,6 +745,9 @@ class TypeScriptCompiler {
                 // .d.ts files are parsed and bound (for checker globals) but not emitted
                 if (isDtsFile) continue
 
+                // node_modules files are never re-emitted by TypeScript (they're third-party code)
+                if (file.fileName.contains("/node_modules/")) continue
+
                 diagnostics.addAll(parser.getDiagnostics())
 
                 // Extract relative imports for dependency ordering
