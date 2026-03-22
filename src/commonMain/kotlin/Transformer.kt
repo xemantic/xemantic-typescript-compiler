@@ -120,6 +120,10 @@ class Transformer(
     // should be `var` (module level, depth=0) or `let` (inside a function body, depth>0).
     private var functionScopeDepth = 0
 
+    // Depth of plain block scopes entered (non-function blocks like `{ }` statement blocks).
+    // Together with functionScopeDepth, detects whether we're at module top-level vs. nested.
+    private var blockScopeDepth = 0
+
     // Counter for generating unique temp variable names (_a, _b, _c, ...).
     private var tempVarCounter = 0
 
@@ -201,6 +205,8 @@ class Transformer(
         currentFileName = sourceFile.fileName
         hasSeenRuntimeStatement = false
         hasSeenAnyTopLevelStatement = false
+        functionScopeDepth = 0
+        blockScopeDepth = 0
         inAsyncBody = false
         inAsyncGeneratorBody = false
         needsAwaiterHelper = false
@@ -5661,7 +5667,12 @@ class Transformer(
             is ExportAssignment -> transformExportAssignment(statement)
 
             // --- Control flow: recurse into children ---
-            is Block -> listOf(statement.copy(statements = transformStatements(statement.statements)))
+            is Block -> {
+                blockScopeDepth++
+                val result = listOf(statement.copy(statements = transformStatements(statement.statements)))
+                blockScopeDepth--
+                result
+            }
             is IfStatement -> listOf(transformIfStatement(statement))
             is DoStatement -> listOf(
                 statement.copy(
@@ -7725,6 +7736,16 @@ class Transformer(
         if (decl.name.text in strictModeReservedWords) return emptyList()
 
         val ref = decl.moduleReference
+        val isRequire = ref is ExternalModuleReference
+
+        // When inside a nested block or function scope, ImportEqualsDeclaration is a parse error.
+        // TypeScript's error-recovery behavior:
+        // - require() form: keep verbatim (e.g. `import I2 = require("foo")` stays as-is)
+        // - namespace alias form: erase (e.g. `import I = M` is dropped)
+        if (blockScopeDepth > 0 || functionScopeDepth > 0) {
+            return if (isRequire) listOf(decl) else emptyList()
+        }
+
         val isExported = ModifierFlag.Export in decl.modifiers
         val isDeclare = ModifierFlag.Declare in decl.modifiers
         // Erase import aliases that resolve to type-only names (interfaces, type aliases,
@@ -7759,11 +7780,6 @@ class Transformer(
                 }
             }
         }
-
-        // `import x = M.N` → `var x = M.N;`
-        // `import x = require("mod")` → `const x = require("mod")`
-        // `import x = 5` (invalid, literal RHS) → `5;` (expression statement, TypeScript's error-recovery output)
-        val isRequire = ref is ExternalModuleReference
 
         // Elide import=require() when the target module only exports types.
         // Exception: if the checker marks this import as explicitly referenced AND the module
