@@ -562,6 +562,21 @@ class Emitter(
             emitExpression(node.incrementor)
         }
         emitInnerComments(node.beforeCloseParenComments)
+        // When both semicolons were synthesized by error recovery (e.g. `for () { // error }`),
+        // TypeScript emits any trailing line comments from the body block's open brace BEFORE
+        // the closing ")" and on the next line: `for (;; // error\n) { // error }`.
+        val bodyBlock = node.statement as? Block
+        val blockOpenBraceComments = if (!options.removeComments && node.syntheticSemicolons) bodyBlock?.openBraceTrailingComments else null
+        val hasLineCommentBeforeCloseParen = blockOpenBraceComments?.any { it.text.startsWith("//") } == true
+        if (hasLineCommentBeforeCloseParen) {
+            // Emit the comment inline (e.g. ` // error`), then newline + indent for the ")"
+            for (comment in blockOpenBraceComments!!) {
+                write(" ")
+                write(comment.text)
+            }
+            writeNewLine()
+            writeIndent()
+        }
         write(")")
         emitInnerComments(node.afterCloseParenComments)
         emitEmbeddedStatement(node.statement)
@@ -1585,12 +1600,13 @@ class Emitter(
     private fun emitEmbeddedStatement(
         statement: Statement,
         trailingOnSameLine: Boolean = false,
+        suppressOpenBraceComments: Boolean = false,
     ) {
         if (statement is Block) {
             // Control-flow bodies (if/while/for) are always emitted multiline,
             // even if the source block was on a single line.
             val forceMultiLine = statement.statements.isNotEmpty()
-            emitBlockBody(if (forceMultiLine && !statement.multiLine) statement.copy(multiLine = true) else statement, emitOpenBraceComments = true)
+            emitBlockBody(if (forceMultiLine && !statement.multiLine) statement.copy(multiLine = true) else statement, emitOpenBraceComments = !suppressOpenBraceComments)
             if (!trailingOnSameLine) {
                 writeNewLine()
             }

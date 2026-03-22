@@ -923,6 +923,42 @@ class Transformer(
                     exportedNsEnumNames.add(stmt.name.text)
             }
         }
+        // Pre-scan: collect export aliases for locally-declared (non-directly-exported) namespace/enum names.
+        // e.g. `namespace m {}; export { m as instantiatedModule }` → iifeExportAliases["m"] = ["instantiatedModule"]
+        // When a locally-declared ns/enum is re-exported under an alias, the IIFE arg must use the export name,
+        // and the separate `exports.alias = m` statement must be suppressed.
+        // localNsEnumNames: track all non-declare namespaces/enums regardless of export modifier
+        val localNsEnumNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when {
+                stmt is ModuleDeclaration && !hasDeclareModifier(stmt) && !isTypeOnlyNamespace(stmt) -> {
+                    val n = extractIdentifierName(stmt.name)
+                        ?: stmt.name.let { flattenDottedNamespaceName(it).firstOrNull() }
+                    n?.let { localNsEnumNames.add(it) }
+                }
+                stmt is EnumDeclaration && !hasDeclareModifier(stmt) &&
+                        (options.preserveConstEnums || options.isolatedModules || options.verbatimModuleSyntax || ModifierFlag.Const !in stmt.modifiers) ->
+                    localNsEnumNames.add(stmt.name.text)
+            }
+        }
+        // Map from local ns/enum name → list of CJS export names (for re-exported-with-alias ns/enums)
+        val iifeExportAliases = mutableMapOf<String, MutableList<String>>()
+        for (stmt in originalSourceFile.statements) {
+            if (stmt is ExportDeclaration && stmt.exportClause is NamedExports && stmt.moduleSpecifier == null) {
+                for (spec in (stmt.exportClause).elements) {
+                    if (spec.isTypeOnly) continue
+                    val localName = (spec.propertyName ?: spec.name).text
+                    val exportName = spec.name.text
+                    if (localName in localNsEnumNames && localName !in exportedNsEnumNames) {
+                        // Locally-declared ns/enum re-exported under a (possibly different) name
+                        iifeExportAliases.getOrPut(localName) { mutableListOf() }.add(exportName)
+                    }
+                }
+            }
+        }
+        // Add aliased ns/enum local names to exportedNsEnumNames so their IIFE args get rewritten
+        exportedNsEnumNames.addAll(iifeExportAliases.keys)
+
         // Note: exportedNsEnumNames are NOT pre-added to exportedVarNames here.
         // Instead, they are added lazily in the IIFE detection branch below, so that
         // their void0 hoists appear in source declaration order (matching TypeScript output).
@@ -961,6 +997,30 @@ class Transformer(
                 && stmt.moduleReference !is ExternalModuleReference
                 && stmt.name.text !in pureTypeNames) {
                 directExportedVarNames.add(stmt.name.text)
+            }
+        }
+
+        // Pre-scan: build a map from localName → exportName for `export { X }` and `export { X as Y }`
+        // clauses that reference locally-declared runtime names (classes, vars, enums — not functions).
+        // Used to detect class decorator reassignment (`X = __decorate(...)`) that needs `exports.Y = X = __decorate(...)`
+        // when the `export { X }` clause appears AFTER the decorated class declaration in the source.
+        // Without this pre-scan, when the `__decorate` statement is processed the export hasn't been
+        // encountered yet, so `X` is not yet in `exportedVarNames`, and the assignment is emitted without the
+        // `exports.Y =` prefix.
+        val namedExportLocalToExport = mutableMapOf<String, String>()
+        for (stmt in originalSourceFile.statements) {
+            if (stmt is ExportDeclaration && stmt.moduleSpecifier == null && stmt.exportClause is NamedExports) {
+                for (spec in (stmt.exportClause as NamedExports).elements) {
+                    if (spec.isTypeOnly) continue
+                    val exportName = spec.name.text
+                    val localName = (spec.propertyName ?: spec.name).text
+                    if (localName in pureTypeNames) continue
+                    if (localName in functionOnlyNames) continue   // functions use stub path, handled separately
+                    if (localName in directExportedVarNames) continue  // direct-exported vars already handled
+                    if (localName in runtimeDeclaredNames) {
+                        namedExportLocalToExport[localName] = exportName
+                    }
+                }
             }
         }
 
@@ -1586,6 +1646,15 @@ class Transformer(
                                 // skip entirely — no void 0 hoist needed
                                 continue
                             }
+                            if (localName in exportedNsEnumNames) {
+                                // Namespace/enum local re-exported via `export { localName as exportName }`:
+                                // The IIFE arg rewriting will handle the actual assignment, so we must NOT
+                                // emit a separate `exports.exportName = localName` statement. However, we DO
+                                // add the export name to exportedVarNames HERE (in export-clause order)
+                                // so the void0 hoist chain matches TypeScript's source order.
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                continue
+                            }
                             if (localName != "undefined" && localName !in runtimeDeclaredNames) {
                                 // Name not declared locally — it's a global re-export.
                                 // TypeScript generates void 0 hoist only (no assignment needed for globals).
@@ -1663,13 +1732,19 @@ class Transformer(
 
                 else -> {
                     // Check if this is a namespace/enum IIFE for an exported name.
-                    // If so, rewrite the IIFE arg from N || (N = {}) to N || (exports.N = N = {}).
+                    // If so, rewrite the IIFE arg from N || (N = {}) to N || (exports.exportName = N = {}).
                     val iifeNameForExport = extractSimpleIifeName(stmt)
                     if (iifeNameForExport != null && iifeNameForExport in exportedNsEnumNames) {
-                        // Add the name to exportedVarNames here (in source declaration order)
-                        // so the void0 hoist ordering matches the source order.
-                        if (iifeNameForExport !in exportedVarNames) exportedVarNames.add(iifeNameForExport)
-                        result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
+                        // Determine the CJS export name: use alias if present, otherwise local name
+                        val cjsExportName = iifeExportAliases[iifeNameForExport]?.firstOrNull() ?: iifeNameForExport
+                        // For directly-exported namespaces (no alias), add the export name here (in source decl order).
+                        // For aliased re-exports (iifeExportAliases has the local name), the export name will be
+                        // added in the export-clause handler (when `export { m as alias }` is processed).
+                        // This ensures the void0 hoist order matches the export clause order, not the decl order.
+                        if (iifeNameForExport !in iifeExportAliases && cjsExportName !in exportedVarNames) {
+                            exportedVarNames.add(cjsExportName)
+                        }
+                        result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport, cjsExportName))
                     } else {
                         // Check if this is an expando property assignment `Name.prop = expr`
                         // where Name is a keep-declaration exported function/arrow/class var.
@@ -1690,7 +1765,20 @@ class Transformer(
                             // TypeScript prefixes with `exports.X = X =` to update both local and export.
                             // Exclude direct-exported vars (no local var binding) — those are handled by
                             // the global exportRewriteMap pass: `X = expr` → `exports.X = expr` directly.
-                            val assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
+                            var assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
+                            if (assignedExportName == null && stmt is ExpressionStatement) {
+                                // Also handle: `X = __decorate(...)` where X is a locally-declared class
+                                // exported via a later `export { X }` or `export { X as Y }` clause.
+                                // The export clause may not have been processed yet, so X isn't in
+                                // exportedVarNames — use the pre-scanned namedExportLocalToExport map.
+                                val bin = stmt.expression as? BinaryExpression
+                                if (bin != null && bin.operator == Equals) {
+                                    val lhsName = (bin.left as? Identifier)?.text
+                                    if (lhsName != null && lhsName !in directExportedVarNames) {
+                                        assignedExportName = namedExportLocalToExport[lhsName]
+                                    }
+                                }
+                            }
                             if (assignedExportName != null && assignedExportName !in directExportedVarNames) {
                                 result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
                             } else {
@@ -2747,9 +2835,13 @@ class Transformer(
                                 }
                             }
                         } else {
-                            for (d in stmt.declarationList.declarations) {
+                            val decls = stmt.declarationList.declarations
+                            for ((dIdx, d) in decls.withIndex()) {
                                 val n = extractIdentifierName(d.name)
                                 if (n != null && d.initializer != null) {
+                                    val isLastDecl = dIdx == decls.size - 1
+                                    val trailingComments = d.trailingComments
+                                        ?: if (isLastDecl) stmt.trailingComments else null
                                     bodyStatements.add(
                                         ExpressionStatement(
                                             expression = BinaryExpression(
@@ -2763,6 +2855,7 @@ class Transformer(
                                                 pos = -1, end = -1,
                                             ),
                                             leadingComments = stmt.leadingComments,
+                                            trailingComments = trailingComments,
                                             pos = -1, end = -1,
                                         )
                                     )
@@ -4983,14 +5076,15 @@ class Transformer(
     }
 
     /**
-     * Rewrites `N || (N = {})` IIFE arg to `N || (exports.N = N = {})` for CJS export.
+     * Rewrites `N || (N = {})` IIFE arg to `N || (exports.exportName = N = {})` for CJS export.
+     * [name] is the local variable name; [exportName] is the CJS property name (may differ for aliases).
      */
-    private fun rewriteIifeArgForCjsExport(stmt: ExpressionStatement, name: String): ExpressionStatement {
+    private fun rewriteIifeArgForCjsExport(stmt: ExpressionStatement, name: String, exportName: String = name): ExpressionStatement {
         val call = stmt.expression as CallExpression
         val nsId = syntheticId(name)
         val exportsProp = PropertyAccessExpression(
             expression = syntheticId("exports"),
-            name = Identifier(text = name, pos = -1, end = -1),
+            name = Identifier(text = exportName, pos = -1, end = -1),
             pos = -1, end = -1,
         )
         val newArg = BinaryExpression(
@@ -7759,8 +7853,16 @@ class Transformer(
         // `export import a = x.c` where `x` is NOT exported → keep (TypeScript keeps it with error).
         if (!isDeclare) {
             if (!isExported) {
-                // Non-exported: erase if the ref is a type-only name (Identifier or qualified path)
-                if (ref is Identifier && ref.text in topLevelTypeOnlyNames) return emptyList()
+                // Non-exported: erase if the ref is a type-only name (Identifier or qualified path).
+                // Exception: in multi-file script-mode compilations, if a LATER file declares a
+                // plain `var` with the same name as this alias, keep the import alias so the
+                // runtime binding is visible. E.g.:
+                //   file4: `namespace P{}; import p = P; var q` → keep `import p = P` (file5 has `var p`)
+                //   file5: `namespace Q{}; import q = Q; var p` → erase `import q = Q` (file4 has `var q`)
+                if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
+                    val keepForLaterVar = checker?.hasVarDeclarationInLaterFile(decl.name.text, currentFileName) == true
+                    if (!keepForLaterVar) return emptyList()
+                }
                 if (ref is QualifiedName && isQualifiedPathTypeOnly(ref)) return emptyList()
             } else {
                 // Exported: only erase if the root namespace is itself exported.
@@ -8050,10 +8152,15 @@ class Transformer(
 
         // Emit class-level __decorate call
         if (hasClassDecorators) {
-            val constructorParams = decl.members
-                .filterIsInstance<Constructor>().firstOrNull()?.parameters
+            val constructor = decl.members.filterIsInstance<Constructor>().firstOrNull()
+            val constructorParams = constructor?.parameters
+            // Collect constructor parameter decorators for __param(index, dec) entries
+            val ctorParamDecorators: List<Pair<Int, List<Decorator>>> = constructor?.parameters
+                ?.mapIndexedNotNull { idx, param ->
+                    if (!param.decorators.isNullOrEmpty()) idx to param.decorators else null
+                } ?: emptyList()
             statements.add(generateClassDecorateStatement(
-                className, decl.decorators, constructorParams, classTypeParams
+                className, decl.decorators, constructorParams, classTypeParams, ctorParamDecorators
             ))
         }
 
@@ -8112,11 +8219,14 @@ class Transformer(
                     }
                     propertyTypeNode = null
                     methodReturnTypeNode = member.type
-                    methodParamTypeNodes = member.parameters.map { param ->
-                        // For rest parameters (...x: T[]), serialize element type T not Array
-                        if (param.dotDotDotToken) (param.type as? ArrayType)?.elementType ?: param.type
-                        else param.type
-                    }
+                    methodParamTypeNodes = member.parameters
+                        // Exclude the `this` parameter (a TypeScript-only "this" type annotation, not a real param)
+                        .filter { param -> (param.name as? Identifier)?.text != "this" }
+                        .map { param ->
+                            // For rest parameters (...x: T[]), serialize element type T not Array
+                            if (param.dotDotDotToken) (param.type as? ArrayType)?.elementType ?: param.type
+                            else param.type
+                        }
                     methodIsAsync = ModifierFlag.Async in member.modifiers
                 }
                 is GetAccessor -> {
@@ -8321,6 +8431,9 @@ class Transformer(
                 is StringLiteralNode -> syntheticId("String")
                 is NoSubstitutionTemplateLiteralNode -> syntheticId("String")
                 is NumericLiteralNode -> syntheticId("Number")
+                // Negative numeric literal type (-1, -2.5, etc.) — still a Number
+                is PrefixUnaryExpression -> if ((typeNode.literal as PrefixUnaryExpression).operand is NumericLiteralNode)
+                    syntheticId("Number") else syntheticId("Object")
                 is Identifier -> when ((typeNode.literal).text) {
                     "true", "false" -> syntheticId("Boolean")
                     else -> syntheticId("Object")
@@ -8459,6 +8572,7 @@ class Transformer(
         decorators: List<Decorator>,
         constructorParams: List<Parameter>? = null,
         classTypeParams: Set<String> = emptySet(),
+        ctorParamDecorators: List<Pair<Int, List<Decorator>>> = emptyList(),
     ): Statement {
         val decoratorExprs = decorators.map { dec ->
             val transformed = transformExpression(dec.expression)
@@ -8468,10 +8582,31 @@ class Transformer(
             } else transformed
         }.toMutableList()
 
+        // Add __param entries for constructor parameter decorators
+        if (ctorParamDecorators.isNotEmpty()) {
+            needsParamHelper = true
+            for ((paramIndex, paramDecs) in ctorParamDecorators) {
+                for (dec in paramDecs) {
+                    decoratorExprs.add(
+                        CallExpression(
+                            expression = helperExpr("__param"),
+                            arguments = listOf(
+                                NumericLiteralNode(text = paramIndex.toString(), pos = -1, end = -1),
+                                transformExpression(dec.expression),
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    )
+                }
+            }
+        }
+
         // emitDecoratorMetadata: add design:paramtypes for constructor parameters
         if (options.emitDecoratorMetadata && constructorParams != null) {
             needsMetadataHelper = true
-            val paramTypes = constructorParams.map { param ->
+            // Exclude `this` parameter (TypeScript-only annotation) from paramtypes
+            val effectiveParams = constructorParams.filter { param -> (param.name as? Identifier)?.text != "this" }
+            val paramTypes = effectiveParams.map { param ->
                 val typeNode = if (param.dotDotDotToken)
                     (param.type as? ArrayType)?.elementType ?: param.type
                 else param.type

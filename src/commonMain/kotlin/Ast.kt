@@ -196,6 +196,8 @@ data class ForStatement(
     val afterSemicolon2Comments: List<Comment>? = null,
     val beforeCloseParenComments: List<Comment>? = null,
     val afterCloseParenComments: List<Comment>? = null,
+    /** True when both semicolons in the for header were inserted by error recovery (e.g. `for () {}`). */
+    val syntheticSemicolons: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
