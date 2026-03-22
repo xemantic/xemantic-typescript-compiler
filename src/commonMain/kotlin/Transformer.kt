@@ -29,6 +29,12 @@ import kotlin.math.pow
 class Transformer(
     private val options: CompilerOptions,
     private val checker: Checker? = null,
+    /**
+     * Namespace exports collected from OTHER files in a multi-file compilation.
+     * Used to qualify references to merged namespace members declared in other files.
+     * Maps namespace name → set of exported member names across all files.
+     */
+    private val externalNamespaceExports: Map<String, Set<String>> = emptyMap(),
 ) {
 
     // Modifiers that are TypeScript-only and should be stripped from class members
@@ -281,6 +287,10 @@ class Transformer(
         // Pre-pass: collect all exported names for each namespace across merged blocks.
         // This lets later blocks qualify references to members exported from earlier blocks.
         collectMergedNamespaceExports(sourceFile.statements)
+        // Merge in exports from other files in the same compilation (cross-file namespace merging).
+        for ((nsName, exports) in externalNamespaceExports) {
+            mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }.addAll(exports)
+        }
 
         // Pre-pass: collect const enum values for inlining at use sites.
         // Values are inlined even when preserveConstEnums is true (the enum body is kept,
@@ -7035,7 +7045,14 @@ class Transformer(
                 flushPending()
                 // Transfer trailing comment from SpreadAssignment to its expression argument
                 val spreadExpr = prop.expression.withTrailingComments(prop.trailingComments)
-                if (isFirst) {
+                if (isFirst && leadingProps.isEmpty() && spreadExpr is ObjectLiteralExpression) {
+                    // Optimization: when no leading props and spread is an object literal,
+                    // use the spread expression directly as the accumulator:
+                    // { ...{ x: 0 }, y: v } → Object.assign({ x: 0 }, { y: v })
+                    // instead of Object.assign(Object.assign({}, { x: 0 }), { y: v })
+                    accumulator = spreadExpr
+                    isFirst = false
+                } else if (isFirst) {
                     // First spread: start the chain — accumulator already holds leading props (or {})
                     accumulator = makeObjectAssignCall(listOf(accumulator, spreadExpr))
                     isFirst = false

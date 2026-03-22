@@ -697,9 +697,40 @@ class TypeScriptCompiler {
             val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames)
             diagnostics.addAll(checker.getDiagnostics())
 
+            // Pre-compute cross-file namespace exports for multi-file namespace merging.
+            // When namespace blocks are split across files (e.g. `namespace ts { }` in A.ts and B.ts),
+            // each file's transformer needs to know about exports declared in other files so it can
+            // qualify references like `sys.version` → `ts.sys.version`.
+            val crossFileNamespaceExports = collectCrossFileNamespaceExports(parsedSourceFiles.values)
+
             // Phase 3: Transform and emit each file
             for ((tsFileName, sourceFile) in parsedSourceFiles) {
-                val transformer = Transformer(options, checker)
+                // TS6131: When outFile is set but module is not AMD/System and a file has exports,
+                // exclude the file from outFile output (TypeScript skips such files silently).
+                // The Checker emits TS6131 for the first such file. Here we just skip the output.
+                if (options.outFile != null && options.module == null && options.out == null) {
+                    val effectiveMod = options.effectiveModule
+                    if (effectiveMod != ModuleKind.AMD && effectiveMod != ModuleKind.System
+                        && effectiveMod != ModuleKind.UMD && effectiveMod != ModuleKind.None) {
+                        val hasExports = sourceFile.statements.any { stmt ->
+                            when (stmt) {
+                                is ExportDeclaration, is ExportAssignment -> true
+                                is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
+                                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers && stmt.body != null
+                                is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                                is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                                is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                                is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
+                                is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
+                                is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+                                else -> false
+                            }
+                        }
+                        if (hasExports) continue
+                    }
+                }
+
+                val transformer = Transformer(options, checker, crossFileNamespaceExports)
                 val transformed = transformer.transform(sourceFile)
 
                 val emitter = Emitter(options)
@@ -1037,4 +1068,112 @@ private fun reformatJson(content: String): String {
         }
     }
     return sb.toString()
+}
+
+/**
+ * Collects namespace exports across all provided source files.
+ * Used for multi-file compilation to qualify cross-file namespace member references.
+ * Maps namespace name → set of exported member names from ALL files combined.
+ */
+private fun collectCrossFileNamespaceExports(sourceFiles: Collection<SourceFile>): Map<String, Set<String>> {
+    val result = mutableMapOf<String, MutableSet<String>>()
+    for (sourceFile in sourceFiles) {
+        collectNamespaceExportsFromStatements(sourceFile.statements, result)
+    }
+    return result
+}
+
+private fun collectNamespaceExportsFromStatements(
+    stmts: List<Statement>,
+    result: MutableMap<String, MutableSet<String>>,
+) {
+    for (stmt in stmts) {
+        if (stmt !is ModuleDeclaration) continue
+        // Skip declare namespaces (ambient) and type-only namespaces (only interfaces/types)
+        if (ModifierFlag.Declare in stmt.modifiers) continue
+        collectNamespaceExportsFromModule(stmt, result)
+    }
+}
+
+private fun collectNamespaceExportsFromModule(
+    module: ModuleDeclaration,
+    result: MutableMap<String, MutableSet<String>>,
+) {
+    // Handle dotted namespace names like `namespace A.B.C`
+    val nsName = when (val name = module.name) {
+        is Identifier -> name.text
+        is PropertyAccessExpression -> {
+            // Flatten the dotted name: A.B.C → ["A", "B", "C"]
+            val parts = mutableListOf<String>()
+            var expr: Expression = name
+            while (expr is PropertyAccessExpression) {
+                parts.add(0, expr.name.text)
+                expr = expr.expression
+            }
+            if (expr is Identifier) parts.add(0, expr.text)
+            if (parts.isEmpty()) return
+            // Each part (except last) exports the next part as child
+            for (i in 0 until parts.size - 1) {
+                result.getOrPut(parts[i]) { mutableSetOf() }.add(parts[i + 1])
+            }
+            parts.last()
+        }
+        else -> return
+    }
+    when (val body = module.body) {
+        is ModuleDeclaration -> {
+            // Nested namespace: `namespace A { namespace B { ... } }`
+            val childName = when (val n = body.name) {
+                is Identifier -> n.text
+                else -> return
+            }
+            result.getOrPut(nsName) { mutableSetOf() }.add(childName)
+            collectNamespaceExportsFromModule(body, result)
+        }
+        is ModuleBlock -> {
+            collectNamespaceBodyExports(nsName, body.statements, result)
+        }
+        else -> {}
+    }
+}
+
+private fun collectNamespaceBodyExports(
+    nsName: String,
+    stmts: List<Statement>,
+    result: MutableMap<String, MutableSet<String>>,
+) {
+    val exports = result.getOrPut(nsName) { mutableSetOf() }
+    for (stmt in stmts) {
+        val isExported = when (stmt) {
+            is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+            is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
+            else -> false
+        }
+        if (!isExported) continue
+        when (stmt) {
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                val name = decl.name
+                if (name is Identifier) exports.add(name.text)
+            }
+            is FunctionDeclaration -> stmt.name?.text?.let { exports.add(it) }
+            is ClassDeclaration -> stmt.name?.text?.let { exports.add(it) }
+            is EnumDeclaration -> exports.add(stmt.name.text)
+            is ModuleDeclaration -> {
+                val childName = when (val n = stmt.name) {
+                    is Identifier -> n.text
+                    else -> null
+                }
+                childName?.let { exports.add(it) }
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    collectNamespaceExportsFromModule(stmt, result)
+                }
+            }
+            is ImportEqualsDeclaration -> exports.add(stmt.name.text)
+            else -> {}
+        }
+    }
 }
