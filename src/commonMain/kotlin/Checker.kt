@@ -311,6 +311,40 @@ class Checker(
      * Check if an import=require() resolves to a type-only module (only interfaces/types).
      * Used by CJS transform to elide require() for type-only imports.
      */
+    /**
+     * Returns true if a symbol is purely type-only based on its declaration nodes.
+     * This avoids using symbol.flags which may be polluted by cross-file merging.
+     * - InterfaceDeclaration / TypeAliasDeclaration → always type-only
+     * - ModuleDeclaration with NonInstantiated state → type-only
+     * - VariableDeclaration, FunctionDeclaration, ClassDeclaration, EnumDeclaration → value
+     * - ImportSpecifier with Alias flags → check underlying if resolvable, otherwise conservative
+     */
+    private fun isSymbolTypeOnly(symbol: Symbol): Boolean {
+        var hasValueDecl = false
+        var hasTypeOnlyDecl = false
+        for (decl in symbol.declarations) {
+            when (decl) {
+                is InterfaceDeclaration, is TypeAliasDeclaration -> hasTypeOnlyDecl = true
+                is ModuleDeclaration -> {
+                    // Module is type-only only if NonInstantiated (no runtime IIFE)
+                    val state = binderResults.firstNotNullOfOrNull { br ->
+                        br.moduleInstanceStates[nodeKey(decl)]
+                    }
+                    if (state == ModuleInstanceState.Instantiated || state == null) {
+                        hasValueDecl = true
+                    } else {
+                        hasTypeOnlyDecl = true
+                    }
+                }
+                is VariableDeclaration, is FunctionDeclaration,
+                is ClassDeclaration, is EnumDeclaration -> hasValueDecl = true
+                else -> {} // ImportSpecifier, BindingElement, etc. - ignore for now
+            }
+        }
+        if (hasValueDecl) return false
+        return hasTypeOnlyDecl
+    }
+
     fun isTypeOnlyImportRequire(moduleSpecifier: String, sourceFileName: String): Boolean {
         val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
         val targetResult = fileResults[targetFile] ?: return false
@@ -323,12 +357,10 @@ class Checker(
                         if (expr is Identifier) {
                             val symbol = targetResult.locals[expr.text]
                             if (symbol != null) {
-                                val resolved = resolveAlias(symbol)
-                                // If resolveAlias couldn't fully resolve (e.g. cycle detected),
-                                // the symbol retains SymbolFlags.Alias — treat as NOT type-only
-                                // (unknown value status → keep the import to be safe).
-                                if (resolved.flags.hasAny(SymbolFlags.Alias)) return false
-                                return !resolved.flags.hasAny(SymbolFlags.Value)
+                                // Note: symbol.flags may have been polluted by cross-file merging
+                                // (e.g. Interface|Alias when another file imports this name).
+                                // Use the node-level declaration kind to determine the original type.
+                                return isSymbolTypeOnly(symbol)
                             }
                         }
                         return false // expression export = always value
@@ -353,6 +385,10 @@ class Checker(
             val resolved = resolveAlias(globalSymbol)
             if (resolved.flags.hasAny(SymbolFlags.Value)) return false
             if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
+                // If the namespace exports any value members, it's not type-only
+                // (e.g. `declare namespace NS { export var foo }` has a runtime value shape)
+                val exports = resolved.exports
+                if (exports != null && exports.values.any { it.flags.hasAny(SymbolFlags.Value) }) return false
                 for (br in binderResults) {
                     for (decl in resolved.declarations) {
                         if (decl is ModuleDeclaration) {
@@ -372,6 +408,9 @@ class Checker(
                 val resolved = resolveAlias(symbol)
                 if (resolved.flags.hasAny(SymbolFlags.Value)) return false
                 if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
+                    // If the namespace exports any value members, it's not type-only
+                    val exports = resolved.exports
+                    if (exports != null && exports.values.any { it.flags.hasAny(SymbolFlags.Value) }) return false
                     for (br in binderResults) {
                         for (decl in resolved.declarations) {
                             if (decl is ModuleDeclaration) {

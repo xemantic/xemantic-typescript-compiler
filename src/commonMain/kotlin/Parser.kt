@@ -3193,10 +3193,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                             // Type arguments are dropped. Wrap in parens (TypeScript emits (expr))
                             // UNLESS the next token continues the expression (., ?., ), ]) — those
                             // either provide their own grouping or feed into a member access.
+                            // Exception: when followed by `.` or `?.`, wrap in parens if the
+                            // expression contains optional chaining — the `<T>` ends the chain scope,
+                            // so `a?.b<T>.c` must emit `(a?.b).c`, not `a?.b.c`.
                             typeArgs != null && canFollowTypeArgumentsInExpression() -> {
                                 when (token) {
-                                    SyntaxKind.CloseParen, SyntaxKind.CloseBracket,
-                                    SyntaxKind.Dot, SyntaxKind.QuestionDot -> result
+                                    SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> result
+                                    SyntaxKind.Dot, SyntaxKind.QuestionDot ->
+                                        if (expressionHasOptionalChain(result))
+                                            ParenthesizedExpression(expression = result, pos = result.pos, end = getEnd())
+                                        else result
                                     else -> ParenthesizedExpression(
                                         expression = result,
                                         pos = result.pos,
@@ -4195,6 +4201,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         SyntaxKind.Equals,
         // Binary keyword operators: Box<number> instanceof Object, key<T> in obj
         SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> true
+        else -> false
+    }
+
+    /**
+     * Returns true if [expr] contains any optional chaining (`.?`, `?.()`, `?.[`).
+     * Used to decide whether an instantiation expression boundary requires wrapping
+     * in parentheses: `a?.b<T>.c` must emit `(a?.b).c` not `a?.b.c`.
+     */
+    private fun expressionHasOptionalChain(expr: Expression): Boolean = when (expr) {
+        is PropertyAccessExpression -> expr.questionDotToken || expressionHasOptionalChain(expr.expression)
+        is ElementAccessExpression -> expr.questionDotToken || expressionHasOptionalChain(expr.expression)
+        is CallExpression -> expr.questionDotToken || expressionHasOptionalChain(expr.expression)
         else -> false
     }
 
