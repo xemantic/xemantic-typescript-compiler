@@ -107,6 +107,8 @@ data class CompilerOptions(
     val strictNullChecks: Boolean = false,
     /** True when `// @strictNullChecks: false` was explicitly set. */
     val strictNullChecksExplicitlyFalse: Boolean = false,
+    /** True when `// @strictPropertyInitialization: false` was explicitly set. */
+    val strictPropertyInitializationExplicitlyFalse: Boolean = false,
     val noUnusedLocals: Boolean = false,
     val noUnusedParameters: Boolean = false,
     val experimentalDecorators: Boolean = false,
@@ -381,6 +383,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
         "noimplicitthis" -> options.copy(noImplicitThis = boolValue)
         "strictnullchecks" -> options.copy(strictNullChecks = boolValue, strictNullChecksExplicitlyFalse = !boolValue)
+        "strictpropertyinitialization" -> options.copy(strictPropertyInitializationExplicitlyFalse = !boolValue)
         "nounusedlocals" -> options.copy(noUnusedLocals = boolValue)
         "nounusedparameters" -> options.copy(noUnusedParameters = boolValue)
         "experimentaldecorators" -> options.copy(experimentalDecorators = boolValue)
