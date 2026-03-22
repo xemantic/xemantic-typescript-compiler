@@ -4496,7 +4496,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         var type = parsePrimaryType()
 
         // Array type suffix: T[], T[][]
-        while (token == SyntaxKind.OpenBracket) {
+        // TypeScript applies ASI here: do not consume [ that is on a new line
+        // (e.g. method return type `boolean` followed by `[key: type]` index signature)
+        while (token == SyntaxKind.OpenBracket && !scanner.hasPrecedingLineBreak()) {
             if (scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.CloseBracket }) {
                 nextToken(); nextToken()
                 type = ArrayType(elementType = type, pos = pos, end = getEnd())
