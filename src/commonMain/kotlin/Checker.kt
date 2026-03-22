@@ -6726,6 +6726,9 @@ class Checker(
                             checkDuplicateParams(prop.parameters, source, fileName)
                             prop.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
                         }
+                        is PropertyAssignment -> {
+                            checkDuplicatesInExpr(prop.initializer, source, fileName)
+                        }
                         else -> {}
                     }
                 }
@@ -7067,7 +7070,10 @@ class Checker(
                                 relatedInformation = listOf(relatedInfo),
                             ))
                         }
-                        continue // Don't also emit TS2300
+                        // When there's also a var declaration, TS2300 fires for ALL (class+function+var)
+                        // When it's only class+function (no var), skip TS2300 (only TS2813/TS2814)
+                        if (!hasVar) continue
+                        // Fall through to emit TS2300 below (isDuplicate check)
                     }
 
                     // Otherwise: declare function + declare class is a legal merge
