@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,120 tests**, 7,148 passing (70.6%), 2,969 failing
+- **10,077 tests**, 7,285 passing (72.3%), 2,789 failing
+- **Session 2026-03-22b**: TS2552 spelling suggestions with Damerau-Levenshtein (+84 tests), parser error recovery (+14 tests), decorator metadata type serialization (+5 tests), cross-file const enum re-export elision, baseUrl module resolution in Checker
 - **Session 2026-03-21b**: Skip deprecated ES5/ES3/AMD/System/UMD JS emit tests (-475 tests, deprecated in TS6.0/removed in TS7.0/tsgo). Remove `let`/`const`→`var` downlevel code. Map `effectiveTarget` ES5→ES2015. Block comment whitespace preservation (+1). Parameter comment inline formatting (+2), string enum syntactic reverse mapping (+2), esModuleInterop helpers (+15), TS1036 first-only, yield isStartOfExpression (+2)
 - **Session 2026-03-21**: +9 tests (7,228→7,237) — StackOverflow fix: iterative left-spine walk in checkConstAssignmentInExpr (+1), binding pattern element defaults TS2448 FP fix, top-level await parsing for ES2022+/NodeNext/System modules (+1), TS1215 'arguments' in module strict mode (+1), CJS void 0 hoist skip for type-only global re-exports (+1), /// reference types hoist before CJS preamble (+1), shebang stripping in outFile bundles (+1), CJS/AMD exports qualification for exported import aliases (+3)
 - **Session 2026-03-20d**: +6 tests (7,206→7,212) — TS2694 namespace name resolves through import aliases via symbol parent chain (+2), TS1127 invalid unicode escape reports at escape position (+1), TS1003 incomplete dot access position fix (+1), TS1100 strict mode recurses into variable initializer functions (+3), TS1007 related info for missing close paren in if/while/with/do-while (+4), some test ordering overlap.
@@ -2024,6 +2025,79 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
   `indexerAsOptional`, `indexerSignatureWithRestParam`.
 
   **Files:** `Parser.kt`
+
+---
+
+### 28. Session 2026-03-22c — FP reductions and JS emit fixes
+
+Analysis of 2,789 remaining failures:
+- **1,726** "none produced" (need type checker: TS2322 112, TS2345 45, TS2339 43)
+- **1,062** error diff failures (FP codes: TS1005 62, TS2304 43, TS1109 42, TS7006 36, TS2552 17)
+- **329** JS emit failures (file ordering 59, CJS export 25, temp var 24, decorator 26, other 153)
+
+- [ ] **28a. TS2552 false positive reduction — type parameters and parameter properties** (~6 tests)
+
+  Our TS2552 spelling suggestions fire for names that TypeScript reports as plain TS2304:
+  - `X` suggesting `x` (parameter property name) — constructor `public x` creates a class member,
+    but `X` in type position should not suggest `x` (a value). TypeScript only suggests same-kind names.
+  - `H` suggesting `h` (type parameter) — type params aren't value names.
+  - `path` suggesting `Math` — Edit distance 2 for length-4 name exceeds TypeScript's threshold.
+  - `b` suggesting `B` (namespace) — TS2833 should fire instead, but we don't have namespace detection.
+
+  Fix: Skip TS2552 suggestions when the candidate is a different kind (value vs type).
+  TypeScript's threshold is `candidateName.length * 0.4` (not `name.length / 3`).
+  Also skip suggesting parameter properties for type-position names.
+
+  **Files:** `Checker.kt`
+
+- [ ] **28b. CJS type-only import alias void0 hoist suppression** (~6 tests)
+
+  `export import v = C` where `C` is a type-only namespace alias (interface/declare namespace)
+  incorrectly gets `exports.v = void 0` hoisted, and later `exports.v = C`.
+  TypeScript suppresses void0 + assignment for pure type aliases.
+
+  Tests: `internalAliasInterfaceInsideTopLevelModuleWithExport`,
+  `internalAliasUninitializedModuleInsideTopLevelModule` (CJS + AMD variants).
+
+  **Files:** `Transformer.kt`
+
+- [ ] **28c. Module file detection for CJS transform** (~6 tests)
+
+  Some non-module files (no imports/exports) still get CJS preamble (`Object.defineProperty`).
+  Tests: `compositeWithNodeModulesSourceFile`, `declarationEmitNestedBindingPattern`.
+
+  **Files:** `Transformer.kt`, `TypeScriptCompiler.kt`
+
+- [ ] **28d. Decorator metadata — CJS export qualification for __decorate** (~4 tests)
+
+  `exports.MyClass = MyClass = __decorate([...])` — decorator metadata result should be
+  assigned to `exports.X` when the class is exported in CJS mode.
+
+  Tests: `decoratorMetadataWithImportDeclarationNameCollision2` and variants.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **28e. Decorator metadata — negative literal types and import resolution** (~4 tests)
+
+  - `decoratorWithNegativeLiteralTypeNoCrash`: `-1` type should serialize to `Number`, not `Object`.
+  - `decoratorMetadataTypeOnlyExport`: imported class type should use `require()` in metadata,
+    not inline the class reference.
+
+  **Files:** `Transformer.kt`
+
+- [ ] **28f. Missing `export {}` elision in error recovery** (~6 tests)
+
+  When parser error recovery produces malformed imports/exports, the emitter still produces
+  `export {}` which doesn't appear in TypeScript's output. Need to suppress empty export
+  statements that come from parse errors.
+
+  **Files:** `Emitter.kt`
+
+- [ ] **28g. `for` statement comment preservation** (~2 tests)
+
+  `for (;; // error\n)` — comments in `for` header get dropped. TypeScript preserves them.
+
+  **Files:** `Emitter.kt`
 
 ---
 
