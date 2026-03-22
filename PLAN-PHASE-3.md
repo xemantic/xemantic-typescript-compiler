@@ -1955,6 +1955,65 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
 - [x] **25h. ES5 arrow→function downlevel** — ~~*deferred*~~ **REMOVED**: ES5 target deprecated in TypeScript 6.0, removed in 7.0/tsgo. JS emit tests for `target=ES5/ES3` and `module=AMD/System/UMD` skipped in test generator. No downlevel transforms will be implemented.
 
+### 26. Session 2026-03-21c — New diagnostics: with statement, labeled statement, namespace jump/return
+
+- [x] **26a. TS1104/TS1108 in namespace bodies** (+2 tests)
+
+  `checkJumpInStatement` and `checkReturnInTopLevel` now recurse into
+  `ModuleDeclaration` bodies. `continue` inside `declare namespace` gets TS1104,
+  `return` gets TS1108. `break` does NOT get TS1105 (TS1036 already fires for
+  ambient context) — suppressed by passing `inSwitch=true` when recursing into
+  namespace bodies.
+
+  **Files:** `Checker.kt`
+
+- [x] **26b. TS2410 + TS1101 — with statement diagnostics** (+10 tests)
+
+  TS2410 "The 'with' statement is not supported" fires for ALL with statements.
+  Span covers `with (expression)` (from `with` to closing `)` of condition).
+  TS1101 "'with' statements are not allowed in strict mode" fires when
+  `alwaysStrict != false`. Span covers just the `with` keyword (4 chars).
+  Implementation: `checkWithStatements()` + `walkForWithStatements()` walker.
+  Uses paren-depth scanning to find matching `)` (not `expression.end`).
+
+  **Files:** `Checker.kt`
+
+- [x] **26c. TS1344 — label on declaration statement** (+4 tests)
+
+  "'A label is not allowed here." fires in strict mode (`alwaysStrict != false`)
+  when a LabeledStatement's body is a declaration-like node (VariableStatement,
+  FunctionDeclaration, ClassDeclaration, EnumDeclaration, ModuleDeclaration,
+  InterfaceDeclaration, TypeAliasDeclaration, ImportDeclaration, ExportDeclaration,
+  ExportAssignment). Span covers just the label identifier. Added `isDeclarationStatement()`
+  helper. Implemented in `checkJumpInStatement`'s LabeledStatement case.
+
+  **Files:** `Checker.kt`
+
+- [x] **26d. TS1066 — non-constant ambient enum initializer** (+2 tests)
+
+  "In ambient enum declarations member initializer must be constant expression."
+  Fires when a `declare enum` member has a non-constant initializer (e.g., `'foo'.length`).
+  Added `isConstantEnumMemberExpr()` helper (accepts numeric/string literals, prefix +/-,
+  binary ops, parens) and `expressionTrueEnd()` helper to compute the correct squiggle
+  span length. The AST's `node.end` overshoots (includes the next scanned token),
+  so `expressionTrueEnd()` returns the true end by examining rightmost leaf nodes
+  (e.g., `PropertyAccessExpression → name.pos + name.text.length`).
+  Tests: `ambientEnum1`, `ambientErrors1`.
+
+  **Files:** `Checker.kt`
+
+---
+
+## Remaining failure analysis (session 2026-03-21c)
+
+**Tests passing**: 7,200 / 10,077 (71.4%)
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Error "none produced" | ~1,780 | Dominated by TS2322 (551), TS2339 (150), TS2345 (140) |
+| Error diff | ~790 | Top FP: TS1005 (286x), TS2304 (221x), TS1109 (217x), TS7006 (188x) |
+| JS emit | ~470 | ES5 downlevel 345, decorators 27, system 7, sourcemap 6 |
+
 ---
 
 ## Remaining failure analysis (session 2026-03-21b)

@@ -13542,16 +13542,78 @@ class Checker(
         }
     }
 
+    /**
+     * Returns true if the expression qualifies as a constant for ambient enum member initializers.
+     * TS1066 fires when this returns false inside a declare enum.
+     */
+    private fun isConstantEnumMemberExpr(expr: Expression): Boolean = when (expr) {
+        is NumericLiteralNode -> true
+        is StringLiteralNode -> true
+        is PrefixUnaryExpression -> (expr.operator == SyntaxKind.Minus || expr.operator == SyntaxKind.Plus) &&
+            expr.operand is NumericLiteralNode
+        is BinaryExpression -> isConstantEnumMemberExpr(expr.left) && isConstantEnumMemberExpr(expr.right)
+        is ParenthesizedExpression -> isConstantEnumMemberExpr(expr.expression)
+        else -> false
+    }
+
+    /**
+     * Computes the true end position of an expression in source text.
+     *
+     * In this AST, node.end includes the start of the NEXT scanned token
+     * (because the parser calls getEnd() after nextToken()). This helper
+     * recovers the actual end of the expression text by examining the
+     * rightmost leaf of the expression tree.
+     */
+    private fun expressionTrueEnd(expr: Expression): Int = when (expr) {
+        is NumericLiteralNode -> expr.pos + expr.text.length
+        is StringLiteralNode -> {
+            val quoteCount = if (expr.isUnterminated) 1 else 2
+            val content = expr.rawText ?: expr.text
+            expr.pos + content.length + quoteCount
+        }
+        is Identifier -> expr.pos + expr.text.length
+        is PrefixUnaryExpression -> expressionTrueEnd(expr.operand)
+        is BinaryExpression -> expressionTrueEnd(expr.right)
+        is ParenthesizedExpression -> expressionTrueEnd(expr.expression) + 1 // +1 for closing )
+        is PropertyAccessExpression -> expr.name.pos + expr.name.text.length
+        is ElementAccessExpression -> expressionTrueEnd(expr.argumentExpression) + 1 // +1 for ]
+        is NonNullExpression -> expressionTrueEnd(expr.expression) + 1 // +1 for !
+        else -> expr.end // fallback — may overshoot by one token for complex expressions
+    }
+
     private fun checkAmbientInitInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
         for (stmt in stmts) {
             val isDeclare = when (stmt) {
                 is VariableStatement -> ModifierFlag.Declare in stmt.modifiers
                 is ClassDeclaration -> ModifierFlag.Declare in stmt.modifiers
                 is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
+                is EnumDeclaration -> ModifierFlag.Declare in stmt.modifiers
                 else -> false
             }
             val ambient = isAmbient || isDeclare
             when (stmt) {
+                is EnumDeclaration -> {
+                    if (ambient) {
+                        for (member in stmt.members) {
+                            val init = member.initializer ?: continue
+                            if (!isConstantEnumMemberExpr(init)) {
+                                val start = init.pos
+                                val length = (expressionTrueEnd(init) - start).coerceAtLeast(1)
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "In ambient enum declarations member initializer must be constant expression.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 1066,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
+                }
                 is VariableStatement -> {
                     if (ambient) {
                         for (d in stmt.declarationList.declarations) {
