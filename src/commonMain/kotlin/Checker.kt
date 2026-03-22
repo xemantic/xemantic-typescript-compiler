@@ -9444,6 +9444,20 @@ class Checker(
                         }
                     }
                 }
+                is InterfaceDeclaration -> {
+                    // Interface method signatures without return type annotation get TS7010.
+                    // The squiggle covers the full method signature (from name through `;`).
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration && member.type == null) {
+                            val name = (member.name as? Identifier)?.text
+                                ?: (member.name as? StringLiteralNode)?.text
+                            if (name != null) {
+                                // For interface methods, use full span (member.pos to member.end)
+                                emitTS7010WithSpan(member.pos, member.end - member.pos, name, source, fileName)
+                            }
+                        }
+                    }
+                }
                 is ModuleDeclaration -> {
                     val body = stmt.body
                     if (body is ModuleBlock) {
@@ -9470,6 +9484,10 @@ class Checker(
             is StringLiteralNode -> nameNode.text.length + 2 // include quotes
             else -> return
         }
+        emitTS7010WithSpan(start, length, nameText, source, fileName)
+    }
+
+    private fun emitTS7010WithSpan(start: Int, length: Int, nameText: String, source: String, fileName: String) {
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "'$nameText', which lacks return-type annotation, implicitly has an 'any' return type.",
