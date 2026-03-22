@@ -6480,7 +6480,10 @@ class Checker(
         candidates.addAll(KNOWN_GLOBALS)
 
         val nameLower = name.lowercase()
-        val minDistance = maxOf(1, name.length / 3)
+        // Threshold: name.length / 3 (integer division). For names of length 1 or 2,
+        // this is 0, meaning only exact case-insensitive matches are suggested.
+        // For length 3+, allows substitutions/transpositions proportional to length.
+        val minDistance = name.length / 3
         var bestSuggestion: String? = null
         var bestDist = Int.MAX_VALUE
 
