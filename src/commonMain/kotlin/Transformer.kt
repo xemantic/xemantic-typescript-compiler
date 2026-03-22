@@ -1266,15 +1266,25 @@ class Transformer(
                                                 for (name in names) {
                                                     val assignStmt = makeExportAssignment(name)
                                                     result.add(assignStmt)
-                                                    // Track for excluding from identifier rewriting
-                                                    if (name in conflictingExportedNames) {
-                                                        keepDeclExportAssignments.add(assignStmt)
-                                                    }
-                                                    // Track function/arrow/class init vars for expando rewriting
+                                                    // Always exclude exports.x = x assignment from identifier rewriting,
+                                                    // otherwise exports.x = x would become exports.x = exports.x
+                                                    keepDeclExportAssignments.add(assignStmt)
+                                                    // Track function/arrow/class init vars for expando rewriting.
                                                     if (decl.initializer is FunctionExpression ||
                                                         decl.initializer is ArrowFunction ||
                                                         decl.initializer is ClassExpression) {
                                                         keepDeclFunctionVarNames.add(name)
+                                                    }
+                                                    // For FunctionExpression/ArrowFunction exports, add to
+                                                    // directExportedVarNames so that ALL references (including
+                                                    // recursive self-calls) are rewritten to (0, exports.name)().
+                                                    // Do NOT do this for ClassExpression: decorated class
+                                                    // declarations are transformed to `let A = class A {}` +
+                                                    // `A = __decorate([...], A)`, and the local `A` must stay
+                                                    // throughout the decorator reassignment pattern.
+                                                    if (decl.initializer is FunctionExpression ||
+                                                        decl.initializer is ArrowFunction) {
+                                                        directExportedVarNames.add(name)
                                                     }
                                                 }
                                             }
