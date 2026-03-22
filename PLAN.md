@@ -115,11 +115,10 @@ These tests expect TypeScript's exact error recovery output. Independent of type
 
 ### 11. Remaining checker-dependent tests
 
-- [ ] **11a. Decorator metadata with type info** (~3 tests) — `decoratorMetadataNoLibIsolatedModulesTypes`, `decoratorMetadataTypeOnlyExport`, `metadataOfUnion`. Requires type serialization — significantly more work than other checker integration.
+- [x] **11a. Decorator metadata type serialization improvements** — Fixed `serializeTypeNode`: null/undefined/never alone → `void 0`, always filter `never` from unions, respect `strictNullChecks` for null/undefined union filtering, numeric enum type references → `Number` (via checker), QualifiedName enum member types (E.A) → `Number`, class-level `__decorate` now includes `design:paramtypes` for constructor params. Fixes `metadataOfUnion` (3 tests), `metadataOfUnionWithNull` (2 tests variants).
+  - **Still failing**: `decoratorMetadataTypeOnlyExport` (needs cross-file type-only export detection), `decoratorMetadataNoLibIsolatedModulesTypes` (needs TS2318 diagnostic + `typeof X !== "undefined"` pattern).
 
-- [ ] **11b. Enum non-literal cross-file initializers** (~2 tests) — Regular (non-const) enum member initializers that reference imported values should resolve to their constant value in the enum IIFE body.
-  - **Key test:** `importElisionEnum` — `MyEnum { a = MyEnumFromModule.a }` should resolve to `MyEnum { a = 0 }`
-  - **Fix area:** `Transformer.kt: transformEnumDeclaration()` — use checker to resolve imported enum member values
+- [x] **11b. Enum non-literal cross-file initializers** — `importElisionEnum` already passes (fixed in a prior session).
 
 ### 4c. Enable `.errors.txt` tests (deferred)
 

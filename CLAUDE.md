@@ -145,6 +145,13 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Ambient module `.d.ts` exports use inner module exports**: When resolving a namespace import to a `.d.ts` file with a single `declare module "X" {}`, the module symbol's exports should come from that ambient module's exports, NOT from the file-level locals. `createModuleSymbol` checks for this pattern.
 - **Default import resolution chain**: For `import Foo from "./mod"`, resolve in order: (1) `targetResult.locals["default"]`, (2) scan `ExportAssignment` (not `isExportEquals`) nodes for `export default X`, (3) scan `export { X as default } from "mod"` specifiers.
 
+### Decorator metadata type serialization gotchas
+
+- **`null`/`undefined`/`never` → `void 0`**: Standalone null/undefined/never type nodes and unions that filter down to all-nullish serialize as `VoidExpression(0)`, not `Object`. `never` is always excluded from unions; `null`/`undefined` only filtered when `!strictNullChecks`.
+- **Numeric enum type serialization**: `E.A` (QualifiedName) and plain `E` where E is a numeric enum → `Number`. Requires `checker.isNumericEnumType(name, fileName)`. String enums → `Object`.
+- **Class-level `__decorate` includes constructor paramtypes**: When `emitDecoratorMetadata` is true and a class has decorators, the class-level `__decorate([...], ClassName)` call must include `__metadata("design:paramtypes", [...])` for constructor parameters. Pass `constructorParams` to `generateClassDecorateStatement`.
+- **Type-only export cross-file detection**: `export type { Foo }` in `a.ts` makes `Foo` type-only when imported in `b.ts` even without `import type { Foo }`. Our checker's `isValueExport` looks at the symbol's flags (Class → Value → true) and doesn't detect type-only export specifiers. Fix requires tracking per-name type-only exports in the binder.
+
 ### TS2454/TS2564 gotchas
 
 - **`any` type skips TS2454/TS2564**: Variables and properties typed as `any` don't need definite assignment checking because `any` includes `undefined`.
@@ -160,7 +167,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2552 (spelling suggestions), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,269 / 10,077 tests passing (72.1%)**, up from 7,267/10,077 (session 2026-03-21b). ES5/ES3/AMD/System/UMD JS emit tests skipped (475 tests removed — deprecated in TypeScript 6.0, removed in 7.0/tsgo). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), cross-file const enum re-export elision (partially done).
+**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2552 (spelling suggestions), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,288 / 10,077 tests passing (72.3%)**, up from 7,283/10,077 (session 2026-03-21b+). ES5/ES3/AMD/System/UMD JS emit tests skipped (475 tests removed — deprecated in TypeScript 6.0, removed in 7.0/tsgo). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), cross-file const enum re-export elision (partially done).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -178,7 +185,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 7,269 currently passing tests must continue to pass after every change.
+- **No regressions** — the 7,288 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
