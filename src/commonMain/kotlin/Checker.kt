@@ -6115,14 +6115,14 @@ class Checker(
     ) {
         when (name) {
             is Identifier -> {
-                checkIdentifierResolved(name.text, name, scope, source, fileName)
+                checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = true)
             }
             is QualifiedName -> {
                 // Check the leftmost part of A.B.C
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
                 if (leftmost is Identifier) {
-                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName)
+                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = true)
                 }
                 // Check QualifiedName segments for TS2694
                 checkQualifiedNameExports(name, source, fileName)
@@ -6565,7 +6565,8 @@ class Checker(
     /**
      * Finds a spelling suggestion for an unresolved name.
      * Returns the closest name from scope if within edit-distance threshold.
-     * Mirrors TypeScript's getSpellingSuggestion algorithm.
+     * Mirrors TypeScript's getSpellingSuggestion algorithm with weighted costs:
+     * case-diff = 0.1, substitution = 2, insert/delete = 1.
      * Only suggests value-producing names (not type-alias/interface-only declarations).
      */
     private fun getSpellingSuggestion(name: String, scope: NameScope, fileName: String): String? {
@@ -6591,27 +6592,27 @@ class Checker(
             }
         }
 
-        val nameLower = name.lowercase()
-        // Threshold: name.length / 3 (integer division). For names of length 1 or 2,
-        // this is 0, meaning only exact case-insensitive matches are suggested.
-        // For length 3+, allows substitutions/transpositions proportional to length.
-        val minDistance = name.length / 3
+        // TypeScript's threshold: floor(name.length * 0.4) + 1
+        // bestDistance starts at this value; candidates must have distance STRICTLY LESS THAN bestDistance
+        // We use 10x integer scale throughout: 0.1 → 1, 1 → 10, 2 → 20
+        val maximumLengthDifference = maxOf(2, (name.length * 0.34).toInt())
+        var bestDistance10 = (name.length * 0.4).toInt() * 10 + 10  // (floor(n*0.4) + 1) * 10
         var bestSuggestion: String? = null
-        var bestDist = Int.MAX_VALUE
 
         for (candidate in candidates) {
             if (candidate == name) continue  // exact match already handled by scope.has()
             if (candidate.isEmpty()) continue  // skip empty candidates
             // Don't suggest type-only declarations (type aliases, interfaces) in value position
             if (candidate in typeOnlyNames) continue
+            // Skip candidates shorter than 3 unless case-insensitive match
+            if (candidate.length < 3 && candidate.lowercase() != name.lowercase()) continue
             // Quick filter: skip if length difference is too large
             val lenDiff = kotlin.math.abs(candidate.length - name.length)
-            if (lenDiff > minDistance) continue
+            if (lenDiff > maximumLengthDifference) continue
 
-            val candidateLower = candidate.lowercase()
-            val dist = levenshteinDistance(nameLower, candidateLower)
-            if (dist <= minDistance && dist < bestDist) {
-                bestDist = dist
+            val dist10 = weightedLevenshteinDistance10(name, candidate, bestDistance10)
+            if (dist10 < bestDistance10) {
+                bestDistance10 = dist10
                 bestSuggestion = candidate
             }
         }
@@ -6652,31 +6653,44 @@ class Checker(
     }
 
     /**
-     * Compute optimal string alignment (restricted Damerau-Levenshtein) distance.
-     * Counts adjacent transpositions as distance 1, matching TypeScript's
-     * getSpellingSuggestion behavior (e.g., "tupel" → "tuple" = 1).
+     * Compute weighted Levenshtein distance matching TypeScript's getSpellingSuggestion.
+     * Cost model: case-only difference = 0.1, insert/delete = 1, other substitution = 2.
+     * Uses 10x integer scaling to avoid floating point (so 0.1 → 1, 1 → 10, 2 → 20).
+     * Returns the distance in 10x scale; callers use the same scale for thresholds.
+     * [cutoff10] is the maximum acceptable distance in 10x scale (for early termination).
      */
-    private fun levenshteinDistance(a: String, b: String): Int {
+    private fun weightedLevenshteinDistance10(a: String, b: String, cutoff10: Int): Int {
         if (a == b) return 0
-        if (a.isEmpty()) return b.length
-        if (b.isEmpty()) return a.length
-        // dp[i][j] = distance(a[0..i-1], b[0..j-1])
-        val dp = Array(a.length + 1) { i -> IntArray(b.length + 1) { j -> if (i == 0) j else if (j == 0) i else 0 } }
-        for (i in 1..a.length) {
-            for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                dp[i][j] = minOf(
-                    dp[i - 1][j] + 1,      // deletion
-                    dp[i][j - 1] + 1,      // insertion
-                    dp[i - 1][j - 1] + cost // substitution
-                )
-                // Transposition
-                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
-                    dp[i][j] = minOf(dp[i][j], dp[i - 2][j - 2] + cost)
+        if (a.isEmpty()) return b.length * 10
+        if (b.isEmpty()) return a.length * 10
+        val m = a.length
+        val n = b.length
+        // dp[j] = distance(a[0..i-1], b[0..j-1]) in 10x scale
+        var prev = IntArray(n + 1) { j -> j * 10 } // insert cost = 10 per char
+        var curr = IntArray(n + 1)
+        for (i in 1..m) {
+            curr[0] = i * 10  // delete cost = 10 per char
+            var rowMin = curr[0]
+            for (j in 1..n) {
+                val cost10 = when {
+                    a[i - 1] == b[j - 1] -> 0                          // exact match
+                    a[i - 1].lowercaseChar() == b[j - 1].lowercaseChar() -> 1  // case-only diff = 0.1 → 1
+                    else -> 20                                          // substitution = 2 → 20
                 }
+                curr[j] = minOf(
+                    prev[j] + 10,         // deletion (cost 1 → 10)
+                    curr[j - 1] + 10,     // insertion (cost 1 → 10)
+                    prev[j - 1] + cost10  // substitution
+                )
+                if (curr[j] < rowMin) rowMin = curr[j]
             }
+            // Early termination: if entire row exceeds cutoff, no solution possible
+            if (rowMin >= cutoff10) return cutoff10
+            val tmp = prev
+            prev = curr
+            curr = tmp
         }
-        return dp[a.length][b.length]
+        return prev[n]
     }
 
     /**
