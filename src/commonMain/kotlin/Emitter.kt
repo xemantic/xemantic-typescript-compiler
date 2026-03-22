@@ -356,13 +356,29 @@ class Emitter(
         // skip type annotation
         if (node.initializer != null) {
             write(" = ")
-            // Emit inline comment between `=` and initializer value, e.g. `let a = /*c*/ {}`
             if (!options.removeComments) {
-                val inlineComment = findInlineInitializerComment(node.initializer)
-                if (inlineComment != null) {
-                    write(inlineComment.text)
-                    write(" ")
+                // Check if the initializer has own-line leading comments (hasPrecedingNewLine=true).
+                // In that case, emit them on their own lines before the value (TypeScript style):
+                //   var yy = \n/// value comment\n20;
+                val ownLineLeading = findInlineInitializerOwnLineComments(node.initializer)
+                if (!ownLineLeading.isNullOrEmpty()) {
+                    writeNewLine()
+                    for (comment in ownLineLeading) {
+                        writeIndent()
+                        write(comment.text)
+                        writeNewLine()
+                    }
+                    writeIndent()
+                } else {
+                    // Emit inline comment between `=` and initializer value, e.g. `let a = /*c*/ {}`
+                    val inlineComment = findInlineInitializerComment(node.initializer)
+                    if (inlineComment != null) {
+                        write(inlineComment.text)
+                        write(" ")
+                    }
                 }
+            } else {
+                // No comments path: just check for inline comments (removed)
             }
             emitExpression(node.initializer)
         }
@@ -382,6 +398,15 @@ class Emitter(
             is ElementAccessExpression -> findInlineInitializerComment(expr.expression)
             else -> null
         }
+    }
+
+    /**
+     * Finds own-line (hasPrecedingNewLine=true) leading comments on the leftmost part of an
+     * initializer expression. These appear on their own line between `=` and the value:
+     *   var yy = \n/// comment\n20;
+     */
+    private fun findInlineInitializerOwnLineComments(expr: Expression): List<Comment>? {
+        return expr.leadingComments?.filter { it.hasPrecedingNewLine }?.takeIf { it.isNotEmpty() }
     }
 
     private fun emitExpressionStatement(node: ExpressionStatement) {
