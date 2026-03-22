@@ -12317,15 +12317,26 @@ class Transformer(
     }
 
     private fun rewriteIdInClassElement(member: ClassElement, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): ClassElement = when (member) {
-        is Constructor -> member.copy(
-            parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
-        )
-        is MethodDeclaration -> member.copy(
-            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
-            parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
-        )
+        is Constructor -> {
+            // Parameters shadow any imported names in the constructor body.
+            // Remove parameter-bound names from the rename map before rewriting the body.
+            val paramNames = member.parameters.flatMap { collectBoundNames(it.name) }.toSet()
+            val bodyMap = if (paramNames.isEmpty()) map else map - paramNames
+            member.copy(
+                parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+                body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) }),
+            )
+        }
+        is MethodDeclaration -> {
+            // Parameters shadow any imported names in the method body.
+            val paramNames = member.parameters.flatMap { collectBoundNames(it.name) }.toSet()
+            val bodyMap = if (paramNames.isEmpty()) map else map - paramNames
+            member.copy(
+                name = rewriteComputedName(member.name, map, wrapCallsWithZero),
+                parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+                body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) }),
+            )
+        }
         is PropertyDeclaration -> member.copy(
             name = rewriteComputedName(member.name, map, wrapCallsWithZero),
             initializer = member.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
