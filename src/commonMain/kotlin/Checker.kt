@@ -81,7 +81,8 @@ class Checker(
             checkDefiniteAssignment()
         }
         // 6. Check for class properties without initializer (TS2564)
-        if (!options.strictExplicitlyFalse) {
+        // Suppressed when strict=false, or when strictPropertyInitialization=false explicitly set
+        if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
             checkPropertyInitialization()
         }
         // 7. Check for implicit any parameters (TS7006)
@@ -4413,6 +4414,8 @@ class Checker(
     ) {
         // Find the constructor and collect assigned properties
         val constructorAssigned = mutableSetOf<String>()
+        // Collect all class member names (for typeof-reference check below)
+        val classMemberNames = mutableSetOf<String>()
         for (member in members) {
             if (member is Constructor) {
                 member.body?.let { body ->
@@ -4431,6 +4434,13 @@ class Checker(
                     }
                 }
             }
+            // Collect member names for typeof-reference detection
+            val memberName = when (val n = (member as? PropertyDeclaration)?.name
+                ?: (member as? MethodDeclaration)?.name) {
+                is Identifier -> n.text
+                else -> null
+            }
+            if (memberName != null) classMemberNames.add(memberName)
         }
 
         // Check each property
@@ -4450,13 +4460,22 @@ class Checker(
             // Skip if type annotation is a bare generic reference (would trigger TS2314)
             // TypeScript doesn't flag TS2564 on error types
             if (isUnresolvedGenericType(member.type)) continue
+            // Skip `typeof X` where X is a class member or unresolved name — TypeScript resolves
+            // these as error types and suppresses TS2564. Only check `typeof X` when X is
+            // definitely NOT a class member (TypeScript would resolve it as a valid type).
+            if (member.type is TypeQuery) {
+                val queryExpr = (member.type as TypeQuery).exprName
+                if (queryExpr is Identifier && queryExpr.text in classMemberNames) continue
+                // If the typeof target is NOT a class member, fall through to check TS2564
+                // (e.g., `typeof GlobalFoo` where GlobalFoo is a declared external var)
+            }
 
-            // Get property name
+            // Get property name — only identifier-named and computed properties get TS2564
+            // String/numeric literal names are excluded (TypeScript doesn't check those)
             val propName = when (val name = member.name) {
                 is Identifier -> name.text
-                is StringLiteralNode -> name.text
                 is ComputedPropertyName -> {
-                    // Computed property name — check for Symbol.X or simple identifier
+                    // Computed property name — handles Symbol.X and simple identifiers
                     when (val expr = name.expression) {
                         is PropertyAccessExpression -> {
                             val base = expr.expression
@@ -4464,6 +4483,7 @@ class Checker(
                                 "[Symbol.${expr.name.text}]"
                             } else null
                         }
+                        is Identifier -> "[${expr.text}]"
                         else -> null
                     }
                 }
@@ -5983,15 +6003,16 @@ class Checker(
         source: String,
         fileName: String,
     ) {
+        // typeof X in type position — TypeScript uses TS2304 (no TS2662/TS2663 suggestions)
         when (name) {
             is Identifier -> {
-                checkIdentifierResolved(name.text, name, scope, source, fileName)
+                checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = true)
             }
             is QualifiedName -> {
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
                 if (leftmost is Identifier) {
-                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName)
+                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = true)
                 }
             }
             else -> {}
@@ -6143,6 +6164,7 @@ class Checker(
     /**
      * Check if an identifier name can be resolved in the current scope chain.
      * If not, emit TS2662/TS2663 (did-you-mean) or TS2304.
+     * @param inTypePosition When true, suppress TS2662/TS2663 suggestions (type positions use TS2304)
      */
     private fun checkIdentifierResolved(
         name: String,
@@ -6150,6 +6172,7 @@ class Checker(
         scope: NameScope,
         source: String,
         fileName: String,
+        inTypePosition: Boolean = false,
     ) {
         // Skip empty/synthetic names or non-identifier text from parser recovery
         if (name.isEmpty()) return
@@ -6164,7 +6187,8 @@ class Checker(
         val (line, character) = getLineAndCharacterOfPosition(source, start)
 
         // Check for did-you-mean static/instance member suggestion
-        val classCtx = scope.classContext
+        // In type positions (e.g., `typeof x` operand), TypeScript emits TS2304 only (no suggestions)
+        val classCtx = if (inTypePosition) null else scope.classContext
         if (classCtx != null) {
             if (name in classCtx.staticMembers) {
                 diagnostics.add(Diagnostic(
@@ -6869,21 +6893,156 @@ class Checker(
                     allNamespacesValueFree || allVarsDeclare
                 } else false
 
-                // declare function + declare class is a legal merge (function acts as constructor overload)
-                val classFuncConflict = if (hasClass && hasFunc) {
-                    val allFuncsDeclare = group.filter { it.kind == "function" }.all { decl ->
+                // TS2395: All declarations in a merged name must be uniformly exported or local
+                // (e.g., `var f = 10; export function f() {}` → TS2395 for each declaration)
+                val checkExportUniformity = hasFunc || hasVar || hasClass || hasNamespace
+                if (checkExportUniformity) {
+                    val exportedDecls = group.filter { decl ->
+                        when (val s = decl.stmt) {
+                            is FunctionDeclaration -> ModifierFlag.Export in s.modifiers
+                            is VariableStatement -> ModifierFlag.Export in s.modifiers
+                            is ClassDeclaration -> ModifierFlag.Export in s.modifiers
+                            is ModuleDeclaration -> ModifierFlag.Export in s.modifiers
+                            else -> false
+                        }
+                    }
+                    val nonExportedDecls = group.filter { decl ->
+                        when (val s = decl.stmt) {
+                            is FunctionDeclaration -> ModifierFlag.Export !in s.modifiers
+                            is VariableStatement -> ModifierFlag.Export !in s.modifiers
+                            is ClassDeclaration -> ModifierFlag.Export !in s.modifiers
+                            is ModuleDeclaration -> ModifierFlag.Export !in s.modifiers
+                            else -> false
+                        }
+                    }
+                    val hasMixedExports = exportedDecls.isNotEmpty() && nonExportedDecls.isNotEmpty()
+                    if (hasMixedExports) {
+                        val allDecls = exportedDecls + nonExportedDecls
+                        for (decl in allDecls) {
+                            val start = decl.nameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
+                                category = DiagnosticCategory.Error,
+                                code = 2395,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = decl.name.length,
+                            ))
+                        }
+                        continue // Don't also check for TS2300 etc.
+                    }
+                }
+
+                // TS2393: Duplicate function implementation — two functions both with bodies
+                if (hasFunc && !hasClass && !hasVar && !hasNamespace) {
+                    val funcDecls = group.filter { it.kind == "function" }
+                    val funcBodies = funcDecls.filter { decl ->
+                        val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
+                        funcStmt.body != null
+                    }
+                    if (funcBodies.size >= 2) {
+                        for (decl in funcBodies) {
+                            val start = decl.nameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Duplicate function implementation.",
+                                category = DiagnosticCategory.Error,
+                                code = 2393,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = decl.name.length,
+                            ))
+                        }
+                        continue
+                    }
+                }
+
+                // TS2813/TS2814: function-with-body + non-ambient class
+                if (hasClass && hasFunc) {
+                    val funcDecls = group.filter { it.kind == "function" }
+                    val classDecls = group.filter { it.kind == "class" }
+                    val funcsWithBody = funcDecls.filter { decl ->
+                        val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
+                        funcStmt.body != null
+                    }
+                    val nonAmbientClasses = classDecls.filter { decl ->
+                        val classStmt = decl.stmt as? ClassDeclaration ?: return@filter false
+                        ModifierFlag.Declare !in classStmt.modifiers
+                    }
+                    if (funcsWithBody.isNotEmpty() && nonAmbientClasses.isNotEmpty()) {
+                        // Get the first non-ambient class position for the related info
+                        val relatedClass = nonAmbientClasses.first()
+                        val classStart = relatedClass.nameNode.pos
+                        val (classLine, classChar) = getLineAndCharacterOfPosition(source, classStart)
+                        val relatedInfo = Diagnostic(
+                            message = "Consider adding a 'declare' modifier to this class.",
+                            category = DiagnosticCategory.Message,
+                            code = 6506,
+                            fileName = fileName,
+                            line = classLine,
+                            character = classChar,
+                            start = classStart,
+                            length = relatedClass.name.length,
+                        )
+                        // TS2814 for functions with body
+                        for (decl in funcsWithBody) {
+                            val start = decl.nameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Function with bodies can only merge with classes that are ambient.",
+                                category = DiagnosticCategory.Error,
+                                code = 2814,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = decl.name.length,
+                                relatedInformation = listOf(relatedInfo),
+                            ))
+                        }
+                        // TS2813 for non-ambient classes
+                        for (decl in nonAmbientClasses) {
+                            val start = decl.nameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Class declaration cannot implement overload list for '${decl.name}'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2813,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = decl.name.length,
+                                relatedInformation = listOf(relatedInfo),
+                            ))
+                        }
+                        continue // Don't also emit TS2300
+                    }
+
+                    // Otherwise: declare function + declare class is a legal merge
+                    val allFuncsDeclare = funcDecls.all { decl ->
                         val funcStmt = decl.stmt as? FunctionDeclaration ?: return@all false
                         ModifierFlag.Declare in funcStmt.modifiers
                     }
-                    val allClassesDeclare = group.filter { it.kind == "class" }.all { decl ->
+                    val allClassesDeclare = classDecls.all { decl ->
                         val classStmt = decl.stmt as? ClassDeclaration ?: return@all false
                         ModifierFlag.Declare in classStmt.modifiers
                     }
-                    !(allFuncsDeclare && allClassesDeclare)
-                } else false
+                    if (!(allFuncsDeclare && allClassesDeclare)) {
+                        // Mixed: some declare, some not → TS2300
+                        for (decl in group) {
+                            emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                        }
+                    }
+                    continue
+                }
 
                 val isDuplicate = (hasClass && classCount >= 2) ||
-                        classFuncConflict ||
                         (hasVar && (hasClass || hasFunc)) ||
                         (hasVar && hasNamespace && !namespaceVarAllowed)
 
