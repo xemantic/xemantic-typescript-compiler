@@ -6430,7 +6430,7 @@ class Checker(
             val countKey = "$fileName:$name"
             val currentCount = spellingSuggestionCounts[countKey] ?: 0
             if (currentCount < 10) {
-                val suggestion = getSpellingSuggestion(name, scope)
+                val suggestion = getSpellingSuggestion(name, scope, fileName)
                 if (suggestion != null) {
                     spellingSuggestionCounts[countKey] = currentCount + 1
                     // Try to find the declaration position of the suggestion for TS2728 related info
@@ -6467,8 +6467,9 @@ class Checker(
      * Finds a spelling suggestion for an unresolved name.
      * Returns the closest name from scope if within edit-distance threshold.
      * Mirrors TypeScript's getSpellingSuggestion algorithm.
+     * Only suggests value-producing names (not type-alias/interface-only declarations).
      */
-    private fun getSpellingSuggestion(name: String, scope: NameScope): String? {
+    private fun getSpellingSuggestion(name: String, scope: NameScope, fileName: String): String? {
         // Collect all candidate names from scope chain
         val candidates = mutableSetOf<String>()
         var s: NameScope? = scope
@@ -6478,6 +6479,18 @@ class Checker(
         }
         // Also include well-known globals
         candidates.addAll(KNOWN_GLOBALS)
+
+        // Build set of type-only names from binder locals so we don't suggest
+        // type aliases or interfaces as replacements for value-position references.
+        val typeOnlyNames = mutableSetOf<String>()
+        val binderResult = fileResults[fileName]
+        if (binderResult != null) {
+            for ((symName, sym) in binderResult.locals) {
+                if (!sym.flags.hasAny(SymbolFlags.Value)) {
+                    typeOnlyNames.add(symName)
+                }
+            }
+        }
 
         val nameLower = name.lowercase()
         // Threshold: name.length / 3 (integer division). For names of length 1 or 2,
@@ -6490,6 +6503,8 @@ class Checker(
         for (candidate in candidates) {
             if (candidate == name) continue  // exact match already handled by scope.has()
             if (candidate.isEmpty()) continue  // skip empty candidates
+            // Don't suggest type-only declarations (type aliases, interfaces) in value position
+            if (candidate in typeOnlyNames) continue
             // Quick filter: skip if length difference is too large
             val lenDiff = kotlin.math.abs(candidate.length - name.length)
             if (lenDiff > minDistance) continue
