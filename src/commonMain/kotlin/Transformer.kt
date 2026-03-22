@@ -851,11 +851,44 @@ class Transformer(
                     }
                 }
                 is ImportEqualsDeclaration -> {
-                    if (!stmt.isTypeOnly) {
+                    val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    if (stmt.isTypeOnly) {
+                        // Explicitly type-only: always type-only
+                        typeOnlyDeclaredNames.add(stmt.name.text)
+                    } else if (!isDeclare) {
+                        // Check if the target resolves to a type-only name (interface, type alias,
+                        // uninstantiated namespace). If so, the alias itself is type-only.
+                        // Exception: `declare import` keeps the ambient binding even for type-only targets.
+                        // For exported aliases, require the root namespace to be exported (TypeScript only
+                        // erases `export import b = a.I` when `a` is itself exported from the module).
+                        val ref = stmt.moduleReference
+                        val requireRootExported = isExported
+                        val isTypeOnlyTarget = when {
+                            ref is Identifier && ref.text in topLevelTypeOnlyNames -> {
+                                if (!requireRootExported) true
+                                else {
+                                    val rootNs = topLevelStatements.filterIsInstance<ModuleDeclaration>()
+                                        .firstOrNull { extractIdentifierName(it.name) == ref.text }
+                                    rootNs == null || ModifierFlag.Export in rootNs.modifiers
+                                }
+                            }
+                            ref is QualifiedName -> isQualifiedPathTypeOnly(ref, requireRootExported)
+                            else -> false
+                        }
+                        if (isTypeOnlyTarget) {
+                            typeOnlyDeclaredNames.add(stmt.name.text)
+                        } else {
+                            runtimeDeclaredNames.add(stmt.name.text)
+                            // `export import a = X.Y` creates a runtime binding to namespace X
+                            if (isExported && stmt.moduleReference !is ExternalModuleReference) {
+                                namespaceAliasRoot(stmt.moduleReference)?.let { runtimeDeclaredNames.add(it) }
+                            }
+                        }
+                    } else {
+                        // `declare import` — ambient binding, always treated as runtime
                         runtimeDeclaredNames.add(stmt.name.text)
-                        // `export import a = X.Y` creates a runtime binding to namespace X
-                        if (ModifierFlag.Export in stmt.modifiers &&
-                            stmt.moduleReference !is ExternalModuleReference) {
+                        if (isExported && stmt.moduleReference !is ExternalModuleReference) {
                             namespaceAliasRoot(stmt.moduleReference)?.let { runtimeDeclaredNames.add(it) }
                         }
                     }
@@ -2368,6 +2401,42 @@ class Transformer(
                     }
                 }
                 is ModuleDeclaration -> extractIdentifierName(stmt.name)?.let { runtimeDeclaredNames.add(it) }
+                is ImportEqualsDeclaration -> {
+                    val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                    if (stmt.isTypeOnly) {
+                        // Explicitly type-only: always type-only
+                        typeOnlyDeclaredNames.add(stmt.name.text)
+                    } else if (!isDeclare) {
+                        // Check if the target resolves to a type-only name (interface, type alias,
+                        // uninstantiated namespace). If so, the alias itself is type-only.
+                        // Exception: `declare import` keeps the ambient binding even for type-only targets.
+                        // For exported aliases, require the root namespace to be exported (TypeScript only
+                        // erases `export import b = a.I` when `a` is itself exported from the module).
+                        val ref = stmt.moduleReference
+                        val requireRootExported = isExported
+                        val isTypeOnlyTarget = when {
+                            ref is Identifier && ref.text in topLevelTypeOnlyNames -> {
+                                if (!requireRootExported) true
+                                else {
+                                    val rootNs = topLevelStatements.filterIsInstance<ModuleDeclaration>()
+                                        .firstOrNull { extractIdentifierName(it.name) == ref.text }
+                                    rootNs == null || ModifierFlag.Export in rootNs.modifiers
+                                }
+                            }
+                            ref is QualifiedName -> isQualifiedPathTypeOnly(ref, requireRootExported)
+                            else -> false
+                        }
+                        if (isTypeOnlyTarget) {
+                            typeOnlyDeclaredNames.add(stmt.name.text)
+                        } else {
+                            runtimeDeclaredNames.add(stmt.name.text)
+                        }
+                    } else {
+                        // `declare import` — ambient binding, always treated as runtime
+                        runtimeDeclaredNames.add(stmt.name.text)
+                    }
+                }
                 else -> {}
             }
         }
@@ -7657,13 +7726,37 @@ class Transformer(
 
         val ref = decl.moduleReference
         val isExported = ModifierFlag.Export in decl.modifiers
-        if (!isExported) {
-            // Erase non-exported import aliases that resolve to type-only names.
-            if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
-                return emptyList()
-            }
-            if (ref is QualifiedName && isQualifiedPathTypeOnly(ref)) {
-                return emptyList()
+        val isDeclare = ModifierFlag.Declare in decl.modifiers
+        // Erase import aliases that resolve to type-only names (interfaces, type aliases,
+        // uninstantiated namespaces). This applies to both exported and non-exported aliases:
+        // `import b = a.I` where a.I is an interface → no runtime value, erase.
+        // `export import b = a.I` same — the export produces no JS binding.
+        // Exception: `declare export import a = x.c` — `declare` modifier means TypeScript
+        // preserves the ambient binding even if the target is type-only.
+        // For exported aliases, TypeScript only erases when the root namespace is itself exported.
+        // `export import b = a.I` where `a` is an exported namespace → erase.
+        // `export import a = x.c` where `x` is NOT exported → keep (TypeScript keeps it with error).
+        if (!isDeclare) {
+            if (!isExported) {
+                // Non-exported: erase if the ref is a type-only name (Identifier or qualified path)
+                if (ref is Identifier && ref.text in topLevelTypeOnlyNames) return emptyList()
+                if (ref is QualifiedName && isQualifiedPathTypeOnly(ref)) return emptyList()
+            } else {
+                // Exported: only erase if the root namespace is itself exported.
+                // TypeScript uses this stricter rule for exported aliases to avoid erasing bindings
+                // that refer to non-exported local namespaces (which could be needed at runtime).
+                if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
+                    // Check if the root (Identifier) refers to an exported type-only namespace
+                    val rootNs = topLevelStatements.filterIsInstance<ModuleDeclaration>()
+                        .firstOrNull { extractIdentifierName(it.name) == ref.text }
+                    if (rootNs == null || ModifierFlag.Export in rootNs.modifiers) {
+                        // No namespace found (it's a type alias/interface) or it's exported: erase
+                        return emptyList()
+                    }
+                }
+                if (ref is QualifiedName && isQualifiedPathTypeOnly(ref, requireRootExported = true)) {
+                    return emptyList()
+                }
             }
         }
 
@@ -11154,8 +11247,12 @@ class Transformer(
     /**
      * Checks whether a qualified namespace path (e.g. `Outer.uninstantiated`) refers to a
      * type-only namespace by traversing the top-level source file namespace hierarchy.
+     *
+     * When [requireRootExported] is true, also requires the root namespace to be exported.
+     * This is needed for `export import` alias elision: TypeScript only erases exported import
+     * aliases when the root namespace is itself exported (not just local/non-exported namespaces).
      */
-    private fun isQualifiedPathTypeOnly(ref: QualifiedName): Boolean {
+    private fun isQualifiedPathTypeOnly(ref: QualifiedName, requireRootExported: Boolean = false): Boolean {
         // Flatten the qualified name into a list of identifier strings, e.g. [Outer, uninstantiated]
         val parts = mutableListOf<String>()
         var node: Node = ref
@@ -11173,6 +11270,8 @@ class Transformer(
             val ns = stmts.filterIsInstance<ModuleDeclaration>()
                 .firstOrNull { extractIdentifierName(it.name) == part }
             if (ns != null) {
+                // If this is the root (i==0) and we require it to be exported, check
+                if (i == 0 && requireRootExported && ModifierFlag.Export !in ns.modifiers) return false
                 if (i == parts.size - 1) return isTypeOnlyNamespace(ns)
                 val body = ns.body ?: return true
                 stmts = when (body) {
