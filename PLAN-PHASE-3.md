@@ -2002,6 +2002,29 @@ Based on analysis of 516 tests with 1-6 line diffs (2026-03-19d session).
 
   **Files:** `Checker.kt`
 
+### 27. Session 2026-03-21 (continued) — Index signature parser diagnostics
+
+- [x] **27a. TS1096/TS1021/TS1019/TS1017 — index signature parameter errors** (+4 tests)
+
+  Added parser diagnostics for malformed index signatures in both class-member and
+  type-member (interface/type-literal) contexts:
+  - TS1096 "An index signature must have exactly one parameter" — for `[]` (zero params,
+    span = entire node) and `[a, b]` (multi-param, span = first param name). Uses
+    `parseSemicolon()` + `scanner.getPrevTokenEnd()` to include trailing `;` in span.
+  - TS1021 "An index signature must have a type annotation" — when no `: returnType`
+    follows `]`. Same span pattern.
+  - TS1019 "An index signature parameter cannot have a question mark" — when `?` found
+    after parameter name. Span = `?` position, length 1.
+  - TS1017 "An index signature cannot have a rest parameter" — when `...` found as first
+    token after `[`. Span = `...` position, length 3.
+  Updated `isIndex` lookAhead to also handle `identifier?:` form. Added `isRestIndexSig`
+  lookAhead for `[...` detection. Both class-member and `parseIndexSignatureOrProperty`
+  contexts updated.
+  Tests: `indexWithoutParamType`, `indexSignatureWithoutTypeAnnotation1`,
+  `indexerAsOptional`, `indexerSignatureWithRestParam`.
+
+  **Files:** `Parser.kt`
+
 ---
 
 ## Remaining failure analysis (session 2026-03-21c)

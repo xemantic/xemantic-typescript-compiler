@@ -1108,6 +1108,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         nextToken()
         val afterKeyword = trailingComments()
         // Per spec: "No LineTerminator here" — if a line break precedes the expression, parse no expression.
+        if (scanner.hasPrecedingLineBreak()) {
+            // TS1142: Line break not permitted here
+            // Report at the position immediately after 'throw' (the newline position), zero-length span
+            val newlinePos = scanner.getPrevTokenEnd()
+            reportError("Line break not permitted here.", code = 1142, overrideStart = newlinePos, overrideLength = 0)
+        }
         val expr = if (!scanner.hasPrecedingLineBreak()) parseExpression() else null
         val preSemi = if (expr != null && !scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments() else null
         parseSemicolon()
@@ -1365,16 +1371,40 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 if (scanner.getToken() == SyntaxKind.Question) scanner.scan() // skip optional ?
                 scanner.getToken() == SyntaxKind.Colon
             }
-            if (isIndexSig) {
+            // Detect rest parameter index signature: [...identifier...] — TS1017
+            val isRestIndexSig = !isIndexSig && scanner.lookAhead {
+                scanner.scan() // skip [
+                scanner.getToken() == SyntaxKind.DotDotDot
+            }
+            if (isIndexSig || isRestIndexSig) {
                 parseExpected(SyntaxKind.OpenBracket)
+                val dotDotDotPos = if (token == SyntaxKind.DotDotDot) getPos() else -1
+                if (dotDotDotPos >= 0) nextToken() // consume ...
                 val paramName = parseIdentifier()
-                parseOptional(SyntaxKind.Question) // optional ? on index parameter (error but valid syntax)
-                parseExpected(SyntaxKind.Colon)
-                val paramType = parseType()
+                val questionPos = if (token == SyntaxKind.Question) getPos() else -1
+                if (questionPos >= 0) nextToken() // consume ?
+                val paramType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 parseExpected(SyntaxKind.CloseBracket)
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 parseSemicolon()
-                return IndexSignature(parameters = listOf(Parameter(name = paramName, type = paramType)),
+                if (dotDotDotPos >= 0) {
+                    // TS1017: An index signature cannot have a rest parameter.
+                    reportError("An index signature cannot have a rest parameter.", code = 1017,
+                        overrideStart = dotDotDotPos, overrideLength = 3)
+                }
+                if (questionPos >= 0) {
+                    // TS1019: An index signature parameter cannot have a question mark.
+                    reportError("An index signature parameter cannot have a question mark.", code = 1019,
+                        overrideStart = questionPos, overrideLength = 1)
+                }
+                if (type == null) {
+                    // TS1021: An index signature must have a type annotation.
+                    val nodeEnd = scanner.getPrevTokenEnd()
+                    reportError("An index signature must have a type annotation.", code = 1021,
+                        overrideStart = pos, overrideLength = nodeEnd - pos)
+                }
+                val param = Parameter(name = paramName, type = paramType)
+                return IndexSignature(parameters = listOf(param),
                     type = type, modifiers = modifiers, pos = pos, end = getEnd(),
                     leadingComments = comments)
             }
@@ -1644,7 +1674,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             scanner.scan() // skip [
             if (!isIdentifierToken(scanner.getToken())) return@lookAhead false
             scanner.scan() // skip name
+            if (scanner.getToken() == SyntaxKind.Question) scanner.scan() // skip optional ?
             scanner.getToken() == SyntaxKind.Colon
+        }
+        // Detect empty index signature: [] — TS1096
+        val isEmptyIndexSig = scanner.lookAhead {
+            scanner.scan() // skip [
+            scanner.getToken() == SyntaxKind.CloseBracket
+        }
+        // Detect rest parameter index signature: [...identifier...] — TS1017
+        val isRestIndexSig = !isIndex && !isEmptyIndexSig && scanner.lookAhead {
+            scanner.scan() // skip [
+            scanner.getToken() == SyntaxKind.DotDotDot
         }
         // Detect mapped type: [K in T ...] — completely skip it (pure type construct)
         val isMappedType = scanner.lookAhead {
@@ -1679,15 +1720,74 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 end = getEnd()
             )
         }
+        if (isEmptyIndexSig) {
+            // Zero-parameter index signature: [] or []: type — TS1096
+            parseExpected(SyntaxKind.OpenBracket)
+            parseExpected(SyntaxKind.CloseBracket)
+            val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            parseSemicolon() // consume trailing ; if present (extends span to include it)
+            val nodeEnd = scanner.getPrevTokenEnd() // end of last-consumed token (after ; or after return type)
+            reportError("An index signature must have exactly one parameter.", code = 1096,
+                overrideStart = pos, overrideLength = nodeEnd - pos)
+            return IndexSignature(parameters = emptyList(), type = type, modifiers = modifiers, pos = pos, end = nodeEnd)
+        }
+        if (isRestIndexSig) {
+            // Rest parameter index signature: [...name(:type)?](:type)? — TS1017
+            parseExpected(SyntaxKind.OpenBracket)
+            val dotDotDotPos = getPos()
+            nextToken() // consume ...
+            val paramName = parseIdentifier()
+            val paramType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            parseExpected(SyntaxKind.CloseBracket)
+            val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            parseSemicolon()
+            // TS1017: An index signature cannot have a rest parameter.
+            reportError("An index signature cannot have a rest parameter.", code = 1017,
+                overrideStart = dotDotDotPos, overrideLength = 3)
+            if (type == null) {
+                val nodeEnd = scanner.getPrevTokenEnd()
+                reportError("An index signature must have a type annotation.", code = 1021,
+                    overrideStart = pos, overrideLength = nodeEnd - pos)
+            }
+            val param = Parameter(name = paramName, type = paramType)
+            return IndexSignature(parameters = listOf(param), type = type, modifiers = modifiers, pos = pos, end = getEnd())
+        }
         if (isIndex) {
             parseExpected(SyntaxKind.OpenBracket)
             val params = mutableListOf<Parameter>()
             val paramName = parseIdentifier()
+            val questionPos = if (token == SyntaxKind.Question) getPos() else -1
+            if (questionPos >= 0) nextToken() // consume ?
             parseExpected(SyntaxKind.Colon)
             val paramType = parseType()
             params.add(Parameter(name = paramName, type = paramType))
+            // Parse any additional parameters (invalid — TS1096 for multi-param index signature)
+            var hasExtraParams = false
+            while (token == SyntaxKind.Comma) {
+                nextToken() // consume ,
+                if (token == SyntaxKind.CloseBracket || token == SyntaxKind.EndOfFile) break
+                params.add(parseParameter())
+                hasExtraParams = true
+            }
+            if (hasExtraParams) {
+                // TS1096: report at the first parameter's name position
+                reportError("An index signature must have exactly one parameter.", code = 1096,
+                    overrideStart = paramName.pos, overrideLength = paramName.text.length.coerceAtLeast(1))
+            }
             parseExpected(SyntaxKind.CloseBracket)
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            parseSemicolon() // consume trailing ; if present (extends span to include it for TS1021)
+            if (questionPos >= 0) {
+                // TS1019: An index signature parameter cannot have a question mark.
+                reportError("An index signature parameter cannot have a question mark.", code = 1019,
+                    overrideStart = questionPos, overrideLength = 1)
+            }
+            if (!hasExtraParams && type == null) {
+                // TS1021: An index signature must have a type annotation.
+                val nodeEnd = scanner.getPrevTokenEnd()
+                reportError("An index signature must have a type annotation.", code = 1021,
+                    overrideStart = pos, overrideLength = nodeEnd - pos)
+            }
             return IndexSignature(parameters = params, type = type, modifiers = modifiers, pos = pos, end = getEnd())
         }
         val name = parseComputedPropertyName()
