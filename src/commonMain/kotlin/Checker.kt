@@ -6318,9 +6318,10 @@ class Checker(
      * Emits TS7026 at both opening and closing tag names.
      */
     private fun checkJsxImplicitAny() {
-        // Skip when jsxFactory is explicitly set or jsx is preserve/react-native
+        // Skip when jsxFactory/reactNamespace is explicitly set or jsx is preserve/react-native
         // (TypeScript doesn't check implicit any in these cases)
         if (options.jsxFactory != null) return
+        if (options.reactNamespace != null) return
         val jsxMode = options.jsx?.lowercase()
         if (jsxMode == "preserve" || jsxMode == "react-native") return
         for (result in binderResults) {
@@ -6516,8 +6517,15 @@ class Checker(
     }
 
     private fun emitJsx7026(tagName: Expression, source: String, fileName: String) {
+        // TS7026 only fires for intrinsic (lowercase) element names like <div>, <span>.
+        // Component references (uppercase) like <Comp> get TS2304 instead.
+        // Namespace components like <Foo.Bar> skip TS7026 entirely.
+        val intrinsicName = when (tagName) {
+            is Identifier -> if (tagName.text.firstOrNull()?.isLowerCase() == true) tagName.text else null
+            else -> null  // PropertyAccessExpression (Foo.Bar) or other — skip
+        } ?: return
         val start = tagName.pos
-        val length = tagName.end - tagName.pos
+        val length = intrinsicName.length
         if (length <= 0) return
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
@@ -7076,18 +7084,19 @@ class Checker(
                         // Fall through to emit TS2300 below (isDuplicate check)
                     }
 
-                    // Otherwise: declare function + declare class is a legal merge
-                    // (any mix of declare/non-declare when both sides are declare = OK)
-                    val allFuncsDeclare = funcDecls.all { decl ->
-                        val funcStmt = decl.stmt as? FunctionDeclaration ?: return@all false
-                        ModifierFlag.Declare in funcStmt.modifiers
-                    }
+                    // Otherwise: declare function + declare class is a legal merge.
+                    // declare class + non-declare function is ALSO legal (class provides type shape,
+                    // function provides implementation — e.g. targetTypeTest1.ts).
+                    // Only emit TS2300 for non-declare class + non-declare function (handled above via
+                    // nonAmbientClasses check) or non-declare class + non-declare function without body.
                     val allClassesDeclare = classDecls.all { decl ->
                         val classStmt = decl.stmt as? ClassDeclaration ?: return@all false
                         ModifierFlag.Declare in classStmt.modifiers
                     }
-                    if (!(allFuncsDeclare && allClassesDeclare)) {
-                        // Mixed: some declare, some not → TS2300
+                    // If all classes are ambient (declare), the function implements them — legal merge
+                    if (!allClassesDeclare) {
+                        // Non-ambient class + functions (without body triggers TS2813/TS2814 above)
+                        // Non-ambient class + declare function → TS2300
                         for (decl in group) {
                             emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
                         }
@@ -12998,6 +13007,8 @@ class Checker(
     private fun collectBlockScopedDeclEx(stmt: Statement, decls: MutableMap<String, BlockScopedDecl>, source: String) {
         when (stmt) {
             is VariableStatement -> {
+                // declare const/let have no temporal dead zone (they're ambient)
+                if (ModifierFlag.Declare in stmt.modifiers) return
                 val kind = stmt.declarationList.flags
                 if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
                     for (d in stmt.declarationList.declarations) {
@@ -13007,14 +13018,18 @@ class Checker(
             }
             is EnumDeclaration -> {
                 // const enum values are inlined at compile time — no temporal dead zone
-                if (ModifierFlag.Const !in stmt.modifiers) {
+                // declare enum has no temporal dead zone either
+                if (ModifierFlag.Const !in stmt.modifiers && ModifierFlag.Declare !in stmt.modifiers) {
                     decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true)
                 }
             }
             is ClassDeclaration -> {
-                val name = stmt.name
-                if (name != null) {
-                    decls[name.text] = BlockScopedDecl(name.pos, isClass = true)
+                // declare class has no temporal dead zone
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    val name = stmt.name
+                    if (name != null) {
+                        decls[name.text] = BlockScopedDecl(name.pos, isClass = true)
+                    }
                 }
             }
             else -> {}
