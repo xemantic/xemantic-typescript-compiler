@@ -14377,9 +14377,33 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        // Check if class extends something
-        val hasExtends = heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true
-        if (!hasExtends) return
+        // Check if class extends something (skip null extends — `class X extends null` is special)
+        val extendsClause = heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+        if (extendsClause == null) return
+        val extendsExpr = extendsClause.types.firstOrNull()?.expression
+        val extendsNull = extendsExpr is Identifier && extendsExpr.text == "null"
+
+        if (extendsNull) {
+            // For `class X extends null`, any super() call is TS17005.
+            for (member in members) {
+                if (member is Constructor && member.body != null) {
+                    findSuperCallWithLength(member.body!!.statements)?.let { (superCallPos, len) ->
+                        val (line, character) = getLineAndCharacterOfPosition(source, superCallPos)
+                        diagnostics.add(Diagnostic(
+                            message = "A constructor cannot contain a 'super' call when its class extends 'null'.",
+                            category = DiagnosticCategory.Error,
+                            code = 17005,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = superCallPos,
+                            length = len,
+                        ))
+                    }
+                }
+            }
+            return
+        }
 
         // Find constructors with bodies that don't contain super()
         for (member in members) {
@@ -14416,6 +14440,62 @@ class Checker(
             if (stmtContainsSuperCall(stmt)) return true
         }
         return false
+    }
+
+    /** Returns the position of the first super() call in stmts, or null if none. */
+    private fun findSuperCallInStatements(stmts: List<Statement>): Int? {
+        for (stmt in stmts) {
+            findSuperCallInStmt(stmt)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findSuperCallInStmt(stmt: Statement): Int? = when (stmt) {
+        is ExpressionStatement -> findSuperCallInExpr(stmt.expression)
+        is Block -> findSuperCallInStatements(stmt.statements)
+        is IfStatement -> findSuperCallInStmt(stmt.thenStatement) ?: stmt.elseStatement?.let { findSuperCallInStmt(it) }
+        else -> null
+    }
+
+    private fun findSuperCallInExpr(expr: Expression): Int? = when (expr) {
+        is CallExpression -> {
+            val callee = expr.expression
+            if (callee is Identifier && callee.text == "super") callee.pos.takeIf { it >= 0 }
+            else findSuperCallInExpr(callee)
+        }
+        is ParenthesizedExpression -> findSuperCallInExpr(expr.expression)
+        else -> null
+    }
+
+    /**
+     * Returns a pair of (startPos, length) for a super() call expression,
+     * where startPos is the start of 'super' and length covers 'super()'.
+     */
+    private fun findSuperCallWithLength(stmts: List<Statement>): Pair<Int, Int>? {
+        for (stmt in stmts) {
+            findSuperCallWithLengthInStmt(stmt)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findSuperCallWithLengthInStmt(stmt: Statement): Pair<Int, Int>? = when (stmt) {
+        is ExpressionStatement -> findSuperCallWithLengthInExpr(stmt.expression)
+        is Block -> findSuperCallWithLength(stmt.statements)
+        is IfStatement -> findSuperCallWithLengthInStmt(stmt.thenStatement) ?: stmt.elseStatement?.let { findSuperCallWithLengthInStmt(it) }
+        else -> null
+    }
+
+    private fun findSuperCallWithLengthInExpr(expr: Expression): Pair<Int, Int>? = when (expr) {
+        is CallExpression -> {
+            val callee = expr.expression
+            if (callee is Identifier && callee.text == "super" && callee.pos >= 0) {
+                // expr.end is one past the token AFTER ')' (usually ';'). Subtract 1 to get just 'super(...)'.
+                val rawLen = expr.end - callee.pos
+                Pair(callee.pos, (rawLen - 1).coerceAtLeast(7))
+            } else findSuperCallWithLengthInExpr(callee)
+        }
+        is ParenthesizedExpression -> findSuperCallWithLengthInExpr(expr.expression)
+        else -> null
     }
 
     private fun stmtContainsSuperCall(stmt: Statement): Boolean = when (stmt) {
