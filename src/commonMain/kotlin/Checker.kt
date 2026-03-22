@@ -4379,9 +4379,96 @@ class Checker(
                 }
             }
             is LabeledStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
+            is VariableStatement -> {
+                // Recurse into class/function expressions in variable initializers
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> checkDefiniteAssignmentInExprContext(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName) }
             else -> {}
         }
     }
+
+    /**
+     * Walk an expression for nested function/class expressions, recursing into
+     * their bodies to check for TS2454.
+     */
+    private fun checkDefiniteAssignmentInExprContext(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
+                        }
+                        is Constructor -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
+                        }
+                        is GetAccessor -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
+                        }
+                        is SetAccessor -> member.body?.let {
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
+                        }
+                        is PropertyDeclaration -> member.initializer?.let {
+                            checkDefiniteAssignmentInExprContext(it, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is FunctionExpression -> expr.body.let {
+                checkDefiniteAssignmentInStatements(
+                    it.statements, source, fileName,
+                    preInitialized = collectParamNames(expr.parameters),
+                )
+            }
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkDefiniteAssignmentInStatements(
+                        body.statements, source, fileName,
+                        preInitialized = collectParamNames(expr.parameters),
+                    )
+                    is Expression -> checkDefiniteAssignmentInExprContext(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is CallExpression -> {
+                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+                expr.arguments.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+            }
+            is NewExpression -> {
+                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                checkDefiniteAssignmentInExprContext(expr.left, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkDefiniteAssignmentInExprContext(expr.condition, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.whenTrue, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.whenFalse, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
 
     // -----------------------------------------------------------------------
     // Property initialization checking (TS2564)
