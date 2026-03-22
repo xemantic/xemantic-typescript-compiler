@@ -98,13 +98,20 @@ Several tests fail because class properties aren't correctly handled.
 
 These tests expect TypeScript's exact error recovery output. Independent of type checker — only touches `Parser.kt`.
 
-- [ ] **10a. Audit the top 10 error recovery patterns** — Compare parser output against TypeScript baselines for the most common failure patterns. Categorize by:
-  - Missing semicolons / incomplete statements
-  - Invalid arrow function syntax
-  - Incomplete type annotations
-  - Missing identifiers / unexpected tokens
+- [x] **10a. Audit the top 10 error recovery patterns** — Analyzed 745 diff failures. Top patterns:
+  - TS1109/TS1005 (parser FP): 83 tests — parser reports wrong error or position
+  - "Only FN" (missing errors): 466 tests — mostly type checker gaps (TS2322, TS2339, TS2345)
+  - Mixed: 127 tests — both FP and FN
+  - Fixable patterns identified: property access `.` error position, unclosed export clauses, object literal semicolons, heritage clause trailing comma, method body missing, argument list `}`
 
-- [ ] **10b. Implement recovery for high-value patterns** — Fix the patterns that unblock the most tests. Measure net impact after each fix.
+- [x] **10b. Implement recovery for high-value patterns** — Fixed 14 tests (+14 total):
+  - Property access `.` error position (TypeScript reports at next token for `}`, at afterDotPos for statement-starting keywords)
+  - Unclosed export clause: `from` keyword stops specifier parsing, `,` expected before `from` for `x as a from`
+  - Object literal semicolons: report `',' expected` for each `;`, consume for recovery
+  - Heritage clause trailing comma: TS1009 at comma position when followed by `{`
+  - Object literal method without body: report `'{' expected` when method params parsed but no `{`
+  - `private`/`public`/`protected` in non-class context: emit TS1128
+  - Argument list closing `}`: emit TS1135 instead of TS1109
 
 ### 11. Remaining checker-dependent tests
 
