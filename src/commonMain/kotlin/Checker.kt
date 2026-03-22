@@ -92,7 +92,9 @@ class Checker(
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
         // 9. Check JSX elements for missing type definitions (TS7026)
-        if (options.jsx != null) {
+        // TS7026 is an implicit-any diagnostic, so only fire when noImplicitAny/strict is on.
+        // With @strict: false or @noImplicitAny: false, implicit any is allowed → no TS7026.
+        if (options.jsx != null && (options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse) {
             checkJsxImplicitAny()
         }
         // 10. Check for duplicate identifiers (TS2300)
@@ -3803,6 +3805,7 @@ class Checker(
             val source = result.sourceFile.text
             checkDefiniteAssignmentInStatements(
                 result.sourceFile.statements, source, fileName,
+                fileLocals = result.locals,
             )
         }
     }
@@ -3816,6 +3819,7 @@ class Checker(
         source: String,
         fileName: String,
         preInitialized: Set<String> = emptySet(),
+        fileLocals: SymbolTable? = null,
     ) {
         // Track variables declared with type but no initializer
         val uninitialized = mutableSetOf<String>()
@@ -3823,7 +3827,7 @@ class Checker(
         for (stmt in statements) {
             // 1. Collect variable declarations that are uninitialized
             // (but skip any names that are pre-initialized via function parameters)
-            collectUninitializedVars(stmt, uninitialized, preInitialized)
+            collectUninitializedVars(stmt, uninitialized, preInitialized, fileLocals)
 
             // 2. Check for uses of uninitialized variables in this statement
             if (uninitialized.isNotEmpty()) {
@@ -3842,6 +3846,7 @@ class Checker(
         stmt: Statement,
         uninitialized: MutableSet<String>,
         preInitialized: Set<String> = emptySet(),
+        fileLocals: SymbolTable? = null,
     ) {
         when (stmt) {
             is VariableStatement -> {
@@ -3856,6 +3861,9 @@ class Checker(
                         if (isUnresolvedGenericType(decl.type)) continue
                         // Skip types that include undefined — variable is implicitly initialized to undefined
                         if (typeIncludesUndefined(decl.type)) continue
+                        // Skip if the type annotation is a reference to a namespace symbol.
+                        // Namespace-typed vars (var a: A where A is a namespace) get TS2709 but NOT TS2454.
+                        if (fileLocals != null && isNamespaceTypeRef(decl.type, fileLocals)) continue
                         val name = decl.name
                         if (name is Identifier) {
                             // Skip if name matches a function parameter (var redeclaration of param)
@@ -3868,6 +3876,22 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * Returns true if the type annotation is a TypeReference directly to a namespace symbol.
+     * Used to suppress TS2454 for vars typed as plain namespace names (e.g. `var a: SomeNamespace`).
+     * TypeScript flags TS2709 (cannot use namespace as type) for such declarations instead of TS2454.
+     * Note: qualified types like `var x: A.B` are NOT suppressed, since A.B may be a valid class/interface.
+     */
+    private fun isNamespaceTypeRef(type: TypeNode?, locals: SymbolTable): Boolean {
+        if (type !is TypeReference) return false
+        val typeName = type.typeName
+        // Only check simple identifiers — `var a: A` where A is a namespace
+        val name = (typeName as? Identifier)?.text ?: return false
+        val symbol = locals[name] ?: return false
+        // If the name resolves to any kind of module/namespace, TypeScript flags TS2709 not TS2454
+        return symbol.flags.hasAny(SymbolFlags.Module)
     }
 
     private fun isAnyType(type: Node?): Boolean {
