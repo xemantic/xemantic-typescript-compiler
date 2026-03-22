@@ -6542,7 +6542,16 @@ class Transformer(
                     if (transformed.leadingComments.isNullOrEmpty() && hasCommentsInTree(transformed)) {
                         expr.copy(expression = transformed)
                     } else {
-                        transformed
+                        // Transfer outer paren's leading comments to the result so they're not lost.
+                        // E.g. `(x) => \n// comment\n({} as any)` — the comment is on the `(`
+                        // (outer ParenthesizedExpression's leadingComments), which must survive the drop.
+                        val outerComments = expr.leadingComments
+                        if (outerComments.isNullOrEmpty()) {
+                            transformed
+                        } else {
+                            val merged = outerComments + (transformed.leadingComments ?: emptyList())
+                            copyExpressionWithLeadingComments(transformed, merged)
+                        }
                     }
                 } else if (transformed is CommaListExpression) {
                     // CommaListExpression already includes its own parens; drop the outer ones.
