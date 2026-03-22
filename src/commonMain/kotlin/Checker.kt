@@ -199,6 +199,10 @@ class Checker(
         checkOptionalParamWithInitializer()
         // 49. Check set accessor parameter initializer (TS1052)
         checkSetAccessorInitializer()
+        // 49b. Check set accessor rest parameter (TS1053)
+        checkSetAccessorRestParameter()
+        // 49c. Check for-in left-hand side type annotation (TS2404)
+        checkForInLhsTypeAnnotation()
         // 50. Check statements in ambient contexts (TS1036)
         checkAmbientStatements()
         // 51. Check parameter initializer in non-implementation context (TS2371)
@@ -228,6 +232,8 @@ class Checker(
         if (!options.strictExplicitlyFalse || options.noImplicitAny) {
             checkBodylessFunctionReturnTypesMissing()
         }
+        // 62. Check block-scoped declarations outside blocks (TS1156)
+        checkBlockScopedDeclarationsInSingleBody()
     }
 
     // -----------------------------------------------------------------------
@@ -4966,10 +4972,36 @@ class Checker(
                     }
                 }
                 is ImportEqualsDeclaration -> scope.names.add(stmt.name.text)
+                is IfStatement -> {
+                    // type/interface in non-block embedded body is function-scoped (hoisted)
+                    collectEmbeddedTypeNames(stmt.thenStatement, scope)
+                    stmt.elseStatement?.let { collectEmbeddedTypeNames(it, scope) }
+                }
+                is WhileStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is DoStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is ForStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is ForInStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is ForOfStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
                 else -> {}
             }
             // Hoist var declarations from nested blocks/loops
             collectHoistedVarNames(stmt, scope)
+        }
+    }
+
+    /**
+     * Collect type/interface names from a non-block embedded single-statement body.
+     * When `type T = X` or `interface I {}` appears directly as the body of if/while/for
+     * (not inside {}), it is function-scoped (hoisted to the enclosing function scope).
+     */
+    private fun collectEmbeddedTypeNames(stmt: Statement, scope: NameScope) {
+        if (stmt is Block) return  // block-scoped types are handled normally
+        var inner: Statement = stmt
+        while (inner is LabeledStatement) inner = inner.statement
+        when (inner) {
+            is TypeAliasDeclaration -> scope.names.add(inner.name.text)
+            is InterfaceDeclaration -> scope.names.add(inner.name.text)
+            else -> {}
         }
     }
 
@@ -14828,6 +14860,132 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS1053: A 'set' accessor cannot have rest parameter
+    // -----------------------------------------------------------------------
+
+    private fun checkSetAccessorRestParameter() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForSetAccessorRest(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForSetAccessorRest(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is SetAccessor) {
+                            for (param in member.parameters) {
+                                if (param.dotDotDotToken) {
+                                    // Squiggle on `...` (3 chars), at name.pos - 3
+                                    val namePos = when (val n = param.name) {
+                                        is Identifier -> n.pos
+                                        else -> param.pos
+                                    }
+                                    val start = namePos - 3
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "A 'set' accessor cannot have rest parameter.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 1053,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = 3,
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorRest(it.statements, source, fileName) }
+                is Block -> walkForSetAccessorRest(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2404: The left-hand side of a 'for...in' statement cannot use a type annotation
+    // -----------------------------------------------------------------------
+
+    private fun checkForInLhsTypeAnnotation() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForInLhsType(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForInLhsType(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ForInStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList) {
+                        for (decl in init.declarations) {
+                            if (decl.type == null) continue
+                            // TypeScript squiggles the variable name, not the `:`.
+                            val namePos = decl.name.pos
+                            val nameLen = when (val n = decl.name) {
+                                is Identifier -> n.text.length.coerceAtLeast(1)
+                                else -> 1
+                            }
+                            val (line, character) = getLineAndCharacterOfPosition(source, namePos)
+                            diagnostics.add(Diagnostic(
+                                message = "The left-hand side of a 'for...in' statement cannot use a type annotation.",
+                                category = DiagnosticCategory.Error,
+                                code = 2404,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = namePos,
+                                length = nameLen,
+                            ))
+                        }
+                    }
+                }
+                is Block -> walkForInLhsType(stmt.statements, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForInLhsType(it.statements, source, fileName) }
+                is FunctionDeclaration -> stmt.body?.let { walkForInLhsType(it.statements, source, fileName) }
+                is IfStatement -> {
+                    val then = stmt.thenStatement
+                    if (then is Block) walkForInLhsType(then.statements, source, fileName)
+                    val els = stmt.elseStatement
+                    if (els is Block) walkForInLhsType(els.statements, source, fileName)
+                }
+                is WhileStatement -> {
+                    val body = stmt.statement
+                    if (body is Block) walkForInLhsType(body.statements, source, fileName)
+                }
+                is ForStatement -> {
+                    val body = stmt.statement
+                    if (body is Block) walkForInLhsType(body.statements, source, fileName)
+                }
+                is ForOfStatement -> {
+                    val body = stmt.statement
+                    if (body is Block) walkForInLhsType(body.statements, source, fileName)
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // TS1036: Statements are not allowed in ambient contexts
     // -----------------------------------------------------------------------
 
@@ -16960,5 +17118,172 @@ class Checker(
             // Don't recurse into nested loops — breaks in them don't affect outer
             else -> false
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1156 — block-scoped declarations outside blocks
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS1156: `const`/`let`/`type`/`interface` declarations can only be
+     * declared inside a block. Fires when they appear as the single-statement
+     * body of `if`/`else`/`while`/`do`/`for`/`for-in`/`for-of`.
+     */
+    private fun checkBlockScopedDeclarationsInSingleBody() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForBlockScopeViolations(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForBlockScopeViolations(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            walkBlockScopeInStatement(stmt, source, fileName)
+        }
+    }
+
+    private fun walkBlockScopeInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is IfStatement -> {
+                checkEmbeddedForBlockScope(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkEmbeddedForBlockScope(it, source, fileName) }
+                // Also recurse into blocks
+                if (stmt.thenStatement is Block) walkForBlockScopeViolations((stmt.thenStatement as Block).statements, source, fileName)
+                stmt.elseStatement?.let { if (it is Block) walkForBlockScopeViolations((it as Block).statements, source, fileName) }
+                // Recurse into non-block embedded (which may be labeled etc.)
+                if (stmt.thenStatement !is Block) walkBlockScopeInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { if (it !is Block) walkBlockScopeInStatement(it, source, fileName) }
+            }
+            is WhileStatement -> {
+                checkEmbeddedForBlockScope(stmt.statement, source, fileName)
+                if (stmt.statement is Block) walkForBlockScopeViolations((stmt.statement as Block).statements, source, fileName)
+                else walkBlockScopeInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkEmbeddedForBlockScope(stmt.statement, source, fileName)
+                if (stmt.statement is Block) walkForBlockScopeViolations((stmt.statement as Block).statements, source, fileName)
+                else walkBlockScopeInStatement(stmt.statement, source, fileName)
+            }
+            is ForStatement -> {
+                checkEmbeddedForBlockScope(stmt.statement, source, fileName)
+                if (stmt.statement is Block) walkForBlockScopeViolations((stmt.statement as Block).statements, source, fileName)
+                else walkBlockScopeInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                checkEmbeddedForBlockScope(stmt.statement, source, fileName)
+                if (stmt.statement is Block) walkForBlockScopeViolations((stmt.statement as Block).statements, source, fileName)
+                else walkBlockScopeInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkEmbeddedForBlockScope(stmt.statement, source, fileName)
+                if (stmt.statement is Block) walkForBlockScopeViolations((stmt.statement as Block).statements, source, fileName)
+                else walkBlockScopeInStatement(stmt.statement, source, fileName)
+            }
+            is Block -> walkForBlockScopeViolations(stmt.statements, source, fileName)
+            is LabeledStatement -> walkBlockScopeInStatement(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { walkForBlockScopeViolations(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                val body = when (m) {
+                    is MethodDeclaration -> m.body
+                    is Constructor -> m.body
+                    is GetAccessor -> m.body
+                    is SetAccessor -> m.body
+                    else -> null
+                }
+                body?.let { walkForBlockScopeViolations(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) walkForBlockScopeViolations(body.statements, source, fileName)
+            }
+            is TryStatement -> {
+                walkForBlockScopeViolations(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkForBlockScopeViolations(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkForBlockScopeViolations(it.statements, source, fileName) }
+            }
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    val stmts2 = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    walkForBlockScopeViolations(stmts2, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check if [embedded] is a block-scoped declaration (const/let/type/interface)
+     * that's the direct single-statement body of a control flow statement.
+     */
+    private fun checkEmbeddedForBlockScope(embedded: Statement, source: String, fileName: String) {
+        if (embedded is Block) return  // Block is fine
+        // Strip through LabeledStatement layers to find the actual declaration
+        var stmt: Statement = embedded
+        while (stmt is LabeledStatement) stmt = stmt.statement
+        when (stmt) {
+            is VariableStatement -> {
+                val keyword = stmt.declarationList.flags
+                val kwName = when (keyword) {
+                    SyntaxKind.ConstKeyword -> "const"
+                    SyntaxKind.LetKeyword -> "let"
+                    else -> return  // var is allowed
+                }
+                reportBlockScopeViolation(stmt, stmt.pos, source, fileName, kwName, useFullStmtSpan = true)
+            }
+            is TypeAliasDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val nameStart = stmt.name.pos
+                val nameLen = stmt.name.text.length
+                reportBlockScopeViolationAt(nameStart, nameLen, source, fileName, "type")
+            }
+            is InterfaceDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val nameStart = stmt.name.pos
+                val nameLen = stmt.name.text.length
+                reportBlockScopeViolationAt(nameStart, nameLen, source, fileName, "interface")
+            }
+            else -> {}
+        }
+    }
+
+    private fun reportBlockScopeViolation(
+        stmt: Statement, stmtPos: Int, source: String, fileName: String,
+        kwName: String, useFullStmtSpan: Boolean
+    ) {
+        // start = position of keyword (const/let)
+        var start = stmtPos
+        while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) start++
+        val length = if (useFullStmtSpan) {
+            // Span = entire statement text on the same line (up to `;`)
+            // Find the `;` position
+            var end = start
+            while (end < source.length && source[end] != '\n' && source[end] != '\r') end++
+            // Trim trailing whitespace
+            while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) end--
+            end - start
+        } else {
+            kwName.length
+        }
+        reportBlockScopeViolationAt(start, length, source, fileName, kwName)
+    }
+
+    private fun reportBlockScopeViolationAt(start: Int, length: Int, source: String, fileName: String, kwName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'$kwName' declarations can only be declared inside a block.",
+            category = DiagnosticCategory.Error,
+            code = 1156,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 }
