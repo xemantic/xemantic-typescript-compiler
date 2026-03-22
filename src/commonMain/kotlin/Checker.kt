@@ -5410,6 +5410,10 @@ class Checker(
                 for (member in stmt.members) {
                     when (member) {
                         is PropertyDeclaration -> {
+                            // Check computed property name (e.g. [x]: string — x must be in scope)
+                            if (member.name is ComputedPropertyName) {
+                                checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, ifaceScope, source, fileName)
+                            }
                             member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                         }
                         is MethodDeclaration -> {
@@ -5522,6 +5526,10 @@ class Checker(
         when (element) {
             is PropertyDeclaration -> {
                 val propScope = classScope.child(classContext = memberClassCtx)
+                // Check computed property name (e.g. [x]: string — x must be in scope)
+                if (element.name is ComputedPropertyName) {
+                    checkUnresolvedInExpr((element.name as ComputedPropertyName).expression, propScope, source, fileName)
+                }
                 element.type?.let { checkUnresolvedInType(it, propScope, source, fileName) }
                 element.initializer?.let { checkUnresolvedInExpr(it, propScope, source, fileName) }
             }
