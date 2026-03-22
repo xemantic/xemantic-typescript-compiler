@@ -7231,14 +7231,28 @@ class Checker(
             val getterCount = group.count { it.kind == "getter" }
             val setterCount = group.count { it.kind == "setter" }
 
-            val isDuplicate = (hasMethod && (hasGetter || hasSetter || hasProperty)) ||
-                    (hasProperty && (hasGetter || hasSetter)) ||
-                    (getterCount >= 2) || (setterCount >= 2)
+            // Determine which members to flag with TS2300:
+            // - getter + setter (complete pair) → ALLOWED
+            // - complete accessor pair (get+set) + property → only flag the property
+            //   (the accessor pair is the "intended" definition; the property is the intruder)
+            // - incomplete accessor (get-only or set-only) + property → flag ALL
+            // - method + getter/setter/property → flag ALL
+            // - duplicate getters (2+) or setters (2+) → flag ALL in the group
+            val hasCompleteAccessorPair = hasGetter && hasSetter && getterCount == 1 && setterCount == 1
+            val membersToFlag: List<MemberInfo> = when {
+                hasMethod && (hasGetter || hasSetter || hasProperty) -> group
+                getterCount >= 2 || setterCount >= 2 -> group // all conflict when either accessor is duplicated
+                hasProperty && hasCompleteAccessorPair ->
+                    // Complete get+set pair plus property: only the property is the duplicate
+                    group.filter { it.kind == "property" }
+                hasProperty && (hasGetter || hasSetter) ->
+                    // Incomplete accessor + property: both conflict
+                    group
+                else -> emptyList()
+            }
 
-            if (isDuplicate) {
-                for (info in group) {
-                    emitDuplicate2300(info.name, info.nameNode, source, fileName)
-                }
+            for (info in membersToFlag) {
+                emitDuplicate2300(info.name, info.nameNode, source, fileName)
             }
         }
     }
