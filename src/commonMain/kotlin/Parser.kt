@@ -519,8 +519,21 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Only parse declarations if the current token can start one (identifier or binding pattern)
         if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
             decls.add(parseVariableDeclaration(keywordTrailingComments))
-            while (parseOptional(SyntaxKind.Comma)) {
-                decls.add(parseVariableDeclaration())
+            while (true) {
+                if (parseOptional(SyntaxKind.Comma)) {
+                    decls.add(parseVariableDeclaration())
+                } else if ((isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket)
+                    && decls.last().initializer != null
+                    && !scanner.hasPrecedingLineBreak()) {
+                    // Error recovery: missing comma before next declarator when on same line with
+                    // an initializer (e.g. `var x = /re/ i` — regex literal followed by identifier).
+                    // Emit TS1005 ',' expected. Don't recover across line breaks or without initializer,
+                    // to avoid misinterpreting `for (let x of ...)` or multi-line code.
+                    parseExpected(SyntaxKind.Comma)
+                    decls.add(parseVariableDeclaration())
+                } else {
+                    break
+                }
             }
         } else {
             // Report error but produce empty declarations list (e.g. bare `let;`)
