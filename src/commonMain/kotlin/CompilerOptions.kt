@@ -540,6 +540,26 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
 
     // Compute line/column positions for option keys and values in the tsconfig JSON
     val optionPositions = mutableMapOf<String, TsconfigOptionPosition>()
+    // Add a synthetic "compileroptionskey" entry pointing to the "compilerOptions" key itself.
+    // This is used as a fallback position for TS5107 deprecation diagnostics when the deprecated
+    // option is set via CLI/test directive (not in tsconfig), but a tsconfig is present.
+    // TypeScript attributes such CLI-level deprecated options to the "compilerOptions" key position.
+    val compilerOptionsKeyStart = json.indexOf("\"compilerOptions\"")
+    if (compilerOptionsKeyStart >= 0) {
+        val keyLength = "\"compilerOptions\"".length
+        val keyLineCol = computeLineAndColumn(json, compilerOptionsKeyStart)
+        optionPositions["compileroptionskey"] = TsconfigOptionPosition(
+            fileName = tsconfigFileName,
+            keyLine = keyLineCol.first,
+            keyCharacter = keyLineCol.second,
+            keyStart = compilerOptionsKeyStart,
+            keyLength = keyLength,
+            valueLine = keyLineCol.first,
+            valueCharacter = keyLineCol.second,
+            valueStart = compilerOptionsKeyStart,
+            valueLength = keyLength,
+        )
+    }
     for (kv in kvMatches) {
         if (kv.key in allowedTsconfigOptions) {
             val keyLineCol = computeLineAndColumn(json, kv.keyStart)

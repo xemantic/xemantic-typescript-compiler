@@ -275,7 +275,10 @@ class TypeScriptCompiler {
         // - simulatedVersion < version (stopFunctioningVersion): option is deprecated → emit TS5107
         // - simulatedVersion >= version: option is removed → emit TS5108 (ignoreDeprecations ignored)
         fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0", withMigrationUrl: Boolean = false) {
-            val pos = tsconfigKey?.let { tsconfigPos[it] }
+            // When the option is not explicitly in tsconfig but a tsconfig exists, fall back to
+            // the "compilerOptions" key position. TypeScript attributes CLI-level deprecated options
+            // to the "compilerOptions" section when a tsconfig is present.
+            val pos = tsconfigKey?.let { tsconfigPos[it] ?: tsconfigPos["compileroptionskey"] }
             if (simulatedVersion >= version) {
                 // Option has been removed: ignoreDeprecations no longer suppresses the diagnostic
                 diagnostics.add(Diagnostic(

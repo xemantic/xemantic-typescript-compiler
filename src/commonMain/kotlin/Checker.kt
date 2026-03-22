@@ -6663,24 +6663,30 @@ class Checker(
     }
 
     /**
-     * Find the declaration position of [name] in the current file's binder locals.
+     * Find the declaration position of [name] in the current file's binder locals,
+     * or by scanning the AST for block-scoped let/const declarations not in the top-level locals.
      * Returns a TS2728 related diagnostic ("'name' is declared here.") if found, null otherwise.
      */
     private fun findDeclarationRelatedInfo(name: String, fileName: String, source: String): Diagnostic? {
         val result = fileResults[fileName] ?: return null
-        val symbol = result.locals[name] ?: return null
-        val decl = symbol.declarations?.firstOrNull() ?: symbol.valueDeclaration ?: return null
-        val declPos = when (decl) {
-            is VariableDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
-            is FunctionDeclaration -> decl.name?.pos ?: decl.pos
-            is ClassDeclaration -> decl.name?.pos ?: decl.pos
-            is InterfaceDeclaration -> decl.name.pos
-            is TypeAliasDeclaration -> decl.name.pos
-            is EnumDeclaration -> decl.name.pos
-            is ModuleDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
-            is ImportSpecifier -> decl.name.pos
-            is NamespaceImport -> decl.name.pos
-            else -> decl.pos
+        val symbol = result.locals[name]
+        val declPos = if (symbol != null) {
+            val decl = symbol.declarations?.firstOrNull() ?: symbol.valueDeclaration ?: return null
+            when (decl) {
+                is VariableDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                is FunctionDeclaration -> decl.name?.pos ?: decl.pos
+                is ClassDeclaration -> decl.name?.pos ?: decl.pos
+                is InterfaceDeclaration -> decl.name.pos
+                is TypeAliasDeclaration -> decl.name.pos
+                is EnumDeclaration -> decl.name.pos
+                is ModuleDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                is ImportSpecifier -> decl.name.pos
+                is NamespaceImport -> decl.name.pos
+                else -> decl.pos
+            }
+        } else {
+            // Not in file-level locals — search AST for block-scoped let/const declaration
+            findBlockScopedDeclPos(name, result.sourceFile.statements) ?: return null
         }
         val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
         return Diagnostic(
@@ -6693,6 +6699,50 @@ class Checker(
             start = declPos,
             length = name.length,
         )
+    }
+
+    /**
+     * Recursively search [stmts] for the first `let`/`const` declaration of [name].
+     * Returns the position of the identifier in the declaration, or null if not found.
+     */
+    private fun findBlockScopedDeclPos(name: String, stmts: List<Statement>): Int? {
+        for (stmt in stmts) {
+            val pos = findBlockScopedDeclPosInStmt(name, stmt)
+            if (pos != null) return pos
+        }
+        return null
+    }
+
+    private fun findBlockScopedDeclPosInStmt(name: String, stmt: Statement): Int? {
+        return when (stmt) {
+            is VariableStatement -> {
+                val kind = stmt.declarationList.flags
+                if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                    for (d in stmt.declarationList.declarations) {
+                        val id = d.name as? Identifier
+                        if (id != null && id.text == name) return id.pos
+                    }
+                }
+                null
+            }
+            is Block -> findBlockScopedDeclPos(name, stmt.statements)
+            is IfStatement -> {
+                findBlockScopedDeclPosInStmt(name, stmt.thenStatement)
+                    ?: stmt.elseStatement?.let { findBlockScopedDeclPosInStmt(name, it) }
+            }
+            is ForStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
+            is ForInStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
+            is ForOfStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
+            is WhileStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
+            is DoStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
+            is TryStatement -> {
+                findBlockScopedDeclPos(name, stmt.tryBlock.statements)
+                    ?: stmt.catchClause?.let { findBlockScopedDeclPos(name, it.block.statements) }
+                    ?: stmt.finallyBlock?.let { findBlockScopedDeclPos(name, it.statements) }
+            }
+            is LabeledStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
+            else -> null
+        }
     }
 
     /**
@@ -7651,7 +7701,30 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        data class MemberInfo(val name: String, val groupKey: String, val kind: String, val nameNode: Node)
+        // displayName is used in the message (string literals get extra quotes in TS: ''0'' for '0')
+        // groupKey is used for duplicate comparison (only numeric literals are normalized)
+        data class MemberInfo(val displayName: String, val groupKey: String, val kind: String, val nameNode: Node)
+
+        fun memberKey(nameNode: Node): Pair<String, String>? {
+            return when (nameNode) {
+                is Identifier -> nameNode.text.let { it to it }
+                is NumericLiteralNode -> {
+                    // Numeric literals are normalized: 0.0 → "0"
+                    val normalized = normalizeNumericKey(nameNode.text)
+                    nameNode.text to normalized
+                }
+                is StringLiteralNode -> {
+                    // String literals are NOT normalized for comparison — '0.0' ≠ '0'
+                    // But TypeScript DOES compare string literals numerically against numeric literals:
+                    // class { 0.0: ..., '0': ... } → duplicate (numeric 0.0 key = "0", string '0' = "0")
+                    // class { '0.0': ..., '0': ... } → NOT duplicate (strings compared as-is)
+                    // String names are wrapped in quotes in messages: ''0'' for '0'
+                    val quotedDisplay = "'${nameNode.text}'"
+                    quotedDisplay to nameNode.text
+                }
+                else -> null
+            }
+        }
 
         val memberInfos = mutableListOf<MemberInfo>()
         for (member in members) {
@@ -7665,20 +7738,20 @@ class Checker(
             val staticPrefix = if (isStatic) "static:" else ""
             when (member) {
                 is MethodDeclaration -> {
-                    val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "method", member.name))
+                    val (display, key) = memberKey(member.name) ?: continue
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "method", member.name))
                 }
                 is PropertyDeclaration -> {
-                    val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "property", member.name))
+                    val (display, key) = memberKey(member.name) ?: continue
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "property", member.name))
                 }
                 is GetAccessor -> {
-                    val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "getter", member.name))
+                    val (display, key) = memberKey(member.name) ?: continue
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "getter", member.name))
                 }
                 is SetAccessor -> {
-                    val text = getMemberNameText(member.name) ?: continue
-                    memberInfos.add(MemberInfo(text, "$staticPrefix${normalizeNumericKey(text)}", "setter", member.name))
+                    val (display, key) = memberKey(member.name) ?: continue
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "setter", member.name))
                 }
                 else -> {}
             }
@@ -7735,7 +7808,7 @@ class Checker(
             }
 
             for (info in membersToFlag) {
-                emitDuplicate2300(info.name, info.nameNode, source, fileName)
+                emitDuplicate2300(info.displayName, info.nameNode, source, fileName)
             }
         }
     }
@@ -7809,7 +7882,7 @@ class Checker(
         source: String,
         fileName: String,
         spanLength: Int = when (node) {
-            is StringLiteralNode -> name.length + 2 // quotes
+            is StringLiteralNode -> node.text.length + 2 // inner text + 2 quotes
             is NumericLiteralNode -> node.text.length
             else -> name.length
         },
@@ -13514,9 +13587,12 @@ class Checker(
                 }
             }
             is EnumDeclaration -> {
+                // declare enum has no temporal dead zone
+                if (ModifierFlag.Declare in stmt.modifiers) return
                 // const enum values are inlined at compile time — no temporal dead zone
-                // declare enum has no temporal dead zone either
-                if (ModifierFlag.Const !in stmt.modifiers && ModifierFlag.Declare !in stmt.modifiers) {
+                // EXCEPT with isolatedModules: true, where cross-file inlining isn't done
+                val isConst = ModifierFlag.Const in stmt.modifiers
+                if (!isConst || options.isolatedModules) {
                     decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true)
                 }
             }
