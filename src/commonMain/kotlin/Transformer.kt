@@ -435,8 +435,55 @@ class Transformer(
             return sourceFile.copy(statements = sysStatements)
         }
 
+        // For ESM modules with importHelpers: true, inject `import { __helperA, ... } from "tslib"`
+        // at the top. CJS modules use `const tslib_1 = require("tslib")` (handled elsewhere).
+        // Note: .cjs/.cts files use CJS semantics even with module:preserve.
+        val isCjsFileName = fileName.endsWith(".cjs") || fileName.endsWith(".cts")
+        val withTslib = if (options.importHelpers && isCurrentFileModule &&
+            !isCjsFileName && isESModuleFormat(effectiveModule, fileName)
+        ) {
+            val tslibNames = mutableListOf<String>()
+            // Collect helpers that are actually used (same set as the skipHelpers check above):
+            // Note: skipHelpers=true when importHelpers && isCurrentFileModule, so helpers list is empty.
+            // We detect usage via the needsXxx flags.
+            if (needsMakeTemplateObjectHelper) tslibNames.add("__makeTemplateObject")
+            if (needsAwaiterHelper) tslibNames.add("__awaiter")
+            if (needsAsyncGeneratorHelper) {
+                tslibNames.add("__asyncGenerator")
+                tslibNames.add("__await")
+            }
+            if (needsRestHelper) tslibNames.add("__rest")
+            if (needsDecorateHelper) tslibNames.add("__decorate")
+            if (needsMetadataHelper) tslibNames.add("__metadata")
+            if (needsParamHelper) tslibNames.add("__param")
+            if (tslibNames.isNotEmpty()) {
+                val tslibImport = ImportDeclaration(
+                    importClause = ImportClause(
+                        name = null,
+                        namedBindings = NamedImports(
+                            elements = tslibNames.map { name ->
+                                ImportSpecifier(
+                                    name = Identifier(text = name, pos = -1, end = -1),
+                                    propertyName = null,
+                                    isTypeOnly = false,
+                                    pos = -1, end = -1,
+                                )
+                            },
+                            pos = -1, end = -1,
+                        ),
+                        isTypeOnly = false,
+                        pos = -1, end = -1,
+                    ),
+                    moduleSpecifier = StringLiteralNode(text = "tslib", singleQuote = false, rawText = null, pos = -1, end = -1),
+                    assertClause = null,
+                    pos = -1, end = -1,
+                )
+                listOf(tslibImport) + withHelpers
+            } else withHelpers
+        } else withHelpers
+
         // ES module import elision: erase imports whose bindings are unused in value positions
-        val elided = elideUnusedESModuleImports(withHelpers)
+        val elided = elideUnusedESModuleImports(withTslib)
 
         // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
         // when x is explicitly type-only, OR when x resolves to a const enum
@@ -5065,14 +5112,17 @@ class Transformer(
         if (parenFn.expression !is FunctionExpression) return null
         val fn = parenFn.expression
         if (fn.parameters.size != 1) return null
-        val paramName = (fn.parameters[0].name as? Identifier)?.text ?: return null
+        if ((fn.parameters[0].name as? Identifier)?.text == null) return null
         if (call.arguments.size != 1) return null
         val arg = call.arguments[0]
         // Simple form: N || (N = {})
+        // Note: when a namespace body has a member with the same name as the namespace
+        // (e.g. `namespace A { export const A = 0 }`), the IIFE parameter is renamed to A_1
+        // while the outer variable stays A: `(function(A_1){...})(A || (A = {}))`.
+        // We return the variable name (left of ||) which is what exportedNsEnumNames contains.
         if (arg !is BinaryExpression || arg.operator != BarBar) return null
         val leftId = arg.left as? Identifier ?: return null
-        if (leftId.text != paramName) return null
-        return paramName
+        return leftId.text
     }
 
     /**
@@ -7656,7 +7706,22 @@ class Transformer(
 
     private fun transformBlock(block: Block, isFunctionScope: Boolean = false): Block {
         if (isFunctionScope) functionScopeDepth++
+        // Pre-scan function scope for const enum declarations so their members can be inlined.
+        // Only active when const enum inlining is enabled (not isolatedModules/verbatimModuleSyntax).
+        // We save and restore any overridden entries to avoid polluting outer-scope const enum values.
+        val savedConstEnumEntries = if (isFunctionScope && !options.isolatedModules && !options.verbatimModuleSyntax) {
+            val saved = mutableMapOf<String, Map<String, Any?>?>()
+            collectConstEnumValues(block.statements, savedEntries = saved)
+            saved
+        } else null
         val result = block.copy(statements = transformStatements(block.statements, isFunctionScope = isFunctionScope))
+        // Restore overridden const enum entries from outer scope
+        if (savedConstEnumEntries != null) {
+            for ((name, oldValue) in savedConstEnumEntries) {
+                if (oldValue == null) constEnumValues.remove(name)
+                else constEnumValues[name] = oldValue
+            }
+        }
         if (isFunctionScope) functionScopeDepth--
         return result
     }
@@ -10143,7 +10208,7 @@ class Transformer(
         }
     }
 
-    private fun collectConstEnumValues(stmts: List<Statement>) {
+    private fun collectConstEnumValues(stmts: List<Statement>, savedEntries: MutableMap<String, Map<String, Any?>?>? = null) {
         for (stmt in stmts) {
             val decl = when {
                 stmt is EnumDeclaration && ModifierFlag.Const in stmt.modifiers
@@ -10152,7 +10217,7 @@ class Transformer(
                 stmt is ModuleDeclaration -> {
                     // Recurse into namespace bodies to find nested const enums
                     val body = stmt.body
-                    if (body is ModuleBlock) collectConstEnumValues(body.statements)
+                    if (body is ModuleBlock) collectConstEnumValues(body.statements, savedEntries)
                     null
                 }
                 else -> null
@@ -10189,6 +10254,10 @@ class Transformer(
                     }
                 }
                 members[name] = value
+            }
+            // If caller wants to save overridden entries (for scope restoration), record old value
+            if (savedEntries != null && decl.name.text !in savedEntries) {
+                savedEntries[decl.name.text] = constEnumValues[decl.name.text]
             }
             constEnumValues[decl.name.text] = members
         }
@@ -11637,14 +11706,22 @@ class Transformer(
     private fun helperExpr(helperName: String): Expression {
         // importHelpers: true uses tslib only for module files (where require() is available).
         // Script files can't import tslib, so they use bare helper identifiers.
-        return if (options.importHelpers && isCurrentFileModule) {
+        if (!options.importHelpers || !isCurrentFileModule) return syntheticId(helperName)
+        // For ESM modules (es2015/es2020/es2022/esnext/preserve .mts/.mjs), TypeScript emits
+        // `import { __helperName } from "tslib"` and uses the bare helper name directly.
+        // For CJS modules (.cts/.cjs files, or module:commonjs/none/nodenext), it uses
+        // `const tslib_1 = require("tslib")` and `tslib_1.__helperName`.
+        // Note: .cjs/.cts files override even module:preserve (they're always CJS).
+        val isCjsFile = currentFileName.endsWith(".cjs") || currentFileName.endsWith(".cts")
+        val isEsm = !isCjsFile && isESModuleFormat(options.effectiveModule, currentFileName)
+        return if (isEsm) {
+            syntheticId(helperName)
+        } else {
             PropertyAccessExpression(
                 expression = syntheticId("tslib_1"),
                 name = syntheticId(helperName),
                 pos = -1, end = -1,
             )
-        } else {
-            syntheticId(helperName)
         }
     }
 
