@@ -4545,9 +4545,20 @@ class Checker(
                     val isAmbientClass = ModifierFlag.Declare in stmt.modifiers
                     for (member in stmt.members) {
                         if (isAmbientClass) {
-                            // In ambient classes, only check PUBLIC method parameters for TS7006
-                            if (member is MethodDeclaration && ModifierFlag.Private !in member.modifiers) {
-                                checkParamsForImplicitAny(member.parameters, source, fileName)
+                            when (member) {
+                                is MethodDeclaration -> {
+                                    // Public method params in ambient classes get TS7006
+                                    // Private methods: no TS7006, TypeScript doesn't check them
+                                    if (ModifierFlag.Private !in member.modifiers) {
+                                        checkParamsForImplicitAny(member.parameters, source, fileName)
+                                    }
+                                }
+                                is PropertyDeclaration -> {
+                                    // Property with function type gets TS7006 for both public AND private
+                                    // e.g. `pub_f10: (x) => string` and `priv_f10: (x) => string`
+                                    checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
+                                }
+                                else -> {}
                             }
                         } else {
                             checkImplicitAnyInClassElement(member, source, fileName)
@@ -4572,6 +4583,8 @@ class Checker(
                 }
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
+                        // Check function type annotation: `var f: (x) => string` → TS7006 for `x`
+                        checkImplicitAnyInTypeAnnotation(decl.type, source, fileName)
                         decl.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
                     }
                 }
@@ -4633,6 +4646,8 @@ class Checker(
                 element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
             }
             is PropertyDeclaration -> {
+                // Check function type annotation: `pub_f10: (x) => string` → TS7006 for `x`
+                checkImplicitAnyInTypeAnnotation(element.type, source, fileName)
                 element.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
             }
             else -> {}
