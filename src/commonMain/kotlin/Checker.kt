@@ -9210,7 +9210,14 @@ class Checker(
 
         for (i in members.indices) {
             val member = members[i]
-            if (member is MethodDeclaration) {
+            if (member is Constructor && member.body == null) {
+                // Constructor overload without body — check if a constructor WITH body follows
+                val hasImpl = members.subList(i + 1, members.size).any { it is Constructor && it.body != null }
+                if (!hasImpl) {
+                    // Emit TS2390 on the "constructor" keyword span
+                    emitTS2390(member, source, fileName)
+                }
+            } else if (member is MethodDeclaration) {
                 val name = when (val n = member.name) {
                     is Identifier -> n.text
                     is StringLiteralNode -> n.text
@@ -9377,6 +9384,23 @@ class Checker(
             line = line,
             character = character,
             start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTS2390(constructor: Constructor, source: String, fileName: String) {
+        // TS2390: "Constructor implementation is missing." — squiggle covers "constructor" keyword
+        val pos = constructor.pos
+        val length = "constructor".length
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "Constructor implementation is missing.",
+            category = DiagnosticCategory.Error,
+            code = 2390,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = pos,
             length = length,
         ))
     }
