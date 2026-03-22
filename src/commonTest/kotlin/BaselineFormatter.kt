@@ -407,11 +407,18 @@ fun formatErrorBaseline(
                             +"    "
                             +nextLine
                             +"\r\n"
-                            // Emit squiggles (cover entire line or remaining)
-                            val squiggleLen = remaining.coerceAtMost(nextLine.length.coerceAtLeast(1))
-                            +"    "
-                            +"~".repeat(squiggleLen)
-                            +"\r\n"
+                            // Emit squiggles (cover entire line or remaining).
+                            val squiggleLen = remaining.coerceAtMost(nextLine.length)
+                            if (squiggleLen > 0) {
+                                +"    "
+                                +"~".repeat(squiggleLen)
+                                +"\r\n"
+                            } else if (nextLine.isEmpty()) {
+                                // Blank lines within a multi-line span get an empty squiggle line —
+                                // TypeScript emits a blank indent line even with no tildes.
+                                +"    "
+                                +"\r\n"
+                            }
                             remaining -= squiggleLen
                             nextLineIdx++
                         }
