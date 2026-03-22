@@ -1287,6 +1287,18 @@ class Emitter(
     private fun emitImportEqualsDeclaration(node: ImportEqualsDeclaration) {
         if (node.isTypeOnly) return
         writeIndent()
+        // When inside a block (blockDepth > 0), ImportEqualsDeclaration is a parse error
+        // (TypeScript syntax error). Emit it verbatim to match TypeScript's error-recovery output.
+        // Only the require() form reaches here (namespace aliases are erased by Transformer).
+        if (blockDepth > 0 && node.moduleReference is ExternalModuleReference) {
+            write("import ")
+            write(node.name.emitText)
+            write(" = require(")
+            emitExpression((node.moduleReference as ExternalModuleReference).expression)
+            write(");")
+            writeNewLine()
+            return
+        }
         if (ModifierFlag.Export in node.modifiers) {
             write("export ")
         }
