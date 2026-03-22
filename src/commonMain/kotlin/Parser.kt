@@ -843,6 +843,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
 
+        // Track `for ()` error-recovery: when token is `)` right after `(`, report TS1109
+        // and skip all the semicolon parsing (matching TypeScript's error recovery).
+        var forMissingHeader = false
         val initializer: Node? = when (token) {
             VarKeyword, LetKeyword, ConstKeyword -> {
                 disallowIn = true
@@ -850,7 +853,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 disallowIn = false
                 v
             }
-            Semicolon, CloseParen -> null
+            Semicolon -> null
+            CloseParen -> {
+                // `for ()` — missing init AND semicolons. Report TS1109 "Expression expected"
+                // at the `)` position (matching TypeScript's behavior).
+                reportError("Expression expected.", code = 1109)
+                forMissingHeader = true
+                null
+            }
             else -> {
                 disallowIn = true
                 val e = parseExpression()
@@ -863,6 +873,31 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // For VariableDeclarationList, the trailing comments are already captured
         // on the last variable declaration's nameTrailingComments, so skip here.
         val afterInit = if (initializer !is VariableDeclarationList) trailingComments() else null
+
+        // `for ()` error recovery: skip straight to CloseParen parsing (no semicolons needed)
+        if (forMissingHeader) {
+            parseExpected(SyntaxKind.CloseParen)
+            val afterCloseParen = trailingComments()
+            val body = parseStatement() ?: EmptyStatement()
+            return ForStatement(
+                initializer = null,
+                condition = null,
+                incrementor = null,
+                statement = body,
+                afterKeywordComments = afterKeyword,
+                afterOpenParenComments = afterOpenParen,
+                afterInitComments = null,
+                afterSemicolon1Comments = null,
+                afterConditionComments = null,
+                afterSemicolon2Comments = null,
+                beforeCloseParenComments = null,
+                afterCloseParenComments = afterCloseParen,
+                syntheticSemicolons = true,
+                pos = pos,
+                end = getEnd(),
+                leadingComments = comments
+            )
+        }
 
         if (parseOptional(SyntaxKind.InKeyword)) {
             val afterIn = trailingComments()
