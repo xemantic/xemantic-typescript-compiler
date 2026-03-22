@@ -187,6 +187,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun reportError(message: String, code: Int = 1005, overrideLength: Int? = null, overrideStart: Int? = null) {
         val start = overrideStart ?: scanner.getTokenPos()
+        // TypeScript suppresses duplicate errors at the same source position
+        // (mirrors the `start !== lastError.start` check in TypeScript's parseErrorAtPosition)
+        val lastDiag = diagnostics.lastOrNull()
+        if (lastDiag != null && lastDiag.start == start) return
         val length = overrideLength ?: (scanner.getPos() - start).coerceAtLeast(0)
         val (line, character) = getLineAndCharacterOfPosition(start)
         diagnostics.add(
