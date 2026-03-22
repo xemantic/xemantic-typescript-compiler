@@ -11417,9 +11417,11 @@ class Checker(
                     start = spanStart,
                     length = length,
                 ))
-                // Also emit TS7006 when parameter has no type annotation (fires regardless of noImplicitAny)
+                // Also emit TS7006 when parameter has no type annotation.
+                // Fires by default but suppressed when strict is explicitly false.
                 val name = param.name
-                if (param.type == null && name is Identifier && name.text != "this") {
+                if (param.type == null && name is Identifier && name.text != "this" &&
+                    !options.strictExplicitlyFalse) {
                     diagnostics.add(Diagnostic(
                         message = "Parameter '${name.text}' implicitly has an 'any' type.",
                         category = DiagnosticCategory.Error,
