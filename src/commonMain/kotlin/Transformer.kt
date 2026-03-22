@@ -10521,6 +10521,9 @@ class Transformer(
             when (stmt) {
                 is ImportEqualsDeclaration -> {
                     if (stmt.isTypeOnly) continue
+                    // `export import X = require("...")` inside a namespace body is a parse error
+                    // (external module reference inside namespace). TypeScript emits nothing for these.
+                    if (stmt.moduleReference is ExternalModuleReference) continue
                     // Skip duplicate import alias: if the same alias name was already declared by
                     // a prior import in this namespace body, TypeScript skips emitting the second.
                     val aliasNameDup = stmt.name.text
