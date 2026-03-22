@@ -3457,11 +3457,15 @@ class Emitter(
             } else {
                 // Comma-after format: used when params have only leading comments (JSDoc style).
                 // The comma appears after the parameter, and `)` follows immediately after the last param.
-                // First parameter's comment stays on the same line as `(` — only subsequent params get newline.
+                // First parameter's comment stays on the same line as `(` IF it has no preceding newline
+                // (e.g., `func(/** inline */ a, ...)`). If the first param's comment has hasPrecedingNewLine=true
+                // (source has `func(\n  /** comment */\n  a`), emit on its own line like subsequent params.
                 for ((index, param) in emittableParams.withIndex()) {
                     val isLast = index == emittableParams.size - 1
-                    if (index == 0) {
-                        // First param: emit leading comments inline after `(`
+                    val firstParamCommentIsInline = index == 0 &&
+                        param.leadingComments?.any { it.hasPrecedingNewLine } != true
+                    if (firstParamCommentIsInline) {
+                        // First param with inline comment(s): emit comments on same line as `(`
                         val leading = param.leadingComments
                         if (!leading.isNullOrEmpty()) {
                             for (comment in leading) {
