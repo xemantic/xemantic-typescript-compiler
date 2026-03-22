@@ -1593,8 +1593,10 @@ class Transformer(
                         // name (has a void0 hoist). This covers class decorator reassignment:
                         //   `A = __decorate([dec], A)` → `exports.A = A = __decorate([dec], A)`
                         // TypeScript prefixes with `exports.X = X =` to update both local and export.
+                        // Exclude direct-exported vars (no local var binding) — those are handled by
+                        // the global exportRewriteMap pass: `X = expr` → `exports.X = expr` directly.
                         val assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
-                        if (assignedExportName != null) {
+                        if (assignedExportName != null && assignedExportName !in directExportedVarNames) {
                             result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
                         } else {
                             // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
@@ -7567,12 +7569,10 @@ class Transformer(
         // E.g. `import public = require("1")` in a strict-mode file produces no output.
         if (decl.name.text in strictModeReservedWords) return emptyList()
 
-        // Erase import if the referenced name is type-only (interface, type alias, or type-only namespace).
-        // Exception: exported import aliases (export import a = X.Y) are always emitted since
-        // they create explicitly exported bindings that other modules may depend on.
         val ref = decl.moduleReference
         val isExported = ModifierFlag.Export in decl.modifiers
         if (!isExported) {
+            // Erase non-exported import aliases that resolve to type-only names.
             if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
                 return emptyList()
             }
@@ -7587,13 +7587,13 @@ class Transformer(
         val isRequire = ref is ExternalModuleReference
 
         // Elide import=require() when the target module only exports types.
-        // Exception: if the checker marks this import as explicitly referenced (e.g. JSX factory
-        // namespace imports like React), keep it even if the module appears type-only.
+        // Exception: if the checker marks this import as explicitly referenced AND the module
+        // has value exports (e.g. JSX factory namespace imports like React), keep it.
+        // If the module itself is type-only (no value exports at all), always erase — even if
+        // the imported name appears in value positions (those are type errors, not value uses).
         if (isRequire && !isExported && ref is ExternalModuleReference) {
             val specText = (ref.expression as? StringLiteralNode)?.text
-            val isExplicitlyReferenced = checker?.isReferencedAliasDeclaration(decl) == true
-            if (!isExplicitlyReferenced && specText != null &&
-                checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
+            if (specText != null && checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
                 return emptyList()
             }
         }
