@@ -7255,23 +7255,38 @@ class Checker(
             val getterCount = group.count { it.kind == "getter" }
             val setterCount = group.count { it.kind == "setter" }
 
-            // Determine which members to flag with TS2300:
+            // Determine which members to flag with TS2300.
+            // TypeScript's rules (derived from test baselines):
             // - getter + setter (complete pair) → ALLOWED
             // - complete accessor pair (get+set) + property → only flag the property
-            //   (the accessor pair is the "intended" definition; the property is the intruder)
-            // - incomplete accessor (get-only or set-only) + property → flag ALL
-            // - method + getter/setter/property → flag ALL
             // - duplicate getters (2+) or setters (2+) → flag ALL in the group
+            // - method + property (method first) → only flag the property
+            // - property + method (property first) → flag ALL (both property and method)
+            // - property + property → only flag the second and subsequent properties (not the first)
+            // - method + getter/setter → flag ALL
             val hasCompleteAccessorPair = hasGetter && hasSetter && getterCount == 1 && setterCount == 1
             val membersToFlag: List<MemberInfo> = when {
-                hasMethod && (hasGetter || hasSetter || hasProperty) -> group
                 getterCount >= 2 || setterCount >= 2 -> group // all conflict when either accessor is duplicated
+                hasMethod && (hasGetter || hasSetter) -> group // method + accessor → all
                 hasProperty && hasCompleteAccessorPair ->
                     // Complete get+set pair plus property: only the property is the duplicate
                     group.filter { it.kind == "property" }
                 hasProperty && (hasGetter || hasSetter) ->
                     // Incomplete accessor + property: both conflict
                     group
+                hasMethod && hasProperty -> {
+                    // method + property: if method comes FIRST, only flag the property;
+                    // if property comes FIRST, flag ALL
+                    val firstMember = group.first()
+                    if (firstMember.kind == "method") {
+                        group.filter { it.kind != "method" }
+                    } else {
+                        group // property first → both flagged
+                    }
+                }
+                hasProperty && group.count { it.kind == "property" } >= 2 ->
+                    // property + property: only flag the 2nd and subsequent, not the first
+                    group.drop(1)
                 else -> emptyList()
             }
 
