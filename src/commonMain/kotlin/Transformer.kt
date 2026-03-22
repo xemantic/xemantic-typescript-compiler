@@ -2202,7 +2202,7 @@ class Transformer(
             needsRestHelper || needsAwaiterHelper || needsAsyncGeneratorHelper ||
             needsMakeTemplateObjectHelper
         )
-        if (needsAnyImportHelper && !options.importHelpers) {
+        if (needsAnyImportHelper && !options.importHelpers && !options.noEmitHelpers) {
             val helpers = buildString {
                 // __createBinding is needed by both __importStar and __exportStar
                 if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
@@ -3277,8 +3277,8 @@ class Transformer(
         }
 
         // Runtime helpers go OUTSIDE the define wrapper (after amd comments, before define)
-        // When importHelpers: true, don't emit inline helpers — use tslib instead.
-        if (needsAnyAmdHelper && !options.importHelpers) {
+        // When importHelpers: true or noEmitHelpers: true, don't emit inline helpers.
+        if (needsAnyAmdHelper && !options.importHelpers && !options.noEmitHelpers) {
             val helpers = buildString {
                 if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
                 if (needsImportStar) append(SET_MODULE_DEFAULT_HELPER)
@@ -10798,14 +10798,23 @@ class Transformer(
                     (node.body?.statements?.any { checkNode(it) } == true)
                 is EnumDeclaration -> node.name.text == name
                 is VariableStatement -> node.declarationList.declarations.any { extractIdentifierName(it.name) == name }
-                is ModuleDeclaration -> extractIdentifierName(node.name) == name ||
-                    // Also check inside inner module bodies — a `var M` inside a child namespace
-                    // shadows the outer IIFE parameter since the child IIFE is a nested scope.
+                is ModuleDeclaration -> {
+                    // A namespace named X creates a value collision only if it has non-type-only content.
+                    // An empty namespace `namespace X {}` is type-only and produces no JS var, so it
+                    // does NOT shadow the outer IIFE parameter. TypeScript's isUniqueLocalName checks
+                    // SymbolFlags.Value which empty namespaces don't have.
+                    val nsNameMatches = extractIdentifierName(node.name) == name
+                    val hasValueContent = !isTypeOnlyNamespace(node)
+                    (nsNameMatches && hasValueContent) ||
+                    // Recurse into the body to find nested declarations that shadow the name.
+                    // For dotted namespace chains (ModuleDeclaration body), traverse through
+                    // until we reach a ModuleBlock. Only recurse into ModuleBlock contents.
                     when (val b = node.body) {
                         is ModuleBlock -> b.statements.any { checkNode(it) }
                         is ModuleDeclaration -> checkNode(b)
                         else -> false
                     }
+                }
                 is ImportEqualsDeclaration -> {
                     // Non-exported import-equals becomes a local `var M = ...` which shadows
                     // the namespace param. Exported import-equals becomes `M.M = ...` (no collision).
