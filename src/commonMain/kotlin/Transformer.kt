@@ -738,6 +738,10 @@ class Transformer(
         val namedImportLocalNames = mutableSetOf<String>()
         // Track export assignments from keep-declaration path — must be excluded from rewriting.
         val keepDeclExportAssignments = mutableSetOf<Statement>()
+        // Track exported variable names from the keep-declaration path (exported const/let/var with
+        // function/arrow/class initializer). These need expando property assignments rewritten to
+        // use exports.Name as the base.
+        val keepDeclFunctionVarNames = mutableSetOf<String>()
         // Track `export default class X` names — their static initializers must appear
         // BEFORE the `exports.default = X` assignment (TypeScript's ordering).
         val defaultExportedClassNames = mutableSetOf<String>()
@@ -1086,6 +1090,12 @@ class Transformer(
                                                     // Track for excluding from identifier rewriting
                                                     if (name in conflictingExportedNames) {
                                                         keepDeclExportAssignments.add(assignStmt)
+                                                    }
+                                                    // Track function/arrow/class init vars for expando rewriting
+                                                    if (decl.initializer is FunctionExpression ||
+                                                        decl.initializer is ArrowFunction ||
+                                                        decl.initializer is ClassExpression) {
+                                                        keepDeclFunctionVarNames.add(name)
                                                     }
                                                 }
                                             }
@@ -1589,19 +1599,33 @@ class Transformer(
                         if (iifeNameForExport !in exportedVarNames) exportedVarNames.add(iifeNameForExport)
                         result.add(rewriteIifeArgForCjsExport(stmt as ExpressionStatement, iifeNameForExport))
                     } else {
-                        // Check if this is a simple assignment `X = expr` where X is an exported
-                        // name (has a void0 hoist). This covers class decorator reassignment:
-                        //   `A = __decorate([dec], A)` → `exports.A = A = __decorate([dec], A)`
-                        // TypeScript prefixes with `exports.X = X =` to update both local and export.
-                        // Exclude direct-exported vars (no local var binding) — those are handled by
-                        // the global exportRewriteMap pass: `X = expr` → `exports.X = expr` directly.
-                        val assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
-                        if (assignedExportName != null && assignedExportName !in directExportedVarNames) {
-                            result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
+                        // Check if this is an expando property assignment `Name.prop = expr`
+                        // where Name is a keep-declaration exported function/arrow/class var.
+                        // Rewrite the base to `exports.Name.prop = expr` and rewrite Name
+                        // references in the RHS (with indirect call wrapping).
+                        val expandoBaseName = extractExpandoAssignmentBase(stmt, keepDeclFunctionVarNames, directExportedVarNames)
+                        if (expandoBaseName != null) {
+                            val expandoRewriteMap = mapOf(expandoBaseName to (PropertyAccessExpression(
+                                expression = syntheticId("exports"),
+                                name = syntheticId(expandoBaseName),
+                                pos = -1, end = -1,
+                            ) as Expression))
+                            result.add(rewriteIdInStatement(stmt, expandoRewriteMap))
                         } else {
-                            // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
-                            // TypeScript handles this as error recovery (export inside block is invalid JS).
-                            result.add(cjsRewriteNestedExportVars(stmt))
+                            // Check if this is a simple assignment `X = expr` where X is an exported
+                            // name (has a void0 hoist). This covers class decorator reassignment:
+                            //   `A = __decorate([dec], A)` → `exports.A = A = __decorate([dec], A)`
+                            // TypeScript prefixes with `exports.X = X =` to update both local and export.
+                            // Exclude direct-exported vars (no local var binding) — those are handled by
+                            // the global exportRewriteMap pass: `X = expr` → `exports.X = expr` directly.
+                            val assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
+                            if (assignedExportName != null && assignedExportName !in directExportedVarNames) {
+                                result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
+                            } else {
+                                // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
+                                // TypeScript handles this as error recovery (export inside block is invalid JS).
+                                result.add(cjsRewriteNestedExportVars(stmt))
+                            }
                         }
                     }
                 }
@@ -4893,6 +4917,28 @@ class Transformer(
         if (bin.operator != Equals) return null
         val lhsName = (bin.left as? Identifier)?.text ?: return null
         return if (lhsName in exportedNames) lhsName else null
+    }
+
+    /**
+     * Returns the base identifier name if stmt is an expando assignment like `Name.prop = expr`
+     * or `Name[expr] = expr` where `Name` is in the given set. Used to detect expando property
+     * assignments on exported function/arrow/class vars that need the base rewritten to
+     * `exports.Name.prop = ...`.
+     */
+    private fun extractExpandoAssignmentBase(
+        stmt: Statement,
+        expandoNames: Collection<String>,
+        directExportedNames: Collection<String>,
+    ): String? {
+        if (stmt !is ExpressionStatement) return null
+        val bin = stmt.expression as? BinaryExpression ?: return null
+        if (bin.operator != Equals) return null
+        val baseName = when (val left = bin.left) {
+            is PropertyAccessExpression -> (left.expression as? Identifier)?.text
+            is ElementAccessExpression -> (left.expression as? Identifier)?.text
+            else -> null
+        } ?: return null
+        return if (baseName in expandoNames && baseName !in directExportedNames) baseName else null
     }
 
     /**
