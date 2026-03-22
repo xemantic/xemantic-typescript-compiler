@@ -69,6 +69,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Checker gotchas
 
+- **`node.end` overshoots by one token**: In this AST, `node.end` = `scanner.getPos()` AFTER calling `nextToken()`, so it includes the start/end of the NEXT scanned token — not the true end of the node's text. To compute squiggle length, use `expressionTrueEnd(expr)` which traverses the rightmost leaf: `PropertyAccessExpression → name.pos + name.text.length`, `StringLiteralNode → pos + rawText.length + 2`, `NumericLiteralNode → pos + text.length`, `Identifier → pos + text.length`. Never use `node.end - node.pos` for span length in diagnostics.
 - **Merged enum autoValue reset**: Each enum declaration block resets auto-increment to 0. `computeEnumSymbolValues` must have `var autoValue = 0.0` INSIDE the loop over declarations, not outside — otherwise merged enums get wrong values (e.g., `Enum1 { A0 = 100 }; Enum1 { A }` → A should be 0, not 101).
 - **Nested enum value computation**: `computeAllEnumValues` must recurse into namespace `exports` to find nested const enums. Top-level `result.locals` only has the outer namespace symbols.
 - **`resolveAlias` cycle detection**: Import aliases can be circular (import shadowing, re-exports). Must use a `visited: MutableSet<Int>` parameter to prevent StackOverflow.
