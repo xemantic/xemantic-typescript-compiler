@@ -1703,12 +1703,8 @@ class Emitter(
                 }
             }
             is BigIntLiteralNode -> {
-                // Numeric separators are natively supported starting ES2021 — preserve them as-is
-                val hasBigIntSeparators = '_' in node.text
-                val preserveBigIntSeps = hasBigIntSeparators && options.effectiveTarget >= ScriptTarget.ES2021
-                if (preserveBigIntSeps) {
-                    write(node.text)
-                } else {
+                // TypeScript always strips numeric separators from BigInt literals (unlike regular
+                // numeric literals where separators are preserved for ES2021+).
                 val text = node.text.replace("_", "")
                 // TypeScript converts binary/octal BigInt literals to decimal (e.g. 0b101n → 5n, 0o567n → 375n)
                 // and lowercases hex digits (e.g. 0xFFFFn → 0xffffn)
@@ -1729,7 +1725,6 @@ class Emitter(
                     else -> withoutN
                 }
                 write("${converted}n")
-                } // end else (not preserveBigIntSeps)
             }
             is RegularExpressionLiteralNode -> write(node.text)
             is NoSubstitutionTemplateLiteralNode -> emitNoSubstitutionTemplateLiteral(node)

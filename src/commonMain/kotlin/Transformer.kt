@@ -11861,10 +11861,23 @@ class Transformer(
             },
             members = stmt.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
         )
-        is FunctionDeclaration -> stmt.copy(
-            parameters = stmt.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-            body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
-        )
+        is FunctionDeclaration -> {
+            // Parameters shadow exported names — exclude param names and body-local names from the map
+            val paramNames = stmt.parameters.flatMapTo(mutableSetOf()) { collectBoundNames(it.name) }
+            val bodyLocalNames = stmt.body?.statements?.flatMapTo(mutableSetOf()) { bodyStmt ->
+                when (bodyStmt) {
+                    is FunctionDeclaration -> listOfNotNull(bodyStmt.name?.text)
+                    is VariableStatement -> bodyStmt.declarationList.declarations.flatMap { collectBoundNames(it.name) }
+                    else -> emptyList()
+                }
+            } ?: emptySet()
+            val localNames = paramNames + bodyLocalNames
+            val bodyMap = if (localNames.isEmpty()) map else map - localNames
+            stmt.copy(
+                parameters = stmt.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+                body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) }),
+            )
+        }
         else -> stmt
     }
 
@@ -12043,27 +12056,37 @@ class Transformer(
                 span.copy(expression = rewriteId(span.expression, map, wrapCallsWithZero))
             }
         )
-        is ArrowFunction -> expr.copy(
-            parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-            body = when (val b = expr.body) {
-                is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
-                is Expression -> rewriteId(b, map, wrapCallsWithZero)
-                else -> b
-            },
-        )
+        is ArrowFunction -> {
+            // Parameters shadow exported names — exclude param names from the body map
+            val paramNames = expr.parameters.flatMapTo(mutableSetOf()) { collectBoundNames(it.name) }
+            val bodyMap = if (paramNames.isEmpty()) map else map - paramNames
+            expr.copy(
+                parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+                body = when (val b = expr.body) {
+                    is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) })
+                    is Expression -> rewriteId(b, bodyMap, wrapCallsWithZero)
+                    else -> b
+                },
+            )
+        }
         is FunctionExpression -> {
-            // Don't rewrite names that are locally declared as functions or variables in this scope —
+            // Don't rewrite names that are locally declared as params/functions/variables in this scope —
             // they shadow any outer binding with the same name. This prevents namespace-IIFE-local
             // function declarations from being incorrectly rewritten to exports.X.
-            val localNames = expr.body.statements.flatMapTo(mutableSetOf()) { stmt ->
+            val paramNames = expr.parameters.flatMapTo(mutableSetOf()) { collectBoundNames(it.name) }
+            val bodyLocalNames = expr.body.statements.flatMapTo(mutableSetOf()) { stmt ->
                 when (stmt) {
                     is FunctionDeclaration -> listOfNotNull(stmt.name?.text)
                     is VariableStatement -> stmt.declarationList.declarations.flatMap { collectBoundNames(it.name) }
                     else -> emptyList()
                 }
             }
+            val localNames = paramNames + bodyLocalNames
             val localMap = if (localNames.isEmpty()) map else map - localNames
-            expr.copy(body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, localMap, wrapCallsWithZero) }))
+            expr.copy(
+                parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+                body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, localMap, wrapCallsWithZero) }),
+            )
         }
         is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
         is ClassExpression -> expr.copy(
