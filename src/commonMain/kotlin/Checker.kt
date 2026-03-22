@@ -205,6 +205,11 @@ class Checker(
         checkEmptyTypeArguments()
         // 60. Check TS2354: importHelpers without tslib
         checkImportHelpersWithoutTslib()
+        // 61. Check bodyless function declarations without return type (TS7010)
+        // Fires by default (like TS2454/TS2564), suppressed only when @strict: false explicitly set.
+        if (!options.strictExplicitlyFalse || options.noImplicitAny) {
+            checkBodylessFunctionReturnTypesMissing()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -9297,6 +9302,83 @@ class Checker(
             break // Non-matching member breaks the chain
         }
         return ImplResult.Missing
+    }
+
+    // -----------------------------------------------------------------------
+    // Bodyless function return type checking (TS7010)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for function/method declarations without a body that lack a return
+     * type annotation. Emits TS7010 when:
+     * - The declaration is ambient (declare function) without return type, OR
+     * - The declaration is a non-ambient overload with no matching implementation
+     *   (same name with body) anywhere in the same scope.
+     * This check is suppressed when @strict: false is explicitly set (like TS2454/TS2564).
+     */
+    private fun checkBodylessFunctionReturnTypesMissing() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkTS7010InStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkTS7010InStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (stmt.body == null && stmt.name != null && stmt.type == null) {
+                        val name = stmt.name!!.text
+                        val isAmbient = ModifierFlag.Declare in stmt.modifiers
+                        if (isAmbient || !hasImplementationInScope(statements, name)) {
+                            emitTS7010(stmt.name!!, name, source, fileName)
+                        }
+                    }
+                    stmt.body?.let { checkTS7010InStatements(it.statements, source, fileName) }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkTS7010InStatements(body.statements, source, fileName)
+                    } else if (body is ModuleDeclaration) {
+                        checkTS7010InStatements(listOf(body), source, fileName)
+                    }
+                }
+                is Block -> checkTS7010InStatements(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    /** Check if any function declaration with [name] and a body exists in [statements]. */
+    private fun hasImplementationInScope(statements: List<Statement>, name: String): Boolean {
+        return statements.any { it is FunctionDeclaration && it.name?.text == name && it.body != null }
+    }
+
+    private fun emitTS7010(nameNode: Node, nameText: String, source: String, fileName: String) {
+        val start = nameNode.pos
+        val length = when (nameNode) {
+            is Identifier -> nameNode.text.length
+            is StringLiteralNode -> nameNode.text.length + 2 // include quotes
+            else -> return
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'$nameText', which lacks return-type annotation, implicitly has an 'any' return type.",
+            category = DiagnosticCategory.Error,
+            code = 7010,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     private fun emitTS2391(nameNode: Node, source: String, fileName: String) {
