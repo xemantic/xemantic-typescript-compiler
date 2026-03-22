@@ -660,6 +660,12 @@ data class ArrayLiteralExpression(
     val openBracketComments: List<Comment>? = null,
     /** Source position of the closing `]` token. */
     val closeBracketPos: Int = -1,
+    /**
+     * Per-element post-comma comments: `postCommaComments[i]` holds same-line comments that
+     * appeared after element `i`'s comma (e.g. `elem, // comment\n nextElem`). These are
+     * emitted after the comma, not before it.
+     */
+    val postCommaComments: List<List<Comment>?>? = null,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayLiteralExpression
 }

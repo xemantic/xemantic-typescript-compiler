@@ -2011,6 +2011,16 @@ class Emitter(
                     prevWasSameLine = false
                 } else {
                     if (!isLast || node.hasTrailingComma) write(",")
+                    // Emit post-comma same-line comments (e.g. `elem, // comment\n`).
+                    // These were captured by the parser after the comma token and must appear
+                    // after the comma, not before it.
+                    val postCommaComments = if (!options.removeComments) node.postCommaComments?.getOrNull(index) else null
+                    if (!postCommaComments.isNullOrEmpty()) {
+                        for (comment in postCommaComments) {
+                            write(" ")
+                            write(comment.text)
+                        }
+                    }
                     // Check if the next element starts on the same source line as this element ends.
                     // Only apply this for compound elements (ObjectLiteralExpression or ArrayLiteralExpression)
                     // to preserve `}, {` inline formatting when the source has it. Skip for simple elements
