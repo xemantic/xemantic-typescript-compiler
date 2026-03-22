@@ -7585,6 +7585,12 @@ class Checker(
     }
 
     companion object {
+        /** Predefined type names that cannot be used as class/interface names (TS2414/TS2427). */
+        private val PREDEFINED_TYPE_NAMES = setOf(
+            "any", "number", "boolean", "string", "void", "never", "object",
+            "unknown", "undefined", "null", "bigint", "symbol",
+        )
+
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
 
@@ -14299,34 +14305,34 @@ class Checker(
             when (stmt) {
                 is ClassDeclaration -> {
                     val name = stmt.name
-                    if (name != null && name.text == "undefined") {
+                    if (name != null && name.text in PREDEFINED_TYPE_NAMES) {
                         val start = name.pos
                         val (line, character) = getLineAndCharacterOfPosition(source, start)
                         diagnostics.add(Diagnostic(
-                            message = "Class name cannot be 'undefined'.",
+                            message = "Class name cannot be '${name.text}'.",
                             category = DiagnosticCategory.Error,
                             code = 2414,
                             fileName = fileName,
                             line = line,
                             character = character,
                             start = start,
-                            length = 9, // "undefined"
+                            length = name.text.length,
                         ))
                     }
                 }
                 is InterfaceDeclaration -> {
-                    if (stmt.name.text == "undefined") {
+                    if (stmt.name.text in PREDEFINED_TYPE_NAMES) {
                         val start = stmt.name.pos
                         val (line, character) = getLineAndCharacterOfPosition(source, start)
                         diagnostics.add(Diagnostic(
-                            message = "Interface name cannot be 'undefined'.",
+                            message = "Interface name cannot be '${stmt.name.text}'.",
                             category = DiagnosticCategory.Error,
                             code = 2427,
                             fileName = fileName,
                             line = line,
                             character = character,
                             start = start,
-                            length = 9, // "undefined"
+                            length = stmt.name.text.length,
                         ))
                     }
                 }
