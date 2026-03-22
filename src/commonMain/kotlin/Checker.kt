@@ -56,6 +56,13 @@ class Checker(
     private val maxCheckDepth = 200
     private var checkDepth = 0
 
+    /**
+     * Per-file-per-name count of TS2552 spelling suggestions emitted.
+     * TypeScript limits spelling suggestions to 10 per unique name per file.
+     * Key = "$fileName:$missingName".
+     */
+    private val spellingSuggestionCounts: MutableMap<String, Int> = mutableMapOf()
+
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
     private fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
@@ -5362,18 +5369,19 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 // Regular functions break 'this' binding — clear class context
                 val fnScope = scope.child(hasArguments = true, classContext = null)
-                addParamsToScope(stmt.parameters, fnScope)
                 stmt.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                // Check type parameter constraints BEFORE adding params to scope:
+                // TypeScript evaluates type constraints without function params in scope.
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                }
+                addParamsToScope(stmt.parameters, fnScope)
                 // For ES5 target, `let`/`const` is downleveled to `var` which is function-scoped
                 // and hoisted, making it visible in parameter defaults. Suppress TS2304 for body
                 // variables when targeting ES5 (matching TypeScript's behavior).
                 if (options.target < ScriptTarget.ES2015) {
                     stmt.body?.let { collectDeclaredNames(it.statements, fnScope) }
-                }
-                // Check type parameter constraints
-                stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
                 }
                 stmt.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
                 for (param in stmt.parameters) {
@@ -6197,16 +6205,19 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        // typeof X in type position — TypeScript uses TS2304 (no TS2662/TS2663 suggestions)
+        // typeof X in type position — the identifier is a value reference, so spelling
+        // suggestions (TS2552) are allowed, but class-member suggestions (TS2662/TS2663) are not.
+        // We use inTypePosition = false so TS2552 can fire, relying on the fact that
+        // typeof operands don't appear inside a class body where TS2662/TS2663 would trigger.
         when (name) {
             is Identifier -> {
-                checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = true)
+                checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = false)
             }
             is QualifiedName -> {
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
                 if (leftmost is Identifier) {
-                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = true)
+                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = false)
                 }
             }
             else -> {}
@@ -6413,6 +6424,33 @@ class Checker(
             }
         }
 
+        // Try to find a spelling suggestion (TS2552)
+        // TypeScript limits to 10 suggestions per unique name per file (max10SpellingSuggestions)
+        if (!inTypePosition) {
+            val countKey = "$fileName:$name"
+            val currentCount = spellingSuggestionCounts[countKey] ?: 0
+            if (currentCount < 10) {
+                val suggestion = getSpellingSuggestion(name, scope)
+                if (suggestion != null) {
+                    spellingSuggestionCounts[countKey] = currentCount + 1
+                    // Try to find the declaration position of the suggestion for TS2728 related info
+                    val relatedInfo = findDeclarationRelatedInfo(suggestion, fileName, source)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find name '$name'. Did you mean '$suggestion'?",
+                        category = DiagnosticCategory.Error,
+                        code = 2552,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        relatedInformation = if (relatedInfo != null) listOf(relatedInfo) else emptyList(),
+                    ))
+                    return
+                }
+            }
+        }
+
         diagnostics.add(Diagnostic(
             message = "Cannot find name '$name'.",
             category = DiagnosticCategory.Error,
@@ -6423,6 +6461,104 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * Finds a spelling suggestion for an unresolved name.
+     * Returns the closest name from scope if within edit-distance threshold.
+     * Mirrors TypeScript's getSpellingSuggestion algorithm.
+     */
+    private fun getSpellingSuggestion(name: String, scope: NameScope): String? {
+        // Collect all candidate names from scope chain
+        val candidates = mutableSetOf<String>()
+        var s: NameScope? = scope
+        while (s != null) {
+            candidates.addAll(s.names)
+            s = s.parent
+        }
+        // Also include well-known globals
+        candidates.addAll(KNOWN_GLOBALS)
+
+        val nameLower = name.lowercase()
+        val minDistance = maxOf(1, name.length / 3)
+        var bestSuggestion: String? = null
+        var bestDist = Int.MAX_VALUE
+
+        for (candidate in candidates) {
+            if (candidate == name) continue  // exact match already handled by scope.has()
+            if (candidate.isEmpty()) continue  // skip empty candidates
+            // Quick filter: skip if length difference is too large
+            val lenDiff = kotlin.math.abs(candidate.length - name.length)
+            if (lenDiff > minDistance) continue
+
+            val candidateLower = candidate.lowercase()
+            val dist = levenshteinDistance(nameLower, candidateLower)
+            if (dist <= minDistance && dist < bestDist) {
+                bestDist = dist
+                bestSuggestion = candidate
+            }
+        }
+        return bestSuggestion
+    }
+
+    /**
+     * Find the declaration position of [name] in the current file's binder locals.
+     * Returns a TS2728 related diagnostic ("'name' is declared here.") if found, null otherwise.
+     */
+    private fun findDeclarationRelatedInfo(name: String, fileName: String, source: String): Diagnostic? {
+        val result = fileResults[fileName] ?: return null
+        val symbol = result.locals[name] ?: return null
+        val decl = symbol.declarations?.firstOrNull() ?: symbol.valueDeclaration ?: return null
+        val declPos = when (decl) {
+            is VariableDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+            is FunctionDeclaration -> decl.name?.pos ?: decl.pos
+            is ClassDeclaration -> decl.name?.pos ?: decl.pos
+            is InterfaceDeclaration -> decl.name.pos
+            is TypeAliasDeclaration -> decl.name.pos
+            is EnumDeclaration -> decl.name.pos
+            is ImportSpecifier -> decl.name.pos
+            is NamespaceImport -> decl.name.pos
+            else -> decl.pos
+        }
+        val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+        return Diagnostic(
+            message = "'$name' is declared here.",
+            category = DiagnosticCategory.Message,
+            code = 2728,
+            fileName = fileName,
+            line = declLine,
+            character = declChar,
+            start = declPos,
+            length = name.length,
+        )
+    }
+
+    /**
+     * Compute optimal string alignment (restricted Damerau-Levenshtein) distance.
+     * Counts adjacent transpositions as distance 1, matching TypeScript's
+     * getSpellingSuggestion behavior (e.g., "tupel" → "tuple" = 1).
+     */
+    private fun levenshteinDistance(a: String, b: String): Int {
+        if (a == b) return 0
+        if (a.isEmpty()) return b.length
+        if (b.isEmpty()) return a.length
+        // dp[i][j] = distance(a[0..i-1], b[0..j-1])
+        val dp = Array(a.length + 1) { i -> IntArray(b.length + 1) { j -> if (i == 0) j else if (j == 0) i else 0 } }
+        for (i in 1..a.length) {
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                dp[i][j] = minOf(
+                    dp[i - 1][j] + 1,      // deletion
+                    dp[i][j - 1] + 1,      // insertion
+                    dp[i - 1][j - 1] + cost // substitution
+                )
+                // Transposition
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
+                    dp[i][j] = minOf(dp[i][j], dp[i - 2][j - 2] + cost)
+                }
+            }
+        }
+        return dp[a.length][b.length]
     }
 
     /**
