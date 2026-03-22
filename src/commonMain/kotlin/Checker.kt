@@ -4618,13 +4618,19 @@ class Checker(
             val propName = when (val name = member.name) {
                 is Identifier -> name.text
                 is ComputedPropertyName -> {
-                    // Computed property name — handles Symbol.X and simple identifiers
+                    // Computed property name — handles Symbol.X, NS.x, and simple identifiers
                     when (val expr = name.expression) {
                         is PropertyAccessExpression -> {
-                            val base = expr.expression
-                            if (base is Identifier && base.text == "Symbol") {
-                                "[Symbol.${expr.name.text}]"
-                            } else null
+                            // Build the full dotted name for display (e.g. "[Symbol.iterator]", "[NS.x]")
+                            fun buildDottedName(e: Expression): String? = when (e) {
+                                is Identifier -> e.text
+                                is PropertyAccessExpression -> {
+                                    val baseName = buildDottedName(e.expression) ?: return@buildDottedName null
+                                    "$baseName.${e.name.text}"
+                                }
+                                else -> null
+                            }
+                            buildDottedName(expr)?.let { "[$it]" }
                         }
                         is Identifier -> "[${expr.text}]"
                         else -> null
