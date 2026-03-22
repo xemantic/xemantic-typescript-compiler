@@ -197,12 +197,6 @@ class Binder(private val options: CompilerOptions) {
     // -----------------------------------------------------------------------
 
     private fun bindModuleDeclaration(decl: ModuleDeclaration) {
-        val name = when (val n = decl.name) {
-            is Identifier -> n.text
-            is StringLiteralNode -> n.text
-            else -> return
-        }
-
         // Compute module instance state
         val state = computeModuleInstanceState(decl)
         moduleInstanceStates[nodeKey(decl)] = state
@@ -215,24 +209,44 @@ class Binder(private val options: CompilerOptions) {
         }.let { f ->
             if (ModifierFlag.Export in decl.modifiers) f or SymbolFlags.ExportValue else f
         }
-        val symbol = declareSymbol(currentScope, name, flags, decl)
 
-        // Bind the module body in a nested scope
+        // For dotted namespace names (e.g. A.B.C), collect segments and declare
+        // nested symbols: A → A.B → A.B.C, each with exports pointing to the next.
+        val segments = mutableListOf<String>()
+        var cur: Expression = decl.name
+        while (cur is PropertyAccessExpression) {
+            segments.add(0, cur.name.text)
+            cur = cur.expression
+        }
+        when (cur) {
+            is Identifier -> segments.add(0, cur.text)
+            is StringLiteralNode -> segments.add(0, cur.text)
+            else -> return
+        }
+
+        // Declare/merge symbols for each segment, creating nested exports
+        val savedScope = currentScope
+        val savedContainer = currentContainer
+        var sym: Symbol? = null
+        for ((i, seg) in segments.withIndex()) {
+            val segFlags = if (i == 0) flags else SymbolFlags.NamespaceModule
+            sym = declareSymbol(currentScope, seg, segFlags, decl)
+            if (sym.exports == null) sym.exports = symbolTable()
+            currentScope = sym.exports!!
+            currentContainer = sym
+        }
+
+        // Bind the body in the innermost namespace's exports scope
         val body = decl.body
-        if (body != null) {
-            if (symbol.exports == null) symbol.exports = symbolTable()
-            val savedScope = currentScope
-            val savedContainer = currentContainer
-            currentScope = symbol.exports!!
-            currentContainer = symbol
+        if (body != null && sym != null) {
             when (body) {
                 is ModuleBlock -> bindStatements(body.statements)
                 is ModuleDeclaration -> bindModuleDeclaration(body)
                 else -> { /* empty body */ }
             }
-            currentScope = savedScope
-            currentContainer = savedContainer
         }
+        currentScope = savedScope
+        currentContainer = savedContainer
     }
 
     // -----------------------------------------------------------------------

@@ -4722,9 +4722,9 @@ class Checker(
             // Skip if parameter has type annotation or initializer
             if (param.type != null) continue
             if (param.initializer != null) continue
-            // Skip `this` parameter
+            // Skip `this` parameter and error-recovery placeholders (empty name)
             val name = param.name
-            if (name is Identifier && name.text == "this") continue
+            if (name is Identifier && (name.text == "this" || name.text.isEmpty())) continue
             // Skip destructured parameters (they get separate diagnostics)
             if (name !is Identifier) continue
             // Skip parameter properties (public/private/etc. modifiers) — TS7006 already
@@ -5108,6 +5108,12 @@ class Checker(
                 val fnScope = scope.child(hasArguments = true, classContext = null)
                 addParamsToScope(stmt.parameters, fnScope)
                 stmt.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                // For ES5 target, `let`/`const` is downleveled to `var` which is function-scoped
+                // and hoisted, making it visible in parameter defaults. Suppress TS2304 for body
+                // variables when targeting ES5 (matching TypeScript's behavior).
+                if (options.target < ScriptTarget.ES2015) {
+                    stmt.body?.let { collectDeclaredNames(it.statements, fnScope) }
+                }
                 // Check type parameter constraints
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
@@ -5418,6 +5424,10 @@ class Checker(
                     expr.typeParameters?.map { it.name.text } ?: emptyList()
                 )
                 addParamsToScope(expr.parameters, arrowScope)
+                // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
+                if (options.target < ScriptTarget.ES2015) {
+                    if (expr.body is Block) collectDeclaredNames((expr.body as Block).statements, arrowScope)
+                }
                 for (param in expr.parameters) {
                     param.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
                     param.initializer?.let { checkUnresolvedInExpr(it, arrowScope, source, fileName) }
@@ -5435,6 +5445,10 @@ class Checker(
                 expr.name?.let { fnScope.names.add(it.text) }
                 expr.typeParameters?.forEach { fnScope.names.add(it.name.text) }
                 addParamsToScope(expr.parameters, fnScope)
+                // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
+                if (options.target < ScriptTarget.ES2015) {
+                    collectDeclaredNames(expr.body.statements, fnScope)
+                }
                 for (param in expr.parameters) {
                     param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
                     param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
@@ -5943,13 +5957,16 @@ class Checker(
         val result = fileResults[fileName] ?: return parentScope
         // For simple identifier names, look up the binder symbol directly
         val name = stmt.name
-        val symbol = when (name) {
+        val nsScope = parentScope.child()
+        when (name) {
             is Identifier -> {
                 // Look up the merged symbol for this namespace via nodeToSymbol
-                result.nodeToSymbol[nodeKey(stmt)]
+                val symbol = result.nodeToSymbol[nodeKey(stmt)]
+                symbol?.exports?.keys?.forEach { nsScope.names.add(it) }
             }
             is PropertyAccessExpression -> {
-                // Dotted namespace: resolve through globals chain (A.B.C → globals["A"].exports["B"].exports["C"])
+                // Dotted namespace A.B.C: collect exports of each ancestor namespace
+                // (A, A.B, A.B.C) so names from parent namespaces are in scope.
                 val segments = mutableListOf<String>()
                 var cur: Expression = name
                 while (cur is PropertyAccessExpression) {
@@ -5965,16 +5982,13 @@ class Checker(
                         sym?.exports?.get(seg)
                     }
                     if (sym == null) break
+                    // Add exports of each ancestor namespace to scope
+                    sym.exports?.keys?.forEach { nsScope.names.add(it) }
                 }
-                sym
             }
-            else -> null
+            else -> {}
         }
-        if (symbol?.exports == null || symbol.exports!!.isEmpty()) return parentScope
-        val nsScope = parentScope.child()
-        for ((exportName, _) in symbol.exports!!) {
-            nsScope.names.add(exportName)
-        }
+        if (nsScope.names.isEmpty()) return parentScope
         return nsScope
     }
 
