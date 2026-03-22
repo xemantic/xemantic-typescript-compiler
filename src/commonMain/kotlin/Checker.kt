@@ -496,6 +496,32 @@ class Checker(
     }
 
     /**
+     * Check if a name resolves to a numeric enum type.
+     * Used for decorator metadata serialization: numeric enums serialize as `Number`.
+     * Returns false for string enums, non-enums, or unknown names.
+     */
+    fun isNumericEnumType(name: String, sourceFileName: String): Boolean {
+        val result = fileResults[sourceFileName] ?: return false
+        val symbol = result.locals[name] ?: globals[name] ?: return false
+        val target = resolveAlias(symbol)
+        if (!target.flags.hasAny(SymbolFlags.Enum)) return false
+        // A numeric enum has all NumberValue (or no values computed, which means all auto-number)
+        val values = enumValues[target.id] ?: return true // no values means all auto-numeric
+        return values.values.none { it is ConstantValue.StringValue }
+    }
+
+    /**
+     * Check if a name resolves to a class symbol (directly or through alias chains).
+     * Used for decorator metadata: type-only class imports serialize as `Function`.
+     */
+    fun isClassType(name: String, sourceFileName: String): Boolean {
+        val result = fileResults[sourceFileName] ?: return false
+        val symbol = result.locals[name] ?: globals[name] ?: return false
+        val target = resolveAlias(symbol)
+        return target.flags.hasAny(SymbolFlags.Class)
+    }
+
+    /**
      * Resolve an enum member value through import aliases.
      * Works for both const and non-const enums. Returns the numeric value or null.
      */

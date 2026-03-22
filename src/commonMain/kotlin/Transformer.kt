@@ -7941,7 +7941,11 @@ class Transformer(
 
         // Emit class-level __decorate call
         if (hasClassDecorators) {
-            statements.add(generateClassDecorateStatement(className, decl.decorators))
+            val constructorParams = decl.members
+                .filterIsInstance<Constructor>().firstOrNull()?.parameters
+            statements.add(generateClassDecorateStatement(
+                className, decl.decorators, constructorParams, classTypeParams
+            ))
         }
 
         return statements
@@ -8189,6 +8193,12 @@ class Transformer(
      */
     private fun serializeTypeNode(typeNode: TypeNode?, typeParams: Set<String>): Expression {
         if (typeNode == null) return syntheticId("Object")
+        val strictNull = options.strictNullChecks
+        // Single null/undefined/never types → void 0
+        if (isVoidMetadataTypeNode(typeNode)) return VoidExpression(
+            expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
                 SyntaxKind.StringKeyword -> syntheticId("String")
@@ -8196,7 +8206,7 @@ class Transformer(
                 SyntaxKind.BooleanKeyword -> syntheticId("Boolean")
                 SyntaxKind.SymbolKeyword -> syntheticId("Symbol")
                 SyntaxKind.BigIntKeyword -> syntheticId("BigInt")
-                else -> syntheticId("Object") // any, unknown, void, undefined, never, object, etc.
+                else -> syntheticId("Object") // any, unknown, void, object, etc.
             }
             is LiteralType -> when (typeNode.literal) {
                 is StringLiteralNode -> syntheticId("String")
@@ -8204,19 +8214,31 @@ class Transformer(
                 is NumericLiteralNode -> syntheticId("Number")
                 is Identifier -> when ((typeNode.literal).text) {
                     "true", "false" -> syntheticId("Boolean")
-                    "null" -> syntheticId("Object")
                     else -> syntheticId("Object")
                 }
                 else -> syntheticId("Object")
             }
             is TemplateLiteralType -> syntheticId("String") // template literal types → String
             is TypeReference -> {
-                val name = extractTypeRefName(typeNode.typeName)
+                val simpleName = extractTypeRefName(typeNode.typeName)
                 when {
-                    name != null && name in typeParams -> syntheticId("Object")
-                    name != null && name in topLevelTypeOnlyNames -> syntheticId("Object")
-                    name != null -> syntheticId(name)
-                    else -> syntheticId("Object")
+                    simpleName != null && simpleName in typeParams -> syntheticId("Object")
+                    simpleName != null && simpleName in topLevelTypeOnlyNames -> {
+                        // Type-only import: use Function if it's a class type, else Object
+                        if (checker?.isClassType(simpleName, currentFileName) == true)
+                            syntheticId("Function")
+                        else syntheticId("Object")
+                    }
+                    simpleName != null && checker?.isNumericEnumType(simpleName, currentFileName) == true ->
+                        syntheticId("Number")
+                    simpleName != null -> syntheticId(simpleName)
+                    else -> {
+                        // QualifiedName like E.A — check if base is a numeric enum
+                        val baseName = extractQualifiedNameBase(typeNode.typeName)
+                        if (baseName != null && checker?.isNumericEnumType(baseName, currentFileName) == true)
+                            syntheticId("Number")
+                        else syntheticId("Object")
+                    }
                 }
             }
             is ImportType -> syntheticId("Object")
@@ -8227,18 +8249,29 @@ class Transformer(
             is TypePredicate -> syntheticId("Boolean")
             is ParenthesizedType -> serializeTypeNode(typeNode.type, typeParams)
             is UnionType -> {
-                // Filter out null/undefined from union, then unify
-                val filtered = typeNode.types.filter { !isNullishTypeNode(it) }
+                // Always filter `never`; filter null/undefined only when !strictNullChecks
+                val filtered = typeNode.types.filter { !isNullishTypeNode(it, strictNull) }
+                val voidExpr = VoidExpression(
+                    expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                    pos = -1, end = -1,
+                )
                 when {
-                    filtered.isEmpty() -> syntheticId("Object")
+                    filtered.isEmpty() -> voidExpr
+                    // If all remaining types are void/null/undefined, still emit void 0
+                    filtered.all { isVoidMetadataTypeNode(it) } -> voidExpr
                     filtered.size == 1 -> serializeTypeNode(filtered[0], typeParams)
                     else -> unifyTypeSerializations(filtered, typeParams)
                 }
             }
             is IntersectionType -> {
-                val filtered = typeNode.types.filter { !isNullishTypeNode(it) }
+                val filtered = typeNode.types.filter { !isNullishTypeNode(it, strictNull) }
+                val voidExpr = VoidExpression(
+                    expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                    pos = -1, end = -1,
+                )
                 when {
-                    filtered.isEmpty() -> syntheticId("Object")
+                    filtered.isEmpty() -> voidExpr
+                    filtered.all { isVoidMetadataTypeNode(it) } -> voidExpr
                     filtered.size == 1 -> serializeTypeNode(filtered[0], typeParams)
                     else -> unifyTypeSerializations(filtered, typeParams)
                 }
@@ -8257,19 +8290,41 @@ class Transformer(
         }
     }
 
-    /** Get the simple name from a TypeReference's typeName (Identifier or first part of QualifiedName). */
+    /** Get the simple name from a TypeReference's typeName (only for plain Identifier). */
     private fun extractTypeRefName(typeName: Node): String? = when (typeName) {
         is Identifier -> typeName.text
-        is QualifiedName -> null // qualified names like E.A — can't serialize without type checker
         else -> null
     }
 
-    /** Return true if a type node represents null or undefined (so it's stripped from unions). */
-    private fun isNullishTypeNode(typeNode: TypeNode): Boolean = when (typeNode) {
-        is KeywordTypeNode -> typeNode.kind == SyntaxKind.NullKeyword ||
-            typeNode.kind == SyntaxKind.UndefinedKeyword
-        is LiteralType -> typeNode.literal is Identifier &&
+    /** Get the leftmost/base identifier from a QualifiedName (e.g. `E.A` → `"E"`). */
+    private fun extractQualifiedNameBase(typeName: Node): String? = when (typeName) {
+        is Identifier -> typeName.text
+        is QualifiedName -> extractQualifiedNameBase(typeName.left)
+        else -> null
+    }
+
+    /**
+     * Return true if a type node is "nullish" for union filtering purposes.
+     * `never` is always nullish (excluded from unions in metadata serialization).
+     * `null`/`undefined` are nullish only when strictNullChecks is false.
+     */
+    private fun isNullishTypeNode(typeNode: TypeNode, strictNull: Boolean): Boolean = when (typeNode) {
+        is KeywordTypeNode -> when (typeNode.kind) {
+            SyntaxKind.NeverKeyword -> true
+            SyntaxKind.NullKeyword, SyntaxKind.UndefinedKeyword -> !strictNull
+            else -> false
+        }
+        is LiteralType -> !strictNull && typeNode.literal is Identifier &&
             (typeNode.literal).text == "null"
+        else -> false
+    }
+
+    /** Return true if a type node alone represents a pure void/null/undefined/never type → `void 0`. */
+    private fun isVoidMetadataTypeNode(typeNode: TypeNode): Boolean = when (typeNode) {
+        is KeywordTypeNode -> typeNode.kind == SyntaxKind.NullKeyword ||
+            typeNode.kind == SyntaxKind.UndefinedKeyword ||
+            typeNode.kind == SyntaxKind.NeverKeyword
+        is LiteralType -> typeNode.literal is Identifier && (typeNode.literal).text == "null"
         else -> false
     }
 
@@ -8290,13 +8345,34 @@ class Transformer(
     }
 
     /** Generate `ClassName = __decorate([...], ClassName)` for class-level decorators. */
-    private fun generateClassDecorateStatement(className: String, decorators: List<Decorator>): Statement {
+    private fun generateClassDecorateStatement(
+        className: String,
+        decorators: List<Decorator>,
+        constructorParams: List<Parameter>? = null,
+        classTypeParams: Set<String> = emptySet(),
+    ): Statement {
         val decoratorExprs = decorators.map { dec ->
             val transformed = transformExpression(dec.expression)
             if (!dec.trailingComments.isNullOrEmpty()) {
                 val merged = (transformed.trailingComments.orEmpty() + dec.trailingComments).ifEmpty { null }
                 copyExpressionWithTrailingComments(transformed, merged)
             } else transformed
+        }.toMutableList()
+
+        // emitDecoratorMetadata: add design:paramtypes for constructor parameters
+        if (options.emitDecoratorMetadata && constructorParams != null) {
+            needsMetadataHelper = true
+            val paramTypes = constructorParams.map { param ->
+                val typeNode = if (param.dotDotDotToken)
+                    (param.type as? ArrayType)?.elementType ?: param.type
+                else param.type
+                serializeTypeNode(typeNode, classTypeParams)
+            }
+            decoratorExprs.add(makeMetadataCall("design:paramtypes", ArrayLiteralExpression(
+                elements = paramTypes,
+                multiLine = false,
+                pos = -1, end = -1,
+            )))
         }
 
         val call = CallExpression(
