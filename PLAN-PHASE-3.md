@@ -2035,7 +2035,33 @@ Analysis of 2,789 remaining failures:
 - **1,062** error diff failures (FP codes: TS1005 62, TS2304 43, TS1109 42, TS7006 36, TS2552 17)
 - **329** JS emit failures (file ordering 59, CJS export 25, temp var 24, decorator 26, other 153)
 
-- [ ] **28a. TS2552 false positive reduction — type parameters and parameter properties** (~6 tests)
+- [x] **28a. TS2552 false positive reduction — weighted algorithm and type-position filtering** (+1 test)
+
+  Implemented TypeScript's weighted Levenshtein distance (case-diff=0.1, substitution=2,
+  insert/delete=1 using 10x integer scale). Fixed threshold to `floor(n*0.4)+1`.
+  Type references now checked with `inTypePosition=true` suppressing TS2552 for type-position names.
+
+  **Files:** `Checker.kt`
+
+- [x] **28a2. CJS type-only import alias void0 hoist suppression** (+3 tests)
+
+  Extended type-only detection to exported aliases (`export import b = a.I`).
+  Added `requireRootExported` parameter to `isQualifiedPathTypeOnly`.
+
+  **Files:** `Transformer.kt`
+
+- [x] **28a3. Import=require verbatim in nested block scopes** (+3 tests)
+
+  `ImportEqualsDeclaration` in block/function scopes kept verbatim (require form)
+  or erased (namespace alias form). Added `blockScopeDepth` tracking.
+
+  **Files:** `Transformer.kt`, `Emitter.kt`
+
+- [x] **28b. Decorator CJS export qualification for __decorate** (already passing)
+
+  The `namedExportLocalToExport` pre-scan was already implemented in a prior session.
+
+- [ ] **28c. TS2552 false positive reduction — type parameters and parameter properties** (~6 tests)
 
   Our TS2552 spelling suggestions fire for names that TypeScript reports as plain TS2304:
   - `X` suggesting `x` (parameter property name) — constructor `public x` creates a class member,
