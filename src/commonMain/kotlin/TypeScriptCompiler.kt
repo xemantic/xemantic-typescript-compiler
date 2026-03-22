@@ -130,29 +130,80 @@ class TypeScriptCompiler {
         }
         val diagnostics = mutableListOf<Diagnostic>()
 
-        // Helper to compare version strings like "5.0", "6.0"
-        fun isDeprecationSuppressed(deprecationVersion: String): Boolean {
-            val ign = options.ignoreDeprecations ?: return false
-            return ign >= deprecationVersion // lexicographic comparison works for "X.Y" format
-        }
-
         // Helper to look up tsconfig.json position for a given option key (lowercase)
         val tsconfigPos = options.tsconfigOptionPositions
 
-        // TS5101: Deprecated options — point to KEY position in tsconfig
+        // The simulated TypeScript version (from @typeScriptVersion test directive), if any.
+        // When >= stopFunctioningVersion, options emit "removed" (TS5102/TS5108) instead of "deprecated".
+        // Default (no @typeScriptVersion): use "6.0" — the version that generated the test baselines.
+        // This means:
+        //   - 5.0-era options (stopped at 5.5): "6.0" >= "5.5" → TS5102 (removed)
+        //   - 6.0-era options (stopped at 7.0): "6.0" < "7.0" → TS5101 (deprecated)
+        val simulatedVersion = options.simulatedTypeScriptVersion ?: "6.0"
+
+        // Valid ignoreDeprecations values. An invalid value causes TS5103 and is treated as unset.
+        val validIgnoreDeprecationsValues = setOf("5.0", "6.0")
+        val effectiveIgnoreDeprecations: String? = if (options.ignoreDeprecations != null &&
+            options.ignoreDeprecations !in validIgnoreDeprecationsValues) {
+            // Emit TS5103 for invalid ignoreDeprecations value
+            val pos = tsconfigPos["ignoredeprecations"]
+            diagnostics.add(Diagnostic(
+                message = "Invalid value for '--ignoreDeprecations'.",
+                category = DiagnosticCategory.Error,
+                code = 5103,
+                fileName = pos?.fileName,
+                line = pos?.valueLine,
+                character = pos?.valueCharacter,
+                start = pos?.valueStart,
+                length = pos?.valueLength,
+            ))
+            null // treat as unset
+        } else {
+            options.ignoreDeprecations
+        }
+
+        // Helper to compare version strings like "5.0", "6.0"
+        fun isDeprecationSuppressed(deprecationVersion: String): Boolean {
+            val ign = effectiveIgnoreDeprecations ?: return false
+            return ign >= deprecationVersion // lexicographic comparison works for "X.Y" format
+        }
+
+        // TS5101/TS5102: Deprecated/removed options — point to KEY position in tsconfig.
+        // Logic (simulatedVersion is always set, defaults to "6.0"):
+        // - simulatedVersion < stopFunctioningVersion: option is still deprecated → emit TS5101
+        // - simulatedVersion >= stopFunctioningVersion: option is now removed → emit TS5102 (ignoreDeprecations ignored)
         fun addDeprecation5101(
             optionDesc: String,
             tsconfigKey: String? = null,
             messageChain: List<String> = emptyList(),
             deprecationVersion: String = "6.0",
+            stopFunctioningVersion: String = "7.0",
+            withMigrationUrl: Boolean = true,
         ) {
-            if (isDeprecationSuppressed(deprecationVersion)) return
             val pos = tsconfigKey?.let { tsconfigPos[it] }
-            val chain = if (pos != null)
+            if (simulatedVersion >= stopFunctioningVersion) {
+                // Option has been removed: ignoreDeprecations no longer suppresses the diagnostic
+                diagnostics.add(Diagnostic(
+                    message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
+                    category = DiagnosticCategory.Error,
+                    code = 5102,
+                    fileName = pos?.fileName,
+                    line = pos?.keyLine,
+                    character = pos?.keyCharacter,
+                    start = pos?.keyStart,
+                    length = pos?.keyLength,
+                    messageChain = messageChain,
+                ))
+                return
+            }
+            // simulatedVersion < stopFunctioningVersion: option is still deprecated → emit TS5101
+            if (isDeprecationSuppressed(deprecationVersion)) return
+            val chain = if (messageChain.isNotEmpty()) messageChain
+            else if (pos != null && withMigrationUrl)
                 listOf("  Visit https://aka.ms/ts6 for migration information.")
-            else messageChain
+            else emptyList()
             diagnostics.add(Diagnostic(
-                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
+                message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $stopFunctioningVersion. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
                 category = DiagnosticCategory.Error,
                 code = 5101,
                 fileName = pos?.fileName,
@@ -186,22 +237,29 @@ class TypeScriptCompiler {
             ))
         }
         // baseUrl deprecation (TS5101 with migration URL)
-        if (options.baseUrl != null) addDeprecation5101(
-            "baseUrl", tsconfigKey = "baseurl",
-            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information.")
-        )
-        // Removed options (TS5102) — all deprecated in version 5.0
-        if (options.charset != null) addRemoved5102("charset", tsconfigKey = "charset")
-        // downlevelIteration (TS5101 - still deprecated, not removed; fires even when set to false)
+        if (options.baseUrl != null) addDeprecation5101("baseUrl", tsconfigKey = "baseurl",
+            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information."))
+        // Options deprecated in TypeScript 5.0 (TS5101 with "will stop functioning in 5.5")
+        // These use deprecationVersion="5.0" and stopFunctioningVersion="5.5"
+        // Note: no migration URL chain for these options
+        if (options.charset != null) addDeprecation5101("charset", tsconfigKey = "charset",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.keyofStringsOnly) addDeprecation5101("keyofStringsOnly", tsconfigKey = "keyofstringsonly",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.noImplicitUseStrict) addDeprecation5101("noImplicitUseStrict", tsconfigKey = "noimplicitusestrict",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.noStrictGenericChecks) addDeprecation5101("noStrictGenericChecks", tsconfigKey = "nostrictgenericchecks",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.out != null) addDeprecation5101("out", tsconfigKey = "out",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.suppressExcessPropertyErrors) addDeprecation5101("suppressExcessPropertyErrors", tsconfigKey = "suppressexcesspropertyerrors",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.suppressImplicitAnyIndexErrors) addDeprecation5101("suppressImplicitAnyIndexErrors", tsconfigKey = "suppressimplicitanyindexerrors",
+            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        // downlevelIteration (TS5101 - deprecated in 6.0, will stop functioning in 7.0)
         if (options.downlevelIterationExplicitlySet) addDeprecation5101("downlevelIteration", tsconfigKey = "downleveliteration")
-        if (options.keyofStringsOnly) addRemoved5102("keyofStringsOnly", tsconfigKey = "keyofstringsonly")
-        if (options.noImplicitUseStrict) addRemoved5102("noImplicitUseStrict", tsconfigKey = "noimplicitusestrict")
-        if (options.noStrictGenericChecks) addRemoved5102("noStrictGenericChecks", tsconfigKey = "nostrictgenericchecks")
-        if (options.out != null) addRemoved5102("out", tsconfigKey = "out")
         // outFile deprecation (TS5101 - only when explicitly set, not via 'out')
         if (options.outFile != null && options.out == null) addDeprecation5101("outFile", tsconfigKey = "outfile")
-        if (options.suppressExcessPropertyErrors) addRemoved5102("suppressExcessPropertyErrors", tsconfigKey = "suppressexcesspropertyerrors")
-        if (options.suppressImplicitAnyIndexErrors) addRemoved5102("suppressImplicitAnyIndexErrors", tsconfigKey = "suppressimplicitanyindexerrors")
         if (options.importsNotUsedAsValues != null) addRemoved5102(
             "importsNotUsedAsValues", tsconfigKey = "importsnotusedasvalues",
             messageChain = listOf("  Use 'verbatimModuleSyntax' instead."),
@@ -211,12 +269,28 @@ class TypeScriptCompiler {
             messageChain = listOf("  Use 'verbatimModuleSyntax' instead."),
         )
 
-        // TS5107: Deprecated options — point to VALUE position in tsconfig
-        // Only moduleResolution=node10 gets the migration URL chain from tsconfig;
-        // other TS5107 options don't include it.
+        // TS5107/TS5108: Deprecated/removed options — point to VALUE position in tsconfig.
+        // Only moduleResolution=node10 gets the migration URL chain from tsconfig.
+        // Logic (simulatedVersion is always set, defaults to "6.0"):
+        // - simulatedVersion < version (stopFunctioningVersion): option is deprecated → emit TS5107
+        // - simulatedVersion >= version: option is removed → emit TS5108 (ignoreDeprecations ignored)
         fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0", withMigrationUrl: Boolean = false) {
-            if (isDeprecationSuppressed(deprecationVersion)) return
             val pos = tsconfigKey?.let { tsconfigPos[it] }
+            if (simulatedVersion >= version) {
+                // Option has been removed: ignoreDeprecations no longer suppresses the diagnostic
+                diagnostics.add(Diagnostic(
+                    message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
+                    category = DiagnosticCategory.Error,
+                    code = 5108,
+                    fileName = pos?.fileName,
+                    line = pos?.valueLine,
+                    character = pos?.valueCharacter,
+                    start = pos?.valueStart,
+                    length = pos?.valueLength,
+                ))
+                return
+            }
+            if (isDeprecationSuppressed(deprecationVersion)) return
             val chain = if (pos != null && withMigrationUrl) listOf("  Visit https://aka.ms/ts6 for migration information.") else emptyList()
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' is deprecated and will stop functioning in TypeScript $version. Specify compilerOption '\"ignoreDeprecations\": \"$deprecationVersion\"' to silence this error.",
@@ -231,22 +305,8 @@ class TypeScriptCompiler {
             ))
         }
         // Target deprecations — only when target is explicitly set
-        // ES3 is fully removed (TS5108), not just deprecated
-        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) {
-            if (!isDeprecationSuppressed("5.0")) {
-                val pos = tsconfigPos["target"]
-                diagnostics.add(Diagnostic(
-                    message = "Option 'target=ES3' has been removed. Please remove it from your configuration.",
-                    category = DiagnosticCategory.Error,
-                    code = 5108,
-                    fileName = pos?.fileName,
-                    line = pos?.valueLine,
-                    character = pos?.valueCharacter,
-                    start = pos?.valueStart,
-                    length = pos?.valueLength,
-                ))
-            }
-        }
+        // ES3 was deprecated in 5.0 (TS5107), will stop functioning in 5.5
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) addDeprecation("target=ES3", tsconfigKey = "target", version = "5.5", deprecationVersion = "5.0")
         if (options.targetExplicitlySet && options.target == ScriptTarget.ES5) addDeprecation("target=ES5", tsconfigKey = "target")
         // Module deprecations
         if (options.module == ModuleKind.AMD) addDeprecation("module=AMD", tsconfigKey = "module")

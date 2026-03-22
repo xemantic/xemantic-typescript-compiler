@@ -165,6 +165,12 @@ data class CompilerOptions(
     val resolveJsonModule: Boolean = false,
     val inlineSourceMap: Boolean = false,
     val ignoreDeprecations: String? = null,
+    /**
+     * Simulated TypeScript version for version-gated diagnostics (from `// @typeScriptVersion` test directive).
+     * When set, options deprecated at version X emit TS5102/TS5108 ("removed") instead of TS5101/TS5107
+     * ("deprecated") if this version >= their `stopFunctioningVersion`.
+     */
+    val simulatedTypeScriptVersion: String? = null,
     /** Maps lowercase option names to their positions in tsconfig.json (for positioned diagnostics). */
     val tsconfigOptionPositions: Map<String, TsconfigOptionPosition> = emptyMap(),
 ) {
@@ -445,6 +451,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "resolvejsonmodule" -> options.copy(resolveJsonModule = boolValue)
         "inlinesourcemap" -> options.copy(inlineSourceMap = boolValue)
         "ignoredeprecations" -> options.copy(ignoreDeprecations = value.trim())
+        "typescriptversion" -> options.copy(simulatedTypeScriptVersion = value.trim())
         else -> options
     }
 }
