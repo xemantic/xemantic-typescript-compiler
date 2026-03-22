@@ -4054,11 +4054,25 @@ class Checker(
                 if (expr.operator == SyntaxKind.Equals) {
                     // Assignment — right side may use uninitialized, left side is a write
                     findUninitializedRefs(expr.right, uninitialized, source, fileName)
-                    // Don't check left side for reads (it's a write target)
+                    // Mark the left side as assigned (so subsequent uses are not flagged)
+                    val left = expr.left
+                    when (left) {
+                        is Identifier -> uninitialized.remove(left.text)
+                        is ObjectLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                        is ArrayLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                        else -> {}
+                    }
+                } else if (expr.operator == SyntaxKind.Comma) {
+                    // Comma operator: evaluate left first, mark assignments, then evaluate right.
+                    // This correctly handles `t0 = t1, t1 = t0` where t0 is assigned before t1 uses it.
+                    findUninitializedRefs(expr.left, uninitialized, source, fileName)
+                    // Left side is done; now right side can benefit from its assignments
+                    findUninitializedRefs(expr.right, uninitialized, source, fileName)
                 } else {
                     // Iterative left spine to avoid StackOverflow
                     var current: Expression = expr
-                    while (current is BinaryExpression && current.operator != SyntaxKind.Equals) {
+                    while (current is BinaryExpression && current.operator != SyntaxKind.Equals &&
+                           current.operator != SyntaxKind.Comma) {
                         findUninitializedRefs(current.right, uninitialized, source, fileName)
                         current = current.left
                     }
