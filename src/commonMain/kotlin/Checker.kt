@@ -1403,11 +1403,13 @@ class Checker(
      * Simple module specifier resolution: strip leading `./` and append `.ts` / try `.ts`.
      * This is a simplified version for the test suite where module specifiers
      * are relative paths within the same test compilation unit.
+     * Also supports baseUrl-relative non-relative specifiers (e.g., "defs/cc" with baseUrl "/proj").
      */
     private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
+        val isRelative = specifier.startsWith("./") || specifier.startsWith("../")
         val baseName = specifier.removePrefix("./").removePrefix("../")
         // Try exact match first, then with extensions
-        val candidates = listOf(
+        val candidates = mutableListOf(
             baseName,
             "$baseName.ts",
             "$baseName.tsx",
@@ -1415,13 +1417,22 @@ class Checker(
             "./$baseName.ts",
             "./$baseName.tsx",
         )
+        // For non-relative specifiers, also try baseUrl-prefixed paths
+        if (!isRelative && options.baseUrl != null) {
+            val baseUrl = options.baseUrl.trimEnd('/')
+            candidates.add("$baseUrl/$baseName")
+            candidates.add("$baseUrl/$baseName.ts")
+            candidates.add("$baseUrl/$baseName.tsx")
+        }
         for (candidate in candidates) {
             if (candidate in fileResults) return candidate
         }
-        // Try matching by base filename
+        // Try matching by base filename (strips common path prefix)
         for (fileName in fileResults.keys) {
             val fileBase = fileName.removePrefix("./").removeSuffix(".ts").removeSuffix(".tsx")
             if (fileBase == baseName) return fileName
+            // For non-relative specifiers: check if file ends with baseName
+            if (!isRelative && (fileBase.endsWith("/$baseName") || fileBase == baseName)) return fileName
         }
         return null
     }
