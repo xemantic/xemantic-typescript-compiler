@@ -3732,7 +3732,13 @@ class Emitter(
             sb.deleteAt(sb.length - 1)
             for (comment in comments) {
                 write(" ")
-                write(comment.text)
+                // Strip trailing whitespace from each line of multi-line block comments
+                val text = if (comment.text.contains('\n')) {
+                    comment.text.lines().joinToString("\n") { it.trimEnd() }
+                } else {
+                    comment.text
+                }
+                write(text)
             }
             sb.append('\n')
             isStartOfLine = true
