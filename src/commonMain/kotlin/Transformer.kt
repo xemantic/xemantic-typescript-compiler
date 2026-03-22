@@ -10732,9 +10732,19 @@ class Transformer(
                     // exported from a previous `namespace M { }` block).
                     // Use exportedNames minus locallyDeclaredNames for heritage qualification.
                     val heritageQualifyNames = exportedNames - locallyDeclaredNames
+                    val localAndParam = locallyDeclaredNames + nsName + originalName
                     val qualifiedHeritage = stmt.heritageClauses?.map { clause ->
                         clause.copy(types = clause.types.map { type ->
-                            type.copy(expression = qualifyNamespaceRefs(nsName, heritageQualifyNames, type.expression))
+                            // First apply current namespace qualification
+                            var expr = qualifyNamespaceRefs(nsName, heritageQualifyNames, type.expression)
+                            // Then apply outer namespace qualification (for references to outer ns exports)
+                            for ((outerNsName, _, outerExportedNames) in outerNamespaceStack) {
+                                val outerNamesNotLocal = outerExportedNames - localAndParam
+                                if (outerNamesNotLocal.isNotEmpty()) {
+                                    expr = qualifyNamespaceRefs(outerNsName, outerNamesNotLocal, expr)
+                                }
+                            }
+                            type.copy(expression = expr)
                         })
                     }
                     // Anonymous export default class: assign synthetic name
