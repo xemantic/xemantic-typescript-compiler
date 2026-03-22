@@ -1431,6 +1431,7 @@ class Checker(
         val parentVarStmt: VariableStatement? = null, // parent statement for TS6199 grouping
         val parentBindingPattern: Node? = null, // parent ObjectBindingPattern/ArrayBindingPattern for TS6198 grouping
         val bindingElementCount: Int = 0, // total binding elements in parentBindingPattern
+        val parentImportDecl: ImportDeclaration? = null, // parent import for TS6192 grouping
     )
 
     private fun checkUnusedDeclarations() {
@@ -1636,11 +1637,48 @@ class Checker(
             }
         }
 
+        // Check for TS6192: if ALL bindings from an import declaration are unused,
+        // emit a single "All imports in import declaration are unused." instead of individual TS6133.
+        val ts6192Imports = mutableSetOf<ImportDeclaration>()
+        val declsByImport = unusedDecls.filter { it.parentImportDecl != null }
+            .groupBy { it.parentImportDecl!! }
+        for ((importDecl, decls) in declsByImport) {
+            val clause = importDecl.importClause ?: continue
+            // Count total non-type-only bindings
+            var totalBindings = 0
+            if (clause.name != null) totalBindings++ // default import
+            when (val nb = clause.namedBindings) {
+                is NamedImports -> totalBindings += nb.elements.count { !it.isTypeOnly }
+                is NamespaceImport -> totalBindings++
+                else -> {}
+            }
+            if (totalBindings > 1 && decls.size == totalBindings) {
+                ts6192Imports.add(importDecl)
+                // Emit TS6192 for the entire import statement
+                val stmtStart = importDecl.pos
+                val stmtLineEnd = source.indexOf('\n', stmtStart).let { if (it < 0) source.length else it }
+                val spanLength = source.substring(stmtStart, stmtLineEnd).trimEnd().length
+                val (line, character) = getLineAndCharacterOfPosition(source, stmtStart)
+                diagnostics.add(Diagnostic(
+                    message = "All imports in import declaration are unused.",
+                    category = DiagnosticCategory.Error,
+                    code = 6192,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = stmtStart,
+                    length = spanLength,
+                ))
+            }
+        }
+
         for (decl in unusedDecls) {
             // Skip declarations already handled by TS6199
             if (decl.parentVarStmt != null && decl.parentVarStmt in ts6199Stmts) continue
             // Skip declarations already handled by TS6198
             if (decl.parentBindingPattern != null && decl.parentBindingPattern in ts6198Patterns) continue
+            // Skip declarations already handled by TS6192
+            if (decl.parentImportDecl != null && decl.parentImportDecl in ts6192Imports) continue
             // Underscore-prefixed names that made it through for TS6198 grouping: skip individual TS6133
             if (decl.name.startsWith("_")) continue
 
@@ -1812,33 +1850,44 @@ class Checker(
                 if (stmt.importClause?.isTypeOnly == true) return
                 val clause = stmt.importClause ?: return
                 val bindings = clause.namedBindings
+                // Count total non-type-only bindings to determine nameNode strategy:
+                // - 1 binding: use whole import statement for TS6133 (whole-statement squiggle)
+                // - 2+ bindings: use individual binding names for TS6133 (per-binding squiggle)
+                //   (when all unused, TS6192 will replace individual TS6133s)
+                var totalBindingCount = 0
+                if (clause.name != null) totalBindingCount++
+                when (bindings) {
+                    is NamedImports -> totalBindingCount += bindings.elements.count { !it.isTypeOnly }
+                    is NamespaceImport -> totalBindingCount++
+                    else -> {}
+                }
+                val useStatementAsNameNode = totalBindingCount <= 1
                 when (bindings) {
                     is NamedImports -> {
-                        // For single-specifier imports: squiggle the entire import statement
-                        // For multi-specifier imports: squiggle individual specifiers
                         for (spec in bindings.elements) {
                             if (spec.isTypeOnly) continue
-                            val isSingleSpecifier = bindings.elements.size == 1
                             scope.declarations.add(UnusedDecl(
                                 name = spec.name.text,
-                                nameNode = if (isSingleSpecifier) stmt else spec,
+                                nameNode = if (useStatementAsNameNode) stmt else spec,
                                 declNode = stmt,
                                 isExported = false,
                                 isParameter = false,
                                 isTypeOnly = false,
                                 stmtIndex = stmtIndex,
+                                parentImportDecl = stmt,
                             ))
                         }
                     }
                     is NamespaceImport -> {
                         scope.declarations.add(UnusedDecl(
                             name = bindings.name.text,
-                            nameNode = stmt,
+                            nameNode = if (useStatementAsNameNode) stmt else bindings.name,
                             declNode = stmt,
                             isExported = false,
                             isParameter = false,
                             isTypeOnly = false,
                             stmtIndex = stmtIndex,
+                            parentImportDecl = stmt,
                         ))
                     }
                     else -> {}
@@ -1847,12 +1896,13 @@ class Checker(
                 if (clause.name != null) {
                     scope.declarations.add(UnusedDecl(
                         name = clause.name.text,
-                        nameNode = stmt,
+                        nameNode = if (useStatementAsNameNode) stmt else clause.name,
                         declNode = stmt,
                         isExported = false,
                         isParameter = false,
                         isTypeOnly = false,
                         stmtIndex = stmtIndex,
+                        parentImportDecl = stmt,
                     ))
                 }
             }
@@ -15286,30 +15336,34 @@ class Checker(
                 }
                 // TS2410: span = from 'with' to closing ')' of the condition.
                 // Find the matching ')' by scanning forward from 'with ' and tracking depth.
+                // Only emit TS2410 if the with statement is well-formed (balanced parens).
                 var spanEnd2 = spanStart + 4 // skip 'with'
                 while (spanEnd2 < source.length && source[spanEnd2] != '(') spanEnd2++
                 var depth = 0
+                var balanced = false
                 while (spanEnd2 < source.length) {
                     when (source[spanEnd2]) {
                         '(' -> { depth++; spanEnd2++ }
                         ')' -> {
                             spanEnd2++ // include the ')'
-                            if (--depth == 0) break
+                            if (--depth == 0) { balanced = true; break }
                         }
                         else -> spanEnd2++
                     }
                 }
-                val ts2410Length = spanEnd2 - spanStart
-                diagnostics.add(Diagnostic(
-                    message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2410,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = spanStart,
-                    length = ts2410Length,
-                ))
+                if (balanced) {
+                    val ts2410Length = spanEnd2 - spanStart
+                    diagnostics.add(Diagnostic(
+                        message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2410,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = spanStart,
+                        length = ts2410Length,
+                    ))
+                }
                 // Recurse into the body statement
                 walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
             }
