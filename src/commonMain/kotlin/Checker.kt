@@ -6986,32 +6986,38 @@ class Checker(
                     allNamespacesValueFree || allVarsDeclare
                 } else false
 
-                // TS2395: All declarations in a merged name must be uniformly exported or local
-                // (e.g., `var f = 10; export function f() {}` → TS2395 for each declaration)
-                val checkExportUniformity = hasFunc || hasVar || hasClass || hasNamespace
-                if (checkExportUniformity) {
-                    val exportedDecls = group.filter { decl ->
-                        when (val s = decl.stmt) {
-                            is FunctionDeclaration -> ModifierFlag.Export in s.modifiers
-                            is VariableStatement -> ModifierFlag.Export in s.modifiers
-                            is ClassDeclaration -> ModifierFlag.Export in s.modifiers
-                            is ModuleDeclaration -> ModifierFlag.Export in s.modifiers
-                            else -> false
-                        }
+                // TS2395: All declarations in a merged name must be uniformly exported or local.
+                // Check per "declaration space": Type (interface/class), Value (class/function/var),
+                // Namespace. Each space independently must have consistent export status.
+                // TypeScript models: interface→Type, class→Type+Value, function→Value,
+                // var→Value, namespace→Namespace. Only spaces with 2+ members are checked.
+                // Type aliases (not tracked here) are Type-only and transparent.
+                fun isExported(decl: DeclInfo): Boolean {
+                    return when (val s = decl.stmt) {
+                        is FunctionDeclaration -> ModifierFlag.Export in s.modifiers
+                        is VariableStatement -> ModifierFlag.Export in s.modifiers
+                        is ClassDeclaration -> ModifierFlag.Export in s.modifiers
+                        is ModuleDeclaration -> ModifierFlag.Export in s.modifiers
+                        is InterfaceDeclaration -> ModifierFlag.Export in s.modifiers
+                        else -> false
                     }
-                    val nonExportedDecls = group.filter { decl ->
-                        when (val s = decl.stmt) {
-                            is FunctionDeclaration -> ModifierFlag.Export !in s.modifiers
-                            is VariableStatement -> ModifierFlag.Export !in s.modifiers
-                            is ClassDeclaration -> ModifierFlag.Export !in s.modifiers
-                            is ModuleDeclaration -> ModifierFlag.Export !in s.modifiers
-                            else -> false
-                        }
-                    }
-                    val hasMixedExports = exportedDecls.isNotEmpty() && nonExportedDecls.isNotEmpty()
-                    if (hasMixedExports) {
-                        val allDecls = exportedDecls + nonExportedDecls
-                        for (decl in allDecls) {
+                }
+                // Classify each declaration into spaces
+                val typeSpaceDecls = group.filter { it.kind == "interface" || it.kind == "class" }
+                // For value space: exclude pure function overloads (handled by TS2383/TS2384/TS2385)
+                val valueSpaceDecls = if (group.all { it.kind == "function" }) emptyList()
+                    else group.filter { it.kind == "class" || it.kind == "function" || it.kind == "var" }
+                val namespaceSpaceDecls = group.filter { it.kind == "namespace" }
+                var emitted2395 = false
+                for (spaceDecls in listOf(typeSpaceDecls, valueSpaceDecls, namespaceSpaceDecls)) {
+                    if (spaceDecls.size < 2) continue
+                    val exported = spaceDecls.filter { isExported(it) }
+                    val nonExported = spaceDecls.filter { !isExported(it) }
+                    if (exported.isNotEmpty() && nonExported.isNotEmpty()) {
+                        // Emit TS2395 on all declarations in this group (both exported and not)
+                        // Deduplicate: only emit once per declaration node
+                        val all2395 = (exported + nonExported).distinctBy { it.nameNode.pos }
+                        for (decl in all2395) {
                             val start = decl.nameNode.pos
                             val (line, character) = getLineAndCharacterOfPosition(source, start)
                             diagnostics.add(Diagnostic(
@@ -7025,9 +7031,10 @@ class Checker(
                                 length = decl.name.length,
                             ))
                         }
-                        continue // Don't also check for TS2300 etc.
+                        emitted2395 = true
                     }
                 }
+                if (emitted2395) continue // Don't also check for TS2300 etc.
 
                 // TS2393: Duplicate function implementation — two functions both with bodies
                 if (hasFunc && !hasClass && !hasVar && !hasNamespace) {
