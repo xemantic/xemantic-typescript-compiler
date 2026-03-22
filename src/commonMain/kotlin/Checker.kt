@@ -74,7 +74,10 @@ class Checker(
             checkUnusedDeclarations()
         }
         // 5. Check for variables used before assignment (TS2454)
-        if (!options.strictExplicitlyFalse) {
+        // Requires strictNullChecks (either via strict: true or strictNullChecks: true).
+        // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
+        val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
+        if (shouldCheckDefiniteAssignment) {
             checkDefiniteAssignment()
         }
         // 6. Check for class properties without initializer (TS2564)
@@ -3741,13 +3744,15 @@ class Checker(
         statements: List<Statement>,
         source: String,
         fileName: String,
+        preInitialized: Set<String> = emptySet(),
     ) {
         // Track variables declared with type but no initializer
         val uninitialized = mutableSetOf<String>()
 
         for (stmt in statements) {
             // 1. Collect variable declarations that are uninitialized
-            collectUninitializedVars(stmt, uninitialized)
+            // (but skip any names that are pre-initialized via function parameters)
+            collectUninitializedVars(stmt, uninitialized, preInitialized)
 
             // 2. Check for uses of uninitialized variables in this statement
             if (uninitialized.isNotEmpty()) {
@@ -3762,7 +3767,11 @@ class Checker(
         }
     }
 
-    private fun collectUninitializedVars(stmt: Statement, uninitialized: MutableSet<String>) {
+    private fun collectUninitializedVars(
+        stmt: Statement,
+        uninitialized: MutableSet<String>,
+        preInitialized: Set<String> = emptySet(),
+    ) {
         when (stmt) {
             is VariableStatement -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
@@ -3774,9 +3783,14 @@ class Checker(
                         if (isAnyType(decl.type)) continue
                         // Skip if type annotation is a bare generic reference (TS2314 error type)
                         if (isUnresolvedGenericType(decl.type)) continue
+                        // Skip types that include undefined — variable is implicitly initialized to undefined
+                        if (typeIncludesUndefined(decl.type)) continue
                         val name = decl.name
                         if (name is Identifier) {
-                            uninitialized.add(name.text)
+                            // Skip if name matches a function parameter (var redeclaration of param)
+                            if (name.text !in preInitialized) {
+                                uninitialized.add(name.text)
+                            }
                         }
                     }
                 }
@@ -3787,8 +3801,26 @@ class Checker(
 
     private fun isAnyType(type: Node?): Boolean {
         if (type == null) return false
-        // Check for keyword type nodes like `any`
-        return type.kind == SyntaxKind.AnyKeyword
+        // Check for keyword type nodes like `any` and `unknown`
+        // Both are top types — a variable typed `unknown` can hold any value including undefined
+        return type.kind == SyntaxKind.AnyKeyword || type.kind == SyntaxKind.UnknownKeyword
+    }
+
+    /**
+     * Returns true if the type syntactically includes `undefined`.
+     * Variables typed as `T | undefined` start with undefined as a valid value,
+     * so they don't need definite assignment (no TS2454).
+     * Note: `null` alone does NOT satisfy definite assignment — only `undefined` does.
+     */
+    private fun typeIncludesUndefined(type: Node?): Boolean {
+        if (type == null) return false
+        return when (type) {
+            is UnionType -> type.types.any { member ->
+                member.kind == SyntaxKind.UndefinedKeyword ||
+                    typeIncludesUndefined(member)
+            }
+            else -> type.kind == SyntaxKind.UndefinedKeyword
+        }
     }
 
     /**
@@ -4019,6 +4051,37 @@ class Checker(
                     }
                 }
             }
+            is IfStatement -> {
+                // Assignments in if/else branches — scan both branches
+                markAssignmentsInStmt(stmt.thenStatement, uninitialized)
+                stmt.elseStatement?.let { markAssignmentsInStmt(it, uninitialized) }
+            }
+            is SwitchStatement -> {
+                // Assignments in switch cases — scan all case bodies
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    for (s in clauseStmts) markAssignmentsInStmt(s, uninitialized)
+                }
+            }
+            is Block -> {
+                for (s in stmt.statements) markAssignments(s, uninitialized)
+            }
+            else -> {}
+        }
+    }
+
+    private fun markAssignmentsInStmt(stmt: Statement, uninitialized: MutableSet<String>) {
+        when (stmt) {
+            is ExpressionStatement -> markAssignmentsInExpr(stmt.expression, uninitialized)
+            is Block -> stmt.statements.forEach { markAssignmentsInStmt(it, uninitialized) }
+            is IfStatement -> {
+                markAssignmentsInStmt(stmt.thenStatement, uninitialized)
+                stmt.elseStatement?.let { markAssignmentsInStmt(it, uninitialized) }
+            }
             else -> {}
         }
     }
@@ -4094,6 +4157,21 @@ class Checker(
     }
 
     /**
+     * Collect identifier names from a parameter list (for pre-initializing TS2454 scope).
+     * Parameters are always assigned when the function body executes.
+     */
+    private fun collectParamNames(parameters: List<Parameter>): Set<String> {
+        val names = mutableSetOf<String>()
+        for (param in parameters) {
+            val name = param.name
+            if (name is Identifier && name.text != "this") {
+                names.add(name.text)
+            }
+        }
+        return names
+    }
+
+    /**
      * Recurse into function bodies and other nested scopes for TS2454 checking.
      */
     private fun checkDefiniteAssignmentInNestedScopes(
@@ -4105,7 +4183,10 @@ class Checker(
             is FunctionDeclaration -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 stmt.body?.let {
-                    checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                    checkDefiniteAssignmentInStatements(
+                        it.statements, source, fileName,
+                        preInitialized = collectParamNames(stmt.parameters),
+                    )
                 }
             }
             is ClassDeclaration -> {
@@ -4113,16 +4194,28 @@ class Checker(
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
                         }
                         is Constructor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
                         }
                         is GetAccessor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
                         }
                         is SetAccessor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(it.statements, source, fileName)
+                            checkDefiniteAssignmentInStatements(
+                                it.statements, source, fileName,
+                                preInitialized = collectParamNames(member.parameters),
+                            )
                         }
                         else -> {}
                     }
@@ -4466,8 +4559,14 @@ class Checker(
                     // for parameters without type annotations. All methods in interfaces are checked
                     // (interfaces are implicitly ambient).
                     for (member in stmt.members) {
-                        if (member is MethodDeclaration) {
-                            checkParamsForImplicitAny(member.parameters, source, fileName)
+                        when (member) {
+                            is MethodDeclaration -> checkParamsForImplicitAny(member.parameters, source, fileName)
+                            is PropertyDeclaration -> {
+                                // Property with function type annotation: `f10: (x) => string`
+                                // Parameters in function type annotations also get TS7006
+                                checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
+                            }
+                            else -> {}
                         }
                     }
                 }
@@ -4498,6 +4597,17 @@ class Checker(
                 }
                 else -> {}
             }
+        }
+    }
+
+    /**
+     * Check function types in type annotations for implicit-any parameters.
+     * e.g. `f10: (x) => string` — the `x` has no type annotation → TS7006.
+     */
+    private fun checkImplicitAnyInTypeAnnotation(type: TypeNode?, source: String, fileName: String) {
+        when (type) {
+            is FunctionType -> checkParamsForImplicitAny(type.parameters, source, fileName)
+            else -> {}
         }
     }
 
@@ -9445,15 +9555,27 @@ class Checker(
                     }
                 }
                 is InterfaceDeclaration -> {
-                    // Interface method signatures without return type annotation get TS7010.
+                    // Interface method signatures without return type annotation get TS7010/TS7020/TS7021.
                     // The squiggle covers the full method signature (from name through `;`).
                     for (member in stmt.members) {
                         if (member is MethodDeclaration && member.type == null) {
-                            val name = (member.name as? Identifier)?.text
+                            val rawName = (member.name as? Identifier)?.text
                                 ?: (member.name as? StringLiteralNode)?.text
-                            if (name != null) {
-                                // For interface methods, use full span (member.pos to member.end)
-                                emitTS7010WithSpan(member.pos, member.end - member.pos, name, source, fileName)
+                            if (rawName != null) {
+                                when {
+                                    rawName.isEmpty() -> {
+                                        // Call signature `()` — emit TS7020
+                                        emitTS7020WithSpan(member.pos, member.end - member.pos, source, fileName)
+                                    }
+                                    rawName == "new" -> {
+                                        // Construct signature `new()` — emit TS7021
+                                        emitTS7021WithSpan(member.pos, member.end - member.pos, source, fileName)
+                                    }
+                                    else -> {
+                                        // Named method signature — emit TS7010
+                                        emitTS7010WithSpan(member.pos, member.end - member.pos, rawName, source, fileName)
+                                    }
+                                }
                             }
                         }
                     }
@@ -9493,6 +9615,36 @@ class Checker(
             message = "'$nameText', which lacks return-type annotation, implicitly has an 'any' return type.",
             category = DiagnosticCategory.Error,
             code = 7010,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** TS7020: Call signature, which lacks return-type annotation, implicitly has an 'any' return type. */
+    private fun emitTS7020WithSpan(start: Int, length: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Call signature, which lacks return-type annotation, implicitly has an 'any' return type.",
+            category = DiagnosticCategory.Error,
+            code = 7020,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** TS7021: Construct signature, which lacks return-type annotation, implicitly has an 'any' return type. */
+    private fun emitTS7021WithSpan(start: Int, length: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type.",
+            category = DiagnosticCategory.Error,
+            code = 7021,
             fileName = fileName,
             line = line,
             character = character,
