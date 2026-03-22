@@ -1474,6 +1474,39 @@ class Checker(
         return false
     }
 
+    /**
+     * Check if a file is an ES module (has actual ES import/export statements).
+     * Unlike [isModuleFile], this does NOT count `import x = namespace` declarations
+     * as module-making — those are legacy TypeScript namespace aliases.
+     * Used for TS2694 namespace name qualification in module files.
+     */
+    private fun isEsModuleFile(statements: List<Statement>): Boolean {
+        for (stmt in statements) {
+            when (stmt) {
+                is ImportDeclaration -> return true   // import { x } from "..."
+                // ImportEqualsDeclaration: import x = namespace is NOT ES module
+                is ExportDeclaration -> return true   // export { x } or export * from
+                is ExportAssignment -> return true    // export default or export =
+                else -> {
+                    if (stmt is Declaration) {
+                        val modifiers = when (stmt) {
+                            is FunctionDeclaration -> stmt.modifiers
+                            is ClassDeclaration -> stmt.modifiers
+                            is VariableStatement -> stmt.modifiers
+                            is EnumDeclaration -> stmt.modifiers
+                            is InterfaceDeclaration -> stmt.modifiers
+                            is TypeAliasDeclaration -> stmt.modifiers
+                            is ModuleDeclaration -> stmt.modifiers
+                            else -> emptySet()
+                        }
+                        if (ModifierFlag.Export in modifiers) return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     private fun checkUnusedInStatements(
         statements: List<Statement>,
         source: String,
@@ -4409,16 +4442,32 @@ class Checker(
         for (stmt in statements) {
             when (stmt) {
                 is FunctionDeclaration -> {
-                    if (ModifierFlag.Declare !in stmt.modifiers) {
-                        checkParamsForImplicitAny(stmt.parameters, source, fileName)
-                        stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
-                        // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
-                    }
+                    // Check params for TS7006 for ALL function declarations (both regular and declare)
+                    // TypeScript emits TS7006 for untyped parameters in declare functions too
+                    checkParamsForImplicitAny(stmt.parameters, source, fileName)
+                    stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                    // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
                 }
                 is ClassDeclaration -> {
-                    if (ModifierFlag.Declare !in stmt.modifiers) {
-                        for (member in stmt.members) {
+                    val isAmbientClass = ModifierFlag.Declare in stmt.modifiers
+                    for (member in stmt.members) {
+                        if (isAmbientClass) {
+                            // In ambient classes, only check PUBLIC method parameters for TS7006
+                            if (member is MethodDeclaration && ModifierFlag.Private !in member.modifiers) {
+                                checkParamsForImplicitAny(member.parameters, source, fileName)
+                            }
+                        } else {
                             checkImplicitAnyInClassElement(member, source, fileName)
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    // Interface method signatures (and call signatures with empty name) get TS7006
+                    // for parameters without type annotations. All methods in interfaces are checked
+                    // (interfaces are implicitly ambient).
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration) {
+                            checkParamsForImplicitAny(member.parameters, source, fileName)
                         }
                     }
                 }
@@ -5614,7 +5663,7 @@ class Checker(
             if (next == null) {
                 // Intermediate segment not found — emit TS2694
                 // Use resolved symbol's qualified name, not source-level alias
-                val namespacePath = symbolToQualifiedName(symbol!!)
+                val namespacePath = symbolToQualifiedName(symbol!!, fileName)
                 emitTS2694(namespacePath, segments[i], rightId, source, fileName)
                 return
             }
@@ -5626,7 +5675,7 @@ class Checker(
         if (exports == null) return // not a namespace, can't check
         val member = exports[rightId.text]
         // Use resolved symbol's qualified name, not source-level alias
-        val namespacePath = symbolToQualifiedName(symbol!!)
+        val namespacePath = symbolToQualifiedName(symbol!!, fileName)
         if (member == null) {
             // Member doesn't exist at all
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
@@ -5670,8 +5719,11 @@ class Checker(
      * Build a fully-qualified name for a symbol by walking up the parent chain.
      * For `namespace foo { namespace bar { namespace baz {} } }`, returns "foo.bar.baz".
      * For file-level module symbols (quoted names like '"file"'), returns the symbol name directly.
+     *
+     * When [fileName] is provided and the symbol is a top-level namespace in a module file,
+     * prefixes with the quoted file base name (e.g., `"file".c`).
      */
-    private fun symbolToQualifiedName(symbol: Symbol): String {
+    private fun symbolToQualifiedName(symbol: Symbol, fileName: String? = null): String {
         val parts = mutableListOf(symbol.name)
         var current = symbol.parent
         while (current != null && current.name.isNotEmpty() && !current.name.startsWith("\"")) {
@@ -5681,6 +5733,26 @@ class Checker(
         // For module-level symbols, include the quoted module name
         if (current != null && current.name.startsWith("\"")) {
             parts.add(current.name)
+        } else if (current == null && fileName != null) {
+            // Symbol has no parent — it's file-level.
+            // If this file is an ES module (has ES import/export, NOT import=), TypeScript
+            // formats it as "basename".nsName. import= declarations are legacy namespace
+            // aliases and do NOT make a file a module for this purpose.
+            val fileResult = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            if (fileResult != null && isEsModuleFile(fileResult.sourceFile.statements)) {
+                // Build quoted base name: strip known extensions, strip directory prefix
+                val baseName = fileName
+                    .substringAfterLast("/")
+                    .substringAfterLast("\\")
+                    .removeSuffix(".d.ts")
+                    .removeSuffix(".ts")
+                    .removeSuffix(".tsx")
+                    .removeSuffix(".mts")
+                    .removeSuffix(".cts")
+                    .removeSuffix(".js")
+                    .removeSuffix(".jsx")
+                parts.add("\"$baseName\"")
+            }
         }
         parts.reverse()
         return parts.joinToString(".")
@@ -9342,18 +9414,35 @@ class Checker(
         statements: List<Statement>,
         source: String,
         fileName: String,
+        isAmbientClass: Boolean = false,
     ) {
         for (stmt in statements) {
             when (stmt) {
                 is FunctionDeclaration -> {
                     if (stmt.body == null && stmt.name != null && stmt.type == null) {
                         val name = stmt.name!!.text
-                        val isAmbient = ModifierFlag.Declare in stmt.modifiers
-                        if (isAmbient || !hasImplementationInScope(statements, name)) {
-                            emitTS7010(stmt.name!!, name, source, fileName)
-                        }
+                        // Emit TS7010 for all bodyless function declarations (both declare and overloads)
+                        // that lack a return type annotation, regardless of whether an implementation exists.
+                        emitTS7010(stmt.name!!, name, source, fileName)
                     }
                     stmt.body?.let { checkTS7010InStatements(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    val isAmbient = ModifierFlag.Declare in stmt.modifiers
+                    // Check methods in class body (recurse with ambient context)
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration && member.body == null && member.type == null) {
+                            val name = (member.name as? Identifier)?.text
+                                ?: (member.name as? StringLiteralNode)?.text
+                            if (name != null && isAmbient) {
+                                // In ambient classes, only PUBLIC methods get TS7010
+                                val isPrivate = ModifierFlag.Private in member.modifiers
+                                if (!isPrivate) {
+                                    emitTS7010(member.name!!, name, source, fileName)
+                                }
+                            }
+                        }
+                    }
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
@@ -9467,11 +9556,13 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            // In JS files (allowJs/checkJs), all parameters are implicitly optional (min=0)
+            val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
 
             // Build function/class declaration maps for this file
             val funcParams = mutableMapOf<String, FuncParamInfo>()
             val classCtorParams = mutableMapOf<String, FuncParamInfo>()
-            collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams)
+            collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, isJsFile)
 
             // Walk statements checking call expressions
             checkArgCountInStatements(result.sourceFile.statements, funcParams, classCtorParams, source, fileName)
@@ -9489,6 +9580,7 @@ class Checker(
         statements: List<Statement>,
         funcParams: MutableMap<String, FuncParamInfo>,
         classCtorParams: MutableMap<String, FuncParamInfo>,
+        isJsFile: Boolean = false,
     ) {
         for (stmt in statements) {
             when (stmt) {
@@ -9500,14 +9592,14 @@ class Checker(
                         continue
                     }
                     if (funcParams[name]?.isOverloaded == true) continue // already marked as overloaded
-                    val info = paramInfo(stmt.parameters)
+                    val info = paramInfo(stmt.parameters, isJsFile)
                     funcParams[name] = info
                 }
                 is ClassDeclaration -> {
                     val name = stmt.name?.text ?: continue
                     val ctor = stmt.members.filterIsInstance<Constructor>().firstOrNull()
                     if (ctor != null) {
-                        val info = paramInfo(ctor.parameters)
+                        val info = paramInfo(ctor.parameters, isJsFile)
                         classCtorParams[name] = info
                     } else if (stmt.heritageClauses.isNullOrEmpty()) {
                         // No explicit constructor and no base class → 0 params
@@ -9518,14 +9610,14 @@ class Checker(
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body as? ModuleBlock ?: continue
-                    collectFuncDecls(body.statements, funcParams, classCtorParams)
+                    collectFuncDecls(body.statements, funcParams, classCtorParams, isJsFile)
                 }
                 else -> {}
             }
         }
     }
 
-    private fun paramInfo(parameters: List<Parameter>): FuncParamInfo {
+    private fun paramInfo(parameters: List<Parameter>, isJsFile: Boolean = false): FuncParamInfo {
         var required = 0
         var total = 0
         var hasRest = false
@@ -9537,7 +9629,8 @@ class Checker(
                 continue
             }
             total++
-            if (!p.questionToken && p.initializer == null) {
+            // In JS files (checkJs), all parameters are implicitly optional (min=0, max=N)
+            if (!isJsFile && !p.questionToken && p.initializer == null) {
                 required++
             }
         }
