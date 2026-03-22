@@ -589,10 +589,15 @@ class TypeScriptCompiler {
                     .replace(".cts", ".cjs")
                     .replace(".ts", ".js")
 
+            // When noEmitOnError is set and there are errors, suppress all JS output
+            val singleFileJsOutputs = if (options.noEmitOnError &&
+                diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
+            else listOf(jsName to javascript)
+
             return CompilationResult(
                 fileName = fileName,
                 sourceEchoes = listOf(fileName to file.content),
-                jsOutputs = listOf(jsName to javascript),
+                jsOutputs = singleFileJsOutputs,
                 options = options,
                 diagnostics = diagnostics,
             )
@@ -876,10 +881,15 @@ class TypeScriptCompiler {
                 jsonOutputs + jsOutputs
             }
 
+            // When noEmitOnError is set and there are errors, suppress all JS output
+            val suppressedJsOutputs = if (options.noEmitOnError &&
+                diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
+            else finalJsOutputs
+
             return CompilationResult(
                 fileName = fileName,
                 sourceEchoes = sourceEchoes,
-                jsOutputs = finalJsOutputs,
+                jsOutputs = suppressedJsOutputs,
                 isMultiFile = true,
                 options = options,
                 diagnostics = diagnostics,

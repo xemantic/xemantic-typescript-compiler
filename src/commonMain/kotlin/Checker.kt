@@ -553,6 +553,49 @@ class Checker(
         return ModuleInstanceState.Instantiated // safe default
     }
 
+    /**
+     * Returns true if [name] is declared as a plain `var` in any file that comes
+     * BEFORE [currentFileName] in the compilation order.
+     *
+     * Used in script-mode (non-module) files to decide whether to erase `import x = NS`
+     * when NS is a non-instantiated namespace: if an earlier file already declares `x`
+     * as a plain var, the import alias in the current file is redundant and should be erased.
+     */
+    fun hasVarDeclarationInEarlierFile(name: String, currentFileName: String): Boolean {
+        val currentIdx = binderResults.indexOfFirst { it.sourceFile.fileName == currentFileName }
+        if (currentIdx <= 0) return false
+        for (i in 0 until currentIdx) {
+            val result = binderResults[i]
+            val symbol = result.locals[name] ?: continue
+            for (decl in symbol.declarations) {
+                if (decl is VariableDeclaration) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Returns true if a plain `var` declaration for [name] exists in any file that comes
+     * AFTER [currentFileName] in the compilation order.
+     *
+     * Used symmetrically with [hasVarDeclarationInEarlierFile]: when a later file will declare
+     * `var x`, the current file's `import x = NS` must be kept so that the merged var binding
+     * is observable at runtime (`var x = NS` in current + `var x` in later = two var declarations
+     * for the same name, which is legal in script mode).
+     */
+    fun hasVarDeclarationInLaterFile(name: String, currentFileName: String): Boolean {
+        val currentIdx = binderResults.indexOfFirst { it.sourceFile.fileName == currentFileName }
+        if (currentIdx < 0) return false
+        for (i in currentIdx + 1 until binderResults.size) {
+            val result = binderResults[i]
+            val symbol = result.locals[name] ?: continue
+            for (decl in symbol.declarations) {
+                if (decl is VariableDeclaration) return true
+            }
+        }
+        return false
+    }
+
     // -----------------------------------------------------------------------
     // Symbol table merging
     // -----------------------------------------------------------------------

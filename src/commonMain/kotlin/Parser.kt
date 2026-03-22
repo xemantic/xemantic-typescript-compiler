@@ -850,7 +850,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 disallowIn = false
                 v
             }
-            Semicolon -> null
+            Semicolon, CloseParen -> null
             else -> {
                 disallowIn = true
                 val e = parseExpression()
@@ -911,11 +911,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             )
         }
 
-        parseExpected(SyntaxKind.Semicolon)
+        val hasSemicolon1 = parseExpected(SyntaxKind.Semicolon)
         val afterSemicolon1 = trailingComments()
-        val condition = if (token != SyntaxKind.Semicolon) parseExpression() else null
+        val condition = if (token != SyntaxKind.Semicolon && token != SyntaxKind.CloseParen) parseExpression() else null
         val afterCondition = if (condition != null) trailingComments() else null
-        parseExpected(SyntaxKind.Semicolon)
+        val hasSemicolon2 = parseExpected(SyntaxKind.Semicolon)
         val afterSemicolon2 = trailingComments()
         val incrementor = if (token != SyntaxKind.CloseParen) parseExpression() else null
         val beforeCloseParen = trailingComments()
@@ -935,6 +935,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             afterSemicolon2Comments = afterSemicolon2,
             beforeCloseParenComments = beforeCloseParen,
             afterCloseParenComments = afterCloseParen,
+            syntheticSemicolons = !hasSemicolon1 && !hasSemicolon2,
             pos = pos,
             end = getEnd(),
             leadingComments = comments
