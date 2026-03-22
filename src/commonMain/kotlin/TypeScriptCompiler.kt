@@ -894,6 +894,12 @@ private fun extractRelativeImports(
                 deps.add(candidate)
                 break
             }
+            // Also try with "./" prefix (test files like @filename: ./foo.ts store as "./foo.ts")
+            val dotSlashCandidate = "./$candidate"
+            if (dotSlashCandidate in allTsFileNames) {
+                deps.add(dotSlashCandidate)
+                break
+            }
         }
     }
     return deps

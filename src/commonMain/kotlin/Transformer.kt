@@ -364,12 +364,30 @@ class Transformer(
                 fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
         if (useCJS && isModuleFile(sourceFile)) {
             // When importHelpers: true, inject `const tslib_1 = require("tslib")` instead of inlining helpers.
-            val statementsForCJS = if (options.importHelpers && needsAwaiterHelper) {
+            // This applies to any helper that uses tslib (awaiter, rest, decorators, async generator, etc.).
+            val needsInlineHelperForCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
+                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper
+            val statementsForCJS = if (options.importHelpers && needsInlineHelperForCjs) {
                 val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
                 listOf(tslibStmt) + withHelpers
             } else withHelpers
             val cjsStatements = transformToCommonJS(statementsForCJS, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
+        }
+
+        // For module:preserve, .cts/.cjs files use CJS semantics — inject tslib require() if needed.
+        // These files don't go through transformToCommonJS (since isESModuleFormat=true for preserve),
+        // but they still need `const tslib_1 = require("tslib")` when importHelpers:true and helpers are used.
+        if (effectiveModule == ModuleKind.Preserve &&
+            (fileName.endsWith(".cts") || fileName.endsWith(".cjs")) &&
+            options.importHelpers && isCurrentFileModule
+        ) {
+            val needsInlineHelperForPreserveCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
+                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper
+            if (needsInlineHelperForPreserveCjs) {
+                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
+                return sourceFile.copy(statements = listOf(tslibStmt) + withHelpers)
+            }
         }
 
         // AMD module transform — only for module files (files with imports/exports).
@@ -10332,6 +10350,8 @@ class Transformer(
                 .toSet()
 
         val result = mutableListOf<Statement>()
+        // Temp var declarations (for exported destructuring) are hoisted to the top of the body.
+        val hoistedTempVarNames = mutableListOf<String>()
 
         for (stmt in statements) {
             // First, check for type-only statements that should be removed
@@ -10421,23 +10441,96 @@ class Transformer(
                     if (isExported) {
                         // export var x = expr → nsName.x = expr;
                         // Multiple declarations in one statement → comma expression: N.a = 1, N.b = 2
+                        // Destructuring (ObjectBindingPattern / ArrayBindingPattern) uses a temp var:
+                        //   var _a;
+                        //   _a = expr, nsName.p1 = _a.p1, nsName.p2 = _a.p2, ...
                         val assignments = mutableListOf<Expression>()
                         for (decl in stmt.declarationList.declarations) {
-                            val varName = extractIdentifierName(decl.name)
-                            if (varName != null && decl.initializer != null) {
-                                val init =
-                                    qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
-                                assignments.add(
-                                    BinaryExpression(
-                                        left = PropertyAccessExpression(
-                                            expression = Identifier(nsName),
-                                            name = Identifier(varName),
-                                        ),
-                                        operator = Equals,
-                                        right = init,
-                                        pos = -1, end = -1,
-                                    )
-                                )
+                            when (val nameNode = decl.name) {
+                                is Identifier -> {
+                                    if (decl.initializer != null) {
+                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
+                                        assignments.add(
+                                            BinaryExpression(
+                                                left = PropertyAccessExpression(
+                                                    expression = Identifier(nsName),
+                                                    name = Identifier(nameNode.text),
+                                                ),
+                                                operator = Equals,
+                                                right = init,
+                                                pos = -1, end = -1,
+                                            )
+                                        )
+                                    }
+                                }
+                                is ObjectBindingPattern -> {
+                                    if (decl.initializer != null) {
+                                        val tempVar = nextTempVarName()
+                                        hoistedTempVarNames.add(tempVar)
+                                        val tempId = syntheticId(tempVar)
+                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
+                                        // _a = expr
+                                        val tempAssign = BinaryExpression(left = tempId, operator = Equals, right = init, pos = -1, end = -1)
+                                        assignments.add(tempAssign)
+                                        // nsName.p = _a.p for each binding element
+                                        for (element in nameNode.elements) {
+                                            if (element !is BindingElement) continue
+                                            val propName = (element.propertyName as? Identifier)?.text ?: (element.name as? Identifier)?.text ?: continue
+                                            val localName = (element.name as? Identifier)?.text ?: continue
+                                            assignments.add(
+                                                BinaryExpression(
+                                                    left = PropertyAccessExpression(
+                                                        expression = Identifier(nsName),
+                                                        name = Identifier(localName),
+                                                    ),
+                                                    operator = Equals,
+                                                    right = PropertyAccessExpression(
+                                                        expression = tempId,
+                                                        name = Identifier(propName),
+                                                    ),
+                                                    pos = -1, end = -1,
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                                is ArrayBindingPattern -> {
+                                    if (decl.initializer != null) {
+                                        val tempVar = nextTempVarName()
+                                        hoistedTempVarNames.add(tempVar)
+                                        val tempId = syntheticId(tempVar)
+                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
+                                        // _a = expr
+                                        val tempAssign = BinaryExpression(left = tempId, operator = Equals, right = init, pos = -1, end = -1)
+                                        assignments.add(tempAssign)
+                                        // nsName.p = _a[i] for each binding element
+                                        var idx = 0
+                                        for (element in nameNode.elements) {
+                                            if (element is OmittedExpression) { idx++; continue }
+                                            if (element !is BindingElement) { idx++; continue }
+                                            val localName = (element.name as? Identifier)?.text
+                                            if (localName != null) {
+                                                assignments.add(
+                                                    BinaryExpression(
+                                                        left = PropertyAccessExpression(
+                                                            expression = Identifier(nsName),
+                                                            name = Identifier(localName),
+                                                        ),
+                                                        operator = Equals,
+                                                        right = ElementAccessExpression(
+                                                            expression = tempId,
+                                                            argumentExpression = NumericLiteralNode(text = idx.toString(), pos = -1, end = -1),
+                                                            pos = -1, end = -1,
+                                                        ),
+                                                        pos = -1, end = -1,
+                                                    )
+                                                )
+                                            }
+                                            idx++
+                                        }
+                                    }
+                                }
+                                else -> {}
                             }
                         }
                         if (assignments.isNotEmpty()) {
@@ -10571,6 +10664,23 @@ class Transformer(
                     }
                 }
             }
+        }
+
+        // Prepend hoisted temp var declarations (from exported destructuring) to the start of result.
+        // TypeScript hoists these to the top of the IIFE body, before any other statements.
+        if (hoistedTempVarNames.isNotEmpty()) {
+            val tempDecls = hoistedTempVarNames.map { tempVar ->
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(VariableDeclaration(name = Identifier(tempVar), pos = -1, end = -1)),
+                        flags = VarKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    modifiers = emptySet(),
+                    pos = -1, end = -1,
+                )
+            }
+            result.addAll(0, tempDecls)
         }
 
         // Apply outer namespace qualification: inner namespace bodies may reference
