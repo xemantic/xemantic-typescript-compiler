@@ -4725,6 +4725,9 @@ class Checker(
             if (name is Identifier && name.text == "this") continue
             // Skip destructured parameters (they get separate diagnostics)
             if (name !is Identifier) continue
+            // Skip parameter properties (public/private/etc. modifiers) — TS7006 already
+            // emitted in checkParamPropsInParams alongside TS2369 for them.
+            if (param.modifiers.any { isParameterPropertyModifier(it) }) continue
 
             if (param.dotDotDotToken) {
                 // TS7019: Rest parameter implicitly has an 'any[]' type
@@ -9370,6 +9373,13 @@ class Checker(
                         checkMissingImplInStatements(body.statements, source, fileName)
                     }
                 }
+                is Block -> checkMissingImplInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkMissingImplInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let {
+                        checkMissingImplInStatements(listOf(it), source, fileName)
+                    }
+                }
                 else -> {}
             }
         }
@@ -11221,6 +11231,9 @@ class Checker(
                     // Function parameters with access modifiers → TS2369
                     checkParamPropsInParams(stmt.parameters, source, fileName)
                     checkInvalidParameterModifiers(stmt.parameters, source, fileName)
+                    // Check for param props in type annotations (e.g., return type `(public B) => C`)
+                    checkParamPropsInTypeAnnotation(stmt.type, source, fileName)
+                    for (p in stmt.parameters) checkParamPropsInTypeAnnotation(p.type, source, fileName)
                     stmt.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                 }
                 is ClassDeclaration -> {
@@ -11238,6 +11251,8 @@ class Checker(
                                 }
                                 // TS1090: invalid modifiers checked on ALL constructors (with or without body)
                                 checkInvalidParameterModifiers(member.parameters, source, fileName)
+                                // Check for param props in parameter type annotations
+                                for (p in member.parameters) checkParamPropsInTypeAnnotation(p.type, source, fileName)
                                 member.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                             }
                             is GetAccessor -> {
@@ -11271,9 +11286,24 @@ class Checker(
                     val body = stmt.body
                     if (body is ModuleBlock) walkForParameterProperties(body.statements, source, fileName)
                 }
+                is InterfaceDeclaration -> {
+                    // Interface construct signatures `new (public x)` → TS2369
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration) {
+                            checkParamPropsInParams(member.parameters, source, fileName)
+                        }
+                    }
+                }
                 is Block -> walkForParameterProperties(stmt.statements, source, fileName)
                 else -> {}
             }
+        }
+    }
+
+    private fun checkParamPropsInTypeAnnotation(type: TypeNode?, source: String, fileName: String) {
+        when (type) {
+            is FunctionType -> checkParamPropsInParams(type.parameters, source, fileName)
+            else -> {}
         }
     }
 
@@ -11387,6 +11417,20 @@ class Checker(
                     start = spanStart,
                     length = length,
                 ))
+                // Also emit TS7006 when parameter has no type annotation (fires regardless of noImplicitAny)
+                val name = param.name
+                if (param.type == null && name is Identifier && name.text != "this") {
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error,
+                        code = 7006,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = spanStart,
+                        length = length,
+                    ))
+                }
             }
         }
     }
