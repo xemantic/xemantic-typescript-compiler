@@ -373,8 +373,10 @@ val generateTypeScriptTests by tasks.registering {
                     val paramBaseline = baselinesDir.resolve(paramName)
                     if (paramBaseline.exists()) {
                         // Skip JS emit for deprecated target/module combinations
-                        val targetVal = config["target"]
-                        val moduleVal = config["module"]
+                        // Check both varying config AND fixed directives (e.g. @module: system with @target: ES5, ES2015
+                        // means module is fixed in directives but not in config)
+                        val targetVal = config["target"] ?: directives["target"]?.trim()?.lowercase()
+                        val moduleVal = config["module"] ?: directives["module"]?.trim()?.lowercase()
                         val isDeprecatedTarget = targetVal in deprecatedTargets
                         val isDeprecatedModule = moduleVal in deprecatedModules
                         if (isDeprecatedTarget || isDeprecatedModule) {

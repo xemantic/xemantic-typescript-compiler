@@ -744,6 +744,9 @@ class Transformer(
         // Collect module-level leading comments to place before the preamble.
         // TypeScript emits these BEFORE Object.defineProperty (after "use strict").
         val prePreambleStatements = mutableListOf<Statement>()
+        // Temp var names for side-effect empty destructuring: `export const {} = expr` → `var _a; _a = expr`
+        // The `var _a;` declaration is hoisted before Object.defineProperty.
+        val sideEffectTempVars = mutableListOf<String>()
 
         // Pre-scan original source for function declaration names.
         // Function declarations are JS-hoisted — when re-exported via `export { name }`,
@@ -888,11 +891,15 @@ class Transformer(
         // Detect and strip prologue directives (string-literal expression statements at the
         // start of the file). "use strict" is re-inserted at the very top; other prologue
         // directives (like "hey!" or " use strict ") go after "use strict" but before preamble.
+        // Note: RawStatement (injected helpers like __awaiter) do NOT end the prologue zone —
+        // they are prepended to statements before this transform and must be skipped over.
         var hasUseStrictPrologue = false
         val otherPrologueDirectives = mutableListOf<ExpressionStatement>()
         var pastPrologue = false
         val statementsRaw = statements.filter { stmt ->
-            if (!pastPrologue && stmt is ExpressionStatement && stmt.expression is StringLiteralNode) {
+            if (stmt is RawStatement) {
+                true // keep helper raw statements, don't set pastPrologue
+            } else if (!pastPrologue && stmt is ExpressionStatement && stmt.expression is StringLiteralNode) {
                 val text = (stmt.expression as StringLiteralNode).text
                 if (text == "use strict") {
                     hasUseStrictPrologue = true
@@ -996,7 +1003,8 @@ class Transformer(
                                 if (flattenPairs != null && flattenPairs.all { it != null }) {
                                     // All decls can be flattened — emit exports.prop = expr.prop directly
                                     var isFirst = true
-                                    for (pairs in flattenPairs) {
+                                    var emittedAny = false
+                                    for ((pairIdx, pairs) in flattenPairs.withIndex()) {
                                         for ((localName, valueExpr) in pairs!!) {
                                             directExportedVarNames.add(localName)
                                             val leadingComments = if (isFirst) stmt.leadingComments else null
@@ -1015,20 +1023,70 @@ class Transformer(
                                                 pos = -1, end = -1,
                                             ))
                                             isFirst = false
+                                            emittedAny = true
+                                        }
+                                        // Handle empty binding pattern with initializer (side effect):
+                                        // `export const {} = expr` or `export const [] = expr` with no bound names
+                                        // TypeScript emits: `var _a; _a = expr;`
+                                        if (pairs!!.isEmpty() && pairIdx < stmt.declarationList.declarations.size) {
+                                            val decl = stmt.declarationList.declarations[pairIdx]
+                                            if (decl.initializer != null) {
+                                                val tempName = nextTempVarName()
+                                                sideEffectTempVars.add(tempName)
+                                                result.add(ExpressionStatement(
+                                                    expression = BinaryExpression(
+                                                        left = syntheticId(tempName),
+                                                        operator = Equals,
+                                                        right = decl.initializer,
+                                                        pos = -1, end = -1,
+                                                    ),
+                                                    leadingComments = if (isFirst) stmt.leadingComments else null,
+                                                    pos = -1, end = -1,
+                                                ))
+                                                isFirst = false
+                                                emittedAny = true
+                                            }
                                         }
                                     }
                                 } else {
                                     // Keep declaration + emit exports.x = x; right after
-                                    result.add(stmt.copy(modifiers = strippedModifiers))
-                                    for (decl in stmt.declarationList.declarations) {
-                                        val names = collectBoundNames(decl.name)
-                                        if (names.isNotEmpty() && decl.initializer != null) {
-                                            for (name in names) {
-                                                val assignStmt = makeExportAssignment(name)
-                                                result.add(assignStmt)
-                                                // Track for excluding from identifier rewriting
-                                                if (name in conflictingExportedNames) {
-                                                    keepDeclExportAssignments.add(assignStmt)
+                                    // Special case: empty ArrayBindingPattern (e.g. `export const [] = expr`)
+                                    // has no bound names → use temp var for side-effect: `var _a; _a = expr`
+                                    val allEmptyBindings = stmt.declarationList.declarations.all { decl ->
+                                        decl.name is ArrayBindingPattern &&
+                                            collectBoundNames(decl.name).isEmpty()
+                                    }
+                                    if (allEmptyBindings) {
+                                        var isFirst = true
+                                        for (decl in stmt.declarationList.declarations) {
+                                            if (decl.initializer != null) {
+                                                val tempName = nextTempVarName()
+                                                sideEffectTempVars.add(tempName)
+                                                result.add(ExpressionStatement(
+                                                    expression = BinaryExpression(
+                                                        left = syntheticId(tempName),
+                                                        operator = Equals,
+                                                        right = decl.initializer,
+                                                        pos = -1, end = -1,
+                                                    ),
+                                                    leadingComments = if (isFirst) stmt.leadingComments else null,
+                                                    pos = -1, end = -1,
+                                                ))
+                                                isFirst = false
+                                            }
+                                        }
+                                    } else {
+                                        result.add(stmt.copy(modifiers = strippedModifiers))
+                                        for (decl in stmt.declarationList.declarations) {
+                                            val names = collectBoundNames(decl.name)
+                                            if (names.isNotEmpty() && decl.initializer != null) {
+                                                for (name in names) {
+                                                    val assignStmt = makeExportAssignment(name)
+                                                    result.add(assignStmt)
+                                                    // Track for excluding from identifier rewriting
+                                                    if (name in conflictingExportedNames) {
+                                                        keepDeclExportAssignments.add(assignStmt)
+                                                    }
                                                 }
                                             }
                                         }
@@ -1680,6 +1738,24 @@ class Transformer(
                 val hoistStmt = ExpressionStatement(expression = hoistExpr, pos = -1, end = -1)
                 result.add(insertPos + batchIdx, hoistStmt)
             }
+        }
+
+        // Insert side-effect temp var declarations (from empty destructuring: `export const {} = expr`)
+        // BEFORE Object.defineProperty: `var _a;` at position 0.
+        if (sideEffectTempVars.isNotEmpty()) {
+            val tempVarDecls = sideEffectTempVars.map { tempName ->
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(VariableDeclaration(
+                            name = Identifier(text = tempName, pos = -1, end = -1),
+                            type = null, initializer = null, pos = -1, end = -1,
+                        )),
+                        flags = VarKeyword, pos = -1, end = -1,
+                    ),
+                    modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+                )
+            }
+            result.addAll(0, tempVarDecls)
         }
 
         // Insert function export stubs after void0 hoists and Object.defineProperty preamble.
@@ -2913,10 +2989,12 @@ class Transformer(
         firstStmt?.leadingComments?.filter { c ->
             c.text.startsWith("///") && c.text.contains("<reference") && c.text.contains("path") &&
                 c !in preDefineComments && // not already collected
-                // Check this is detached (blank line between comment and statement)
+                // Check this is detached (blank line — consecutive \n\n — between comment and statement)
+                // Must use "\n\n" (not just count total newlines) to avoid false positives when
+                // multiple reference directives appear on consecutive lines before the import.
                 c.end >= 0 && originalSourceFile.text.let { src ->
                     val between = src.substring(c.end, firstStmt.pos.coerceAtMost(src.length))
-                    between.count { it == '\n' } >= 2
+                    between.contains("\n\n")
                 }
         }?.let { preDefineComments.addAll(it) }
 
