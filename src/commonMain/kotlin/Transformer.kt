@@ -10531,11 +10531,13 @@ class Transformer(
             if (parts.isEmpty()) return emptyList()
             // Build a chain of nested ModuleDeclarations from the parts
             // e.g. [hello, hi, world] + body → M(hello, body=M(hi, body=M(world, body=block)))
+            // Only the outermost level (index 0) keeps the original leadingComments; inner levels
+            // are stripped so the comment doesn't repeat inside each nested IIFE.
             fun buildNested(idx: Int): ModuleDeclaration {
                 return if (idx == parts.lastIndex) {
-                    decl.copy(name = syntheticId(parts[idx]))
+                    decl.copy(name = syntheticId(parts[idx]), leadingComments = if (idx == 0) decl.leadingComments else null)
                 } else {
-                    decl.copy(name = syntheticId(parts[idx]), body = buildNested(idx + 1))
+                    decl.copy(name = syntheticId(parts[idx]), body = buildNested(idx + 1), leadingComments = if (idx == 0) decl.leadingComments else null)
                 }
             }
             return transformModuleDeclaration(buildNested(0), nested, parentNsName, useDottedVar = !nested)
