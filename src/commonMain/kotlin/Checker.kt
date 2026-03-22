@@ -6962,20 +6962,22 @@ class Checker(
                     }
                 }
 
-                // TS2813/TS2814: function-with-body + non-ambient class
+                // TS2813/TS2814: function + non-ambient class conflict
                 if (hasClass && hasFunc) {
                     val funcDecls = group.filter { it.kind == "function" }
                     val classDecls = group.filter { it.kind == "class" }
-                    val funcsWithBody = funcDecls.filter { decl ->
+                    val nonDeclFuncs = funcDecls.filter { decl ->
                         val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
-                        funcStmt.body != null
+                        ModifierFlag.Declare !in funcStmt.modifiers
                     }
                     val nonAmbientClasses = classDecls.filter { decl ->
                         val classStmt = decl.stmt as? ClassDeclaration ?: return@filter false
                         ModifierFlag.Declare !in classStmt.modifiers
                     }
-                    if (funcsWithBody.isNotEmpty() && nonAmbientClasses.isNotEmpty()) {
-                        // Get the first non-ambient class position for the related info
+                    if (nonDeclFuncs.isNotEmpty() && nonAmbientClasses.isNotEmpty()) {
+                        // Any non-declare function (with or without body) + non-ambient class
+                        // → TS2813 for class, TS2814 for function
+                        // Related info points to the first non-ambient class
                         val relatedClass = nonAmbientClasses.first()
                         val classStart = relatedClass.nameNode.pos
                         val (classLine, classChar) = getLineAndCharacterOfPosition(source, classStart)
@@ -6989,8 +6991,8 @@ class Checker(
                             start = classStart,
                             length = relatedClass.name.length,
                         )
-                        // TS2814 for functions with body
-                        for (decl in funcsWithBody) {
+                        // TS2814 for all non-declare functions
+                        for (decl in nonDeclFuncs) {
                             val start = decl.nameNode.pos
                             val (line, character) = getLineAndCharacterOfPosition(source, start)
                             diagnostics.add(Diagnostic(
@@ -7025,6 +7027,7 @@ class Checker(
                     }
 
                     // Otherwise: declare function + declare class is a legal merge
+                    // (any mix of declare/non-declare when both sides are declare = OK)
                     val allFuncsDeclare = funcDecls.all { decl ->
                         val funcStmt = decl.stmt as? FunctionDeclaration ?: return@all false
                         ModifierFlag.Declare in funcStmt.modifiers
