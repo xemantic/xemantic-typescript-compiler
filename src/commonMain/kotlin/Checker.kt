@@ -117,6 +117,18 @@ class Checker(
         if (options.allowUnreachableCode == false) {
             checkUnreachableCode()
         }
+        // 18b. Check unused labels (TS7028)
+        if (options.allowUnusedLabels == false) {
+            checkUnusedLabels()
+        }
+        // 18c. Check fallthrough cases in switch (TS7029)
+        if (options.noFallthroughCasesInSwitch) {
+            checkFallthroughCases()
+        }
+        // 18d. Check not all code paths return a value (TS7030) and TS2355
+        if (options.noImplicitReturns) {
+            checkImplicitReturns()
+        }
         // 19. Check type used as value (TS2693)
         checkTypeUsedAsValue()
         // 20. Check always-truthy expressions (TS2872)
@@ -9353,7 +9365,7 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkUnreachableInStatements(result.sourceFile.statements, source, fileName)
+            checkUnreachableInStatements(result.sourceFile.statements, source, fileName, result)
         }
     }
 
@@ -9361,41 +9373,91 @@ class Checker(
         statements: List<Statement>,
         source: String,
         fileName: String,
+        binderResult: BinderResult,
     ) {
         var termIdx = -1
+        var currentRun = mutableListOf<Statement>()
+
         for (i in statements.indices) {
             val stmt = statements[i]
             if (termIdx >= 0) {
-                // Skip hoisted declarations — they're not unreachable
-                if (stmt is FunctionDeclaration || stmt is ClassDeclaration ||
-                    stmt is InterfaceDeclaration || stmt is TypeAliasDeclaration ||
-                    stmt is EnumDeclaration || stmt is ModuleDeclaration ||
-                    stmt is ImportDeclaration || stmt is ImportEqualsDeclaration ||
-                    stmt is ExportDeclaration) {
-                    continue
+                // After a terminating statement: collect unreachable runs separated by hoisted decls.
+                // Hoisted = doesn't generate runtime code:
+                //   - FunctionDeclaration: truly hoisted (JS var hoisting)
+                //   - InterfaceDeclaration, TypeAliasDeclaration: type-only, erased
+                //   - ImportDeclaration, ImportEqualsDeclaration, ExportDeclaration: module-level
+                //   - VariableStatement with var flags: var declarations are function-hoisted
+                //   - ModuleDeclaration that is non-instantiated (only type-only contents)
+                val isHoisted = stmt is FunctionDeclaration ||
+                    stmt is InterfaceDeclaration ||
+                    stmt is TypeAliasDeclaration ||
+                    stmt is ImportDeclaration ||
+                    stmt is ImportEqualsDeclaration ||
+                    stmt is ExportDeclaration ||
+                    isVarDeclaration(stmt) ||
+                    isNonPreservedConstEnum(stmt) ||
+                    isNonInstantiatedNamespace(stmt, binderResult)
+                if (isHoisted) {
+                    // Emit current run if non-empty
+                    if (currentRun.isNotEmpty()) {
+                        emitTS7027(currentRun, source, fileName)
+                        currentRun = mutableListOf()
+                    }
+                    // Recurse into hoisted declaration (it IS reachable for inner checks)
+                    checkUnreachableInNestedStatement(stmt, source, fileName, binderResult)
+                } else {
+                    // Add to current unreachable run (do NOT recurse — it's unreachable)
+                    currentRun.add(stmt)
                 }
-                // Found first unreachable non-hoisted statement
-                // Collect ALL remaining non-hoisted statements for the span
-                val unreachableStmts = mutableListOf(stmt)
-                for (j in i + 1 until statements.size) {
-                    val s = statements[j]
-                    if (s is FunctionDeclaration || s is ClassDeclaration ||
-                        s is InterfaceDeclaration || s is TypeAliasDeclaration ||
-                        s is EnumDeclaration || s is ModuleDeclaration ||
-                        s is ImportDeclaration || s is ImportEqualsDeclaration ||
-                        s is ExportDeclaration) continue
-                    unreachableStmts.add(s)
+            } else {
+                // Before the terminating statement: check normally
+                if (isDefinitelyTerminating(stmt)) {
+                    termIdx = i
                 }
-                emitTS7027(unreachableStmts, source, fileName)
-                break // Only one TS7027 per block
+                // Recurse into nested blocks
+                checkUnreachableInNestedStatement(stmt, source, fileName, binderResult)
             }
-            // Check if this statement makes subsequent code unreachable
-            if (isDefinitelyTerminating(stmt)) {
-                termIdx = i
-            }
-            // Recurse into nested blocks
-            checkUnreachableInNestedStatement(stmt, source, fileName)
         }
+
+        // Emit final run if any unreachable statements remain
+        if (currentRun.isNotEmpty()) {
+            emitTS7027(currentRun, source, fileName)
+        }
+    }
+
+    /**
+     * Returns true for `var` variable statements with NO initializer (pure declarations).
+     * TypeScript does not report TS7027 for bare `var x;` after unreachable code because
+     * `var` declarations without initializers are hoisted and have no runtime side effects.
+     * `var x = 1;` (with initializer) IS reported since the initializer is unreachable code.
+     */
+    private fun isVarDeclaration(stmt: Statement): Boolean {
+        if (stmt !is VariableStatement) return false
+        if (stmt.declarationList.flags != SyntaxKind.VarKeyword) return false
+        // Only treat as hoisted if ALL declarations have no initializer
+        return stmt.declarationList.declarations.all { it.initializer == null }
+    }
+
+    /**
+     * Returns true if a ModuleDeclaration is non-instantiated or const-enum-only (produces no runtime code).
+     * Non-instantiated/ConstEnumOnly namespaces contain only type-only declarations (interfaces, type aliases,
+     * non-preserved const enums) and are treated like hoisted declarations for TS7027 purposes.
+     */
+    private fun isNonInstantiatedNamespace(stmt: Statement, binderResult: BinderResult): Boolean {
+        if (stmt !is ModuleDeclaration) return false
+        val state = binderResult.moduleInstanceStates[nodeKey(stmt)]
+        return state == ModuleInstanceState.NonInstantiated || state == ModuleInstanceState.ConstEnumOnly
+    }
+
+    /**
+     * Returns true if this is a non-preserved `const enum` declaration.
+     * Without `preserveConstEnums`, const enums are type-only (inlined at use sites)
+     * and should not be reported as unreachable code.
+     */
+    private fun isNonPreservedConstEnum(stmt: Statement): Boolean {
+        if (stmt !is EnumDeclaration) return false
+        if (ModifierFlag.Const !in stmt.modifiers) return false
+        return !options.preserveConstEnums
     }
 
     private fun isDefinitelyTerminating(stmt: Statement): Boolean {
@@ -9417,10 +9479,11 @@ class Checker(
                 stmt.condition == null && !containsBreak(stmt.statement)
             }
             is IfStatement -> {
-                // if (cond) { return } else { return } — both branches terminate
                 val thenTerm = isBlockTerminating(stmt.thenStatement)
                 val elseTerm = stmt.elseStatement?.let { isBlockTerminating(it) } ?: false
-                thenTerm && elseTerm
+                // if (cond) { ... } else { ... } — both branches terminate
+                // if (true) { ... } — always-true with terminating then branch (no else needed)
+                (thenTerm && elseTerm) || (thenTerm && stmt.elseStatement == null && isAlwaysTrue(stmt.expression))
             }
             is SwitchStatement -> {
                 // All cases + default terminate → switch is terminating
@@ -9461,6 +9524,64 @@ class Checker(
         }
     }
 
+    private fun isAlwaysFalse(expr: Expression): Boolean {
+        return when (expr) {
+            is Identifier -> expr.text == "false"
+            is ParenthesizedExpression -> isAlwaysFalse(expr.expression)
+            else -> false
+        }
+    }
+
+    /**
+     * Returns true if a call expression is an IIFE that always throws.
+     * Pattern: `(function() { throw X; })()` or `(() => { throw X; })()`
+     */
+    private fun exprAlwaysThrows(expr: Expression): Boolean {
+        if (expr !is CallExpression) return false
+        val func = expr.expression
+        val funcBody: List<Statement> = when {
+            func is FunctionExpression -> func.body?.statements ?: return false
+            func is ParenthesizedExpression && func.expression is FunctionExpression ->
+                (func.expression as FunctionExpression).body?.statements ?: return false
+            func is ArrowFunction -> {
+                val body = func.body
+                when (body) {
+                    is Block -> body.statements
+                    is ThrowStatement -> listOf(body)
+                    else -> return false
+                }
+            }
+            func is ParenthesizedExpression && func.expression is ArrowFunction -> {
+                val body = (func.expression as ArrowFunction).body
+                when (body) {
+                    is Block -> body.statements
+                    else -> return false
+                }
+            }
+            else -> return false
+        }
+        return funcBody.any { it is ThrowStatement }
+    }
+
+    /**
+     * Report unreachable code inside an IIFE's body statements.
+     * Used for for-loop condition/incrementor that's unreachable.
+     */
+    private fun reportUnreachableIIFEBody(expr: Expression?, source: String, fileName: String) {
+        if (expr == null) return
+        val callExpr = expr as? CallExpression ?: return
+        val func = callExpr.expression
+        val funcBody: List<Statement>? = when {
+            func is FunctionExpression -> func.body?.statements
+            func is ParenthesizedExpression && func.expression is FunctionExpression ->
+                (func.expression as FunctionExpression).body?.statements
+            else -> null
+        }
+        if (!funcBody.isNullOrEmpty()) {
+            emitTS7027(funcBody, source, fileName)
+        }
+    }
+
     private fun containsBreak(stmt: Statement): Boolean {
         return when (stmt) {
             is BreakStatement -> true
@@ -9477,18 +9598,59 @@ class Checker(
         stmt: Statement,
         source: String,
         fileName: String,
+        binderResult: BinderResult,
     ) {
         when (stmt) {
-            is Block -> checkUnreachableInStatements(stmt.statements, source, fileName)
+            is Block -> checkUnreachableInStatements(stmt.statements, source, fileName, binderResult)
             is IfStatement -> {
-                checkUnreachableInNestedStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkUnreachableInNestedStatement(it, source, fileName) }
+                if (isAlwaysTrue(stmt.expression)) {
+                    // if(true) { ... } else { ... } — else branch is unreachable
+                    checkUnreachableInNestedStatement(stmt.thenStatement, source, fileName, binderResult)
+                    val elseStmt = stmt.elseStatement
+                    if (elseStmt != null) {
+                        // Mark else branch as unreachable
+                        val elseStmts = if (elseStmt is Block) elseStmt.statements
+                                        else listOf(elseStmt)
+                        emitTS7027(elseStmts, source, fileName)
+                        // Also recurse into else for inner unreachable checks (but mark outer as unreachable)
+                    }
+                } else {
+                    checkUnreachableInNestedStatement(stmt.thenStatement, source, fileName, binderResult)
+                    stmt.elseStatement?.let { checkUnreachableInNestedStatement(it, source, fileName, binderResult) }
+                }
             }
-            is ForStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is ForStatement -> {
+                // If the for-loop's initializer always throws, the condition and incrementor
+                // are unreachable. TypeScript reports TS7027 on the IIFE body statements
+                // inside the condition and incrementor expressions.
+                val initTerminates = stmt.initializer?.let { init ->
+                    when (init) {
+                        is VariableDeclarationList -> false
+                        is Expression -> exprAlwaysThrows(init)
+                        else -> false
+                    }
+                } ?: false
+                if (initTerminates) {
+                    // Report unreachable code inside IIFE bodies of condition and incrementor
+                    reportUnreachableIIFEBody(stmt.condition, source, fileName)
+                    reportUnreachableIIFEBody(stmt.incrementor, source, fileName)
+                } else {
+                    checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
+                }
+            }
+            is ForInStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
+            is ForOfStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
+            is WhileStatement -> {
+                if (isAlwaysFalse(stmt.expression)) {
+                    // while(false) { ... } — body is unreachable
+                    val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements
+                                    else listOf(stmt.statement)
+                    emitTS7027(bodyStmts, source, fileName)
+                } else {
+                    checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
+                }
+            }
+            is DoStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
             is SwitchStatement -> {
                 for (clause in stmt.caseBlock) {
                     val clauseStmts = when (clause) {
@@ -9496,50 +9658,50 @@ class Checker(
                         is DefaultClause -> clause.statements
                         else -> emptyList()
                     }
-                    checkUnreachableInStatements(clauseStmts, source, fileName)
+                    checkUnreachableInStatements(clauseStmts, source, fileName, binderResult)
                 }
             }
             is TryStatement -> {
-                checkUnreachableInStatements(stmt.tryBlock.statements, source, fileName)
+                checkUnreachableInStatements(stmt.tryBlock.statements, source, fileName, binderResult)
                 stmt.catchClause?.let {
-                    checkUnreachableInStatements(it.block.statements, source, fileName)
+                    checkUnreachableInStatements(it.block.statements, source, fileName, binderResult)
                 }
                 stmt.finallyBlock?.let {
-                    checkUnreachableInStatements(it.statements, source, fileName)
+                    checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                 }
             }
             is FunctionDeclaration -> {
-                stmt.body?.let { checkUnreachableInStatements(it.statements, source, fileName) }
+                stmt.body?.let { checkUnreachableInStatements(it.statements, source, fileName, binderResult) }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> member.body?.let {
-                            checkUnreachableInStatements(it.statements, source, fileName)
+                            checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                         }
                         is Constructor -> member.body?.let {
-                            checkUnreachableInStatements(it.statements, source, fileName)
+                            checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                         }
                         is GetAccessor -> member.body?.let {
-                            checkUnreachableInStatements(it.statements, source, fileName)
+                            checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                         }
                         is SetAccessor -> member.body?.let {
-                            checkUnreachableInStatements(it.statements, source, fileName)
+                            checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                         }
                         else -> {}
                     }
                 }
             }
-            is LabeledStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName)
+            is LabeledStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
             is ExpressionStatement -> {
                 // Check arrow/function expressions
                 when (val expr = stmt.expression) {
                     is ArrowFunction -> when (val body = expr.body) {
-                        is Block -> checkUnreachableInStatements(body.statements, source, fileName)
+                        is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
                         else -> {}
                     }
                     is FunctionExpression -> expr.body?.let {
-                        checkUnreachableInStatements(it.statements, source, fileName)
+                        checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                     }
                     else -> {}
                 }
@@ -9548,11 +9710,11 @@ class Checker(
                 for (decl in stmt.declarationList.declarations) {
                     when (val init = decl.initializer) {
                         is ArrowFunction -> when (val body = init.body) {
-                            is Block -> checkUnreachableInStatements(body.statements, source, fileName)
+                            is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
                             else -> {}
                         }
                         is FunctionExpression -> init.body?.let {
-                            checkUnreachableInStatements(it.statements, source, fileName)
+                            checkUnreachableInStatements(it.statements, source, fileName, binderResult)
                         }
                         else -> {}
                     }
@@ -9560,7 +9722,7 @@ class Checker(
             }
             is ModuleDeclaration -> {
                 val body = stmt.body as? ModuleBlock ?: return
-                checkUnreachableInStatements(body.statements, source, fileName)
+                checkUnreachableInStatements(body.statements, source, fileName, binderResult)
             }
             else -> {}
         }
@@ -9574,13 +9736,14 @@ class Checker(
         while (actualStart < source.length && source[actualStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
             actualStart++
         }
-        // Span covers all unreachable statements (from first to end of last)
-        val last = stmts.last()
-        var spanEnd = last.end
-        // Trim trailing whitespace from last statement
-        while (spanEnd > actualStart && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
-            spanEnd--
-        }
+        // For `const enum` declarations, the parser sets pos to the `enum` keyword
+        // (since the caller consumes `const` via nextToken() before calling parseEnumDeclaration).
+        // Look backwards to include the `const` keyword in the span start.
+        actualStart = findConstEnumStart(source, first, actualStart)
+        // Compute real span end for the last statement.
+        // stmt.end includes one extra "next token" due to how our parser captures end positions.
+        // Use a forward scan to find the natural end of the last statement.
+        val spanEnd = computeUnreachableSpanEnd(source, stmts.last(), actualStart)
         val length = spanEnd - actualStart
         val (line, character) = getLineAndCharacterOfPosition(source, actualStart)
         diagnostics.add(Diagnostic(
@@ -9593,6 +9756,115 @@ class Checker(
             start = actualStart,
             length = length.coerceAtLeast(1),
         ))
+    }
+
+    /**
+     * For `const enum` declarations, the parser sets `pos` to the `enum` keyword because the
+     * caller consumed `const` via `nextToken()` before invoking `parseEnumDeclaration`.
+     * This function looks backwards from the node pos to include `const` in the span start.
+     */
+    private fun findConstEnumStart(source: String, stmt: Statement, currentStart: Int): Int {
+        if (stmt !is EnumDeclaration || ModifierFlag.Const !in stmt.modifiers) return currentStart
+        // Look backwards from currentStart for "const" keyword
+        var pos = currentStart - 1
+        // Skip any whitespace/space between const and enum
+        while (pos >= 0 && source[pos].let { it == ' ' || it == '\t' }) pos--
+        // Check if source[pos-4..pos] == "const"
+        if (pos >= 4 && source.substring(pos - 4, pos + 1) == "const") {
+            return pos - 4
+        }
+        return currentStart
+    }
+
+    /**
+     * Compute the real end of the last unreachable statement, excluding the
+     * contaminating "next outer token" that stmt.end includes due to the scanner
+     * advancing one token ahead during parsing.
+     */
+    private fun computeUnreachableSpanEnd(source: String, stmt: Statement, minStart: Int): Int {
+        // Find the start of the statement text (after leading trivia)
+        var start = stmt.pos
+        while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+            start++
+        }
+        start = start.coerceAtLeast(minStart)
+
+        // Forward scan to find natural statement end (avoids the "next token" contamination)
+        val naturalEnd = findStatementNaturalEnd(source, start, stmt.end)
+
+        if (naturalEnd < stmt.end) {
+            // Found a natural end before stmt.end — the scan terminated cleanly
+            return naturalEnd
+        }
+
+        // Reached stmt.end without a natural terminator (e.g., ASI case at top level).
+        // Trim trailing whitespace from stmt.end.
+        var spanEnd = stmt.end
+        while (spanEnd > start && spanEnd <= source.length && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+            spanEnd--
+        }
+
+        // If the last char is '}', it may be the contaminating outer closing token.
+        // Apply backward trimming to remove it and its preceding whitespace.
+        if (spanEnd > start && spanEnd <= source.length && source[spanEnd - 1] == '}') {
+            while (spanEnd > start && source[spanEnd - 1].let { it != ' ' && it != '\t' && it != '\n' && it != '\r' }) {
+                spanEnd--
+            }
+            while (spanEnd > start && source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+                spanEnd--
+            }
+        }
+
+        return spanEnd.coerceAtLeast(start + 1)
+    }
+
+    /**
+     * Scan forward from [start] to find where the statement's content naturally ends,
+     * not exceeding [upTo]. Tracks bracket depth to correctly handle nested blocks.
+     *
+     * Returns position AFTER the closing ';' or '}' that terminates the statement at depth 0.
+     * Returns [upTo] if no natural end is found within the range.
+     */
+    private fun findStatementNaturalEnd(source: String, start: Int, upTo: Int): Int {
+        var i = start
+        var depth = 0
+        var inString = false
+        var stringChar = ' '
+
+        while (i < upTo && i < source.length) {
+            val ch = source[i]
+            if (inString) {
+                when {
+                    ch == '\\' -> { i += 2; continue }
+                    ch == stringChar -> { inString = false; i++ }
+                    else -> i++
+                }
+                continue
+            }
+            when (ch) {
+                '"', '\'' -> { inString = true; stringChar = ch; i++ }
+                '`' -> { inString = true; stringChar = ch; i++ }
+                '{', '(' , '[' -> { depth++; i++ }
+                '}' -> {
+                    depth--
+                    i++
+                    when {
+                        depth < 0 -> return i - 1   // outer closing brace — stop BEFORE it
+                        depth == 0 -> {
+                            // Block closed at top level. Check if a ';' immediately follows
+                            // (e.g. `x = function() { ... };` — need to include the ';').
+                            var k = i
+                            while (k < source.length && source[k].let { it == ' ' || it == '\t' }) k++
+                            return if (k < upTo && k < source.length && source[k] == ';') k + 1 else i
+                        }
+                    }
+                }
+                ')', ']' -> { depth--; i++ }
+                ';' -> { if (depth == 0) return i + 1; else i++ }
+                else -> i++
+            }
+        }
+        return i  // reached upTo (e.g., EOF or stmt.end)
     }
 
     // -----------------------------------------------------------------------
@@ -15912,6 +16184,781 @@ class Checker(
                     else -> {}
                 }
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS7028: Unused label
+    // -----------------------------------------------------------------------
+
+    private fun checkUnusedLabels() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForUnusedLabels(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForUnusedLabels(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkStmtForUnusedLabels(stmt, source, fileName)
+    }
+
+    private fun walkStmtForUnusedLabels(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is LabeledStatement -> {
+                val labelName = stmt.label.text
+                // Check if this label is used by any break/continue within the labeled statement
+                if (!isLabelUsed(labelName, stmt.statement)) {
+                    val start = stmt.label.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Unused label.",
+                        category = DiagnosticCategory.Error,
+                        code = 7028,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = labelName.length,
+                    ))
+                }
+                // Recurse into the labeled statement
+                walkStmtForUnusedLabels(stmt.statement, source, fileName)
+            }
+            is Block -> walkForUnusedLabels(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkStmtForUnusedLabels(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkStmtForUnusedLabels(it, source, fileName) }
+            }
+            is ForStatement -> walkStmtForUnusedLabels(stmt.statement, source, fileName)
+            is ForInStatement -> walkStmtForUnusedLabels(stmt.statement, source, fileName)
+            is ForOfStatement -> walkStmtForUnusedLabels(stmt.statement, source, fileName)
+            is WhileStatement -> walkStmtForUnusedLabels(stmt.statement, source, fileName)
+            is DoStatement -> walkStmtForUnusedLabels(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForUnusedLabels(clause.statements, source, fileName)
+                        is DefaultClause -> walkForUnusedLabels(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkForUnusedLabels(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkForUnusedLabels(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkForUnusedLabels(it.statements, source, fileName) }
+            }
+            is FunctionDeclaration -> {
+                // New label scope inside function body
+                stmt.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ExpressionStatement -> walkExprForUnusedLabels(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkExprForUnusedLabels(it, source, fileName) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkExprForUnusedLabels(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForUnusedLabels(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is FunctionExpression -> expr.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+            is ArrowFunction -> {
+                val body = expr.body
+                if (body is Block) walkForUnusedLabels(body.statements, source, fileName)
+            }
+            is ClassExpression -> {
+                for (m in expr.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Returns true if a break or continue referencing [labelName] exists in [stmt].
+     * Does NOT recurse into nested function boundaries (those create new label scopes).
+     */
+    private fun isLabelUsed(labelName: String, stmt: Statement): Boolean {
+        return when (stmt) {
+            is BreakStatement -> stmt.label?.text == labelName
+            is ContinueStatement -> stmt.label?.text == labelName
+            is Block -> stmt.statements.any { isLabelUsed(labelName, it) }
+            is IfStatement -> isLabelUsed(labelName, stmt.thenStatement) ||
+                (stmt.elseStatement?.let { isLabelUsed(labelName, it) } ?: false)
+            is LabeledStatement -> isLabelUsed(labelName, stmt.statement)
+            is ForStatement -> isLabelUsed(labelName, stmt.statement)
+            is ForInStatement -> isLabelUsed(labelName, stmt.statement)
+            is ForOfStatement -> isLabelUsed(labelName, stmt.statement)
+            is WhileStatement -> isLabelUsed(labelName, stmt.statement)
+            is DoStatement -> isLabelUsed(labelName, stmt.statement)
+            is SwitchStatement -> stmt.caseBlock.any { clause ->
+                when (clause) {
+                    is CaseClause -> clause.statements.any { isLabelUsed(labelName, it) }
+                    is DefaultClause -> clause.statements.any { isLabelUsed(labelName, it) }
+                    else -> false
+                }
+            }
+            is TryStatement -> stmt.tryBlock.statements.any { isLabelUsed(labelName, it) } ||
+                (stmt.catchClause?.block?.statements?.any { isLabelUsed(labelName, it) } ?: false) ||
+                (stmt.finallyBlock?.statements?.any { isLabelUsed(labelName, it) } ?: false)
+            // Do NOT recurse into function declarations/expressions — new label scope
+            else -> false
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS7029: Fallthrough case in switch
+    // -----------------------------------------------------------------------
+
+    private fun checkFallthroughCases() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForFallthroughCases(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForFallthroughCases(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkStmtForFallthroughCases(stmt, source, fileName)
+    }
+
+    private fun walkStmtForFallthroughCases(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is SwitchStatement -> {
+                checkSwitchForFallthrough(stmt, source, fileName)
+                // Recurse into case clause bodies too
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForFallthroughCases(clause.statements, source, fileName)
+                        is DefaultClause -> walkForFallthroughCases(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> walkForFallthroughCases(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkStmtForFallthroughCases(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkStmtForFallthroughCases(it, source, fileName) }
+            }
+            is LabeledStatement -> walkStmtForFallthroughCases(stmt.statement, source, fileName)
+            is ForStatement -> walkStmtForFallthroughCases(stmt.statement, source, fileName)
+            is ForInStatement -> walkStmtForFallthroughCases(stmt.statement, source, fileName)
+            is ForOfStatement -> walkStmtForFallthroughCases(stmt.statement, source, fileName)
+            is WhileStatement -> walkStmtForFallthroughCases(stmt.statement, source, fileName)
+            is DoStatement -> walkStmtForFallthroughCases(stmt.statement, source, fileName)
+            is TryStatement -> {
+                walkForFallthroughCases(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkForFallthroughCases(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkForFallthroughCases(it.statements, source, fileName) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ExpressionStatement -> walkExprForFallthroughCases(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkExprForFallthroughCases(it, source, fileName) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForFallthroughCases(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is FunctionExpression -> expr.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+            is ArrowFunction -> {
+                val body = expr.body
+                if (body is Block) walkForFallthroughCases(body.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check a switch statement for fallthrough cases (TS7029).
+     * A case clause falls through if it has statements but doesn't end with a terminating statement.
+     * Empty case clauses (no statements) are allowed to fall through.
+     * TypeScript reports TS7029 on the CURRENT case clause that falls through (not the next one).
+     */
+    private fun checkSwitchForFallthrough(stmt: SwitchStatement, source: String, fileName: String) {
+        val clauses = stmt.caseBlock
+        for (i in clauses.indices) {
+            val clause = clauses[i]
+            val clauseStmts = when (clause) {
+                is CaseClause -> clause.statements
+                is DefaultClause -> clause.statements
+                else -> continue
+            }
+            // Only check non-last clauses — last clause doesn't fall through anywhere
+            if (i == clauses.size - 1) continue
+            // Empty clauses (no statements) are allowed to fall through
+            if (clauseStmts.isEmpty()) continue
+            // Check if the clause definitely terminates
+            if (!clauseStmtsTerminate(clauseStmts)) {
+                // Report on the CURRENT clause's case/default keyword
+                val clauseStart = when (clause) {
+                    is CaseClause -> clause.pos
+                    is DefaultClause -> clause.pos
+                    else -> continue
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, clauseStart)
+                // Span covers "case X:" or "default:" header
+                val colonIdx = source.indexOf(':', clauseStart)
+                val spanEnd = if (colonIdx >= 0) colonIdx + 1 else clauseStart + 4
+                val spanLen = spanEnd - clauseStart
+                diagnostics.add(Diagnostic(
+                    message = "Fallthrough case in switch.",
+                    category = DiagnosticCategory.Error,
+                    code = 7029,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = clauseStart,
+                    length = spanLen,
+                ))
+            }
+        }
+    }
+
+    /**
+     * Returns true if a list of statements definitely terminates on ALL code paths.
+     */
+    private fun clauseStmtsTerminate(stmts: List<Statement>): Boolean {
+        // A clause terminates if any statement in it definitely terminates on all paths
+        return stmts.any { isDefinitelyTerminating(it) }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS7030: Not all code paths return a value / TS2355
+    // -----------------------------------------------------------------------
+
+    private fun checkImplicitReturns() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForImplicitReturns(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForImplicitReturns(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkStmtForImplicitReturns(stmt, source, fileName)
+    }
+
+    private fun walkStmtForImplicitReturns(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> checkFunctionForImplicitReturn(stmt, source, fileName)
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> checkMethodForImplicitReturn(m, source, fileName)
+                        is Constructor -> {} // constructors don't need return value checks
+                        is GetAccessor -> checkGetAccessorForImplicitReturn(m, source, fileName)
+                        is SetAccessor -> {} // setters don't return
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> walkForImplicitReturns(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkStmtForImplicitReturns(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkStmtForImplicitReturns(it, source, fileName) }
+            }
+            is LabeledStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
+            is ForStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
+            is ForInStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
+            is ForOfStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
+            is WhileStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
+            is DoStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForImplicitReturns(clause.statements, source, fileName)
+                        is DefaultClause -> walkForImplicitReturns(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkForImplicitReturns(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkForImplicitReturns(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkForImplicitReturns(it.statements, source, fileName) }
+            }
+            is ExpressionStatement -> walkExprForImplicitReturns(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkExprForImplicitReturns(it, source, fileName) }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) walkForImplicitReturns(body.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForImplicitReturns(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is FunctionExpression -> {
+                checkFuncExprForImplicitReturn(expr, source, fileName)
+            }
+            is ArrowFunction -> {
+                checkArrowForImplicitReturn(expr, source, fileName)
+            }
+            is ClassExpression -> {
+                for (m in expr.members) {
+                    when (m) {
+                        is MethodDeclaration -> checkMethodForImplicitReturn(m, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Get the return type annotation node position/length for a function, for TS7030 diagnostic span.
+     */
+    private fun checkFunctionForImplicitReturn(decl: FunctionDeclaration, source: String, fileName: String) {
+        val body = decl.body ?: return
+        val retType = decl.type
+        val isAsync = ModifierFlag.Async in decl.modifiers
+        // Only check if there's an explicit return type annotation (for TS2355) or for TS7030
+        checkBodyForImplicitReturn(body, retType, isAsync, decl.name?.let { FuncRef(it.pos, it.text.length) }, source, fileName)
+        // Recurse into body for nested functions
+        walkForImplicitReturns(body.statements, source, fileName)
+    }
+
+    private fun checkMethodForImplicitReturn(decl: MethodDeclaration, source: String, fileName: String) {
+        val body = decl.body ?: return
+        val retType = decl.type
+        val isAsync = ModifierFlag.Async in decl.modifiers
+        val nameNode = decl.name
+        val nameRef = when (nameNode) {
+            is Identifier -> FuncRef(nameNode.pos, nameNode.text.length)
+            else -> null
+        }
+        checkBodyForImplicitReturn(body, retType, isAsync, nameRef, source, fileName)
+        walkForImplicitReturns(body.statements, source, fileName)
+    }
+
+    private fun checkGetAccessorForImplicitReturn(decl: GetAccessor, source: String, fileName: String) {
+        val body = decl.body ?: return
+        val retType = decl.type
+        val nameNode = decl.name
+        val nameRef = when (nameNode) {
+            is Identifier -> FuncRef(nameNode.pos, nameNode.text.length)
+            else -> null
+        }
+        checkBodyForImplicitReturn(body, retType, false, nameRef, source, fileName)
+        walkForImplicitReturns(body.statements, source, fileName)
+    }
+
+    private fun checkFuncExprForImplicitReturn(expr: FunctionExpression, source: String, fileName: String) {
+        val body = expr.body ?: return
+        val retType = expr.type
+        val isAsync = ModifierFlag.Async in expr.modifiers
+        val nameRef = expr.name?.let { FuncRef(it.pos, it.text.length) }
+        checkBodyForImplicitReturn(body, retType, isAsync, nameRef, source, fileName)
+        walkForImplicitReturns(body.statements, source, fileName)
+    }
+
+    private fun checkArrowForImplicitReturn(expr: ArrowFunction, source: String, fileName: String) {
+        val bodyNode = expr.body
+        if (bodyNode !is Block) return // expression body always returns
+        val retType = expr.type
+        val isAsync = ModifierFlag.Async in expr.modifiers
+        checkBodyForImplicitReturn(bodyNode, retType, isAsync, null, source, fileName)
+        walkForImplicitReturns(bodyNode.statements, source, fileName)
+    }
+
+    /**
+     * Check a function body for TS7030 / TS2355 (not all code paths return a value).
+     *
+     * TypeScript's rules:
+     * - With explicit non-void return type: report at the return type annotation.
+     *   - TS2355 if the body has NO return-with-value statements anywhere.
+     *   - TS7030 if the body has SOME return-with-value statements but not all paths return.
+     * - Without return type (or void-like): report TS7030 at the function name.
+     *   - Only when the body has SOME return-with-value statements but not all paths return.
+     */
+    private fun checkBodyForImplicitReturn(
+        body: Block,
+        retType: TypeNode?,
+        isAsync: Boolean,
+        funcNameRef: FuncRef?,
+        source: String,
+        fileName: String,
+    ) {
+        // If the function always returns/throws on all paths, no error
+        if (bodyAlwaysReturns(body.statements)) return
+
+        // Determine if the body has any return-with-value statement
+        val hasAnyReturn = bodyHasReturnWithValue(body.statements)
+
+        // Check if the return type annotation is present and is non-void/undefined/any
+        val nonVoidRetTypeName = retType?.let {
+            val name = getTypeNodeName(it, isAsync)
+            if (name != null && !isVoidLikeTypeName(name)) name else null
+        }
+
+        if (nonVoidRetTypeName != null && retType != null) {
+            // Report at the return type annotation
+            // Use the type name length to determine span (retType.end is contaminated by next token)
+            val start = retType.pos
+            val spanLen = getRetTypeSpanLength(source, start)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            if (hasAnyReturn) {
+                // TS7030: some paths return, some don't
+                diagnostics.add(Diagnostic(
+                    message = "Not all code paths return a value.",
+                    category = DiagnosticCategory.Error,
+                    code = 7030,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = spanLen,
+                ))
+            } else {
+                // TS2355: function has non-void return type but never returns
+                diagnostics.add(Diagnostic(
+                    message = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.",
+                    category = DiagnosticCategory.Error,
+                    code = 2355,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = spanLen,
+                ))
+            }
+            return
+        }
+
+        // No explicit non-void return type: TS7030 at function name if some paths return
+        if (hasAnyReturn && funcNameRef != null) {
+            val (line, character) = getLineAndCharacterOfPosition(source, funcNameRef.pos)
+            diagnostics.add(Diagnostic(
+                message = "Not all code paths return a value.",
+                category = DiagnosticCategory.Error,
+                code = 7030,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = funcNameRef.pos,
+                length = funcNameRef.length,
+            ))
+        }
+    }
+
+    /**
+     * Returns true if the body contains any `return <expr>` statement where expr is
+     * syntactically non-void (literals, arithmetic, etc.). Does NOT recurse into nested function bodies.
+     */
+    private fun bodyHasReturnWithValue(stmts: List<Statement>): Boolean {
+        return stmts.any { stmtHasReturnWithValue(it) }
+    }
+
+    /**
+     * Returns true if an expression is syntactically non-void (definitely not void type).
+     * Used to filter out `return voidFunc()` cases where we can't know if void without type info.
+     * Conservative: call expressions return false (might be void), literals return true.
+     */
+    private fun isNonVoidExpression(expr: Expression): Boolean {
+        return when (expr) {
+            is NumericLiteralNode -> true
+            is StringLiteralNode -> true
+            is RegularExpressionLiteralNode -> true
+            is Identifier -> expr.text != "undefined"
+            is BinaryExpression -> true  // arithmetic/comparison/string concat
+            is PrefixUnaryExpression -> true
+            is PostfixUnaryExpression -> true
+            is ArrayLiteralExpression -> true
+            is ObjectLiteralExpression -> true
+            is NewExpression -> true
+            is ParenthesizedExpression -> isNonVoidExpression(expr.expression)
+            is ConditionalExpression -> true  // ternary always has a value
+            is TemplateExpression -> true
+            is NoSubstitutionTemplateLiteralNode -> true
+            // CallExpression might return void — skip counting these without type info
+            is CallExpression -> false
+            // TypeAssertionExpression, AsExpression — check inner
+            is TypeAssertionExpression -> isNonVoidExpression(expr.expression)
+            is AsExpression -> isNonVoidExpression(expr.expression)
+            else -> false  // conservative
+        }
+    }
+
+    private fun stmtHasReturnWithValue(stmt: Statement): Boolean {
+        return when (stmt) {
+            is ReturnStatement -> stmt.expression != null && isNonVoidExpression(stmt.expression!!)
+            is Block -> bodyHasReturnWithValue(stmt.statements)
+            is IfStatement -> stmtHasReturnWithValue(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { stmtHasReturnWithValue(it) } ?: false)
+            is WhileStatement -> stmtHasReturnWithValue(stmt.statement)
+            is ForStatement -> stmtHasReturnWithValue(stmt.statement)
+            is ForInStatement -> stmtHasReturnWithValue(stmt.statement)
+            is ForOfStatement -> stmtHasReturnWithValue(stmt.statement)
+            is DoStatement -> stmtHasReturnWithValue(stmt.statement)
+            is LabeledStatement -> stmtHasReturnWithValue(stmt.statement)
+            is SwitchStatement -> stmt.caseBlock.any { clause ->
+                when (clause) {
+                    is CaseClause -> bodyHasReturnWithValue(clause.statements)
+                    is DefaultClause -> bodyHasReturnWithValue(clause.statements)
+                    else -> false
+                }
+            }
+            is TryStatement -> bodyHasReturnWithValue(stmt.tryBlock.statements) ||
+                (stmt.catchClause?.let { bodyHasReturnWithValue(it.block.statements) } ?: false) ||
+                (stmt.finallyBlock?.let { bodyHasReturnWithValue(it.statements) } ?: false)
+            // Do NOT recurse into nested function expressions
+            else -> false
+        }
+    }
+
+    /**
+     * Computes the actual span length of a return type annotation starting at [start] in [source].
+     * This is needed because TypeNode.end includes the next token due to Parser's getEnd() behavior.
+     * We scan forward from start counting identifier/type characters until a non-type character.
+     * For complex types (generic, union, etc.), we count balanced delimiters.
+     */
+    private fun getRetTypeSpanLength(source: String, start: Int): Int {
+        if (start >= source.length) return 0
+        var i = start
+        var depth = 0 // track < > [ ] ( ) nesting
+        while (i < source.length) {
+            val ch = source[i]
+            when {
+                ch == '<' || ch == '[' || ch == '(' -> { depth++; i++ }
+                ch == '>' || ch == ']' || ch == ')' -> {
+                    if (depth > 0) { depth--; i++ }
+                    else break // unmatched close = end of type
+                }
+                ch == '{' -> break // end of type before block
+                ch == ',' && depth == 0 -> break
+                ch == ';' && depth == 0 -> break
+                ch == '=' && depth == 0 -> break
+                ch == '\n' || ch == '\r' -> break
+                ch == '|' && depth == 0 -> { i++ } // union types
+                ch == '&' && depth == 0 -> { i++ } // intersection types
+                ch == '.' -> i++ // qualified names
+                ch.isLetterOrDigit() || ch == '_' || ch == '$' -> i++
+                ch == ' ' || ch == '\t' -> {
+                    // Space may be part of multi-word types ("number | string")
+                    // or end of type before '{'
+                    // Peek ahead
+                    val next = source.getOrNull(i + 1)
+                    if (next != null && (next == '|' || next == '&' || next == '[')) {
+                        i++ // part of union/intersection
+                    } else {
+                        break
+                    }
+                }
+                else -> break
+            }
+        }
+        return (i - start).coerceAtLeast(1)
+    }
+
+    /**
+     * Returns true if the type name represents void, undefined, or any.
+     */
+    private fun isVoidLikeTypeName(name: String): Boolean {
+        return name == "void" || name == "undefined" || name == "any" || name == "never"
+    }
+
+    /**
+     * Extracts the textual name of a type node for basic void/undefined/any check.
+     */
+    private fun getTypeNodeName(node: TypeNode, isAsync: Boolean): String? {
+        return when (node) {
+            is TypeReference -> {
+                val typeName = node.typeName
+                val baseName = when (typeName) {
+                    is Identifier -> typeName.text
+                    is QualifiedName -> typeName.right.text
+                    else -> null
+                }
+                // For async functions, Promise<void> and Promise<any> are void-like
+                if (isAsync && baseName == "Promise" && node.typeArguments?.size == 1) {
+                    val argName = getTypeNodeName(node.typeArguments[0], false)
+                    return if (argName != null && isVoidLikeTypeName(argName)) argName else baseName
+                }
+                baseName
+            }
+            is KeywordTypeNode -> when (node.kind) {
+                SyntaxKind.VoidKeyword -> "void"
+                SyntaxKind.AnyKeyword -> "any"
+                SyntaxKind.NeverKeyword -> "never"
+                SyntaxKind.UndefinedKeyword -> "undefined"
+                // number, string, boolean, bigint, symbol, object, unknown, null
+                // are all non-void types — return a non-null name so we report
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                SyntaxKind.BigIntKeyword -> "bigint"
+                SyntaxKind.SymbolKeyword -> "symbol"
+                SyntaxKind.ObjectKeyword -> "object"
+                SyntaxKind.UnknownKeyword -> "unknown"
+                SyntaxKind.NullKeyword -> "null"
+                else -> null
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Returns true if a list of statements always returns/throws on all paths.
+     * Used for TS7030 checking.
+     */
+    private fun bodyAlwaysReturns(stmts: List<Statement>): Boolean {
+        // If no statements, doesn't always return
+        if (stmts.isEmpty()) return false
+        // Walk through statements — find if some statement definitely terminates
+        for (stmt in stmts) {
+            if (statementAlwaysReturns(stmt)) return true
+        }
+        return false
+    }
+
+    /**
+     * Returns true if this statement always returns/throws on all code paths.
+     */
+    private fun statementAlwaysReturns(stmt: Statement): Boolean {
+        return when (stmt) {
+            is ReturnStatement -> true
+            is ThrowStatement -> true
+            is BreakStatement -> false  // break transfers control out of loop/switch, not "returns"
+            is ContinueStatement -> false
+            is Block -> bodyAlwaysReturns(stmt.statements)
+            is IfStatement -> {
+                val thenRet = statementAlwaysReturns(stmt.thenStatement)
+                val elseBranch = stmt.elseStatement
+                thenRet && elseBranch != null && statementAlwaysReturns(elseBranch)
+            }
+            is WhileStatement -> {
+                // while(true) with no break always terminates (infinite loop or always throws/returns)
+                isAlwaysTrue(stmt.expression) && !containsBreakOrReturn(stmt.statement)
+            }
+            is ForStatement -> {
+                // for(;;) with no break always terminates
+                stmt.condition == null && !containsBreakOrReturn(stmt.statement)
+            }
+            is DoStatement -> {
+                // do {} while (false) - body must always return
+                statementAlwaysReturns(stmt.statement) ||
+                    (isAlwaysTrue(stmt.expression) && !containsBreakOrReturn(stmt.statement))
+            }
+            is SwitchStatement -> {
+                // Switch always returns if it has a default clause and all clauses return
+                val hasDefault = stmt.caseBlock.any { it is DefaultClause }
+                if (!hasDefault) return false
+                // Check that every clause either falls through to one that returns or returns itself
+                switchAlwaysReturns(stmt.caseBlock)
+            }
+            is LabeledStatement -> statementAlwaysReturns(stmt.statement)
+            is TryStatement -> {
+                // try/catch: if both try and catch return, the whole statement returns
+                val tryRet = bodyAlwaysReturns(stmt.tryBlock.statements)
+                val catchRet = stmt.catchClause?.let { bodyAlwaysReturns(it.block.statements) } ?: true
+                tryRet && catchRet
+            }
+            is ExpressionStatement -> {
+                // IIFE or function call that always throws — check for iife pattern
+                when (val expr = stmt.expression) {
+                    is CallExpression -> {
+                        val func = expr.expression
+                        when (func) {
+                            is FunctionExpression -> {
+                                func.body?.let { bodyAlwaysReturns(it.statements) } ?: false
+                            }
+                            is ArrowFunction -> {
+                                val body = func.body
+                                when (body) {
+                                    is Block -> bodyAlwaysReturns(body.statements)
+                                    is ThrowStatement -> true
+                                    else -> false
+                                }
+                            }
+                            else -> false
+                        }
+                    }
+                    else -> false
+                }
+            }
+            else -> false
+        }
+    }
+
+    private fun switchAlwaysReturns(clauses: List<Node>): Boolean {
+        // Each clause either terminates or falls through to a clause that terminates
+        // Simple: check that there's a path through all clauses that always returns
+        val clauseTerminates = clauses.map { clause ->
+            when (clause) {
+                is CaseClause -> bodyAlwaysReturns(clause.statements)
+                is DefaultClause -> bodyAlwaysReturns(clause.statements)
+                else -> false
+            }
+        }
+        // Find the last clause — it must terminate (or the one before that falls through to it)
+        // Actually: switches always return if every "fall-through chain" ends in a return
+        // Simple heuristic: if every non-empty clause terminates, it always returns
+        return clauses.all { clause ->
+            val stmts = when (clause) {
+                is CaseClause -> clause.statements
+                is DefaultClause -> clause.statements
+                else -> emptyList()
+            }
+            stmts.isEmpty() || bodyAlwaysReturns(stmts)
+        }
+    }
+
+    private fun containsBreakOrReturn(stmt: Statement): Boolean {
+        return when (stmt) {
+            is BreakStatement -> true
+            is ReturnStatement -> true
+            is Block -> stmt.statements.any { containsBreakOrReturn(it) }
+            is IfStatement -> containsBreakOrReturn(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { containsBreakOrReturn(it) } ?: false)
+            is LabeledStatement -> containsBreakOrReturn(stmt.statement)
+            // Don't recurse into nested loops — breaks in them don't affect outer
+            else -> false
         }
     }
 }

@@ -146,6 +146,8 @@ data class CompilerOptions(
     val newLine: String? = null,
     val fullEmitPaths: Boolean = false,
     val allowUnreachableCode: Boolean? = null,
+    val allowUnusedLabels: Boolean? = null,
+    val noFallthroughCasesInSwitch: Boolean = false,
     val noResolve: Boolean = false,
     val noImplicitReferences: Boolean = false,
     val moduleDetection: String? = null,
@@ -226,7 +228,10 @@ data class ParsedSource(
  * [CompilerOptions] and the cleaned source (with directives and BOM stripped).
  */
 fun parseCompilerOptions(source: String): Pair<CompilerOptions, String> {
-    val cleaned = source.removePrefix("\uFEFF")
+    // Normalize line endings to LF to ensure consistent positions across platforms.
+    // This matches parseMultiFileSource behavior and prevents \r\n mismatch in
+    // diagnostic spans vs LF-normalized sourceLines in the error baseline formatter.
+    val cleaned = source.removePrefix("\uFEFF").replace("\r\n", "\n").replace("\r", "\n")
     val lines = cleaned.split('\n')
     val directiveLines = mutableListOf<Int>()
     val directives = mutableMapOf<String, String>()
@@ -424,6 +429,8 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "newline" -> options.copy(newLine = value.trim())
         "fullemitpaths" -> options.copy(fullEmitPaths = boolValue)
         "allowunreachablecode" -> options.copy(allowUnreachableCode = boolValue)
+        "allowunusedlabels" -> options.copy(allowUnusedLabels = boolValue)
+        "nofallthroughcasesinswitch" -> options.copy(noFallthroughCasesInSwitch = boolValue)
         "noresolve" -> options.copy(noResolve = boolValue)
         "noimplicitreferences" -> options.copy(noImplicitReferences = boolValue)
         "moduledetection" -> options.copy(moduleDetection = value.trim())
