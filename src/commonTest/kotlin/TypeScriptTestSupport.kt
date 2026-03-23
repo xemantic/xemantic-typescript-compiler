@@ -157,6 +157,10 @@ private fun stripDtsSection(baseline: String): String {
         if (trimmed.startsWith("!!!!")) {
             break
         }
+        // Strip DtsFileErrors section: "//// [DtsFileErrors]" and everything after
+        if (trimmed == "//// [DtsFileErrors]") {
+            break
+        }
         if (trimmed.startsWith("//// [") && trimmed.endsWith("]")) {
             val fileName = trimmed.removePrefix("//// [").removeSuffix("]")
             val baseName = fileName.substringAfterLast('/')
