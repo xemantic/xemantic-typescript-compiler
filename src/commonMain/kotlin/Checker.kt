@@ -8683,7 +8683,7 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             checkJumpInStatements(result.sourceFile.statements, source, fileName,
-                inIteration = false, inSwitch = false, labelNames = emptySet(),
+                inIteration = false, inSwitch = false, labelNames = emptyMap(),
                 crossedFunctionBoundary = false)
         }
     }
@@ -8694,7 +8694,7 @@ class Checker(
         fileName: String,
         inIteration: Boolean,
         inSwitch: Boolean,
-        labelNames: Set<String>,
+        labelNames: Map<String, Boolean>,
         crossedFunctionBoundary: Boolean,
     ) {
         for (stmt in statements) {
@@ -8708,7 +8708,7 @@ class Checker(
         fileName: String,
         inIteration: Boolean,
         inSwitch: Boolean,
-        labelNames: Set<String>,
+        labelNames: Map<String, Boolean>,
         crossedFunctionBoundary: Boolean,
     ) {
         when (stmt) {
@@ -8741,7 +8741,8 @@ class Checker(
             is ContinueStatement -> {
                 val label = stmt.label?.text
                 if (label != null) {
-                    if (label !in labelNames) {
+                    // continue can only jump to labels of iteration statements
+                    if (label !in labelNames || labelNames[label] != true) {
                         if (crossedFunctionBoundary) {
                             emitJumpDiagnostic(stmt, source, fileName, 1107,
                                 "Jump target cannot cross function boundary.")
@@ -8811,7 +8812,10 @@ class Checker(
                         length = stmt.label.text.length,
                     ))
                 }
-                val newLabels = labelNames + stmt.label.text
+                val isIterationLabel = stmt.statement is ForStatement || stmt.statement is ForInStatement ||
+                    stmt.statement is ForOfStatement || stmt.statement is WhileStatement ||
+                    stmt.statement is DoStatement
+                val newLabels = labelNames + (stmt.label.text to isIterationLabel)
                 checkJumpInStatement(stmt.statement, source, fileName,
                     inIteration, inSwitch, newLabels, crossedFunctionBoundary)
             }
@@ -8842,7 +8846,7 @@ class Checker(
             is FunctionDeclaration -> {
                 stmt.body?.let {
                     checkJumpInStatements(it.statements, source, fileName,
-                        inIteration = false, inSwitch = false, labelNames = emptySet(),
+                        inIteration = false, inSwitch = false, labelNames = emptyMap(),
                         crossedFunctionBoundary = true)
                 }
             }
@@ -8857,7 +8861,7 @@ class Checker(
                     }
                     body?.let {
                         checkJumpInStatements(it.statements, source, fileName,
-                            inIteration = false, inSwitch = false, labelNames = emptySet(),
+                            inIteration = false, inSwitch = false, labelNames = emptyMap(),
                             crossedFunctionBoundary = true)
                     }
                 }
@@ -8891,14 +8895,14 @@ class Checker(
             is ArrowFunction -> {
                 when (val body = expr.body) {
                     is Block -> checkJumpInStatements(body.statements, source, fileName,
-                        inIteration = false, inSwitch = false, labelNames = emptySet(),
+                        inIteration = false, inSwitch = false, labelNames = emptyMap(),
                         crossedFunctionBoundary = true)
                     else -> {}
                 }
             }
             is FunctionExpression -> {
                 checkJumpInStatements(expr.body.statements, source, fileName,
-                    inIteration = false, inSwitch = false, labelNames = emptySet(),
+                    inIteration = false, inSwitch = false, labelNames = emptyMap(),
                     crossedFunctionBoundary = true)
             }
             is ClassExpression -> {
@@ -8912,7 +8916,7 @@ class Checker(
                     }
                     body?.let {
                         checkJumpInStatements(it.statements, source, fileName,
-                            inIteration = false, inSwitch = false, labelNames = emptySet(),
+                            inIteration = false, inSwitch = false, labelNames = emptyMap(),
                             crossedFunctionBoundary = true)
                     }
                 }
@@ -9182,55 +9186,82 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            val statements = result.sourceFile.statements
+            checkExportAssignmentConflictsInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
 
-            // Find export assignments (export = X)
-            val exportAssignments = statements.filterIsInstance<ExportAssignment>()
-                .filter { it.isExportEquals }
-            if (exportAssignments.isEmpty()) continue
-
-            // Check for other exported elements
-            val hasOtherExports = statements.any { stmt ->
-                when (stmt) {
-                    is ExportDeclaration -> true
-                    is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                    is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
-                    else -> false
+    private fun checkExportAssignmentConflictsInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Find export assignments (export = X)
+        val exportAssignments = statements.filterIsInstance<ExportAssignment>()
+            .filter { it.isExportEquals }
+        if (exportAssignments.isEmpty()) {
+            // Still recurse into module declaration bodies
+            for (stmt in statements) {
+                if (stmt is ModuleDeclaration) {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkExportAssignmentConflictsInStatements(body.statements, source, fileName)
+                    }
                 }
             }
+            return
+        }
 
-            if (hasOtherExports) {
-                for (ea in exportAssignments) {
-                    // Find the start of the actual statement text (skip leading trivia)
-                    var start = ea.pos
-                    while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
-                        start++
-                    }
-                    // Compute length from start to end of current line (or semicolon)
-                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-                    var end = lineEnd
-                    // Trim trailing whitespace/CR
-                    while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) {
-                        end--
-                    }
-                    val length = end - start
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "An export assignment cannot be used in a module with other exported elements.",
-                        category = DiagnosticCategory.Error,
-                        code = 2309,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+        // Check for other exported elements
+        val hasOtherExports = statements.any { stmt ->
+            when (stmt) {
+                is ExportDeclaration -> true
+                is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
+                is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+                else -> false
+            }
+        }
+
+        if (hasOtherExports) {
+            for (ea in exportAssignments) {
+                // Find the start of the actual statement text (skip leading trivia)
+                var start = ea.pos
+                while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+                    start++
+                }
+                // Compute length from start to end of current line (or semicolon)
+                val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+                var end = lineEnd
+                // Trim trailing whitespace/CR
+                while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) {
+                    end--
+                }
+                val length = end - start
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "An export assignment cannot be used in a module with other exported elements.",
+                    category = DiagnosticCategory.Error,
+                    code = 2309,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+
+        // Recurse into module declarations
+        for (stmt in statements) {
+            if (stmt is ModuleDeclaration) {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    checkExportAssignmentConflictsInStatements(body.statements, source, fileName)
                 }
             }
         }

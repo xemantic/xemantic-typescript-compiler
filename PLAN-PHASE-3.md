@@ -2177,7 +2177,7 @@ TS2694 (4), TS5055 (4), TS1109 (4), TS2882 (3), TS2309 (3), TS5101/5107 (9).
 New codes with highest unlock potential: TS2322 (+293), TS2339 (+100), TS2345 (+79),
 TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+10).
 
-- [ ] **30a. TS6133 rest element in destructuring patterns** (~2 tests)
+- [x] **30a. TS6133 rest element span fix and TS1117 computed property duplicates** (+2 tests)
 
   `const {a, ...bar} = foo` — rest element binding (`...rest`) in object/array
   destructuring is not collected by `collectVarDeclNames`. The `RestElement` AST node
