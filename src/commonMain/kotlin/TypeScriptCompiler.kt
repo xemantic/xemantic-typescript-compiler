@@ -488,6 +488,8 @@ class TypeScriptCompiler {
                 val outputToSources = mutableMapOf<String, MutableList<String>>()
                 for (file in parsed.files) {
                     val fn = file.fileName
+                    // Skip node_modules files — they are not emitted
+                    if (fn.contains("node_modules")) continue
                     // Compute output JS path for compilable files
                     val jsOutput = when {
                         fn.endsWith(".ts") && !fn.endsWith(".d.ts") -> fn.substringBeforeLast(".ts") + ".js"
@@ -502,12 +504,10 @@ class TypeScriptCompiler {
                     }
                 }
                 // TS5055: output JS overwrites an input file
-                for ((jsOutput, sources) in outputToSources) {
-                    if (jsOutput in inputFileSet) {
-                        // Only flag if the input file is different from the source
-                        // (e.g., a.ts produces a.js, and a.js is also an input)
-                        val isOwnOutput = sources.size == 1 && sources[0] == jsOutput
-                        if (!isOwnOutput) {
+                // Skip when outDir is set (output goes elsewhere), noEmit, or emitDeclarationOnly
+                if (options.outDir == null && !options.noEmit && !options.emitDeclarationOnly) {
+                    for ((jsOutput, sources) in outputToSources) {
+                        if (jsOutput in inputFileSet) {
                             diagnostics.add(Diagnostic(
                                 message = "Cannot write file '$jsOutput' because it would overwrite input file.",
                                 category = DiagnosticCategory.Error,
