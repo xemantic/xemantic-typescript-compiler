@@ -16553,37 +16553,51 @@ class Checker(
                 when (stmt) {
                     is ExportAssignment -> {
                         if (!stmt.isExportEquals) {
-                            val start = stmt.pos
-                            var spanStart = start
-                            while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                            // Span ends at expression end (trimmed) + optional semicolon
-                            val exprEnd = stmt.expression.end
-                            var spanEnd = exprEnd
-                            // Skip whitespace after expression
-                            while (spanEnd < source.length && source[spanEnd].let { it == ' ' || it == '\t' }) spanEnd++
-                            // Include semicolon if present
-                            if (spanEnd < source.length && source[spanEnd] == ';') spanEnd++
-                            val length = (spanEnd - spanStart).coerceAtLeast(1)
-                            defaults.add(DefaultExportInfo(stmt, spanStart, length))
+                            val expr = stmt.expression
+                            if (expr is Identifier) {
+                                // `export default identifier` → report at the identifier position
+                                defaults.add(DefaultExportInfo(stmt, expr.pos, expr.text.length))
+                            } else {
+                                // `export default <complex expr>` → report at start of whole statement,
+                                // spanning through the expression end (+ optional semicolon).
+                                var spanStart = stmt.pos
+                                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                                val exprEnd = stmt.expression.end
+                                var spanEnd = exprEnd
+                                while (spanEnd < source.length && source[spanEnd].let { it == ' ' || it == '\t' }) spanEnd++
+                                if (spanEnd < source.length && source[spanEnd] == ';') spanEnd++
+                                val length = (spanEnd - spanStart).coerceAtLeast(1)
+                                defaults.add(DefaultExportInfo(stmt, spanStart, length))
+                            }
                         }
                     }
                     is FunctionDeclaration -> {
                         if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default in stmt.modifiers) {
-                            // Find "export" keyword before the function keyword
-                            val funcPos = stmt.pos
-                            val searchStart = (funcPos - 30).coerceAtLeast(0)
-                            val exportIdx = source.lastIndexOf("export", funcPos)
-                            val spanStart = if (exportIdx >= searchStart) exportIdx else funcPos
-                            defaults.add(DefaultExportInfo(stmt, spanStart, 6))
+                            // TypeScript reports at function name. For anonymous functions, at "export" keyword.
+                            val name = stmt.name
+                            if (name != null) {
+                                defaults.add(DefaultExportInfo(stmt, name.pos, name.text.length))
+                            } else {
+                                // Anonymous function: FunctionDeclaration.pos = "function" keyword position.
+                                // We need the "export" keyword which precedes "default function".
+                                // Search backwards from stmt.pos for "export".
+                                val exportStart = findExportKeywordBefore(source, stmt.pos)
+                                defaults.add(DefaultExportInfo(stmt, exportStart, 6))
+                            }
                         }
                     }
                     is ClassDeclaration -> {
                         if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default in stmt.modifiers) {
-                            val classPos = stmt.pos
-                            val searchStart = (classPos - 30).coerceAtLeast(0)
-                            val exportIdx = source.lastIndexOf("export", classPos)
-                            val spanStart = if (exportIdx >= searchStart) exportIdx else classPos
-                            defaults.add(DefaultExportInfo(stmt, spanStart, 6))
+                            // TypeScript reports at class name. For anonymous classes, at "export" keyword.
+                            val name = stmt.name
+                            if (name != null) {
+                                defaults.add(DefaultExportInfo(stmt, name.pos, name.text.length))
+                            } else {
+                                // Anonymous class: ClassDeclaration.pos = "class" keyword position.
+                                // We need the "export" keyword which precedes "default class".
+                                val exportStart = findExportKeywordBefore(source, stmt.pos)
+                                defaults.add(DefaultExportInfo(stmt, exportStart, 6))
+                            }
                         }
                     }
                     else -> {}
@@ -16592,17 +16606,80 @@ class Checker(
 
             if (defaults.size < 2) continue
 
+            val lastIdx = defaults.size - 1
+            val lastStmt = defaults[lastIdx].stmt
+            // When the last export is a FunctionDeclaration, it acts as the "canonical" binding:
+            // all preceding exports point to it with TS2752 "The first export default is here.",
+            // and the last export points back with TS2753 "Another export default is here."
+            // In all other cases, preceding exports point to the last with TS2753/TS6204,
+            // and the last export points to all preceding with TS2752.
+            val lastIsFunctionDecl = lastStmt is FunctionDeclaration
+
             // Report TS2528 on each default export with related info
             for (i in defaults.indices) {
                 val d = defaults[i]
                 val (line, character) = getLineAndCharacterOfPosition(source, d.start)
+                val isLast = i == lastIdx
 
-                // Related: point to the OTHER default export
-                val relatedIdx = if (i == 0) 1 else 0
-                val relD = defaults[relatedIdx]
-                val (relLine, relChar) = getLineAndCharacterOfPosition(source, relD.start)
-                val relCode = if (i == 0) 2752 else 2753
-                val relMessage = if (i == 0) "The first export default is here." else "Another export default is here."
+                val relatedInfoList = mutableListOf<Diagnostic>()
+
+                if (!isLast) {
+                    // Non-last export: point to the last one
+                    val relD = defaults[lastIdx]
+                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, relD.start)
+                    val relCode: Int
+                    val relMessage: String
+                    if (lastIsFunctionDecl) {
+                        // Last is FD: preceding exports use TS2752 "The first export default is here."
+                        relCode = 2752
+                        relMessage = "The first export default is here."
+                    } else if (i == 0) {
+                        // First export: TS2753 "Another export default is here."
+                        relCode = 2753
+                        relMessage = "Another export default is here."
+                    } else {
+                        // Non-first, non-last: TS6204 "and here."
+                        relCode = 6204
+                        relMessage = "and here."
+                    }
+                    relatedInfoList.add(Diagnostic(
+                        message = relMessage,
+                        category = DiagnosticCategory.Message,
+                        code = relCode,
+                        fileName = fileName,
+                        line = relLine,
+                        character = relChar,
+                        start = relD.start,
+                        length = relD.length,
+                    ))
+                } else {
+                    // Last export: point to all previous ones
+                    for (j in 0 until lastIdx) {
+                        val relD = defaults[j]
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, relD.start)
+                        val relCode: Int
+                        val relMessage: String
+                        if (lastIsFunctionDecl) {
+                            // Last is FD: use TS2753 "Another export default is here."
+                            relCode = 2753
+                            relMessage = "Another export default is here."
+                        } else {
+                            // Normal case: use TS2752 "The first export default is here."
+                            relCode = 2752
+                            relMessage = "The first export default is here."
+                        }
+                        relatedInfoList.add(Diagnostic(
+                            message = relMessage,
+                            category = DiagnosticCategory.Message,
+                            code = relCode,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = relD.start,
+                            length = relD.length,
+                        ))
+                    }
+                }
 
                 diagnostics.add(Diagnostic(
                     message = "A module cannot have multiple default exports.",
@@ -16613,19 +16690,23 @@ class Checker(
                     character = character,
                     start = d.start,
                     length = d.length,
-                    relatedInformation = listOf(Diagnostic(
-                        message = relMessage,
-                        category = DiagnosticCategory.Message,
-                        code = relCode,
-                        fileName = fileName,
-                        line = relLine,
-                        character = relChar,
-                        start = relD.start,
-                        length = relD.length,
-                    )),
+                    relatedInformation = relatedInfoList,
                 ))
             }
         }
+    }
+
+    /**
+     * Find the position of the `export` keyword that appears before a given position.
+     * Used when FunctionDeclaration/ClassDeclaration.pos is the keyword position (e.g. `function`)
+     * but we need the `export` keyword position for anonymous declarations.
+     */
+    private fun findExportKeywordBefore(source: String, stmtPos: Int): Int {
+        // Search backwards from stmtPos for "export" keyword.
+        // The pattern is "export default function/class" where stmtPos = function/class position.
+        val searchStart = (stmtPos - 30).coerceAtLeast(0)
+        val idx = source.lastIndexOf("export", stmtPos)
+        return if (idx in searchStart..stmtPos) idx else stmtPos
     }
 
     // -----------------------------------------------------------------------

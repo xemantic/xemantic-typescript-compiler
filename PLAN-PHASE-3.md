@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,362 passing (73.1%), 2,715 failing
+- **10,077 tests**, 7,365 passing (73.1%), 2,712 failing
+- **Session 2026-03-23**: TS2528 checkMultipleDefaultExports fix: correct positions (ExportAssignment→identifier or full-stmt, named FD/CD→name, anon FD/CD→export keyword), correct 2752/2753/6204 codes for 2+ defaults with FD-last swap logic (+3 tests)
 - **Session 2026-03-22c**: Binder canMerge Variable+Module fix (+1 test), isSymbolTypeOnly namespace-with-value-exports fix for `export = a` where `a` is declare namespace with value exports (+1 test), TS2552 ambient module exclusion from scope + NamespaceModule as suggestion candidate + KNOWN_GLOBALS ordering (+1 test)
 - **Session 2026-03-22b**: TS2552 spelling suggestions with Damerau-Levenshtein (+84 tests), parser error recovery (+14 tests), decorator metadata type serialization (+5 tests), cross-file const enum re-export elision, baseUrl module resolution in Checker
 - **Session 2026-03-21b**: Skip deprecated ES5/ES3/AMD/System/UMD JS emit tests (-475 tests, deprecated in TS6.0/removed in TS7.0/tsgo). Remove `let`/`const`→`var` downlevel code. Map `effectiveTarget` ES5→ES2015. Block comment whitespace preservation (+1). Parameter comment inline formatting (+2), string enum syntactic reverse mapping (+2), esModuleInterop helpers (+15), TS1036 first-only, yield isStartOfExpression (+2)
@@ -2146,6 +2147,24 @@ Analysis of 2,789 remaining failures:
   Test: `narrowedImports_assumeInitialized_ts compiles`.
 
   **Files:** `Checker.kt`
+
+---
+
+## Remaining failure analysis (session 2026-03-22c)
+
+**Tests passing**: 7,362 / 10,077 (73.1%)
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Error "none produced" | 1,718 | Dominated by TS2322, TS2339, TS2345 (type inference) |
+| Error diff | 723 | Top missing: TS2322 (114 tests), TS2304 (44), TS1005 (55), TS2728 (16); top FPs: TS1005 (62), TS1109 (42), TS2304 (41), TS7006 (36) |
+| JS emit | 273 | Small diffs: 30 tests with <= 4 line diffs |
+
+**Key patterns in error diffs:**
+- TS2728 related info missing (16 tests A-D batch): `'X' was also declared here.` for TS2300 duplicates, `'X' is declared here.` for TS2552 suggestions. Need to emit related info when emitting TS2300/TS2552.
+- TS6203 related info missing (9 tests A-D): `'x' was also declared here.` for TS2300 duplicate class/interface members. Same as TS2728 but appears as related code 6203.
+- TS6210 related info missing (9 tests A-D): `An argument for 'y' was not provided.` for TS2554 missing args. Related info pointing to optional parameter location.
+- Nearly all diff failures ALSO need type inference codes (TS2322/TS2403/TS2717) — can't pass by fixing related info alone.
 
 ---
 
