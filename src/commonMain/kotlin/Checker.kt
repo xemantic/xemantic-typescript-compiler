@@ -14756,13 +14756,39 @@ class Checker(
     }
 
     private fun checkModifiers(modifiers: Set<ModifierFlag>, source: String, fileName: String, stmtPos: Int) {
-        if (modifiers.size <= 1) return
+        if (modifiers.size <= 1) {
+            // Only 1 modifier in the set — could still be a duplicate if parser deduped
+            // (e.g. `declare declare var x` → modifiers = {Declare}).
+            // Only 'declare' and 'export' can appear as duplicates via parseDeclareDeclaration
+            // (other keywords like 'protected' can be property names, so skip)
+            if (modifiers.isEmpty() || (ModifierFlag.Declare !in modifiers && ModifierFlag.Export !in modifiers)) return
+        }
         // Check for duplicate modifiers by scanning the source text around the statement
         // Find the modifier keyword positions
         val modifierKeywords = listOf("export", "default", "declare", "abstract", "async",
             "static", "readonly", "public", "private", "protected", "override", "const", "accessor")
-        // Scan from stmtPos to find modifier keywords
+        // Scan backwards from stmtPos to find modifier keywords that precede the declaration keyword
+        // (needed because parseDeclareDeclaration consumes 'declare' before creating the statement)
         var pos = stmtPos
+        while (pos > 0) {
+            // Skip whitespace backwards
+            var p = pos - 1
+            while (p >= 0 && source[p].isWhitespace()) p--
+            if (p < 0) break
+            // Try to match a modifier keyword ending at p+1
+            var found = false
+            for (kw in modifierKeywords) {
+                val kwStart = p + 1 - kw.length
+                if (kwStart >= 0 &&
+                    source.substring(kwStart, kwStart + kw.length) == kw &&
+                    (kwStart == 0 || !source[kwStart - 1].isLetterOrDigit())) {
+                    pos = kwStart
+                    found = true
+                    break
+                }
+            }
+            if (!found) break
+        }
         val seen = mutableSetOf<String>()
         val end = (stmtPos + 200).coerceAtMost(source.length) // scan up to 200 chars
         while (pos < end) {
