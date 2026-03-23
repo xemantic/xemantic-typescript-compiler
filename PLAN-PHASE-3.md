@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,377 passing (73.3%), 2,700 failing
+- **10,077 tests**, 7,388 passing (73.3%), 2,689 failing
+- **Session 2026-03-23c**: +11 tests from analysis-driven fixes: TS6133 rest element span fix (+1), TS1117 computed property name duplicates (+1), TS1115 continue-to-non-loop label (+1), TS2309 export= in ambient modules (+3), TS1030 duplicate declare/export modifiers (+2), TS1015 parameter property without type (+1), TS2588 prefix increment through parens (+1), TS5053 reactNamespace+jsxFactory conflict (+1)
 - **Session 2026-03-23b**: TS7030/TS2355/TS2366 implicit return checks redesigned (+5 tests): `retTypeClass` classification (truly-void/pure-undefined/nullable/non-void), empty `return;` in non-void functions → TS7030 at `return;`, mixed empty+value returns without annotation → TS7030 at empty returns, `getRetTypeSpanLength` fixed for FunctionType and `=>` arrow in type spans
 - **Session 2026-03-23**: TS2528 checkMultipleDefaultExports fix: correct positions (ExportAssignment→identifier or full-stmt, named FD/CD→name, anon FD/CD→export keyword), correct 2752/2753/6204 codes for 2+ defaults with FD-last swap logic (+3 tests)
 - **Session 2026-03-22c**: Binder canMerge Variable+Module fix (+1 test), isSymbolTypeOnly namespace-with-value-exports fix for `export = a` where `a` is declare namespace with value exports (+1 test), TS2552 ambient module exclusion from scope + NamespaceModule as suggestion candidate + KNOWN_GLOBALS ordering (+1 test)
