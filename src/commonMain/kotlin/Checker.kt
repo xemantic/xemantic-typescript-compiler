@@ -67,6 +67,10 @@ class Checker(
     private fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
 
+    // Whether strict null checks are enabled (null/undefined not assignable to other types)
+    // MUST be declared before init {} to avoid Kotlin property initialization order issue
+    private val strictNullChecks: Boolean = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
+
     init {
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
@@ -19031,78 +19035,98 @@ class Checker(
     // -----------------------------------------------------------------------
 
     private fun checkTypeAssignability() {
+        val diagnosticsBefore = diagnostics.size
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            // Build a simple type map from variable declarations with type annotations
             val varTypes = mutableMapOf<String, String>()
-            checkTypeAssignabilityInStatements(result.sourceFile.statements, source, fileName, varTypes)
+            checkTypeAssignabilityInStatements(result.sourceFile.statements, source, fileName, varTypes, returnType = null)
+        }
+        // Post-filter: suppress TS2322 for null/undefined→NamedType when the named type
+        // also has TS2304 (unresolved) or TS2314 (wrong type arg count) in the same file
+        // Collect type names with errors per file: "$fileName" -> set of type names
+        val errorTypeNames = mutableMapOf<String, MutableSet<String>>()
+        for (d in diagnostics) {
+            val fn = d.fileName ?: continue
+            val msg = d.message ?: continue
+            when (d.code) {
+                2304 -> {
+                    // "Cannot find name 'X'." → extract X
+                    val match = Regex("Cannot find name '([^']+)'").find(msg)
+                    match?.groupValues?.get(1)?.let { errorTypeNames.getOrPut(fn) { mutableSetOf() }.add(it) }
+                }
+                2314 -> {
+                    // "Generic type 'X<T>' requires N type argument(s)." → extract X
+                    val match = Regex("Generic type '([^<']+)").find(msg)
+                    match?.groupValues?.get(1)?.let { errorTypeNames.getOrPut(fn) { mutableSetOf() }.add(it) }
+                }
+            }
+        }
+        if (errorTypeNames.isNotEmpty()) {
+            val newDiags = diagnostics.filterIndexed { idx, d ->
+                if (idx >= diagnosticsBefore && d.code == 2322) {
+                    val fn = d.fileName
+                    val msg = d.message ?: ""
+                    // Extract target type name from "Type 'X' is not assignable to type 'Y'."
+                    val targetMatch = Regex("not assignable to type '([^']+)'").find(msg)
+                    val targetName = targetMatch?.groupValues?.get(1)
+                    if (fn != null && targetName != null) {
+                        val errorNames = errorTypeNames[fn]
+                        errorNames == null || targetName !in errorNames
+                    } else true
+                } else true
+            }
+            if (newDiags.size != diagnostics.size) {
+                diagnostics.clear()
+                diagnostics.addAll(newDiags)
+            }
         }
     }
 
     private fun checkTypeAssignabilityInStatements(
         statements: List<Statement>, source: String, fileName: String,
-        varTypes: MutableMap<String, String>
+        varTypes: MutableMap<String, String>, returnType: String?
     ) {
         for (stmt in statements) {
             when (stmt) {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
-                        val typeAnnotation = decl.type
-                        val name = decl.name
-                        if (typeAnnotation != null && name is Identifier) {
-                            val declaredType = resolveSimpleTypeName(typeAnnotation)
-                            if (declaredType != null) {
-                                varTypes[name.text] = declaredType
-                                // Check initializer
-                                val init = decl.initializer
-                                if (init != null) {
-                                    val exprType = inferSimpleExprType(init, varTypes)
-                                    if (exprType != null && !isAssignableTo(exprType, declaredType)) {
-                                        emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(init))
-                                    }
-                                }
-                            }
-                        }
+                        checkVarDeclAssignability(decl, source, fileName, varTypes)
                     }
                 }
                 is ExpressionStatement -> {
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes)
                 }
-                is FunctionDeclaration -> {
-                    stmt.body?.let {
-                        val innerTypes = varTypes.toMutableMap()
-                        // Add parameters with type annotations
-                        for (param in stmt.parameters) {
-                            val paramType = param.type
-                            val paramName = param.name
-                            if (paramType != null && paramName is Identifier) {
-                                val t = resolveSimpleTypeName(paramType)
-                                if (t != null) innerTypes[paramName.text] = t
-                            }
-                        }
-                        checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes)
+                is ReturnStatement -> {
+                    if (returnType != null) {
+                        checkReturnAssignability(stmt, returnType, source, fileName, varTypes)
                     }
                 }
-                is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap())
-                is IfStatement -> {
-                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes)
-                    stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes) }
+                is FunctionDeclaration -> {
+                    checkFunctionBody(stmt.body, stmt.type, stmt.parameters, source, fileName, varTypes)
                 }
-                is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes)
-                is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes)
-                is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes)
-                is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes)
-                is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes)
+                is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType)
+                is IfStatement -> {
+                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType)
+                    stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType) }
+                }
+                is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+                is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+                is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+                is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+                is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
                 is ClassDeclaration -> {
                     for (member in stmt.members) {
                         when (member) {
-                            is MethodDeclaration -> member.body?.let {
-                                checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap())
+                            is MethodDeclaration -> {
+                                checkFunctionBody(member.body, member.type, member.parameters, source, fileName, varTypes)
                             }
                             is Constructor -> member.body?.let {
-                                checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap())
+                                checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType = null)
+                            }
+                            is GetAccessor -> {
+                                checkFunctionBody(member.body, member.type, emptyList(), source, fileName, varTypes)
                             }
                             else -> {}
                         }
@@ -19110,51 +19134,121 @@ class Checker(
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
-                    if (body is ModuleBlock) checkTypeAssignabilityInStatements(body.statements, source, fileName, varTypes.toMutableMap())
+                    if (body is ModuleBlock) checkTypeAssignabilityInStatements(body.statements, source, fileName, varTypes.toMutableMap(), returnType = null)
                 }
                 is TryStatement -> {
-                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap())
-                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap()) }
-                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap()) }
+                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType)
+                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType) }
+                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType) }
                 }
                 is SwitchStatement -> {
                     for (clause in stmt.caseBlock) {
                         when (clause) {
-                            is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap())
-                            is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap())
+                            is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType)
+                            is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType)
                             else -> {}
                         }
                     }
                 }
+                is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
                 else -> {}
             }
         }
     }
 
-    private fun checkTypeAssignabilityInStmt(stmt: Statement, source: String, fileName: String, varTypes: MutableMap<String, String>) {
+    private fun checkFunctionBody(
+        body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
+        source: String, fileName: String, varTypes: MutableMap<String, String>
+    ) {
+        body?.let {
+            val innerTypes = varTypes.toMutableMap()
+            for (param in parameters) {
+                val paramType = param.type
+                val paramName = param.name
+                if (paramType != null && paramName is Identifier) {
+                    val t = resolveSimpleTypeName(paramType)
+                    if (t != null) innerTypes[paramName.text] = t
+                }
+            }
+            val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
+            checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType)
+        }
+    }
+
+    private fun checkTypeAssignabilityInStmt(
+        stmt: Statement, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, returnType: String?
+    ) {
         when (stmt) {
-            is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap())
+            is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType)
             is ExpressionStatement -> checkAssignmentExpression(stmt.expression, source, fileName, varTypes)
+            is ReturnStatement -> {
+                if (returnType != null) checkReturnAssignability(stmt, returnType, source, fileName, varTypes)
+            }
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    val typeAnnotation = decl.type
-                    val name = decl.name
-                    if (typeAnnotation != null && name is Identifier) {
-                        val declaredType = resolveSimpleTypeName(typeAnnotation)
-                        if (declaredType != null) {
-                            varTypes[name.text] = declaredType
-                            val init = decl.initializer
-                            if (init != null) {
-                                val exprType = inferSimpleExprType(init, varTypes)
-                                if (exprType != null && !isAssignableTo(exprType, declaredType)) {
-                                    emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(init))
-                                }
-                            }
-                        }
+                    checkVarDeclAssignability(decl, source, fileName, varTypes)
+                }
+            }
+            is IfStatement -> {
+                checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType)
+                stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType) }
+            }
+            is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+            is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+            is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+            is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+            is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType)
+                        is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType)
+                        else -> {}
                     }
                 }
             }
+            is TryStatement -> {
+                checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType)
+                stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType) }
+                stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType) }
+            }
+            is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType)
             else -> {}
+        }
+    }
+
+    private fun checkVarDeclAssignability(
+        decl: VariableDeclaration, source: String, fileName: String,
+        varTypes: MutableMap<String, String>
+    ) {
+        val typeAnnotation = decl.type
+        val name = decl.name
+        if (typeAnnotation != null && name is Identifier) {
+            val declaredType = resolveSimpleTypeName(typeAnnotation)
+            if (declaredType != null) {
+                varTypes[name.text] = declaredType
+                val init = decl.initializer
+                if (init != null) {
+                    val exprType = inferSimpleExprType(init, varTypes)
+                    if (exprType != null && !isAssignableTo(exprType, declaredType)) {
+                        emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(init))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun checkReturnAssignability(
+        stmt: ReturnStatement, returnType: String, source: String, fileName: String,
+        varTypes: Map<String, String>
+    ) {
+        val expr = stmt.expression ?: return // bare return; handled by TS7030
+        val exprType = inferSimpleExprType(expr, varTypes) ?: return
+        if (!isAssignableTo(exprType, returnType)) {
+            // Squiggle goes under "return" keyword
+            val returnKeywordLength = 6 // "return"
+            emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isSimpleLiteral(expr))
         }
     }
 
@@ -19173,7 +19267,8 @@ class Checker(
         }
     }
 
-    /** Resolve a simple type annotation to a type name string. Returns null for complex types. */
+    /** Resolve a type annotation to a type name string. Returns null for complex types we can't handle.
+     *  Named types (from TypeReference) are prefixed with "@" to distinguish from keyword types. */
     private fun resolveSimpleTypeName(typeNode: TypeNode): String? {
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
@@ -19191,7 +19286,25 @@ class Checker(
                 SyntaxKind.NullKeyword -> "null"
                 else -> null
             }
-            else -> null // Complex types (unions, intersections, generics, etc.) not handled
+            is TypeReference -> {
+                // Only resolve simple type references (no type arguments like A<T>)
+                // Generic types need full type resolution which we don't have
+                if (typeNode.typeArguments != null) return null
+                // Resolve type reference — use last identifier for display name
+                // Prefix with "@" to mark as named type (not a keyword primitive)
+                val name = getTypeReferenceLastName(typeNode.typeName)
+                if (name != null) "@$name" else null
+            }
+            else -> null
+        }
+    }
+
+    /** Get the last identifier name from a TypeReference typeName (Identifier or QualifiedName). */
+    private fun getTypeReferenceLastName(node: Node): String? {
+        return when (node) {
+            is Identifier -> node.text
+            is QualifiedName -> node.right.text
+            else -> null
         }
     }
 
@@ -19217,7 +19330,13 @@ class Checker(
                 else -> null
             }
             is ParenthesizedExpression -> inferSimpleExprType(expr.expression, varTypes)
-            is AsExpression -> inferSimpleExprType(expr.expression, varTypes) // type assertion
+            is AsExpression -> {
+                // Type assertion: return the asserted type, not the inner expression type
+                val assertedType = resolveSimpleTypeName(expr.type)
+                if (assertedType != null) assertedType
+                else inferSimpleExprType(expr.expression, varTypes)
+            }
+            is ArrayLiteralExpression -> "array" // Used internally for assignability
             else -> null
         }
     }
@@ -19235,14 +19354,28 @@ class Checker(
         }
     }
 
-    /** Check if sourceType is assignable to targetType. */
+    /** Check if sourceType is assignable to targetType.
+     *  Named types (from TypeReference) are prefixed with "@". */
     private fun isAssignableTo(sourceType: String, targetType: String): Boolean {
         if (sourceType == targetType) return true
         if (targetType == "any" || targetType == "unknown") return true
         if (sourceType == "any") return true
         // undefined is assignable to void
         if (sourceType == "undefined" && targetType == "void") return true
-        // null is assignable to any/unknown (already handled above) but NOT void
+        // When strict null checks are off, null and undefined are assignable to everything
+        if (!strictNullChecks && (sourceType == "null" || sourceType == "undefined")) return true
+        // For named types (TypeReference, prefixed with "@"), we can only confidently say
+        // that null/undefined are NOT assignable. Other source types might actually be
+        // assignable via structural typing, type aliases, etc.
+        if (targetType.startsWith("@")) {
+            // null and undefined are never assignable to named types (with strict null checks)
+            return sourceType != "null" && sourceType != "undefined"
+        }
+        if (sourceType.startsWith("@")) {
+            // Named source type vs keyword target — can't determine without full resolution
+            return true // safe default: assume assignable to avoid FPs
+        }
+        // null is assignable to any/unknown (already handled above) but NOT void or other types
         // number literal subtypes
         if (sourceType == "number" && targetType == "object") return false
         if (sourceType == "string" && targetType == "object") return false
@@ -19252,7 +19385,10 @@ class Checker(
 
     private fun emitTS2322(start: Int, length: Int, sourceType: String, targetType: String, source: String, fileName: String, hasElaboration: Boolean = false) {
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        val message = "Type '$sourceType' is not assignable to type '$targetType'."
+        // Strip "@" prefix from named types for display
+        val displaySource = sourceType.removePrefix("@")
+        val displayTarget = targetType.removePrefix("@")
+        val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
         diagnostics.add(Diagnostic(
             message = message,
             category = DiagnosticCategory.Error,
