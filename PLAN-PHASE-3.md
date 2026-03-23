@@ -2249,7 +2249,7 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`
 
-- [ ] **30d. TS2882 side-effect import gaps** (~3 tests)
+- [x] **30d. TS2882 side-effect import gaps** (~3 tests) — 1 of 3 fixed (relative specifier only)
 
   `es6ImportWithoutFromClause`, `es6ImportWithoutFromClauseNonInstantiatedModule`,
   `extendGlobalThis` — side-effect imports (`import "mod"`) should fire TS2882

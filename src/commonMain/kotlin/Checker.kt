@@ -8573,12 +8573,7 @@ class Checker(
      * Emitted when an import module specifier doesn't resolve to a known file.
      */
     private fun checkUnresolvedModules() {
-        // Only check in single-file compilations to avoid false positives
-        // in multi-file tests where we can't fully resolve module paths
-        if (binderResults.size > 1) return
-        // Also skip when the source had @Filename directives — companion files
-        // (.json, .js) may not have been parsed but exist as siblings
-        if (isMultiFileSource) return
+        val isMultiFile = binderResults.size > 1 || isMultiFileSource
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -8601,11 +8596,23 @@ class Checker(
                     is StringLiteralNode -> specifier.text
                     else -> continue
                 }
-                if (isSideEffectImport) {
-                    // Side-effect imports use TS2882 instead of TS2307/TS2792
-                    emitTS2882(specifier, moduleName, source, fileName)
+                if (isMultiFile) {
+                    // In multi-file mode, only check side-effect imports with relative specifiers
+                    // that can't resolve to any compilation file. Bare specifiers are too hard
+                    // to resolve correctly (depends on module kind — AMD uses bare names).
+                    if (isSideEffectImport) {
+                        val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+                        if (isRelative && resolveModuleSpecifier(moduleName) == null) {
+                            emitTS2882(specifier, moduleName, source, fileName)
+                        }
+                    }
+                    // Skip TS2307/TS2792 in multi-file to avoid FPs
                 } else {
-                    emitTS2307(specifier, moduleName, source, fileName)
+                    if (isSideEffectImport) {
+                        emitTS2882(specifier, moduleName, source, fileName)
+                    } else {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                 }
             }
         }
