@@ -158,6 +158,25 @@ class Transformer(
     // Causes the __makeTemplateObject helper to be prepended to the output statements.
     private var needsMakeTemplateObjectHelper = false
 
+    // Tracks the order in which helpers are first needed during transformation.
+    // Helpers are emitted in this order so the output matches TypeScript's first-usage ordering.
+    // E.g., when a class has @decorator AND async methods, __decorate comes before __awaiter
+    // because the class decorator is processed before the async method body.
+    private val helperUsageOrder = mutableListOf<String>()
+
+    /** Record a helper as needed, tracking usage order for emission ordering. */
+    private fun requireHelper(name: String) {
+        when (name) {
+            "__makeTemplateObject" -> if (!needsMakeTemplateObjectHelper) { needsMakeTemplateObjectHelper = true; helperUsageOrder.add(name) }
+            "__awaiter" -> if (!needsAwaiterHelper) { needsAwaiterHelper = true; helperUsageOrder.add(name) }
+            "__asyncGenerator" -> if (!needsAsyncGeneratorHelper) { needsAsyncGeneratorHelper = true; helperUsageOrder.add(name) }
+            "__rest" -> if (!needsRestHelper) { needsRestHelper = true; helperUsageOrder.add(name) }
+            "__decorate" -> if (!needsDecorateHelper) { needsDecorateHelper = true; helperUsageOrder.add(name) }
+            "__metadata" -> if (!needsMetadataHelper) { needsMetadataHelper = true; helperUsageOrder.add(name) }
+            "__param" -> if (!needsParamHelper) { needsParamHelper = true; helperUsageOrder.add(name) }
+        }
+    }
+
     // Counter for anonymous export default classes/functions (default_1, default_2, ...)
     private var anonDefaultCounter = 0
 
@@ -216,6 +235,7 @@ class Transformer(
         needsParamHelper = false
         needsMetadataHelper = false
         needsMakeTemplateObjectHelper = false
+        helperUsageOrder.clear()
         topLevelStatements = sourceFile.statements
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
@@ -318,22 +338,29 @@ class Transformer(
         val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
 
         // Collect helpers to inject at top of file.
-        // Order matches TypeScript's emit order (by helper priority/dependency):
-        // __makeTemplateObject, __awaiter, __asyncGenerator/__await, __rest, __decorate, __metadata, __param
+        // Helpers are emitted in the order they were first needed during transformation,
+        // matching TypeScript's first-usage ordering (e.g., __decorate before __awaiter when
+        // a class has both @decorator and async methods — decorator is processed first).
         val helpers = mutableListOf<RawStatement>()
         // importHelpers: true only skips inline helpers for module files (where tslib can be require()'d).
         // Script files (non-module) can't import tslib, so they still need inline helpers.
         val skipHelpers = options.noEmitHelpers || (options.importHelpers && isCurrentFileModule)
-        if (needsMakeTemplateObjectHelper && !skipHelpers) helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
-        if (needsAwaiterHelper && !skipHelpers) helpers.add(RawStatement(code = AWAITER_HELPER))
-        if (needsAsyncGeneratorHelper && !skipHelpers) {
-            helpers.add(RawStatement(code = AWAIT_HELPER))
-            helpers.add(RawStatement(code = ASYNC_GENERATOR_HELPER))
+        if (!skipHelpers) {
+            for (helperName in helperUsageOrder) {
+                when (helperName) {
+                    "__makeTemplateObject" -> helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
+                    "__awaiter" -> helpers.add(RawStatement(code = AWAITER_HELPER))
+                    "__asyncGenerator" -> {
+                        helpers.add(RawStatement(code = AWAIT_HELPER))
+                        helpers.add(RawStatement(code = ASYNC_GENERATOR_HELPER))
+                    }
+                    "__rest" -> helpers.add(RawStatement(code = REST_HELPER))
+                    "__decorate" -> helpers.add(RawStatement(code = DECORATE_HELPER))
+                    "__metadata" -> helpers.add(RawStatement(code = METADATA_HELPER))
+                    "__param" -> helpers.add(RawStatement(code = PARAM_HELPER))
+                }
+            }
         }
-        if (needsRestHelper && !skipHelpers) helpers.add(RawStatement(code = REST_HELPER))
-        if (needsDecorateHelper && !skipHelpers) helpers.add(RawStatement(code = DECORATE_HELPER))
-        if (needsMetadataHelper && !skipHelpers) helpers.add(RawStatement(code = METADATA_HELPER))
-        if (needsParamHelper && !skipHelpers) helpers.add(RawStatement(code = PARAM_HELPER))
 
         // When helpers are present, lift leading comments from the first transformed statement
         // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
@@ -443,19 +470,20 @@ class Transformer(
             !isCjsFileName && isESModuleFormat(effectiveModule, fileName)
         ) {
             val tslibNames = mutableListOf<String>()
-            // Collect helpers that are actually used (same set as the skipHelpers check above):
+            // Collect helpers that are actually used, in first-usage order.
             // Note: skipHelpers=true when importHelpers && isCurrentFileModule, so helpers list is empty.
-            // We detect usage via the needsXxx flags.
-            if (needsMakeTemplateObjectHelper) tslibNames.add("__makeTemplateObject")
-            if (needsAwaiterHelper) tslibNames.add("__awaiter")
-            if (needsAsyncGeneratorHelper) {
-                tslibNames.add("__asyncGenerator")
-                tslibNames.add("__await")
+            // We detect usage via the helperUsageOrder list.
+            for (helperName in helperUsageOrder) {
+                when (helperName) {
+                    "__makeTemplateObject" -> tslibNames.add("__makeTemplateObject")
+                    "__awaiter" -> tslibNames.add("__awaiter")
+                    "__asyncGenerator" -> { tslibNames.add("__asyncGenerator"); tslibNames.add("__await") }
+                    "__rest" -> tslibNames.add("__rest")
+                    "__decorate" -> tslibNames.add("__decorate")
+                    "__metadata" -> tslibNames.add("__metadata")
+                    "__param" -> tslibNames.add("__param")
+                }
             }
-            if (needsRestHelper) tslibNames.add("__rest")
-            if (needsDecorateHelper) tslibNames.add("__decorate")
-            if (needsMetadataHelper) tslibNames.add("__metadata")
-            if (needsParamHelper) tslibNames.add("__param")
             if (tslibNames.isNotEmpty()) {
                 val tslibImport = ImportDeclaration(
                     importClause = ImportClause(
@@ -5938,7 +5966,7 @@ class Transformer(
             inAsyncGeneratorBody = prevInAsyncGeneratorBody
 
             if (isAsyncGenerator) {
-                needsAsyncGeneratorHelper = true
+                requireHelper("__asyncGenerator")
                 functionScopeDepth++
                 val transformedParams = transformParameters(decl.parameters)
                 functionScopeDepth--
@@ -5959,7 +5987,7 @@ class Transformer(
                     asteriskToken = false,
                 ))
             } else if (isAsync) {
-                needsAwaiterHelper = true
+                requireHelper("__awaiter")
                 // Transform parameters inside the function scope so async arrows in
                 // default parameters see the correct functionScopeDepth for `this` binding.
                 functionScopeDepth++
@@ -6188,7 +6216,7 @@ class Transformer(
                     ),
                     pos = -1, end = -1,
                 ))
-                needsRestHelper = true
+                requireHelper("__rest")
             } else if (name is ObjectBindingPattern && options.effectiveTarget < ScriptTarget.ES2018 &&
                 name.elements.any { elem -> !elem.dotDotDotToken && elem.name is ObjectBindingPattern &&
                     elem.name.elements.any { it.dotDotDotToken } }) {
@@ -6372,7 +6400,7 @@ class Transformer(
             pos = -1, end = -1,
         )
         parts.add(BinaryExpression(left = restTarget, operator = Equals, right = restCall, pos = -1, end = -1))
-        needsRestHelper = true
+        requireHelper("__rest")
 
         return when {
             parts.size == 1 -> parts[0]
@@ -6764,7 +6792,7 @@ class Transformer(
                 }
                 inAsyncBody = prevInAsyncBody
                 if (isAsync) {
-                    needsAwaiterHelper = true
+                    requireHelper("__awaiter")
                     val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
                     // Arrow functions inside a regular function scope capture `this` from the enclosing function;
                     // at the top level (functionScopeDepth == 0) there's no meaningful `this`, so use void 0.
@@ -6834,7 +6862,7 @@ class Transformer(
                 inAsyncBody = prevInAsyncBody
                 inAsyncGeneratorBody = prevInAsyncGenBody
                 if (isAsyncGenerator) {
-                    needsAsyncGeneratorHelper = true
+                    requireHelper("__asyncGenerator")
                     val innerName = expr.name?.text?.let { "${it}_1" }
                     val transformedParams = transformParameters(expr.parameters)
                     val asyncGenBody = Block(
@@ -6853,7 +6881,7 @@ class Transformer(
                         asteriskToken = false,
                     )
                 } else if (isAsync) {
-                    needsAwaiterHelper = true
+                    requireHelper("__awaiter")
                     val awaiterBody = Block(
                         statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), body = transformedBody))),
                         multiLine = true,
@@ -7380,7 +7408,7 @@ class Transformer(
         inAsyncBody = prevInAsyncBody
         inAsyncGeneratorBody = prevInAsyncGenBody
         if (isAsyncGenerator && transformedBody != null) {
-            needsAsyncGeneratorHelper = true
+            requireHelper("__asyncGenerator")
             val methodName = (method.name as? Identifier)?.text
             val innerName = methodName?.let { "${it}_1" }
             val transformedParams = transformParameters(method.parameters)
@@ -7401,7 +7429,7 @@ class Transformer(
             )
         }
         if (isAsync && transformedBody != null) {
-            needsAwaiterHelper = true
+            requireHelper("__awaiter")
             val awaiterBody = Block(
                 statements = listOf(ReturnStatement(expression = makeAwaiterCall(syntheticId("this"), body = transformedBody))),
                 multiLine = true,
@@ -7609,7 +7637,7 @@ class Transformer(
         }
 
         // Has invalid escapes: transform to tag(__makeTemplateObject([cooked...], [raw...]), ...exprs)
-        needsMakeTemplateObjectHelper = true
+        requireHelper("__makeTemplateObject")
 
         val void0 = VoidExpression(
             expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1
@@ -7689,7 +7717,7 @@ class Transformer(
                     )
                 )
                 restStmts.add(VariableStatement(declarationList = restDecl, pos = -1, end = -1))
-                needsRestHelper = true
+                requireHelper("__rest")
             } else {
                 newParams.add(param.copy(
                     name = transformBindingName(name),
@@ -7808,7 +7836,7 @@ class Transformer(
                     i.copy(declarations = listOf(decl.copy(name = name, initializer = tempId)))
                 )
                 val restStmt = VariableStatement(declarationList = restDecl, pos = -1, end = -1)
-                needsRestHelper = true
+                requireHelper("__rest")
                 // Wrap original body to also execute the destructuring first
                 val origBody = transformStatementSingle(stmt.statement)
                 val newBodyStmts = mutableListOf<Statement>(restStmt)
@@ -8146,17 +8174,35 @@ class Transformer(
     // -----------------------------------------------------------------
 
     private fun transformClassDeclaration(decl: ClassDeclaration): List<Statement> {
+        val hasClassDecorators = options.experimentalDecorators && !decl.decorators.isNullOrEmpty()
+        val hasAnyDecorators = options.experimentalDecorators && (
+            hasClassDecorators || classHasMemberDecorators(decl)
+        )
+
+        // Mark decorator helpers needed BEFORE transforming the class body,
+        // so that __decorate/__metadata/__param appear before __awaiter in the helper ordering
+        // (decorator is conceptually processed before the async method bodies).
+        if (hasAnyDecorators) {
+            requireHelper("__decorate")
+            if (options.emitDecoratorMetadata) {
+                // Mark __metadata as needed before class body transform so it precedes __awaiter
+                requireHelper("__metadata")
+            }
+            // If any member or ctor param decorators exist, __param may be needed
+            if (decl.members.filterIsInstance<Constructor>().firstOrNull()?.parameters?.any {
+                    !it.decorators.isNullOrEmpty()
+                } == true
+            ) {
+                requireHelper("__param")
+            }
+        }
+
         val result = transformClassBody(
             name = decl.name,
             typeParameters = decl.typeParameters,
             heritageClauses = decl.heritageClauses,
             members = decl.members,
             modifiers = decl.modifiers,
-        )
-
-        val hasClassDecorators = options.experimentalDecorators && !decl.decorators.isNullOrEmpty()
-        val hasAnyDecorators = options.experimentalDecorators && (
-            hasClassDecorators || classHasMemberDecorators(decl)
         )
 
         if (!hasAnyDecorators) {
@@ -8172,7 +8218,6 @@ class Transformer(
         }
 
         // --- Legacy decorator transform ---
-        needsDecorateHelper = true
         val isDefault = ModifierFlag.Default in decl.modifiers
         val className = decl.name?.text
             ?: if (isDefault) "default_${++anonDefaultCounter}" else null
@@ -8405,7 +8450,7 @@ class Transformer(
 
             // Add __param entries for parameter decorators
             if (hasParamDecorators) {
-                needsParamHelper = true
+                requireHelper("__param")
                 for ((paramIndex, paramDecs) in paramDecorators) {
                     for (dec in paramDecs) {
                         decoratorExprs.add(
@@ -8424,7 +8469,7 @@ class Transformer(
 
             // Add __metadata entries for emitDecoratorMetadata
             if (options.emitDecoratorMetadata && (hasMethodDecorators || hasParamDecorators)) {
-                needsMetadataHelper = true
+                requireHelper("__metadata")
                 if (isProperty) {
                     // design:type for properties
                     decoratorExprs.add(makeMetadataCall("design:type",
@@ -8705,7 +8750,7 @@ class Transformer(
 
         // Add __param entries for constructor parameter decorators
         if (ctorParamDecorators.isNotEmpty()) {
-            needsParamHelper = true
+            requireHelper("__param")
             for ((paramIndex, paramDecs) in ctorParamDecorators) {
                 for (dec in paramDecs) {
                     decoratorExprs.add(
@@ -8724,7 +8769,7 @@ class Transformer(
 
         // emitDecoratorMetadata: add design:paramtypes for constructor parameters
         if (options.emitDecoratorMetadata && constructorParams != null) {
-            needsMetadataHelper = true
+            requireHelper("__metadata")
             // Exclude `this` parameter (TypeScript-only annotation) from paramtypes
             val effectiveParams = constructorParams.filter { param -> (param.name as? Identifier)?.text != "this" }
             val paramTypes = effectiveParams.map { param ->
