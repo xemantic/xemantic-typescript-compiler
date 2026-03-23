@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,365 passing (73.1%), 2,712 failing
+- **10,077 tests**, 7,377 passing (73.3%), 2,700 failing
+- **Session 2026-03-23b**: TS7030/TS2355/TS2366 implicit return checks redesigned (+5 tests): `retTypeClass` classification (truly-void/pure-undefined/nullable/non-void), empty `return;` in non-void functions → TS7030 at `return;`, mixed empty+value returns without annotation → TS7030 at empty returns, `getRetTypeSpanLength` fixed for FunctionType and `=>` arrow in type spans
 - **Session 2026-03-23**: TS2528 checkMultipleDefaultExports fix: correct positions (ExportAssignment→identifier or full-stmt, named FD/CD→name, anon FD/CD→export keyword), correct 2752/2753/6204 codes for 2+ defaults with FD-last swap logic (+3 tests)
 - **Session 2026-03-22c**: Binder canMerge Variable+Module fix (+1 test), isSymbolTypeOnly namespace-with-value-exports fix for `export = a` where `a` is declare namespace with value exports (+1 test), TS2552 ambient module exclusion from scope + NamespaceModule as suggestion candidate + KNOWN_GLOBALS ordering (+1 test)
 - **Session 2026-03-22b**: TS2552 spelling suggestions with Damerau-Levenshtein (+84 tests), parser error recovery (+14 tests), decorator metadata type serialization (+5 tests), cross-file const enum re-export elision, baseUrl module resolution in Checker
@@ -2149,6 +2150,8 @@ Analysis of 2,789 remaining failures:
   **Files:** `Checker.kt`
 
 - [x] **29a. TS2323/TS2528/TS2393 for multiple `export default` forms** (+10 tests)
+
+- [x] **29b. TS7030/TS2355/TS2366 implicit return checks** (+5 tests)
 
   Full classification of duplicate `export default` forms: DECL (class/function/interface
   declarations and value-identifier ExportAssignments), REEXPORT (ExportDeclaration with
