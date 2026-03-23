@@ -134,10 +134,12 @@ class Checker(
         if (options.noFallthroughCasesInSwitch) {
             checkFallthroughCases()
         }
-        // 18d. Check not all code paths return a value (TS7030) and TS2355
-        if (options.noImplicitReturns) {
-            checkImplicitReturns()
-        }
+        // 18d. Check not all code paths return a value (TS7030/TS2355/TS2366).
+        // Always run (not gated by noImplicitReturns) because TS2355 fires for functions with
+        // explicit non-void return type and no return statements, regardless of noImplicitReturns.
+        // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
+        // functions with definitely-non-nullable return types.
+        checkImplicitReturns()
         // 19. Check type used as value (TS2693)
         checkTypeUsedAsValue()
         // 20. Check always-truthy expressions (TS2872)
@@ -18126,53 +18128,106 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        // If the function always returns/throws on all paths, no error
-        if (bodyAlwaysReturns(body.statements)) return
-
-        // Determine if the body has any return-with-value statement
-        val hasAnyReturn = bodyHasReturnWithValue(body.statements)
-
-        // Check if the return type annotation is present and is non-void/undefined/any
-        val nonVoidRetTypeName = retType?.let {
-            val name = getTypeNodeName(it, isAsync)
-            if (name != null && !isVoidLikeTypeName(name)) name else null
+        // Check if the return type annotation is present and classify it:
+        // - "truly-void": void/any/never (and unions containing them) → suppress all checks
+        // - "pure-undefined": exactly `undefined` keyword (not a union) → suppress all checks
+        // - "nullable": union containing undefined but not void/any/never (e.g. `string | undefined`) → TS7030 if hasAnyReturn
+        // - "non-void": all other types (number, string, unknown, non-nullable unions) → trigger TS2355/TS2366/TS7030
+        // - null (no annotation): use function name position for TS7030
+        val retTypeName = retType?.let { getTypeNodeName(it, isAsync) }
+        val retTypeClass = when {
+            retType == null -> null
+            retTypeName == null -> "non-void"  // unknown type (complex type we can't parse) → treat as non-void
+            isVoidLikeTypeName(retTypeName) && retTypeName != "undefined" -> "truly-void"  // void/any/never
+            retTypeName == "undefined" -> if (retType is KeywordTypeNode) "pure-undefined" else "nullable"
+            else -> "non-void"  // number, string, unknown, union, etc.
         }
 
-        if (nonVoidRetTypeName != null && retType != null) {
-            // Report at the return type annotation
-            // Use the type name length to determine span (retType.end is contaminated by next token)
-            val start = retType.pos
-            val spanLen = getRetTypeSpanLength(source, start)
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            if (hasAnyReturn) {
-                // TS7030: some paths return, some don't
-                diagnostics.add(Diagnostic(
-                    message = "Not all code paths return a value.",
-                    category = DiagnosticCategory.Error,
-                    code = 7030,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = spanLen,
-                ))
-            } else {
-                // TS2355: function has non-void return type but never returns
-                diagnostics.add(Diagnostic(
-                    message = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.",
-                    category = DiagnosticCategory.Error,
-                    code = 2355,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = spanLen,
-                ))
+        // truly-void and pure-undefined return types suppress all implicit-return checks
+        if (retTypeClass == "truly-void" || retTypeClass == "pure-undefined") return
+
+        // If the function always returns/throws on all paths, check for problematic empty returns
+        val alwaysReturns = bodyAlwaysReturns(body.statements)
+        if (alwaysReturns) {
+            // Case 1: explicit non-void return type + body always returns via empty returns → TS7030 at each empty return
+            if (retTypeClass == "non-void" && retType != null) {
+                reportEmptyReturnsInBody(body.statements, source, fileName)
+            }
+            // Case 2: no explicit return type, but some paths return values and some do empty returns → TS7030 at empty returns
+            // (detectable without type inference: hasAnyReturn strict-mode = true means there's a non-void return)
+            if (retType == null) {
+                val hasValueReturn = bodyHasReturnWithValue(body.statements, anyExpr = false)
+                if (hasValueReturn) {
+                    reportEmptyReturnsInBody(body.statements, source, fileName)
+                }
             }
             return
         }
 
-        // No explicit non-void return type: TS7030 at function name if some paths return
+        // Determine if the body has any return-with-value statement.
+        // When an explicit return type annotation is present, use liberal counting (any `return <expr>`,
+        // including `return undefined`, `return callExpr()`). Without annotation, use strict counting
+        // (only syntactically non-void expressions, excluding `return undefined` identifier).
+        val hasAnyReturn = bodyHasReturnWithValue(body.statements, anyExpr = retType != null)
+
+        // A type is "definitely non-nullable" for TS2366: it's non-void AND not unknown AND not nullable
+        val isDefinitelyNonNullable = retTypeClass == "non-void" && retTypeName != "unknown"
+
+        // For explicit return type annotations: report at the return type annotation
+        if (retType != null) {
+            // "nullable" (e.g. `string | undefined`) only triggers TS7030 if there are some return-with-value stmts
+            if (retTypeClass == "nullable" && !hasAnyReturn) return
+
+            val start = retType.pos
+            val spanLen = getRetTypeSpanLength(source, start)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+            when {
+                // TS2366: noImplicitReturns + non-async + definitely non-nullable return type
+                // "Function lacks ending return statement and return type does not include 'undefined'."
+                options.noImplicitReturns && !isAsync && isDefinitelyNonNullable -> {
+                    diagnostics.add(Diagnostic(
+                        message = "Function lacks ending return statement and return type does not include 'undefined'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2366,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = spanLen,
+                    ))
+                }
+                hasAnyReturn -> {
+                    // TS7030: some paths return, some don't
+                    diagnostics.add(Diagnostic(
+                        message = "Not all code paths return a value.",
+                        category = DiagnosticCategory.Error,
+                        code = 7030,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = spanLen,
+                    ))
+                }
+                retTypeClass == "non-void" -> {
+                    // TS2355: function has non-void return type but never returns
+                    diagnostics.add(Diagnostic(
+                        message = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.",
+                        category = DiagnosticCategory.Error,
+                        code = 2355,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = spanLen,
+                    ))
+                }
+            }
+            return
+        }
+
+        // No explicit return type: TS7030 at function name if some paths return with a value
         if (hasAnyReturn && funcNameRef != null) {
             val (line, character) = getLineAndCharacterOfPosition(source, funcNameRef.pos)
             diagnostics.add(Diagnostic(
@@ -18189,11 +18244,74 @@ class Checker(
     }
 
     /**
-     * Returns true if the body contains any `return <expr>` statement where expr is
-     * syntactically non-void (literals, arithmetic, etc.). Does NOT recurse into nested function bodies.
+     * Report TS7030 at each empty `return;` statement in the body (and nested blocks).
+     * Used when a function with non-void return type has all paths covered by return statements
+     * but some returns are empty (returning undefined implicitly).
+     * Does NOT recurse into nested function bodies.
      */
-    private fun bodyHasReturnWithValue(stmts: List<Statement>): Boolean {
-        return stmts.any { stmtHasReturnWithValue(it) }
+    private fun reportEmptyReturnsInBody(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            reportEmptyReturnsInStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun reportEmptyReturnsInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ReturnStatement -> {
+                if (stmt.expression == null) {
+                    // Empty return; in non-void function
+                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Not all code paths return a value.",
+                        category = DiagnosticCategory.Error,
+                        code = 7030,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = stmt.pos,
+                        length = "return".length,
+                    ))
+                }
+            }
+            is Block -> reportEmptyReturnsInBody(stmt.statements, source, fileName)
+            is IfStatement -> {
+                reportEmptyReturnsInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { reportEmptyReturnsInStmt(it, source, fileName) }
+            }
+            is ForStatement -> reportEmptyReturnsInStmt(stmt.statement, source, fileName)
+            is ForInStatement -> reportEmptyReturnsInStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> reportEmptyReturnsInStmt(stmt.statement, source, fileName)
+            is WhileStatement -> reportEmptyReturnsInStmt(stmt.statement, source, fileName)
+            is DoStatement -> reportEmptyReturnsInStmt(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> reportEmptyReturnsInBody(clause.statements, source, fileName)
+                        is DefaultClause -> reportEmptyReturnsInBody(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                reportEmptyReturnsInBody(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { reportEmptyReturnsInBody(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { reportEmptyReturnsInBody(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> reportEmptyReturnsInStmt(stmt.statement, source, fileName)
+            // Don't recurse into nested function declarations/expressions (they have their own checks)
+            is FunctionDeclaration -> {}
+            else -> {}
+        }
+    }
+
+    /**
+     * Returns true if the body contains any `return <expr>` statement.
+     * When [anyExpr] is true: counts any non-null expression (even `return undefined`, `return callExpr()`).
+     * When [anyExpr] is false (default): uses [isNonVoidExpression] filter (conservative).
+     * Does NOT recurse into nested function bodies.
+     */
+    private fun bodyHasReturnWithValue(stmts: List<Statement>, anyExpr: Boolean = false): Boolean {
+        return stmts.any { stmtHasReturnWithValue(it, anyExpr) }
     }
 
     /**
@@ -18219,35 +18337,45 @@ class Checker(
             is NoSubstitutionTemplateLiteralNode -> true
             // CallExpression might return void — skip counting these without type info
             is CallExpression -> false
-            // TypeAssertionExpression, AsExpression — check inner
-            is TypeAssertionExpression -> isNonVoidExpression(expr.expression)
-            is AsExpression -> isNonVoidExpression(expr.expression)
+            // TypeAssertionExpression (<T>expr): count unless cast type is any/void/undefined
+            is TypeAssertionExpression -> {
+                val typeName = getTypeNodeName(expr.type, false)
+                typeName != null && !isVoidLikeTypeName(typeName)
+            }
+            // AsExpression (expr as T): count unless asserted type is any/void/undefined
+            is AsExpression -> {
+                val typeName = getTypeNodeName(expr.type, false)
+                typeName != null && !isVoidLikeTypeName(typeName)
+            }
             else -> false  // conservative
         }
     }
 
-    private fun stmtHasReturnWithValue(stmt: Statement): Boolean {
+    private fun stmtHasReturnWithValue(stmt: Statement, anyExpr: Boolean = false): Boolean {
         return when (stmt) {
-            is ReturnStatement -> stmt.expression != null && isNonVoidExpression(stmt.expression!!)
-            is Block -> bodyHasReturnWithValue(stmt.statements)
-            is IfStatement -> stmtHasReturnWithValue(stmt.thenStatement) ||
-                (stmt.elseStatement?.let { stmtHasReturnWithValue(it) } ?: false)
-            is WhileStatement -> stmtHasReturnWithValue(stmt.statement)
-            is ForStatement -> stmtHasReturnWithValue(stmt.statement)
-            is ForInStatement -> stmtHasReturnWithValue(stmt.statement)
-            is ForOfStatement -> stmtHasReturnWithValue(stmt.statement)
-            is DoStatement -> stmtHasReturnWithValue(stmt.statement)
-            is LabeledStatement -> stmtHasReturnWithValue(stmt.statement)
+            is ReturnStatement -> {
+                val expr = stmt.expression ?: return false
+                if (anyExpr) true else isNonVoidExpression(expr)
+            }
+            is Block -> bodyHasReturnWithValue(stmt.statements, anyExpr)
+            is IfStatement -> stmtHasReturnWithValue(stmt.thenStatement, anyExpr) ||
+                (stmt.elseStatement?.let { stmtHasReturnWithValue(it, anyExpr) } ?: false)
+            is WhileStatement -> stmtHasReturnWithValue(stmt.statement, anyExpr)
+            is ForStatement -> stmtHasReturnWithValue(stmt.statement, anyExpr)
+            is ForInStatement -> stmtHasReturnWithValue(stmt.statement, anyExpr)
+            is ForOfStatement -> stmtHasReturnWithValue(stmt.statement, anyExpr)
+            is DoStatement -> stmtHasReturnWithValue(stmt.statement, anyExpr)
+            is LabeledStatement -> stmtHasReturnWithValue(stmt.statement, anyExpr)
             is SwitchStatement -> stmt.caseBlock.any { clause ->
                 when (clause) {
-                    is CaseClause -> bodyHasReturnWithValue(clause.statements)
-                    is DefaultClause -> bodyHasReturnWithValue(clause.statements)
+                    is CaseClause -> bodyHasReturnWithValue(clause.statements, anyExpr)
+                    is DefaultClause -> bodyHasReturnWithValue(clause.statements, anyExpr)
                     else -> false
                 }
             }
-            is TryStatement -> bodyHasReturnWithValue(stmt.tryBlock.statements) ||
-                (stmt.catchClause?.let { bodyHasReturnWithValue(it.block.statements) } ?: false) ||
-                (stmt.finallyBlock?.let { bodyHasReturnWithValue(it.statements) } ?: false)
+            is TryStatement -> bodyHasReturnWithValue(stmt.tryBlock.statements, anyExpr) ||
+                (stmt.catchClause?.let { bodyHasReturnWithValue(it.block.statements, anyExpr) } ?: false) ||
+                (stmt.finallyBlock?.let { bodyHasReturnWithValue(it.statements, anyExpr) } ?: false)
             // Do NOT recurse into nested function expressions
             else -> false
         }
@@ -18255,14 +18383,14 @@ class Checker(
 
     /**
      * Computes the actual span length of a return type annotation starting at [start] in [source].
-     * This is needed because TypeNode.end includes the next token due to Parser's getEnd() behavior.
-     * We scan forward from start counting identifier/type characters until a non-type character.
-     * For complex types (generic, union, etc.), we count balanced delimiters.
+     * TypeNode.end includes the next scanned token (the `{` of the body), so we must scan forward
+     * to find the actual end of the type text.
+     * Tracks nesting depth so spaces inside `()`, `<>`, `[]` do not break the scan.
      */
     private fun getRetTypeSpanLength(source: String, start: Int): Int {
         if (start >= source.length) return 0
         var i = start
-        var depth = 0 // track < > [ ] ( ) nesting
+        var depth = 0
         while (i < source.length) {
             val ch = source[i]
             when {
@@ -18271,26 +18399,29 @@ class Checker(
                     if (depth > 0) { depth--; i++ }
                     else break // unmatched close = end of type
                 }
-                ch == '{' -> break // end of type before block
-                ch == ',' && depth == 0 -> break
-                ch == ';' && depth == 0 -> break
-                ch == '=' && depth == 0 -> break
+                ch == '{' -> break // start of body block
                 ch == '\n' || ch == '\r' -> break
-                ch == '|' && depth == 0 -> { i++ } // union types
-                ch == '&' && depth == 0 -> { i++ } // intersection types
-                ch == '.' -> i++ // qualified names
+                depth > 0 -> i++ // inside delimiters: consume everything
+                ch == ',' || ch == ';' -> break
+                ch == '=' -> {
+                    // `=>` is the arrow in a function type like `(A) => B` — consume it
+                    if (source.getOrNull(i + 1) == '>') { i += 2 }
+                    else break // plain `=` ends the type
+                }
+                ch == '>' -> i++ // part of `=>` arrow (consumed after `=`)
+                ch == '|' || ch == '&' || ch == '.' -> i++
                 ch.isLetterOrDigit() || ch == '_' || ch == '$' -> i++
                 ch == ' ' || ch == '\t' -> {
-                    // Space may be part of multi-word types ("number | string")
-                    // or end of type before '{'
-                    // Peek ahead
+                    // At depth 0: space is valid inside union/intersection ("number | string")
+                    // or before `=>` in a function type
                     val next = source.getOrNull(i + 1)
-                    if (next != null && (next == '|' || next == '&' || next == '[')) {
-                        i++ // part of union/intersection
+                    if (next != null && (next == '|' || next == '&' || next == '[' || next == '=' || next.isLetter())) {
+                        i++ // part of multi-word type or function type arrow
                     } else {
                         break
                     }
                 }
+                ch == '?' -> i++ // optional types
                 else -> break
             }
         }
@@ -18339,6 +18470,20 @@ class Checker(
                 SyntaxKind.UnknownKeyword -> "unknown"
                 SyntaxKind.NullKeyword -> "null"
                 else -> null
+            }
+            is UnionType -> {
+                // Union type classification for TS2355/TS7030/TS2366:
+                // - Contains void/any/never → truly void-like, suppress all checks ("void")
+                // - Contains undefined (but not void) → nullable union, suppress TS2355/TS2366
+                //   but NOT TS7030 (e.g. `string | undefined`) → return "undefined"
+                // - No void/any/never/undefined → non-nullable union, may trigger TS7030 → return "union"
+                val memberNames = node.types.mapNotNull { getTypeNodeName(it, false) }
+                when {
+                    memberNames.any { it == "void" || it == "any" || it == "never" } -> "void"
+                    memberNames.any { it == "undefined" } -> "undefined"
+                    memberNames.isEmpty() -> null
+                    else -> "union" // non-nullable union (e.g. `string | number`)
+                }
             }
             else -> null
         }
