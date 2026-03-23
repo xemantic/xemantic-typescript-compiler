@@ -4091,6 +4091,8 @@ class Checker(
                         if (isAnyType(decl.type)) continue
                         // Skip if type annotation is a bare generic reference (TS2314 error type)
                         if (isUnresolvedGenericType(decl.type)) continue
+                        // Skip import types (e.g. `import('./b').B`) — we can't resolve them
+                        if (typeContainsImportType(decl.type)) continue
                         // Skip types that include undefined — variable is implicitly initialized to undefined
                         if (typeIncludesUndefined(decl.type)) continue
                         // Skip if the type annotation is a reference to a namespace symbol.
@@ -4131,6 +4133,24 @@ class Checker(
         // Check for keyword type nodes like `any` and `unknown`
         // Both are top types — a variable typed `unknown` can hold any value including undefined
         return type.kind == SyntaxKind.AnyKeyword || type.kind == SyntaxKind.UnknownKeyword
+    }
+
+    /**
+     * Returns true if the type annotation contains an import type (e.g. `import('./b').B`).
+     * We can't resolve import types, so we skip TS2564 checking for properties with such types.
+     */
+    private fun typeContainsImportType(type: Node?): Boolean {
+        if (type == null) return false
+        if (type is ImportType) return true
+        // Check nested: QualifiedName inside TypeReference, or union/intersection members
+        return when (type) {
+            is TypeReference -> typeContainsImportType(type.typeName)
+            is UnionType -> type.types.any { typeContainsImportType(it) }
+            is IntersectionType -> type.types.any { typeContainsImportType(it) }
+            is ArrayType -> typeContainsImportType(type.elementType)
+            is QualifiedName -> typeContainsImportType(type.left) || typeContainsImportType(type.right)
+            else -> false
+        }
     }
 
     /**
@@ -4835,6 +4855,8 @@ class Checker(
             // Skip if type annotation is a bare generic reference (would trigger TS2314)
             // TypeScript doesn't flag TS2564 on error types
             if (isUnresolvedGenericType(member.type)) continue
+            // Skip import types (e.g. `import('./b').B`) — we can't resolve them
+            if (typeContainsImportType(member.type)) continue
             // Skip `typeof X` where X is a class member or unresolved name — TypeScript resolves
             // these as error types and suppresses TS2564. Only check `typeof X` when X is
             // definitely NOT a class member (TypeScript would resolve it as a valid type).
@@ -8441,7 +8463,8 @@ class Checker(
         val effectiveModule = options.effectiveModule
         // ES module kinds: ES2015, ES2020, ES2022, ESNext
         // Node16/Node18/Node20/NodeNext support import= require() via createRequire, so exclude them
-        val isEsModule = effectiveModule >= ModuleKind.ES2015 && !effectiveModule.isNodeNext
+        // Preserve mode defers module format decision per-file, so exclude it too
+        val isEsModule = effectiveModule >= ModuleKind.ES2015 && !effectiveModule.isNodeNext && effectiveModule != ModuleKind.Preserve
         if (!isEsModule) return
 
         for (result in binderResults) {
