@@ -9797,22 +9797,26 @@ class Transformer(
             }
 
             is GetAccessor -> {
-                // Abstract accessors and overload signatures (no body) are removed
-                if (element.body == null || ModifierFlag.Abstract in element.modifiers) return null
+                // Abstract accessors are removed (type-only)
+                if (ModifierFlag.Abstract in element.modifiers) return null
+                // Null body: error recovery for `get foo(): T;` in non-declare class — keep as empty block
                 element.copy(
                     parameters = transformParameters(element.parameters),
                     type = null,
-                    body = transformBlock(element.body, isFunctionScope = true),
+                    body = element.body?.let { transformBlock(it, isFunctionScope = true) }
+                        ?: Block(statements = emptyList(), multiLine = false, pos = -1, end = -1),
                     modifiers = stripMemberModifiers(element.modifiers),
                 )
             }
 
             is SetAccessor -> {
-                // Abstract accessors and overload signatures (no body) are removed
-                if (element.body == null || ModifierFlag.Abstract in element.modifiers) return null
+                // Abstract accessors are removed (type-only)
+                if (ModifierFlag.Abstract in element.modifiers) return null
+                // Null body: error recovery for `set foo(v: T);` in non-declare class — keep as empty block
                 element.copy(
                     parameters = transformParameters(element.parameters),
-                    body = transformBlock(element.body, isFunctionScope = true),
+                    body = element.body?.let { transformBlock(it, isFunctionScope = true) }
+                        ?: Block(statements = emptyList(), multiLine = false, pos = -1, end = -1),
                     modifiers = stripMemberModifiers(element.modifiers),
                 )
             }

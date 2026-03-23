@@ -18059,6 +18059,7 @@ class Checker(
      */
     private fun checkFunctionForImplicitReturn(decl: FunctionDeclaration, source: String, fileName: String) {
         val body = decl.body ?: return
+        if (decl.asteriskToken) return // generators always return an iterator — no implicit-return check
         val retType = decl.type
         val isAsync = ModifierFlag.Async in decl.modifiers
         // Only check if there's an explicit return type annotation (for TS2355) or for TS7030
@@ -18069,6 +18070,7 @@ class Checker(
 
     private fun checkMethodForImplicitReturn(decl: MethodDeclaration, source: String, fileName: String) {
         val body = decl.body ?: return
+        if (decl.asteriskToken) return // generators always return an iterator — no implicit-return check
         val retType = decl.type
         val isAsync = ModifierFlag.Async in decl.modifiers
         val nameNode = decl.name
@@ -18094,6 +18096,7 @@ class Checker(
 
     private fun checkFuncExprForImplicitReturn(expr: FunctionExpression, source: String, fileName: String) {
         val body = expr.body ?: return
+        if (expr.asteriskToken) return // generators always return an iterator
         val retType = expr.type
         val isAsync = ModifierFlag.Async in expr.modifiers
         val nameRef = expr.name?.let { FuncRef(it.pos, it.text.length) }
@@ -18140,7 +18143,7 @@ class Checker(
             retTypeName == null -> "non-void"  // unknown type (complex type we can't parse) → treat as non-void
             isVoidLikeTypeName(retTypeName) && retTypeName != "undefined" -> "truly-void"  // void/any/never
             retTypeName == "undefined" -> if (retType is KeywordTypeNode) "pure-undefined" else "nullable"
-            else -> "non-void"  // number, string, unknown, union, etc.
+            else -> "non-void"  // number, string, unknown, union, function-type, etc.
         }
 
         // truly-void and pure-undefined return types suppress all implicit-return checks
@@ -18185,7 +18188,8 @@ class Checker(
             when {
                 // TS2366: noImplicitReturns + non-async + definitely non-nullable return type
                 // "Function lacks ending return statement and return type does not include 'undefined'."
-                options.noImplicitReturns && !isAsync && isDefinitelyNonNullable -> {
+                // Only fires when there are no value-returning paths outside try blocks.
+                options.noImplicitReturns && !isAsync && isDefinitelyNonNullable && !hasAnyReturnOutsideTry(body.statements) -> {
                     diagnostics.add(Diagnostic(
                         message = "Function lacks ending return statement and return type does not include 'undefined'.",
                         category = DiagnosticCategory.Error,
@@ -18198,7 +18202,7 @@ class Checker(
                     ))
                 }
                 hasAnyReturn -> {
-                    // TS7030: some paths return, some don't
+                    // TS7030: some paths return with a value, some don't
                     diagnostics.add(Diagnostic(
                         message = "Not all code paths return a value.",
                         category = DiagnosticCategory.Error,
@@ -18227,8 +18231,10 @@ class Checker(
             return
         }
 
-        // No explicit return type: TS7030 at function name if some paths return with a value
-        if (hasAnyReturn && funcNameRef != null) {
+        // No explicit return type: TS7030 at function name only when noImplicitReturns is set
+        // Without noImplicitReturns, TypeScript does NOT report TS7030 for unannotated functions
+        // even when they have mixed returns (some paths return, some don't).
+        if (options.noImplicitReturns && hasAnyReturn && funcNameRef != null) {
             val (line, character) = getLineAndCharacterOfPosition(source, funcNameRef.pos)
             diagnostics.add(Diagnostic(
                 message = "Not all code paths return a value.",
@@ -18382,6 +18388,47 @@ class Checker(
     }
 
     /**
+     * Returns true if the body has any return-with-value statement OUTSIDE of try blocks.
+     * Used to distinguish TS2366 (no value returns outside try) from TS7030 (mixed returns).
+     * Returns inside try blocks don't count — TypeScript handles these as "protected paths."
+     */
+    private fun hasAnyReturnOutsideTry(stmts: List<Statement>): Boolean {
+        for (stmt in stmts) {
+            if (stmtHasReturnWithValueOutsideTry(stmt)) return true
+        }
+        return false
+    }
+
+    private fun stmtHasReturnWithValueOutsideTry(stmt: Statement): Boolean {
+        return when (stmt) {
+            is ReturnStatement -> {
+                val expr = stmt.expression ?: return false
+                // anyExpr=true: any return with expression counts (we only call with retType!=null)
+                true
+            }
+            is Block -> hasAnyReturnOutsideTry(stmt.statements)
+            is IfStatement -> stmtHasReturnWithValueOutsideTry(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { stmtHasReturnWithValueOutsideTry(it) } ?: false)
+            is WhileStatement -> stmtHasReturnWithValueOutsideTry(stmt.statement)
+            is ForStatement -> stmtHasReturnWithValueOutsideTry(stmt.statement)
+            is ForInStatement -> stmtHasReturnWithValueOutsideTry(stmt.statement)
+            is ForOfStatement -> stmtHasReturnWithValueOutsideTry(stmt.statement)
+            is DoStatement -> stmtHasReturnWithValueOutsideTry(stmt.statement)
+            is LabeledStatement -> stmtHasReturnWithValueOutsideTry(stmt.statement)
+            is SwitchStatement -> stmt.caseBlock.any { clause ->
+                when (clause) {
+                    is CaseClause -> hasAnyReturnOutsideTry(clause.statements)
+                    is DefaultClause -> hasAnyReturnOutsideTry(clause.statements)
+                    else -> false
+                }
+            }
+            // TryStatement: returns inside try/catch/finally are "protected" — don't count
+            is TryStatement -> false
+            else -> false
+        }
+    }
+
+    /**
      * Computes the actual span length of a return type annotation starting at [start] in [source].
      * TypeNode.end includes the next scanned token (the `{` of the body), so we must scan forward
      * to find the actual end of the type text.
@@ -18485,6 +18532,7 @@ class Checker(
                     else -> "union" // non-nullable union (e.g. `string | number`)
                 }
             }
+            is FunctionType -> "function-type"  // definitively non-void (a function type is always an object)
             else -> null
         }
     }

@@ -1524,10 +1524,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val params = parseParameterList()
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            // Error recovery: report missing '{' and create empty body
+            // Getter without a body: `get length(): number;` (ambient) or `get pgF()` (error recovery).
+            // Report missing '{' only if the current token is not a semicolon (error recovery case).
             if (token != SyntaxKind.Semicolon) reportErrorAtPrevTokenEnd("'{' expected.")
             parseSemicolon()
-            Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
+            null  // Return null body — Transformer synthesizes empty Block for concrete (non-abstract) classes
         }
         val trailing = trailingComments()
         return GetAccessor(
