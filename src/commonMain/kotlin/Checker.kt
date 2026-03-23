@@ -376,7 +376,14 @@ class Checker(
                     if (state == ModuleInstanceState.Instantiated || state == null) {
                         hasValueDecl = true
                     } else {
-                        hasTypeOnlyDecl = true
+                        // Even a NonInstantiated namespace can be a value if it has value exports
+                        // (e.g. `declare namespace a { export const x: number }; export = a`)
+                        val hasValueExports = symbol.exports?.values?.any { it.flags.hasAny(SymbolFlags.Value) } == true
+                        if (hasValueExports) {
+                            hasValueDecl = true
+                        } else {
+                            hasTypeOnlyDecl = true
+                        }
                     }
                 }
                 is VariableDeclaration, is FunctionDeclaration,

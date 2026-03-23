@@ -385,6 +385,10 @@ class Binder(private val options: CompilerOptions) {
         // Enum + Module
         if (existing.hasAny(SymbolFlags.Enum) && incoming.hasAny(SymbolFlags.Module)) return true
         if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Enum)) return true
+        // Variable + Module (e.g. `declare const b: T; declare namespace b { ... }`)
+        // TypeScript allows namespace augmentation of const/let/var declarations.
+        if (existing.hasAny(SymbolFlags.Variable) && incoming.hasAny(SymbolFlags.Module)) return true
+        if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Variable)) return true
         // Enum + Enum (merge across declarations)
         if (existing.hasAny(SymbolFlags.Enum) && incoming.hasAny(SymbolFlags.Enum)) return true
         // var + var (re-declarations allowed)
