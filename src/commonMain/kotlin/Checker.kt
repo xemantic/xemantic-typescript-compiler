@@ -6652,6 +6652,35 @@ class Checker(
                 collectInferTypeNames(type.type, scope)
             }
             is RestType -> collectInferTypeNames(type.type, scope)
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is PropertyDeclaration -> member.type?.let { collectInferTypeNames(it, scope) }
+                        is MethodDeclaration -> {
+                            member.parameters.forEach { p -> p.type?.let { collectInferTypeNames(it, scope) } }
+                            member.type?.let { collectInferTypeNames(it, scope) }
+                        }
+                        is IndexSignature -> {
+                            member.parameters.forEach { p -> p.type?.let { collectInferTypeNames(it, scope) } }
+                            member.type?.let { collectInferTypeNames(it, scope) }
+                        }
+                        is GetAccessor -> member.type?.let { collectInferTypeNames(it, scope) }
+                        is SetAccessor -> member.parameters.forEach { p -> p.type?.let { collectInferTypeNames(it, scope) } }
+                        else -> {}
+                    }
+                }
+            }
+            is MappedType -> {
+                type.type?.let { collectInferTypeNames(it, scope) }
+                type.nameType?.let { collectInferTypeNames(it, scope) }
+            }
+            is IndexedAccessType -> {
+                collectInferTypeNames(type.objectType, scope)
+                collectInferTypeNames(type.indexType, scope)
+            }
+            is TemplateLiteralType -> {
+                type.templateSpans.forEach { collectInferTypeNames(it.type, scope) }
+            }
             else -> {}
         }
     }
