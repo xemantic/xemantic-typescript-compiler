@@ -12939,7 +12939,7 @@ class Checker(
             }
             is PrefixUnaryExpression -> {
                 if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    val operand = expr.operand
+                    val operand = unwrapParens(expr.operand)
                     if (operand is Identifier && operand.text in constNames) {
                         emitTS2588(operand, source, fileName)
                     }
@@ -12981,6 +12981,12 @@ class Checker(
     private fun unwrapNonNull(expr: Expression): Expression {
         var e = expr
         while (e is NonNullExpression) e = e.expression
+        return e
+    }
+
+    private fun unwrapParens(expr: Expression): Expression {
+        var e = expr
+        while (e is ParenthesizedExpression) e = e.expression
         return e
     }
 
@@ -16032,9 +16038,11 @@ class Checker(
     private fun checkParamsForTS1015(params: List<Parameter>, source: String, fileName: String, requireType: Boolean = true) {
         for (param in params) {
             if (param.questionToken && param.initializer != null) {
-                // In function/method/constructor declarations, TS1015 only fires when type annotation is present.
+                // In function/method/constructor declarations, TS1015 only fires when type annotation is present
+                // or when the parameter has an access modifier (parameter property).
                 // In arrow/function expressions, it fires regardless.
-                if (requireType && param.type == null) continue
+                val isParamProperty = param.modifiers.any { it == ModifierFlag.Public || it == ModifierFlag.Private || it == ModifierFlag.Protected || it == ModifierFlag.Readonly }
+                if (requireType && param.type == null && !isParamProperty) continue
                 val name = param.name
                 val start = name.pos
                 val length = when (name) {
