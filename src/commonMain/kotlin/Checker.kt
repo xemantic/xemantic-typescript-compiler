@@ -6016,6 +6016,8 @@ class Checker(
             }
             is ClassDeclaration -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
+                // Check class decorators
+                stmt.decorators?.forEach { checkUnresolvedInExpr(it.expression, scope, source, fileName) }
                 val classCtx = buildClassContext(stmt, scope, fileName)
                 val classScope = scope.child(classContext = classCtx)
                 stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
@@ -6188,6 +6190,8 @@ class Checker(
                 if (!isStatic && ctorParamNames.isNotEmpty()) {
                     propScope.names.addAll(ctorParamNames)
                 }
+                // Check decorators
+                element.decorators?.forEach { checkUnresolvedInExpr(it.expression, propScope, source, fileName) }
                 // Check computed property name (e.g. [x]: string — x must be in scope)
                 if (element.name is ComputedPropertyName) {
                     checkUnresolvedInExpr((element.name as ComputedPropertyName).expression, propScope, source, fileName)
@@ -6197,6 +6201,8 @@ class Checker(
             }
             is MethodDeclaration -> {
                 val methodScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
+                // Check decorators
+                element.decorators?.forEach { checkUnresolvedInExpr(it.expression, methodScope, source, fileName) }
                 element.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                 element.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -6204,6 +6210,8 @@ class Checker(
                 }
                 addParamsToScope(element.parameters, methodScope)
                 for (param in element.parameters) {
+                    // Check parameter decorators
+                    param.decorators?.forEach { checkUnresolvedInExpr(it.expression, methodScope, source, fileName) }
                     param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                     param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
                 }
@@ -6222,6 +6230,8 @@ class Checker(
                 val ctorScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 addParamsToScope(element.parameters, ctorScope)
                 for (param in element.parameters) {
+                    // Check parameter decorators
+                    param.decorators?.forEach { checkUnresolvedInExpr(it.expression, ctorScope, source, fileName) }
                     param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
                     param.initializer?.let { checkUnresolvedInExpr(it, ctorScope, source, fileName) }
                 }
