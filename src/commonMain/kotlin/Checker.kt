@@ -12527,8 +12527,8 @@ class Checker(
     private fun getPropertyNameLength(nameNode: Node, name: String): Int {
         return when (nameNode) {
             is Identifier -> name.length
-            is StringLiteralNode -> name.length + 2 // quotes
-            is NumericLiteralNode -> name.length
+            is StringLiteralNode -> nameNode.rawText?.let { it.length + 2 } ?: (name.length + 2) // quotes
+            is NumericLiteralNode -> nameNode.text.length // use original text length, not normalized name
             is ComputedPropertyName -> {
                 // Span covers [expr] — find the closing ] in source
                 // Can't use nameNode.end (overshoots by one token).
@@ -12565,20 +12565,32 @@ class Checker(
         return when (name) {
             is Identifier -> name.text
             is StringLiteralNode -> name.text
-            is NumericLiteralNode -> name.text
+            is NumericLiteralNode -> normalizeNumericLiteral(name.text)
             is ComputedPropertyName -> evaluateComputedPropertyName(name.expression)
             else -> null
+        }
+    }
+
+    /** Normalize a numeric literal text to its canonical string form (e.g., "0b11" → "3"). */
+    private fun normalizeNumericLiteral(text: String): String {
+        val d = when {
+            text.startsWith("0b", ignoreCase = true) -> text.substring(2).toLongOrNull(2)?.toDouble()
+            text.startsWith("0o", ignoreCase = true) -> text.substring(2).toLongOrNull(8)?.toDouble()
+            text.startsWith("0x", ignoreCase = true) -> text.substring(2).toLongOrNull(16)?.toDouble()
+            else -> text.replace("_", "").toDoubleOrNull()
+        }
+        if (d == null) return text
+        return if (d == d.toLong().toDouble() && d >= 0 && d < Long.MAX_VALUE.toDouble()) {
+            d.toLong().toString()
+        } else {
+            d.toString()
         }
     }
 
     /** Evaluate simple constant computed property expressions to their string key value. */
     private fun evaluateComputedPropertyName(expr: Expression): String? {
         return when (expr) {
-            is NumericLiteralNode -> {
-                // [1] → "1", [1.5] → "1.5"
-                val d = expr.text.toDoubleOrNull() ?: return null
-                if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
-            }
+            is NumericLiteralNode -> normalizeNumericLiteral(expr.text)
             is StringLiteralNode -> expr.text  // ["+1"] → "+1"
             is PrefixUnaryExpression -> {
                 val operand = expr.operand
