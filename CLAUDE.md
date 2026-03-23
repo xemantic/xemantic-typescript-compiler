@@ -140,6 +140,11 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`for await` in non-async (TS1103)**: `ForOfStatement` with `awaitModifier` in non-async functions gets TS1103. The related TS1356 uses `FuncRef(pos, length)` to track enclosing function position — supports named functions, anonymous function expressions, and arrow functions.
 - **`verbatimModuleSyntax` suppresses const enum inlining**: When set, skip `collectConstEnumValues`, skip checker's `resolveConstEnumMemberAccess`, keep const enum IIFE bodies, and don't treat const enums as type-only.
 
+### TS2528 multiple default exports gotchas
+
+- **Position rules**: `ExportAssignment` with identifier → error at identifier pos; with other expr → error at whole-statement start (full span). Named FunctionDeclaration/ClassDeclaration → error at name pos. Anonymous FD/CD → error at `export` keyword (NOT `function`/`class` — `FunctionDeclaration.pos` = `function` keyword, must search backwards for `export`).
+- **2752/2753/6204 code rules**: All non-last exports point to the LAST export. The LAST export points to ALL previous. For 3+ defaults: first non-last → TS2753, subsequent non-lasts → TS6204 "and here.", last → TS2752 pointing to each previous. **EXCEPTION**: when the LAST export is a `FunctionDeclaration`, codes are swapped: non-lasts use TS2752 "The first export default is here.", and the last uses TS2753 "Another export default is here."
+
 ### Top-level await gotchas
 
 - **Parser `topLevelAwait` parameter**: When `module` is ES2022+, NodeNext, Preserve, or System, the Parser's `topLevelAwait` flag must be set to `true`. This sets initial `inAsyncContext = true` at the file level, enabling `await` keyword recognition at the top level. Inside function bodies, `inAsyncContext` is still reset per-function based on `async` modifier. In sync functions, `await(x)` remains a call expression (identifier).
