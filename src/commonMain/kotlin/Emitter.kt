@@ -1051,12 +1051,12 @@ class Emitter(
         is Constructor -> element.body == null // overload signature
         is GetAccessor -> {
             ModifierFlag.Abstract in element.modifiers
-                    || element.body == null
+            // Note: body==null for `get foo(): T;` in non-declare class — still emitted as `get foo() { }`
         }
 
         is SetAccessor -> {
             ModifierFlag.Abstract in element.modifiers
-                    || element.body == null
+            // Note: body==null for `set foo(v: T);` in non-declare class — still emitted as `set foo(v) { }`
         }
 
         is IndexSignature -> true // type-only, erased
@@ -1126,7 +1126,6 @@ class Emitter(
     }
 
     private fun emitGetAccessorDeclaration(node: GetAccessor) {
-        if (node.body == null) return
         writeIndent()
         if (ModifierFlag.Static in node.modifiers) {
             write("static ")
@@ -1136,12 +1135,16 @@ class Emitter(
         write("(")
         emitParameters(node.parameters)
         write(")")
-        emitBlockBody(node.body, isFunctionBody = true)
+        if (node.body != null) {
+            emitBlockBody(node.body, isFunctionBody = true)
+        } else {
+            // Getter with no body (error recovery for `get foo(): T;` in non-ambient class)
+            write(" { }")
+        }
         writeNewLine()
     }
 
     private fun emitSetAccessorDeclaration(node: SetAccessor) {
-        if (node.body == null) return
         writeIndent()
         if (ModifierFlag.Static in node.modifiers) {
             write("static ")
@@ -1156,7 +1159,12 @@ class Emitter(
             write(": ")
             write(typeNodeToKeywordText(node.type))
         }
-        emitBlockBody(node.body, isFunctionBody = true)
+        if (node.body != null) {
+            emitBlockBody(node.body, isFunctionBody = true)
+        } else {
+            // Setter with no body (error recovery for `set foo(v: T);` in non-ambient class)
+            write(" { }")
+        }
         writeNewLine()
     }
 
