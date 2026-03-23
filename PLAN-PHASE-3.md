@@ -2103,7 +2103,7 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Transformer.kt`
 
-- [ ] **28e. Decorator metadata — negative literal types and import resolution** (~4 tests)
+- [x] **28e. Decorator metadata — negative literal types and import resolution** (~4 tests)
 
   - `decoratorWithNegativeLiteralTypeNoCrash`: `-1` type should serialize to `Number`, not `Object`.
   - `decoratorMetadataTypeOnlyExport`: imported class type should use `require()` in metadata,

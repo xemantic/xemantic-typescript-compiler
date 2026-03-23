@@ -296,14 +296,21 @@ class Transformer(
                                         topLevelRuntimeNames.add(nsName)
                                     }
                                 }
-                                is NamedImports -> bindings.elements.forEach { spec ->
-                                    if (spec.isTypeOnly) {
-                                        topLevelTypeOnlyNames.add(spec.name.text)
-                                    } else if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
-                                        topLevelTypeOnlyNames.add(spec.name.text)
-                                    } else {
-                                        topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
-                                        topLevelRuntimeNames.add(spec.name.text)
+                                is NamedImports -> {
+                                    val modSpecStr = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                                    bindings.elements.forEach { spec ->
+                                        if (spec.isTypeOnly) {
+                                            topLevelTypeOnlyNames.add(spec.name.text)
+                                        } else if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
+                                            topLevelTypeOnlyNames.add(spec.name.text)
+                                        } else if (modSpecStr.isNotEmpty() && checker?.isTypeOnlyExportName(
+                                                (spec.propertyName ?: spec.name).text, modSpecStr, currentFileName) == true) {
+                                            // The import is from `export type { X }` in the target file — type-only
+                                            topLevelTypeOnlyNames.add(spec.name.text)
+                                        } else {
+                                            topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
+                                            topLevelRuntimeNames.add(spec.name.text)
+                                        }
                                     }
                                 }
                                 else -> {}
@@ -922,12 +929,18 @@ class Transformer(
                                     runtimeDeclaredNames.add(nsName)
                                 }
                             }
-                            is NamedImports -> bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
-                                if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
-                                    typeOnlyDeclaredNames.add(spec.name.text)
-                                } else {
-                                    runtimeDeclaredNames.add(spec.name.text)
-                                    namedImportLocalNames.add(spec.name.text)
+                            is NamedImports -> {
+                                val modSpecStr2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                                bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
+                                    if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
+                                        typeOnlyDeclaredNames.add(spec.name.text)
+                                    } else if (modSpecStr2.isNotEmpty() && checker?.isTypeOnlyExportName(
+                                            (spec.propertyName ?: spec.name).text, modSpecStr2, currentFileName) == true) {
+                                        typeOnlyDeclaredNames.add(spec.name.text)
+                                    } else {
+                                        runtimeDeclaredNames.add(spec.name.text)
+                                        namedImportLocalNames.add(spec.name.text)
+                                    }
                                 }
                             }
                             else -> {}

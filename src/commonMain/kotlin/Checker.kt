@@ -524,6 +524,34 @@ class Checker(
     }
 
     /**
+     * Returns true if [name] is exported from [moduleSpecifier] ONLY via `export type { Name }`
+     * (i.e., the export declaration has `isTypeOnly = true`). This indicates the import is effectively
+     * type-only even without an explicit `import type { ... }`.
+     */
+    fun isTypeOnlyExportName(name: String, moduleSpecifier: String, sourceFileName: String): Boolean {
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        // Scan export declarations in the target file to find if `name` is exported type-only
+        var hasTypeOnlyExport = false
+        var hasValueExport = false
+        for (stmt in targetResult.sourceFile.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val clause = stmt.exportClause as? NamedExports ?: continue
+            for (spec in clause.elements) {
+                val exportedName = spec.name.text
+                if (exportedName != name) continue
+                if (stmt.isTypeOnly || spec.isTypeOnly) {
+                    hasTypeOnlyExport = true
+                } else {
+                    hasValueExport = true
+                }
+            }
+        }
+        // Only type-only if exported via `export type { X }` and NOT also via plain `export { X }`
+        return hasTypeOnlyExport && !hasValueExport
+    }
+
+    /**
      * Resolve an enum member value through import aliases.
      * Works for both const and non-const enums. Returns the numeric value or null.
      */
