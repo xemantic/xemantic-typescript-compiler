@@ -398,7 +398,7 @@ class TypeScriptCompiler {
             }
         }
 
-        // TS5053: inlineSourceMap conflicts
+        // TS5053: option conflicts
         if (options.inlineSourceMap) {
             if (options.mapRoot != null) {
                 diagnostics.add(Diagnostic(
@@ -414,6 +414,13 @@ class TypeScriptCompiler {
                     code = 5053,
                 ))
             }
+        }
+        if (options.reactNamespace != null && options.jsxFactory != null) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'reactNamespace' cannot be specified with option 'jsxFactory'.",
+                category = DiagnosticCategory.Error,
+                code = 5053,
+            ))
         }
 
         // TS5095: moduleResolution=bundler with incompatible module
