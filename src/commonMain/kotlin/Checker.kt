@@ -243,6 +243,8 @@ class Checker(
         }
         // 62. Check block-scoped declarations outside blocks (TS1156)
         checkBlockScopedDeclarationsInSingleBody()
+        // 63. Check class member initializers referencing constructor params/vars (TS2301)
+        checkConstructorParamInInitializers()
     }
 
     // -----------------------------------------------------------------------
@@ -1518,12 +1520,44 @@ class Checker(
      */
     private fun resolveNamePath(path: String, result: BinderResult): Symbol? {
         val parts = path.split(".")
-        var current = result.locals[parts[0]] ?: globals[parts[0]] ?: return null
+        // First look in file-level locals, then globals
+        var current = result.locals[parts[0]] ?: globals[parts[0]]
+        // If not found at file level, search all namespace scopes across all files
+        if (current == null && parts.size > 1) {
+            current = findSymbolInAllNamespaceScopes(parts[0]) ?: return null
+        }
+        if (current == null) return null
         for (i in 1 until parts.size) {
-            current = resolveAlias(current)
+            current = resolveAlias(current!!)
             current = current.exports?.get(parts[i]) ?: return null
         }
         return current
+    }
+
+    /**
+     * Search all namespace export scopes in all binder results for a symbol with the given name.
+     * Used when a name is only in a namespace scope (e.g., import alias inside a namespace body).
+     */
+    private fun findSymbolInAllNamespaceScopes(name: String): Symbol? {
+        for (br in binderResults) {
+            val found = findSymbolInExports(name, br.locals)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findSymbolInExports(name: String, scope: SymbolTable): Symbol? {
+        // Check this scope directly
+        val direct = scope[name]
+        if (direct != null) return direct
+        // Recurse into namespace exports
+        for ((_, sym) in scope) {
+            if (sym.flags.hasAny(SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
+                val found = sym.exports?.let { findSymbolInExports(name, it) }
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     private fun resolveQualifiedName(qn: QualifiedName): Symbol? {
@@ -4892,6 +4926,342 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // Constructor parameter references in class member initializers (TS2301)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Checks that instance member variable initializers do not reference identifiers
+     * declared in the constructor (parameters or var declarations in the constructor body).
+     * Emits TS2301 when such a reference is found.
+     *
+     * TypeScript fires this because field initializers run before the constructor body,
+     * yet in the emitted JS they appear inside the constructor — so a reference that
+     * looks like it refers to an outer-scope variable would silently bind to the
+     * constructor parameter instead.
+     */
+    private fun checkConstructorParamInInitializers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkConstructorParamInInitializersInStatements(
+                result.sourceFile.statements, source, fileName
+            )
+        }
+    }
+
+    private fun checkConstructorParamInInitializersInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    checkConstructorParamInClassMembers(stmt.members, source, fileName)
+                }
+                is ModuleDeclaration -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkConstructorParamInInitializersInStatements(
+                            body.statements, source, fileName
+                        )
+                        else -> {}
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    stmt.body?.let {
+                        checkConstructorParamInInitializersInStatements(it.statements, source, fileName)
+                    }
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        checkConstructorParamInInitializersInExpr(decl.initializer, source, fileName)
+                    }
+                }
+                is ExpressionStatement ->
+                    checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
+                is ReturnStatement ->
+                    checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkConstructorParamInInitializersInExpr(
+        expr: Expression?,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is ClassExpression -> {
+                if (ModifierFlag.Declare !in expr.modifiers) {
+                    checkConstructorParamInClassMembers(expr.members, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkConstructorParamInClassMembers(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Collect names declared in the constructor (params + var declarations in body)
+        val ctorDeclaredNames = mutableSetOf<String>()
+        val constructor = members.filterIsInstance<Constructor>().firstOrNull()
+        if (constructor != null) {
+            // Collect parameter names (including binding patterns)
+            for (param in constructor.parameters) {
+                collectParamDeclaredNames(param.name, ctorDeclaredNames)
+            }
+            // Collect var declarations from constructor body
+            constructor.body?.let { body ->
+                collectVarDeclaredNamesInBlock(body.statements, ctorDeclaredNames)
+            }
+        }
+        if (ctorDeclaredNames.isEmpty()) return
+
+        // Check each non-static instance property initializer
+        for (member in members) {
+            if (member !is PropertyDeclaration) continue
+            if (ModifierFlag.Static in member.modifiers) continue // static fields are OK
+            val initializer = member.initializer ?: continue
+            val memberName = (member.name as? Identifier)?.text ?: continue
+
+            // Walk the initializer expression to find identifiers matching ctor-declared names
+            checkExprForCtorParamRefs(initializer, memberName, ctorDeclaredNames, source, fileName)
+        }
+    }
+
+    /** Collect declared names from a parameter binding pattern. */
+    private fun collectParamDeclaredNames(name: Node, result: MutableSet<String>) {
+        when (name) {
+            is Identifier -> if (name.text != "this") result.add(name.text)
+            is ObjectBindingPattern -> name.elements.forEach { elem ->
+                collectParamDeclaredNames(elem.name, result)
+            }
+            is ArrayBindingPattern -> name.elements.forEach { elem ->
+                if (elem is BindingElement) collectParamDeclaredNames(elem.name, result)
+            }
+            else -> {}
+        }
+    }
+
+    /** Collect var-declared names from constructor body statements (hoisted vars). */
+    private fun collectVarDeclaredNamesInBlock(
+        statements: List<Statement>,
+        result: MutableSet<String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (stmt.declarationList.flags != VarKeyword) continue // only var (not let/const)
+                    for (decl in stmt.declarationList.declarations) {
+                        collectParamDeclaredNames(decl.name, result)
+                    }
+                }
+                is Block -> collectVarDeclaredNamesInBlock(stmt.statements, result)
+                is IfStatement -> {
+                    collectVarDeclaredNamesInBlock(listOf(stmt.thenStatement), result)
+                    stmt.elseStatement?.let { collectVarDeclaredNamesInBlock(listOf(it), result) }
+                }
+                is ForStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == VarKeyword) {
+                        for (decl in init.declarations) collectParamDeclaredNames(decl.name, result)
+                    }
+                    collectVarDeclaredNamesInBlock(listOf(stmt.statement), result)
+                }
+                is ForInStatement -> {
+                    collectVarDeclaredNamesInBlock(listOf(stmt.statement), result)
+                }
+                is ForOfStatement -> {
+                    collectVarDeclaredNamesInBlock(listOf(stmt.statement), result)
+                }
+                is WhileStatement -> collectVarDeclaredNamesInBlock(listOf(stmt.statement), result)
+                is DoStatement -> collectVarDeclaredNamesInBlock(listOf(stmt.statement), result)
+                is TryStatement -> {
+                    collectVarDeclaredNamesInBlock(stmt.tryBlock.statements, result)
+                    stmt.catchClause?.block?.statements?.let { collectVarDeclaredNamesInBlock(it, result) }
+                    stmt.finallyBlock?.statements?.let { collectVarDeclaredNamesInBlock(it, result) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * Walk [expr] recursively to find any [Identifier] references matching [ctorNames].
+     * When found, emit TS2301 pointing at the identifier position.
+     * [memberName] is the class field name used in the diagnostic message.
+     */
+    private fun checkExprForCtorParamRefs(
+        expr: Expression,
+        memberName: String,
+        ctorNames: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                if (expr.text in ctorNames) {
+                    val start = expr.pos
+                    val length = expr.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Initializer of instance member variable '$memberName' cannot reference identifier '${expr.text}' declared in the constructor.",
+                        category = DiagnosticCategory.Error,
+                        code = 2301,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            is BinaryExpression -> {
+                checkExprForCtorParamRefs(expr.left, memberName, ctorNames, source, fileName)
+                checkExprForCtorParamRefs(expr.right, memberName, ctorNames, source, fileName)
+            }
+            is CallExpression -> {
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+                expr.arguments.forEach { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+            }
+            is NewExpression -> {
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+                expr.arguments?.forEach { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+            }
+            is PropertyAccessExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is ElementAccessExpression -> {
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+                checkExprForCtorParamRefs(expr.argumentExpression, memberName, ctorNames, source, fileName)
+            }
+            is ParenthesizedExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is PrefixUnaryExpression ->
+                checkExprForCtorParamRefs(expr.operand, memberName, ctorNames, source, fileName)
+            is PostfixUnaryExpression ->
+                checkExprForCtorParamRefs(expr.operand, memberName, ctorNames, source, fileName)
+            is ConditionalExpression -> {
+                checkExprForCtorParamRefs(expr.condition, memberName, ctorNames, source, fileName)
+                checkExprForCtorParamRefs(expr.whenTrue, memberName, ctorNames, source, fileName)
+                checkExprForCtorParamRefs(expr.whenFalse, memberName, ctorNames, source, fileName)
+            }
+            is ArrayLiteralExpression ->
+                expr.elements.forEach { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+            is ObjectLiteralExpression ->
+                expr.properties.forEach { prop ->
+                    when (prop) {
+                        is PropertyAssignment ->
+                            checkExprForCtorParamRefs(prop.initializer, memberName, ctorNames, source, fileName)
+                        is ShorthandPropertyAssignment ->
+                            if (prop.name.text in ctorNames) {
+                                val start = prop.name.pos
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Initializer of instance member variable '$memberName' cannot reference identifier '${prop.name.text}' declared in the constructor.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2301,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = prop.name.text.length,
+                                ))
+                            }
+                        is SpreadAssignment ->
+                            checkExprForCtorParamRefs(prop.expression, memberName, ctorNames, source, fileName)
+                        else -> {}
+                    }
+                }
+            is ArrowFunction -> {
+                // Arrow function: walk the body (recurse into inner lambdas too)
+                when (val body = expr.body) {
+                    is Block -> body.statements.forEach { stmt ->
+                        checkExprForCtorParamRefsInStmt(stmt, memberName, ctorNames, source, fileName)
+                    }
+                    is Expression -> checkExprForCtorParamRefs(body, memberName, ctorNames, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                // Function expression body — walk it
+                expr.body?.statements?.forEach { stmt ->
+                    checkExprForCtorParamRefsInStmt(stmt, memberName, ctorNames, source, fileName)
+                }
+            }
+            is TemplateExpression ->
+                expr.templateSpans.forEach { span ->
+                    checkExprForCtorParamRefs(span.expression, memberName, ctorNames, source, fileName)
+                }
+            is SpreadElement ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is TypeAssertionExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is AsExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is NonNullExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkExprForCtorParamRefs(expr.tag, memberName, ctorNames, source, fileName)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { span ->
+                        checkExprForCtorParamRefs(span.expression, memberName, ctorNames, source, fileName)
+                    }
+                    else -> {}
+                }
+            }
+            is AwaitExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is YieldExpression ->
+                expr.expression?.let { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+            is DeleteExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is VoidExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is TypeOfExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, source, fileName)
+            is CommaListExpression ->
+                expr.elements.forEach { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+            // Literals, ThisExpression, SuperExpression — no identifiers
+            else -> {}
+        }
+    }
+
+    /** Walk a statement recursively to check for constructor param references. */
+    private fun checkExprForCtorParamRefsInStmt(
+        stmt: Statement,
+        memberName: String,
+        ctorNames: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is ExpressionStatement ->
+                checkExprForCtorParamRefs(stmt.expression, memberName, ctorNames, source, fileName)
+            is ReturnStatement ->
+                stmt.expression?.let { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+            is VariableStatement ->
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkExprForCtorParamRefs(it, memberName, ctorNames, source, fileName) }
+                }
+            is IfStatement -> {
+                checkExprForCtorParamRefs(stmt.expression, memberName, ctorNames, source, fileName)
+                checkExprForCtorParamRefsInStmt(stmt.thenStatement, memberName, ctorNames, source, fileName)
+                stmt.elseStatement?.let { checkExprForCtorParamRefsInStmt(it, memberName, ctorNames, source, fileName) }
+            }
+            is Block -> stmt.statements.forEach { checkExprForCtorParamRefsInStmt(it, memberName, ctorNames, source, fileName) }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Implicit any checking (TS7006)
     // -----------------------------------------------------------------------
 
@@ -5550,8 +5920,9 @@ class Checker(
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
                     }
                 }
+                val ctorParamNames = extractCtorParamNames(stmt.members)
                 for (member in stmt.members) {
-                    checkUnresolvedInClassElement(member, classScope, source, fileName)
+                    checkUnresolvedInClassElement(member, classScope, source, fileName, ctorParamNames)
                 }
             }
             is InterfaceDeclaration -> {
@@ -5665,11 +6036,26 @@ class Checker(
         }
     }
 
+    /** Extract constructor parameter names from a list of class members. */
+    private fun extractCtorParamNames(members: List<ClassElement>): Set<String> {
+        val ctor = members.filterIsInstance<Constructor>().firstOrNull() ?: return emptySet()
+        val names = mutableSetOf<String>()
+        collectCtorBodyVarNames(ctor, names)
+        return names
+    }
+
+    /** Collect constructor param names and var-declared body names (for TS2301 scope suppression). */
+    private fun collectCtorBodyVarNames(ctor: Constructor, names: MutableSet<String>) {
+        for (param in ctor.parameters) collectParamDeclaredNames(param.name, names)
+        ctor.body?.let { collectVarDeclaredNamesInBlock(it.statements, names) }
+    }
+
     private fun checkUnresolvedInClassElement(
         element: ClassElement,
         classScope: NameScope,
         source: String,
         fileName: String,
+        ctorParamNames: Set<String> = emptySet(),
     ) {
         // Determine class context with correct static flag for the member
         val isStatic = when (element) {
@@ -5687,6 +6073,11 @@ class Checker(
         when (element) {
             is PropertyDeclaration -> {
                 val propScope = classScope.child(classContext = memberClassCtx)
+                // Add constructor param names to suppress TS2304/TS2552 for names handled by TS2301
+                // (TypeScript knows ctor params are "in scope" conceptually, but TS2301 handles the semantic error)
+                if (!isStatic && ctorParamNames.isNotEmpty()) {
+                    propScope.names.addAll(ctorParamNames)
+                }
                 // Check computed property name (e.g. [x]: string — x must be in scope)
                 if (element.name is ComputedPropertyName) {
                     checkUnresolvedInExpr((element.name as ComputedPropertyName).expression, propScope, source, fileName)
@@ -5883,8 +6274,9 @@ class Checker(
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
                     }
                 }
+                val ctorParamNames = extractCtorParamNames(expr.members)
                 for (member in expr.members) {
-                    checkUnresolvedInClassElement(member, classScope, source, fileName)
+                    checkUnresolvedInClassElement(member, classScope, source, fileName, ctorParamNames)
                 }
             }
             is ObjectLiteralExpression -> {

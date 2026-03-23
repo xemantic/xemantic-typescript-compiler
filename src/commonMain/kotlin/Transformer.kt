@@ -3220,6 +3220,7 @@ class Transformer(
             originalSourceFile.fileName
                 .removePrefix("./")
                 .substringBeforeLast('.')
+                .trimStart('/')
         } else null
         val defineArgs = mutableListOf<Expression>()
         if (amdModuleName != null) {
@@ -4768,6 +4769,7 @@ class Transformer(
                         originalSourceFile.fileName
                             .removePrefix("./")
                             .substringBeforeLast('.')
+                            .trimStart('/')
                     } else null
                     if (systemModuleName != null) {
                         add(StringLiteralNode(text = systemModuleName, pos = -1, end = -1))
@@ -8198,6 +8200,16 @@ class Transformer(
                 pos = decl.pos,
                 end = decl.end,
             )
+            // For ESM exported classes with class decorators, TypeScript does NOT add `export` to the
+            // `let Foo = class Foo {}` declaration. Instead it adds `export { Foo }` after __decorate.
+            // This is because the decorator reassigns `Foo = __decorate(...)`, and exported bindings
+            // can't be reassigned in ESM. For CJS, `export` stays on the let (handled by CJS transform).
+            val isExported = ModifierFlag.Export in strippedModifiers
+            val isESM = isESModuleFormat(options.effectiveModule, currentFileName)
+            val varModifiers = when {
+                isExported && !isESM -> setOf(ModifierFlag.Export)
+                else -> emptySet()
+            }
             val varDecl = VariableStatement(
                 declarationList = VariableDeclarationList(
                     declarations = listOf(
@@ -8210,7 +8222,7 @@ class Transformer(
                     flags = SyntaxKind.LetKeyword,
                     pos = -1, end = -1,
                 ),
-                modifiers = if (ModifierFlag.Export in strippedModifiers) setOf(ModifierFlag.Export) else emptySet(),
+                modifiers = varModifiers,
                 pos = decl.pos, end = decl.end,
                 leadingComments = decl.leadingComments,
             )
@@ -8235,6 +8247,8 @@ class Transformer(
         statements.addAll(generateMemberDecorateStatements(className, decl.members, classTypeParams))
 
         // Emit class-level __decorate call
+        val isExportedClassDecorator = hasClassDecorators && ModifierFlag.Export in strippedModifiers
+        val isESM = isESModuleFormat(options.effectiveModule, currentFileName)
         if (hasClassDecorators) {
             val constructor = decl.members.filterIsInstance<Constructor>().firstOrNull()
             val constructorParams = constructor?.parameters
@@ -8246,6 +8260,23 @@ class Transformer(
             statements.add(generateClassDecorateStatement(
                 className, decl.decorators, constructorParams, classTypeParams, ctorParamDecorators
             ))
+            // For ESM exported classes with class decorators, add `export { Foo }` after __decorate
+            // because the let declaration doesn't have `export` (decorator reassignment issue).
+            if (isExportedClassDecorator && isESM && ModifierFlag.Default !in strippedModifiers) {
+                statements.add(ExportDeclaration(
+                    exportClause = NamedExports(
+                        elements = listOf(ExportSpecifier(
+                            name = syntheticId(className) as Identifier,
+                            propertyName = null,
+                            pos = -1, end = -1,
+                        )),
+                        pos = -1, end = -1,
+                    ),
+                    moduleSpecifier = null,
+                    modifiers = emptySet(),
+                    pos = -1, end = -1,
+                ))
+            }
         }
 
         return statements
@@ -8539,11 +8570,17 @@ class Transformer(
                         syntheticId("Number")
                     simpleName != null -> syntheticId(simpleName)
                     else -> {
-                        // QualifiedName like E.A — check if base is a numeric enum
+                        // QualifiedName like E.A or db.db
                         val baseName = extractQualifiedNameBase(typeNode.typeName)
-                        if (baseName != null && checker?.isNumericEnumType(baseName, currentFileName) == true)
-                            syntheticId("Number")
-                        else syntheticId("Object")
+                        when {
+                            baseName != null && checker?.isNumericEnumType(baseName, currentFileName) == true ->
+                                syntheticId("Number")
+                            // If the base is a runtime value (not type-only), emit the qualified name
+                            // as a property access expression (e.g., `db.db` for CJS module member types)
+                            baseName != null && baseName !in topLevelTypeOnlyNames ->
+                                qualifiedNameToPropertyAccess(typeNode.typeName as QualifiedName)
+                            else -> syntheticId("Object")
+                        }
                     }
                 }
             }
