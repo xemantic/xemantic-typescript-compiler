@@ -8146,6 +8146,34 @@ class Checker(
                     continue
                 }
 
+                // TS2323: Cannot redeclare exported variable 'X' — fires when multiple
+                // exported var declarations have the same name (var+var is normally legal via
+                // hoisting, but exported vars occupy a fixed binding slot)
+                val varCount = group.count { it.kind == "var" }
+                if (!hasClass && !hasFunc && !hasEnum && !hasNamespace && varCount >= 2) {
+                    val allVarsExported = group.filter { it.kind == "var" }.all { decl ->
+                        val varStmt = decl.stmt as? VariableStatement ?: return@all false
+                        ModifierFlag.Export in varStmt.modifiers
+                    }
+                    if (allVarsExported) {
+                        for (decl in group.filter { it.kind == "var" }) {
+                            val start = decl.nameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot redeclare exported variable '${decl.name}'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2323,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = decl.name.length,
+                            ))
+                        }
+                        continue
+                    }
+                }
+
                 val isDuplicate = (hasClass && classCount >= 2) ||
                         (hasVar && (hasClass || hasFunc)) ||
                         (hasVar && hasNamespace && !namespaceVarAllowed)
@@ -16562,15 +16590,57 @@ class Checker(
     // TS2528: A module cannot have multiple default exports
     // -----------------------------------------------------------------------
 
+    private enum class DefaultDeclKind { DECL, REEXPORT, REF_TYPE, EXPR }
+
     private fun checkMultipleDefaultExports() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
 
-            // Collect all export default statements
-            data class DefaultExportInfo(val stmt: Statement, val start: Int, val length: Int)
+            // Classify default exports:
+            // - DECL: ClassDeclaration, FunctionDeclaration, InterfaceDeclaration (all are "declaration forms")
+            //         or ExportAssignment with Identifier pointing to a value symbol
+            // - REF_TYPE: ExportAssignment with Identifier pointing to a type-only symbol
+            // - EXPR: ExportAssignment with non-Identifier expression (literal, complex expr)
+            // ts2528Start/Length: position for TS2528 diagnostic (identifier for ExportAssignment-id, else same as ts2323)
+            // ts2323Start/Length: position for TS2323 diagnostic (whole statement for ExportAssignment, else same as ts2528)
+            data class DefaultExportInfo(
+                val stmt: Statement,
+                val start: Int, val length: Int, // for TS2528
+                val ts2323Start: Int, val ts2323Length: Int, // for TS2323 (may differ for ExportAssignment)
+                val kind: DefaultDeclKind,
+            )
             val defaults = mutableListOf<DefaultExportInfo>()
+
+            fun isTypeOnlyIdentifier(name: String): Boolean {
+                val sym = result.locals[name] ?: return false
+                return !sym.flags.hasAny(SymbolFlags.Value)
+            }
+
+            fun exprStmtSpan(stmt: ExportAssignment): Pair<Int, Int> {
+                // Whole-statement span for TS2323 on `export default <expr>`:
+                // from start of "export" keyword to end of expression (+ optional semicolon).
+                // Cannot use stmt.end because our parser's `end` includes lookahead position.
+                var spanStart = stmt.pos
+                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                val expr = stmt.expression
+                // Use expression text length to find expression end without lookahead artifacts
+                val exprTextEnd = when (expr) {
+                    is Identifier -> expr.pos + expr.text.length
+                    else -> {
+                        // For complex expressions, find the end by scanning the expression manually
+                        var end = expr.pos
+                        // Skip past non-newline, non-semicolon chars to find expression end
+                        while (end < source.length && source[end] != '\n' && source[end] != '\r' && source[end] != ';') end++
+                        end
+                    }
+                }
+                var spanEnd = exprTextEnd
+                while (spanEnd < source.length && source[spanEnd].let { it == ' ' || it == '\t' }) spanEnd++
+                if (spanEnd < source.length && source[spanEnd] == ';') spanEnd++
+                return spanStart to (spanEnd - spanStart).coerceAtLeast(1)
+            }
 
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
@@ -16578,19 +16648,15 @@ class Checker(
                         if (!stmt.isExportEquals) {
                             val expr = stmt.expression
                             if (expr is Identifier) {
-                                // `export default identifier` → report at the identifier position
-                                defaults.add(DefaultExportInfo(stmt, expr.pos, expr.text.length))
+                                // `export default identifier` — classify by whether identifier is value or type-only
+                                // TS2528 reports at identifier, TS2323 reports at whole statement
+                                val kind = if (isTypeOnlyIdentifier(expr.text)) DefaultDeclKind.REF_TYPE else DefaultDeclKind.DECL
+                                val (ts2323Start, ts2323Len) = exprStmtSpan(stmt)
+                                defaults.add(DefaultExportInfo(stmt, expr.pos, expr.text.length, ts2323Start, ts2323Len, kind))
                             } else {
-                                // `export default <complex expr>` → report at start of whole statement,
-                                // spanning through the expression end (+ optional semicolon).
-                                var spanStart = stmt.pos
-                                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                                val exprEnd = stmt.expression.end
-                                var spanEnd = exprEnd
-                                while (spanEnd < source.length && source[spanEnd].let { it == ' ' || it == '\t' }) spanEnd++
-                                if (spanEnd < source.length && source[spanEnd] == ';') spanEnd++
-                                val length = (spanEnd - spanStart).coerceAtLeast(1)
-                                defaults.add(DefaultExportInfo(stmt, spanStart, length))
+                                // `export default <complex expr>` → report at start of whole statement
+                                val (spanStart, spanLength) = exprStmtSpan(stmt)
+                                defaults.add(DefaultExportInfo(stmt, spanStart, spanLength, spanStart, spanLength, DefaultDeclKind.EXPR))
                             }
                         }
                     }
@@ -16599,13 +16665,13 @@ class Checker(
                             // TypeScript reports at function name. For anonymous functions, at "export" keyword.
                             val name = stmt.name
                             if (name != null) {
-                                defaults.add(DefaultExportInfo(stmt, name.pos, name.text.length))
+                                defaults.add(DefaultExportInfo(stmt, name.pos, name.text.length, name.pos, name.text.length, DefaultDeclKind.DECL))
                             } else {
                                 // Anonymous function: FunctionDeclaration.pos = "function" keyword position.
                                 // We need the "export" keyword which precedes "default function".
                                 // Search backwards from stmt.pos for "export".
                                 val exportStart = findExportKeywordBefore(source, stmt.pos)
-                                defaults.add(DefaultExportInfo(stmt, exportStart, 6))
+                                defaults.add(DefaultExportInfo(stmt, exportStart, 6, exportStart, 6, DefaultDeclKind.DECL))
                             }
                         }
                     }
@@ -16614,12 +16680,33 @@ class Checker(
                             // TypeScript reports at class name. For anonymous classes, at "export" keyword.
                             val name = stmt.name
                             if (name != null) {
-                                defaults.add(DefaultExportInfo(stmt, name.pos, name.text.length))
+                                defaults.add(DefaultExportInfo(stmt, name.pos, name.text.length, name.pos, name.text.length, DefaultDeclKind.DECL))
                             } else {
                                 // Anonymous class: ClassDeclaration.pos = "class" keyword position.
                                 // We need the "export" keyword which precedes "default class".
                                 val exportStart = findExportKeywordBefore(source, stmt.pos)
-                                defaults.add(DefaultExportInfo(stmt, exportStart, 6))
+                                defaults.add(DefaultExportInfo(stmt, exportStart, 6, exportStart, 6, DefaultDeclKind.DECL))
+                            }
+                        }
+                    }
+                    is InterfaceDeclaration -> {
+                        if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default in stmt.modifiers) {
+                            // `export default interface Foo {}` — declaration form, always DECL
+                            defaults.add(DefaultExportInfo(stmt, stmt.name.pos, stmt.name.text.length, stmt.name.pos, stmt.name.text.length, DefaultDeclKind.DECL))
+                        }
+                    }
+                    is ExportDeclaration -> {
+                        // `export { default } from 'mod'` or `export { X as default } from 'mod'`
+                        // These are re-exports of `default` — classified as REEXPORT.
+                        val clause = stmt.exportClause
+                        if (clause is NamedExports) {
+                            for (spec in clause.elements) {
+                                if (spec.name.text == "default") {
+                                    // spec.name.pos includes leading trivia; skip whitespace to get token start
+                                    var specStart = spec.name.pos
+                                    while (specStart < source.length && source[specStart].let { it == ' ' || it == '\t' }) specStart++
+                                    defaults.add(DefaultExportInfo(stmt, specStart, spec.name.text.length, specStart, spec.name.text.length, DefaultDeclKind.REEXPORT))
+                                }
                             }
                         }
                     }
@@ -16628,6 +16715,37 @@ class Checker(
             }
 
             if (defaults.size < 2) continue
+
+            // Determine how to report: TS2323 vs TS2528
+            // TS2323 fires when there are ≥2 DECL/REEXPORT forms.
+            // TS2528 fires when any non-DECL form (REEXPORT, REF_TYPE, or EXPR) is present.
+            // When ALL forms are DECL (no REEXPORT/REF_TYPE/EXPR): emit TS2323 only (no TS2528).
+            val declCount = defaults.count { it.kind == DefaultDeclKind.DECL || it.kind == DefaultDeclKind.REEXPORT }
+            val hasNonDeclInline = defaults.any { it.kind != DefaultDeclKind.DECL }
+            val emitTs2323 = declCount >= 2
+            val emitTs2528 = hasNonDeclInline || !emitTs2323
+
+            // TS2393: Duplicate function implementation — fires for multiple anonymous
+            // `export default function(){}` declarations (they all have a body but no name).
+            val anonFuncDefaults = defaults.filter { d ->
+                val fd = d.stmt as? FunctionDeclaration ?: return@filter false
+                fd.name == null && fd.body != null
+            }
+            if (anonFuncDefaults.size >= 2) {
+                for (anonD in anonFuncDefaults) {
+                    val (ts2393Line, ts2393Char) = getLineAndCharacterOfPosition(source, anonD.start)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate function implementation.",
+                        category = DiagnosticCategory.Error,
+                        code = 2393,
+                        fileName = fileName,
+                        line = ts2393Line,
+                        character = ts2393Char,
+                        start = anonD.start,
+                        length = anonD.length,
+                    ))
+                }
+            }
 
             val lastIdx = defaults.size - 1
             val lastStmt = defaults[lastIdx].stmt
@@ -16638,11 +16756,34 @@ class Checker(
             // and the last export points to all preceding with TS2752.
             val lastIsFunctionDecl = lastStmt is FunctionDeclaration
 
-            // Report TS2528 on each default export with related info
             for (i in defaults.indices) {
                 val d = defaults[i]
                 val (line, character) = getLineAndCharacterOfPosition(source, d.start)
                 val isLast = i == lastIdx
+
+                // TS2323: fires for DECL/REEXPORT forms when declCount >= 2.
+                // For DECL forms: all non-last get TS2323; last gets TS2323 only if it's a
+                // "real declaration" (ClassDecl/FuncDecl/InterfaceDecl), not an ExportAssignment.
+                // For REEXPORT forms: only non-last get TS2323 (last re-export gets only TS2528).
+                // The span for TS2323 uses ts2323Start/ts2323Length (whole statement for ExportAssignment).
+                if (emitTs2323 && (d.kind == DefaultDeclKind.DECL || d.kind == DefaultDeclKind.REEXPORT)) {
+                    val isRealDecl = d.stmt !is ExportAssignment && d.kind != DefaultDeclKind.REEXPORT
+                    if (!isLast || isRealDecl) {
+                        val (ts2323Line, ts2323Char) = getLineAndCharacterOfPosition(source, d.ts2323Start)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot redeclare exported variable 'default'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2323,
+                            fileName = fileName,
+                            line = ts2323Line,
+                            character = ts2323Char,
+                            start = d.ts2323Start,
+                            length = d.ts2323Length,
+                        ))
+                    }
+                }
+
+                if (!emitTs2528) continue
 
                 val relatedInfoList = mutableListOf<Diagnostic>()
 
