@@ -19312,6 +19312,13 @@ class Checker(
                     "@$baseName"
                 }
             }
+            is UnionType -> {
+                // Format as "type1 | type2 | ..." for display
+                val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
+                if (memberTypes.any { it == null }) return null
+                // Use "|" prefix to mark as union type for assignability checking
+                "|${memberTypes.joinToString(" | ")}"
+            }
             else -> null
         }
     }
@@ -19355,6 +19362,11 @@ class Checker(
             is ArrayType -> {
                 val elementType = formatTypeForDisplay(typeNode.elementType) ?: return null
                 "$elementType[]"
+            }
+            is UnionType -> {
+                val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
+                if (memberTypes.any { it == null }) return null
+                memberTypes.joinToString(" | ")
             }
             else -> null
         }
@@ -19407,7 +19419,8 @@ class Checker(
     }
 
     /** Check if sourceType is assignable to targetType.
-     *  Named types (from TypeReference) are prefixed with "@". */
+     *  Named types (from TypeReference) are prefixed with "@".
+     *  Union types are prefixed with "|". */
     private fun isAssignableTo(sourceType: String, targetType: String): Boolean {
         if (sourceType == targetType) return true
         if (targetType == "any" || targetType == "unknown") return true
@@ -19416,6 +19429,16 @@ class Checker(
         if (sourceType == "undefined" && targetType == "void") return true
         // When strict null checks are off, null and undefined are assignable to everything
         if (!strictNullChecks && (sourceType == "null" || sourceType == "undefined")) return true
+        // Union types: source is assignable to union if it matches any member
+        if (targetType.startsWith("|")) {
+            val members = targetType.removePrefix("|").split(" | ")
+            // null/undefined are only assignable to union if a member is null/undefined/void
+            if (sourceType == "null" || sourceType == "undefined") {
+                return members.any { it == sourceType || it == "any" || it == "unknown" || (sourceType == "undefined" && it == "void") }
+            }
+            // For other source types, assignable if it matches any member
+            return members.any { isAssignableTo(sourceType, it) }
+        }
         // For named types (TypeReference, prefixed with "@"), we can only confidently say
         // that null/undefined are NOT assignable. Other source types might actually be
         // assignable via structural typing, type aliases, etc.
@@ -19423,8 +19446,8 @@ class Checker(
             // null and undefined are never assignable to named types (with strict null checks)
             return sourceType != "null" && sourceType != "undefined"
         }
-        if (sourceType.startsWith("@")) {
-            // Named source type vs keyword target — can't determine without full resolution
+        if (sourceType.startsWith("@") || sourceType.startsWith("|")) {
+            // Named/union source type vs keyword target — can't determine without full resolution
             return true // safe default: assume assignable to avoid FPs
         }
         // null is assignable to any/unknown (already handled above) but NOT void or other types
@@ -19437,9 +19460,9 @@ class Checker(
 
     private fun emitTS2322(start: Int, length: Int, sourceType: String, targetType: String, source: String, fileName: String, hasElaboration: Boolean = false, typeParams: Set<String> = emptySet()) {
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        // Strip "@" prefix from named types for display
-        val displaySource = sourceType.removePrefix("@")
-        val displayTarget = targetType.removePrefix("@")
+        // Strip "@"/"@" prefix from named/union types for display
+        val displaySource = sourceType.removePrefix("@").removePrefix("|")
+        val displayTarget = targetType.removePrefix("@").removePrefix("|")
         val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
         // Check if target type is a type parameter — add elaboration chain
         val chain = mutableListOf<String>()
