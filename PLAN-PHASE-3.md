@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,285 passing (72.3%), 2,789 failing
+- **10,077 tests**, 7,362 passing (73.1%), 2,715 failing
+- **Session 2026-03-22c**: Binder canMerge Variable+Module fix (+1 test), isSymbolTypeOnly namespace-with-value-exports fix for `export = a` where `a` is declare namespace with value exports (+1 test), TS2552 ambient module exclusion from scope + NamespaceModule as suggestion candidate + KNOWN_GLOBALS ordering (+1 test)
 - **Session 2026-03-22b**: TS2552 spelling suggestions with Damerau-Levenshtein (+84 tests), parser error recovery (+14 tests), decorator metadata type serialization (+5 tests), cross-file const enum re-export elision, baseUrl module resolution in Checker
 - **Session 2026-03-21b**: Skip deprecated ES5/ES3/AMD/System/UMD JS emit tests (-475 tests, deprecated in TS6.0/removed in TS7.0/tsgo). Remove `let`/`const`→`var` downlevel code. Map `effectiveTarget` ES5→ES2015. Block comment whitespace preservation (+1). Parameter comment inline formatting (+2), string enum syntactic reverse mapping (+2), esModuleInterop helpers (+15), TS1036 first-only, yield isStartOfExpression (+2)
 - **Session 2026-03-21**: +9 tests (7,228→7,237) — StackOverflow fix: iterative left-spine walk in checkConstAssignmentInExpr (+1), binding pattern element defaults TS2448 FP fix, top-level await parsing for ES2022+/NodeNext/System modules (+1), TS1215 'arguments' in module strict mode (+1), CJS void 0 hoist skip for type-only global re-exports (+1), /// reference types hoist before CJS preamble (+1), shebang stripping in outFile bundles (+1), CJS/AMD exports qualification for exported import aliases (+3)
@@ -2071,21 +2072,25 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Checker.kt`
 
-- [ ] **28b. CJS type-only import alias void0 hoist suppression** (~6 tests)
+- [x] **28b. CJS type-only import alias void0 hoist suppression** (~6 tests)
 
   `export import v = C` where `C` is a type-only namespace alias (interface/declare namespace)
   incorrectly gets `exports.v = void 0` hoisted, and later `exports.v = C`.
   TypeScript suppresses void0 + assignment for pure type aliases.
+  Already passing — all internalAliasInterfaceInsideTopLevelModuleWithExport and
+  internalAliasUninitializedModuleInsideTopLevelModule variants pass.
 
   Tests: `internalAliasInterfaceInsideTopLevelModuleWithExport`,
   `internalAliasUninitializedModuleInsideTopLevelModule` (CJS + AMD variants).
 
   **Files:** `Transformer.kt`
 
-- [ ] **28c. Module file detection for CJS transform** (~6 tests)
+- [x] **28c. Module file detection for CJS transform** (~6 tests)
 
   Some non-module files (no imports/exports) still get CJS preamble (`Object.defineProperty`).
   Tests: `compositeWithNodeModulesSourceFile`, `declarationEmitNestedBindingPattern`.
+  Already passing — JS emit tests for these pass. Remaining failures are error-baseline only
+  (need type checker for TS2322, not CJS module detection).
 
   **Files:** `Transformer.kt`, `TypeScriptCompiler.kt`
 
@@ -2120,6 +2125,27 @@ Analysis of 2,789 remaining failures:
   Fixed in commit c8c202a (for-statement comment preservation in error recovery).
 
   **Files:** `Emitter.kt`
+
+- [x] **28h. Binder canMerge Variable+Module** (+1 test)
+
+  `declare const b: T; declare namespace b {}` — binder couldn't merge Variable + NamespaceModule,
+  so the second declaration silently overwrote the first symbol. `isSymbolTypeOnly` then saw only
+  the namespace declaration and returned type-only, eliding the `require()`. Fixed by adding
+  `Variable + Module` and `Module + Variable` to `canMerge` in Binder.
+  Test: `narrowedImports_ts compiles`.
+
+  **Files:** `Binder.kt`
+
+- [x] **28i. isSymbolTypeOnly: declare namespace with value exports treated as value** (+1 test)
+
+  `declare namespace a { export const x: number }; export = a` — `isSymbolTypeOnly` returned
+  true for `a` because `declare namespace` → `ModuleInstanceState.NonInstantiated`. But the
+  namespace has value exports (x is a const), so the require for `import a = require("./a")`
+  was incorrectly elided. Fixed by checking `symbol.exports` for any value-flagged symbols when
+  the namespace state is NonInstantiated: if any value exports exist, treat as value.
+  Test: `narrowedImports_assumeInitialized_ts compiles`.
+
+  **Files:** `Checker.kt`
 
 ---
 

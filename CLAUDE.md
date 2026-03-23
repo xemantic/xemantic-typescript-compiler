@@ -68,8 +68,13 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Helper ordering depends on first usage**: When both `__importStar` and `__exportStar` are needed, TypeScript emits the one used first in the output before the other. Track `importStarUsedFirst` by checking which `needsXxx = true` is set first.
 - **`importHelpers: true` uses tslib**: When set, don't emit inline helper functions. Instead add `const tslib_1 = require("tslib")` (CJS) or `"tslib"` dep + `tslib_1` param (AMD), and use `tslib_1.__helperName(...)` instead of bare `__helperName(...)`. The `helperExpr()` method handles this.
 
+### Binder gotchas
+
+- **`canMerge` must include Variable+Module**: `declare const b: T; declare namespace b {}` is valid TypeScript. The binder's `canMerge` must allow `Variable + Module` and `Module + Variable` merging, otherwise the second declaration silently overwrites the first symbol. This matters for `isTypeOnlyImportRequire` which then sees only the namespace and incorrectly elides the `require()`.
+
 ### Checker gotchas
 
+- **`isSymbolTypeOnly` for `declare namespace` with value exports**: A `ModuleInstanceState.NonInstantiated` namespace (from `declare namespace`) is NOT type-only if it has value exports. Check `symbol.exports?.values?.any { it.flags.hasAny(SymbolFlags.Value) }` — if true, the namespace is a runtime value shape even though it has no IIFE. This matters for `export = a` where `a` is a `declare namespace { export const x }`.
 - **`node.end` overshoots by one token**: In this AST, `node.end` = `scanner.getPos()` AFTER calling `nextToken()`, so it includes the start/end of the NEXT scanned token — not the true end of the node's text. To compute squiggle length, use `expressionTrueEnd(expr)` which traverses the rightmost leaf: `PropertyAccessExpression → name.pos + name.text.length`, `StringLiteralNode → pos + rawText.length + 2`, `NumericLiteralNode → pos + text.length`, `Identifier → pos + text.length`. Never use `node.end - node.pos` for span length in diagnostics.
 - **Merged enum autoValue reset**: Each enum declaration block resets auto-increment to 0. `computeEnumSymbolValues` must have `var autoValue = 0.0` INSIDE the loop over declarations, not outside — otherwise merged enums get wrong values (e.g., `Enum1 { A0 = 100 }; Enum1 { A }` → A should be 0, not 101).
 - **Nested enum value computation**: `computeAllEnumValues` must recurse into namespace `exports` to find nested const enums. Top-level `result.locals` only has the outer namespace symbols.
