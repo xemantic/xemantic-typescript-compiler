@@ -2241,7 +2241,7 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **30c. TS1117 duplicate computed property names** (~3 tests)
+- [x] **30c. TS1117 duplicate computed property names** (~3 tests)
 
   `duplicateObjectLiteralProperty_computedName{1,2,3}` — computed property names in
   object literals with duplicate keys. Our TS1117 checker doesn't handle computed

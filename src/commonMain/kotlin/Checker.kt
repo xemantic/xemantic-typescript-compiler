@@ -12541,6 +12541,8 @@ class Checker(
                         val operand = expr.operand
                         if (operand is NumericLiteralNode) 1 + operand.text.length else nameNode.end - nameNode.pos
                     }
+                    is Identifier -> expr.text.length
+                    is PropertyAccessExpression -> computedExpressionTextLength(expr)
                     else -> return nameNode.end - nameNode.pos
                 }
                 exprLen + 2 // [expr]
@@ -12604,7 +12606,35 @@ class Checker(
                     if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
                 } else null
             }
+            // Identifier and PropertyAccess references — compare syntactically
+            // Prefix with __@computed: to avoid conflicts with regular property names
+            is Identifier -> "__@computed:${expr.text}"
+            is PropertyAccessExpression -> {
+                val path = computedPropertyAccessPath(expr) ?: return null
+                "__@computed:$path"
+            }
             else -> null
+        }
+    }
+
+    /** Build dotted path string from a property access chain (e.g., E1.A → "E1.A"). */
+    private fun computedPropertyAccessPath(expr: Expression): String? {
+        return when (expr) {
+            is Identifier -> expr.text
+            is PropertyAccessExpression -> {
+                val base = computedPropertyAccessPath(expr.expression) ?: return null
+                "$base.${expr.name.text}"
+            }
+            else -> null
+        }
+    }
+
+    /** Compute the text length of a property access expression (e.g., E1.A → 4, keys.E1.A → 9). */
+    private fun computedExpressionTextLength(expr: Expression): Int {
+        return when (expr) {
+            is Identifier -> expr.text.length
+            is PropertyAccessExpression -> computedExpressionTextLength(expr.expression) + 1 + expr.name.text.length
+            else -> 0
         }
     }
 
