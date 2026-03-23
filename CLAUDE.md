@@ -125,6 +125,9 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Type parameter constraints evaluated before function params**: Check type param constraints BEFORE calling `addParamsToScope`. For `function f<T extends typeof a>(a: T)`, `a` is not in scope during the constraint — moving `addParamsToScope` AFTER constraint checking allows TS2552 to fire for `a`.
 - **TS2728 related info for file-level declarations only**: `findDeclarationRelatedInfo` looks up suggested names in binder locals (file-level). For function-scoped names (params, local vars) the position isn't tracked, so TS2728 is silently omitted — which matches TypeScript's behavior for those cases.
 - **Gradle binary cache inconsistency**: When changes to Checker.kt don't seem to take effect during debugging, a full clean (`rm -rf build`) is needed. The binary test cache can keep stale results even after recompilation.
+- **Ambient external modules not in scope**: `declare module "foo"` creates a symbol with string-literal name. The unquoted name `foo` used as an identifier gets TS2304 — TypeScript does NOT consider quoted module names as accessible identifiers. Exclude them from `fileScope` in `checkUnresolvedNames`.
+- **NamespaceModule IS a valid suggestion candidate**: `declare namespace Foo` has `SymbolFlags.NamespaceModule` (not `SymbolFlags.Value`), but namespace names ARE usable at value positions (e.g. `Foo.bar`). Don't put them in `typeOnlyNames` — use `!sym.flags.hasAny(Value or Module)` to exclude only pure type declarations.
+- **KNOWN_GLOBALS iterated first in spelling suggestions**: TypeScript's lib.d.ts globals are in the symbol table before file-local symbols. Iterating KNOWN_GLOBALS before scope chain ensures lib globals win ties over local declarations (e.g., `Lock` wins over `ELoc` for `loc`).
 
 ### Checker diagnostic gotchas (TS18004/TS1103)
 

@@ -5614,10 +5614,23 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            // File-level scope: binder locals + globals + known globals
+            // File-level scope: binder locals + globals + known globals.
+            // Skip ambient external modules (`declare module "foo"`) — their string-literal names
+            // are NOT accessible as identifiers in code. TypeScript reports TS2304 for bare uses.
+            val ambientExternalModuleNames = result.sourceFile.statements
+                .filterIsInstance<ModuleDeclaration>()
+                .filter { it.name is StringLiteralNode }
+                .map { (it.name as StringLiteralNode).text }
+                .toSet()
             val fileScope = NameScope(null)
-            for ((name, _) in result.locals) fileScope.names.add(name)
-            for ((name, _) in globals) fileScope.names.add(name)
+            for ((name, _) in result.locals) {
+                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+            }
+            for ((name, _) in globals) {
+                // Don't include ambient external module names from globals — they come from
+                // `declare module "foo"` declarations and are not accessible as identifiers.
+                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+            }
             fileScope.names.addAll(KNOWN_GLOBALS)
 
             checkUnresolvedInStatements(
@@ -5668,7 +5681,10 @@ class Checker(
                     val name = stmt.name
                     when (name) {
                         is Identifier -> scope.names.add(name.text)
-                        is StringLiteralNode -> scope.names.add(name.text)
+                        // StringLiteralNode = `declare module "foo"` (ambient external module).
+                        // These are NOT accessible as identifiers in code — don't add to scope.
+                        // TypeScript reports TS2304 for uses of the unquoted name as a value.
+                        is StringLiteralNode -> { /* skip */ }
                         is PropertyAccessExpression -> {
                             // Dotted namespace: namespace m1.m2.m3 {} — extract leftmost segment
                             var cur: Expression = name
@@ -7086,23 +7102,27 @@ class Checker(
      * Only suggests value-producing names (not type-alias/interface-only declarations).
      */
     private fun getSpellingSuggestion(name: String, scope: NameScope, fileName: String): String? {
-        // Collect all candidate names from scope chain
-        val candidates = mutableSetOf<String>()
+        // Collect all candidate names — KNOWN_GLOBALS first (like TypeScript's lib.d.ts symbols),
+        // then scope chain names. This ensures globals win ties over local declarations,
+        // matching TypeScript's behavior where lib.d.ts entries are in the global symbol table.
+        val candidates = LinkedHashSet<String>()
+        candidates.addAll(KNOWN_GLOBALS)
         var s: NameScope? = scope
         while (s != null) {
             candidates.addAll(s.names)
             s = s.parent
         }
-        // Also include well-known globals
-        candidates.addAll(KNOWN_GLOBALS)
 
         // Build set of type-only names from binder locals so we don't suggest
         // type aliases or interfaces as replacements for value-position references.
+        // NamespaceModule (declare namespace / non-instantiated namespace) IS a valid suggestion
+        // target because namespaces are referenced at value positions (e.g. NS.foo).
+        // Only pure type declarations (TypeAlias, Interface) without any Module flag are excluded.
         val typeOnlyNames = mutableSetOf<String>()
         val binderResult = fileResults[fileName]
         if (binderResult != null) {
             for ((symName, sym) in binderResult.locals) {
-                if (!sym.flags.hasAny(SymbolFlags.Value)) {
+                if (!sym.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)) {
                     typeOnlyNames.add(symName)
                 }
             }
@@ -9326,6 +9346,8 @@ class Checker(
             "Geolocation", "GeolocationPosition",
             "Clipboard", "ClipboardItem",
             "VisualViewport",
+            // Web Locks API
+            "Lock", "LockManager", "LockOptions",
             "indexedDB", "IDBDatabase", "IDBObjectStore", "IDBTransaction",
             "IDBRequest", "IDBCursor", "IDBKeyRange",
             "structuredClone", "reportError",
