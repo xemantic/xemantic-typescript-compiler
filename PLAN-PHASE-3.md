@@ -2094,7 +2094,7 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Transformer.kt`, `TypeScriptCompiler.kt`
 
-- [ ] **28d. Decorator metadata — CJS export qualification for __decorate** (~4 tests)
+- [x] **28d. Decorator metadata — CJS export qualification for __decorate** (~4 tests)
 
   `exports.MyClass = MyClass = __decorate([...])` — decorator metadata result should be
   assigned to `exports.X` when the class is exported in CJS mode.

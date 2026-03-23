@@ -801,6 +801,9 @@ class Transformer(
         // When both __importStar and __exportStar are needed, whichever is used first in the output
         // gets its helper emitted first.
         var importStarUsedFirst = true  // default: __importStar before __exportStar
+        // Track module temp var names for default imports (e.g., `import db from './db'` → "db_1").
+        // Used to wrap decorator metadata type references: `db_1.default.Foo` → safety check pattern.
+        val defaultModuleTempVars = mutableSetOf<String>()
 
         // Counter for generating unique temp names per module base name (e.g. b_1, b_2)
         val moduleNameCounter = mutableMapOf<String, Int>()
@@ -1524,9 +1527,9 @@ class Transformer(
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                             if (options.esModuleInterop) {
                                 needsImportDefault = true
-                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, stmt.trailingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             } else {
-                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, stmt.trailingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             }
                             importStmtForLocalName[localName] = result.last()
                             // Rename: Namespace → b_1.default
@@ -1535,6 +1538,8 @@ class Transformer(
                                 name = syntheticId("default"),
                                 pos = -1, end = -1,
                             )
+                            // Track default import temp var for decorator metadata safety wrapping
+                            defaultModuleTempVars.add(tempName)
                         } else if (bindings is NamespaceImport) {
                             // import * as x from "y"
                             // esModuleInterop: const x = __importStar(require("y"))
@@ -1574,6 +1579,8 @@ class Transformer(
                                 name = syntheticId("default"),
                                 pos = -1, end = -1,
                             )
+                            // Track default import temp var for decorator metadata safety wrapping
+                            defaultModuleTempVars.add(tempName)
                             // Rename named bindings: x → tempName.x, etc.
                             for (element in bindings.elements) {
                                 val importedName = (element.propertyName ?: element.name).text
@@ -2078,6 +2085,33 @@ class Transformer(
             result.addAll(rewritten)
         }
 
+        // Post-process decorator metadata: wrap `X_1.default.Foo` args in safety checks.
+        // When emitDecoratorMetadata is true and a type comes from a default import,
+        // TypeScript wraps the serialized type ref with:
+        //   `typeof (_a = typeof X_1.default !== "undefined" && X_1.default.Foo) === "function" ? _a : Object`
+        // and hoists `var _a;` before Object.defineProperty.
+        if (defaultModuleTempVars.isNotEmpty() && needsMetadataHelper) {
+            val wrappedResult = result.map { stmt -> wrapDefaultImportMetadataArgsInStatement(stmt, defaultModuleTempVars) }
+            val didWrap = wrappedResult.zip(result).any { (new, old) -> new !== old }
+            if (didWrap) {
+                result.clear()
+                result.addAll(wrappedResult)
+                // Insert `var _a;` at position 0 (before Object.defineProperty).
+                // "use strict" is added even later, so this will end up at position 1.
+                val aVarDecl = VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(VariableDeclaration(
+                            name = Identifier(text = "_a", pos = -1, end = -1),
+                            type = null, initializer = null, pos = -1, end = -1,
+                        )),
+                        flags = VarKeyword, pos = -1, end = -1,
+                    ),
+                    modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+                )
+                result.add(0, aVarDecl)
+            }
+        }
+
         // Collect internal import alias names (from `import x = M.N`) for elision.
         // Only erase when the module reference root is a namespace declared in this file,
         // AND the alias name never appears elsewhere in the source (including type positions).
@@ -2329,6 +2363,122 @@ class Transformer(
         }
 
         return result
+    }
+
+    /**
+     * Wraps `X_1.default.Foo` expressions inside `__metadata("design:paramtypes", [...])` calls
+     * with the TypeScript safety check pattern:
+     *   `typeof (_a = typeof X_1.default !== "undefined" && X_1.default.Foo) === "function" ? _a : Object`
+     *
+     * This is needed when decorator metadata references a type from a default import, because
+     * `X_1.default` may not have the expected member if the module has no default export.
+     */
+    private fun wrapDefaultImportMetadataArgsInStatement(stmt: Statement, defaultModuleTempVars: Set<String>): Statement =
+        when (stmt) {
+            is ExpressionStatement -> {
+                val newExpr = wrapDefaultImportMetadataArgsInExpr(stmt.expression, defaultModuleTempVars)
+                if (newExpr !== stmt.expression) stmt.copy(expression = newExpr) else stmt
+            }
+            else -> stmt
+        }
+
+    private fun wrapDefaultImportMetadataArgsInExpr(expr: Expression, defaultModuleTempVars: Set<String>): Expression =
+        when (expr) {
+            is BinaryExpression -> {
+                val newLeft = wrapDefaultImportMetadataArgsInExpr(expr.left, defaultModuleTempVars)
+                val newRight = wrapDefaultImportMetadataArgsInExpr(expr.right, defaultModuleTempVars)
+                if (newLeft !== expr.left || newRight !== expr.right) expr.copy(left = newLeft, right = newRight) else expr
+            }
+            is CallExpression -> {
+                // Check if this is __metadata("design:paramtypes", [...]) or __metadata("design:type", ...)
+                val callee = expr.expression
+                val isMetadataCall = isHelperCall(callee, "__metadata")
+                if (isMetadataCall && expr.arguments.size == 2) {
+                    val key = (expr.arguments[0] as? StringLiteralNode)?.text
+                    if (key == "design:paramtypes" || key == "design:type") {
+                        val valueArg = expr.arguments[1]
+                        val newValueArg = when (valueArg) {
+                            is ArrayLiteralExpression -> {
+                                val newElements = valueArg.elements.map { elem ->
+                                    wrapDefaultImportMemberAccess(elem, defaultModuleTempVars) ?: elem
+                                }
+                                if (newElements.zip(valueArg.elements).any { (n, o) -> n !== o })
+                                    valueArg.copy(elements = newElements) else valueArg
+                            }
+                            else -> wrapDefaultImportMemberAccess(valueArg, defaultModuleTempVars) ?: valueArg
+                        }
+                        if (newValueArg !== valueArg) expr.copy(arguments = listOf(expr.arguments[0], newValueArg)) else expr
+                    } else expr
+                } else {
+                    // Recurse into non-metadata call expressions (e.g., the __decorate call itself)
+                    val newArgs = expr.arguments.map { wrapDefaultImportMetadataArgsInExpr(it, defaultModuleTempVars) }
+                    val newCallee = wrapDefaultImportMetadataArgsInExpr(callee, defaultModuleTempVars)
+                    if (newArgs.zip(expr.arguments).any { (n, o) -> n !== o } || newCallee !== callee)
+                        expr.copy(expression = newCallee, arguments = newArgs) else expr
+                }
+            }
+            is ArrayLiteralExpression -> {
+                // Recurse into array elements (e.g., the decorator list inside __decorate)
+                val newElements = expr.elements.map { wrapDefaultImportMetadataArgsInExpr(it, defaultModuleTempVars) }
+                if (newElements.zip(expr.elements).any { (n, o) -> n !== o })
+                    expr.copy(elements = newElements) else expr
+            }
+            else -> expr
+        }
+
+    /**
+     * If `expr` is `X_1.default.Foo` where `X_1` is a default import temp var,
+     * wrap it with the safety check:
+     *   `typeof (_a = typeof X_1.default !== "undefined" && X_1.default.Foo) === "function" ? _a : Object`
+     * Returns null if no wrapping needed.
+     */
+    private fun wrapDefaultImportMemberAccess(expr: Expression, defaultModuleTempVars: Set<String>): Expression? {
+        // Pattern: PropertyAccessExpression(PropertyAccessExpression(Identifier(X_1), "default"), memberName)
+        if (expr !is PropertyAccessExpression) return null
+        val inner = expr.expression
+        if (inner !is PropertyAccessExpression) return null
+        if (inner.name.text != "default") return null
+        val moduleId = inner.expression as? Identifier ?: return null
+        if (moduleId.text !in defaultModuleTempVars) return null
+        // Build: typeof X_1.default !== "undefined"
+        val typeofCheck = BinaryExpression(
+            left = TypeOfExpression(expression = inner, pos = -1, end = -1),
+            operator = SyntaxKind.ExclamationEqualsEquals,
+            right = StringLiteralNode(text = "undefined", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // Build: typeof X_1.default !== "undefined" && X_1.default.memberName
+        val andExpr = BinaryExpression(
+            left = typeofCheck,
+            operator = SyntaxKind.AmpersandAmpersand,
+            right = expr,  // X_1.default.memberName
+            pos = -1, end = -1,
+        )
+        // Build: _a = (typeof X_1.default !== "undefined" && X_1.default.memberName)
+        val assignExpr = BinaryExpression(
+            left = syntheticId("_a"),
+            operator = SyntaxKind.Equals,
+            right = andExpr,
+            pos = -1, end = -1,
+        )
+        // Build: typeof (_a = ...) === "function"
+        val typeofAssign = TypeOfExpression(
+            expression = ParenthesizedExpression(expression = assignExpr, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        val isFunctionCheck = BinaryExpression(
+            left = typeofAssign,
+            operator = SyntaxKind.EqualsEqualsEquals,
+            right = StringLiteralNode(text = "function", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // Build: typeof (...) === "function" ? _a : Object
+        return ConditionalExpression(
+            condition = isFunctionCheck,
+            whenTrue = syntheticId("_a"),
+            whenFalse = syntheticId("Object"),
+            pos = -1, end = -1,
+        )
     }
 
     /**
@@ -5386,6 +5536,7 @@ class Transformer(
         helperName: String,
         moduleSpecifier: Expression,
         comments: List<Comment>? = null,
+        trailingComments: List<Comment>? = null,
         sourcePos: Int = -1,
         sourceEnd: Int = -1,
     ): Statement {
@@ -5414,6 +5565,7 @@ class Transformer(
             ),
             pos = sourcePos, end = sourceEnd,
             leadingComments = comments,
+            trailingComments = trailingComments,
         )
     }
 

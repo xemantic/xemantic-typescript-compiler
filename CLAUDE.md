@@ -151,6 +151,8 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Numeric enum type serialization**: `E.A` (QualifiedName) and plain `E` where E is a numeric enum → `Number`. Requires `checker.isNumericEnumType(name, fileName)`. String enums → `Object`.
 - **Class-level `__decorate` includes constructor paramtypes**: When `emitDecoratorMetadata` is true and a class has decorators, the class-level `__decorate([...], ClassName)` call must include `__metadata("design:paramtypes", [...])` for constructor parameters. Pass `constructorParams` to `generateClassDecorateStatement`.
 - **Type-only export cross-file detection**: `export type { Foo }` in `a.ts` makes `Foo` type-only when imported in `b.ts` even without `import type { Foo }`. Our checker's `isValueExport` looks at the symbol's flags (Class → Value → true) and doesn't detect type-only export specifiers. Fix requires tracking per-name type-only exports in the binder.
+- **Default import metadata safety wrapper**: When `emitDecoratorMetadata=true` and a constructor param type is a qualified name from a default import (`db_1.default.Foo`), TypeScript wraps it: `typeof (_a = typeof db_1.default !== "undefined" && db_1.default.Foo) === "function" ? _a : Object`. The `var _a;` is hoisted before `Object.defineProperty`. Track `defaultModuleTempVars` during import processing; post-process `__metadata` args AFTER `rewriteIdInStatement`; insert `var _a;` at index 0 directly (not via `sideEffectTempVars` which is already processed).
+- **`makeImportHelperConst` trailing comments**: Add a `trailingComments` parameter and pass `stmt.trailingComments` at the call site — same as `makeRequireConst` already does.
 
 ### TS2454/TS2564 gotchas
 
