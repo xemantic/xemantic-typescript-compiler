@@ -9961,8 +9961,9 @@ class Transformer(
                         val emitExpr = if (foldedValue != null) {
                             NumericLiteralNode(text = foldedValue.toString(), pos = -1, end = -1)
                         } else {
-                            // Qualify bare identifiers that refer to earlier enum members
-                            qualifyEnumMemberRefs(initExpr, enumName, knownMemberNames)
+                            // Check for Infinity/-Infinity (e.g., 1e999 → Infinity)
+                            val infExpr = resolveInfinityLiteral(initExpr)
+                            infExpr ?: qualifyEnumMemberRefs(initExpr, enumName, knownMemberNames)
                         }
                         val numericValue = foldedValue ?: tryEvaluateNumericLiteral(initExpr)?.toLong()
                         if (numericValue != null) {
@@ -10621,6 +10622,29 @@ class Transformer(
                 pos = -1, end = -1,
                 trailingComments = listOf(comment),
             )
+        }
+    }
+
+    /** If expr evaluates to Infinity or -Infinity, return the appropriate AST node. */
+    private fun resolveInfinityLiteral(expr: Expression): Expression? {
+        return when (expr) {
+            is NumericLiteralNode -> {
+                val d = expr.text.replace("_", "").toDoubleOrNull() ?: return null
+                if (d == Double.POSITIVE_INFINITY) syntheticId("Infinity")
+                else null
+            }
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.Minus) {
+                    val inner = expr.operand
+                    if (inner is NumericLiteralNode) {
+                        val d = inner.text.replace("_", "").toDoubleOrNull() ?: return null
+                        if (d == Double.POSITIVE_INFINITY) {
+                            PrefixUnaryExpression(operator = SyntaxKind.Minus, operand = syntheticId("Infinity"), pos = -1, end = -1)
+                        } else null
+                    } else null
+                } else null
+            }
+            else -> null
         }
     }
 
