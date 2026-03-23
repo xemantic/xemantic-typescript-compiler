@@ -2148,11 +2148,27 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Checker.kt`
 
+- [x] **29a. TS2323/TS2528/TS2393 for multiple `export default` forms** (+10 tests)
+
+  Full classification of duplicate `export default` forms: DECL (class/function/interface
+  declarations and value-identifier ExportAssignments), REEXPORT (ExportDeclaration with
+  `{ ... as default }` specifiers), REF_TYPE (type-only identifier ExportAssignments),
+  EXPR (complex expression ExportAssignments). Decision rule:
+  - TS2323 fires when `declCount >= 2` (≥2 DECL+REEXPORT forms exist)
+  - TS2528 fires when `hasNonDeclInline || !emitTs2323`
+  - TS2393 fires for ≥2 anonymous `export default function(){}` declarations
+  - TS2323 for duplicate `export var` in `moduleDuplicateIdentifiers.ts`
+
+  Tests: `exportDefaultClassAndValue`, `exportDefaultDuplicateCrash`,
+  `exportDefaultInterfaceAndTwoFunctions`, `moduleDuplicateIdentifiers`, and others.
+
+  **Files:** `Checker.kt`
+
 ---
 
-## Remaining failure analysis (session 2026-03-22c)
+## Remaining failure analysis (session 2026-03-22d)
 
-**Tests passing**: 7,362 / 10,077 (73.1%)
+**Tests passing**: 7,372 / 10,077 (73.2%)
 
 | Category | Count | Notes |
 |----------|-------|-------|

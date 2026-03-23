@@ -144,6 +144,9 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 - **Position rules**: `ExportAssignment` with identifier → error at identifier pos; with other expr → error at whole-statement start (full span). Named FunctionDeclaration/ClassDeclaration → error at name pos. Anonymous FD/CD → error at `export` keyword (NOT `function`/`class` — `FunctionDeclaration.pos` = `function` keyword, must search backwards for `export`).
 - **2752/2753/6204 code rules**: All non-last exports point to the LAST export. The LAST export points to ALL previous. For 3+ defaults: first non-last → TS2753, subsequent non-lasts → TS6204 "and here.", last → TS2752 pointing to each previous. **EXCEPTION**: when the LAST export is a `FunctionDeclaration`, codes are swapped: non-lasts use TS2752 "The first export default is here.", and the last uses TS2753 "Another export default is here."
+- **TS2323 vs TS2528 classification**: Use `DefaultDeclKind`: DECL (class/function/interface decls and value-identifier ExportAssignments), REEXPORT (ExportDeclaration `{ X as default }`), REF_TYPE (type-only identifier ExportAssignment), EXPR (non-identifier ExportAssignment). `emitTs2323 = declCount >= 2` (where declCount = DECL + REEXPORT). `emitTs2528 = hasNonDeclInline || !emitTs2323`. Both can fire simultaneously.
+- **ExportDeclaration default specifier position**: `ExportSpecifier.name.pos` includes leading whitespace trivia — skip whitespace to get token start position for diagnostics.
+- **`stmt.end` is lookahead position**: `ExportAssignment.end` points AFTER the next scanned token, not the end of the current statement. Compute span end from `expr.pos + expr.text.length` for Identifier expressions, or scan forward from `expr.pos` for complex expressions.
 
 ### Top-level await gotchas
 
