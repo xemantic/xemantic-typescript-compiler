@@ -2061,18 +2061,13 @@ Analysis of 2,789 remaining failures:
 
   The `namedExportLocalToExport` pre-scan was already implemented in a prior session.
 
-- [ ] **28c. TS2552 false positive reduction — type parameters and parameter properties** (~6 tests)
+- [x] **28c. TS2552 false positive reduction — ambient module names and namespace suggestions** (~6 tests)
 
-  Our TS2552 spelling suggestions fire for names that TypeScript reports as plain TS2304:
-  - `X` suggesting `x` (parameter property name) — constructor `public x` creates a class member,
-    but `X` in type position should not suggest `x` (a value). TypeScript only suggests same-kind names.
-  - `H` suggesting `h` (type parameter) — type params aren't value names.
-  - `path` suggesting `Math` — Edit distance 2 for length-4 name exceeds TypeScript's threshold.
-  - `b` suggesting `B` (namespace) — TS2833 should fire instead, but we don't have namespace detection.
-
-  Fix: Skip TS2552 suggestions when the candidate is a different kind (value vs type).
-  TypeScript's threshold is `candidateName.length * 0.4` (not `name.length / 3`).
-  Also skip suggesting parameter properties for type-position names.
+  Fixed: ambient external modules (`declare module "foo"`) excluded from scope so bare identifier
+  uses correctly get TS2304. NamespaceModule names (declare namespace) now included as spelling
+  candidates. KNOWN_GLOBALS iterated first (like TypeScript's lib.d.ts ordering). `Lock` added to
+  KNOWN_GLOBALS for DOM Web Locks API (needed for baseCheck.ts suggestion).
+  spellingSuggestionModule: +1 test.
 
   **Files:** `Checker.kt`
 
@@ -2119,9 +2114,10 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Emitter.kt`
 
-- [ ] **28g. `for` statement comment preservation** (~2 tests)
+- [x] **28g. `for` statement comment preservation** (~2 tests)
 
   `for (;; // error\n)` — comments in `for` header get dropped. TypeScript preserves them.
+  Fixed in commit c8c202a (for-statement comment preservation in error recovery).
 
   **Files:** `Emitter.kt`
 
