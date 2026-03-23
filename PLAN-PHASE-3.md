@@ -2180,12 +2180,55 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
 - [x] **30a. TS6133 rest element span fix and TS1117 computed property duplicates** (+2 tests)
 
-  `const {a, ...bar} = foo` — rest element binding (`...rest`) in object/array
-  destructuring is not collected by `collectVarDeclNames`. The `RestElement` AST node
-  has a `name` field that needs explicit collection.
-  Tests: `unusedLocalsAndObjectSpread`, `unusedLocalsAndObjectSpread2`.
+  Rest elements in ObjectBindingPattern get identifier span (no parentBindingPattern)
+  instead of whole-pattern span. TS1117 now evaluates computed property expressions
+  (`[1]`, `[+1]`, `["foo"]`) against regular property names for duplicate detection.
+  Added `evaluateComputedPropertyName()` and numeric literal normalization (0b11→3).
+  Tests: `unusedLocalsAndObjectSpread`, `duplicateObjectLiteralProperty_computedName1`.
 
   **Files:** `Checker.kt`
+
+- [x] **30a2. TS1115 continue-to-non-loop label validation** (+1 test)
+
+  Changed `labelNames` from `Set<String>` to `Map<String, Boolean>` to track whether
+  each label wraps an iteration statement. `continue target` fires TS1115 when `target`
+  labels a non-loop statement (e.g., labeled block or statement).
+  Test: `continueTarget1`.
+
+  **Files:** `Checker.kt`
+
+- [x] **30a3. TS2309 export= in ambient modules** (+3 tests)
+
+  `export = X` inside `declare module "..."` blocks now detects conflicts with other
+  exported elements via recursive `checkExportAssignmentConflictsInStatements`.
+  Tests: `incompatibleExports1`, `incompatibleExports2`,
+  `importDeclWithExportModifierAndExportAssignmentInAmbientContext`.
+
+  **Files:** `Checker.kt`
+
+- [x] **30a4. TS1030 duplicate declare/export modifiers** (+2 tests)
+
+  Parser stores modifiers as Set (deduplicates `declare declare` → {Declare}).
+  checkModifiers now scans backwards from stmtPos to find consumed modifier keywords.
+  Only for Declare/Export (other keywords like `protected` can be property names).
+  Tests: `declareAlreadySeen`, `exportAlreadySeen`.
+
+  **Files:** `Checker.kt`
+
+- [x] **30a5. TS1015 parameter property + TS2588 prefix increment** (+2 tests)
+
+  Parameter properties (public/private/protected/readonly) fire TS1015 even without
+  type annotation. `++((x))` now detects const assignment through parens.
+  Tests: `es6ClassTest`, `constDeclarations-access2`.
+
+  **Files:** `Checker.kt`
+
+- [x] **30a6. TS5053 reactNamespace+jsxFactory conflict** (+1 test)
+
+  When both options are specified, emit TS5053.
+  Test: `jsxFactoryAndReactNamespace`.
+
+  **Files:** `TypeScriptCompiler.kt`
 
 - [ ] **30b. TS5055 — per-file JS output with declaration option** (~4 tests)
 
