@@ -16871,7 +16871,20 @@ class Checker(
             // TS2323 fires when there are ≥2 DECL/REEXPORT forms.
             // TS2528 fires when any non-DECL form (REEXPORT, REF_TYPE, or EXPR) is present.
             // When ALL forms are DECL (no REEXPORT/REF_TYPE/EXPR): emit TS2323 only (no TS2528).
-            val declCount = defaults.count { it.kind == DefaultDeclKind.DECL || it.kind == DefaultDeclKind.REEXPORT }
+            // Function overloads with the same name count as 1 DECL for TS2323.
+            val overloadNames = mutableSetOf<String>()
+            var declCount = 0
+            for (info in defaults) {
+                if (info.kind == DefaultDeclKind.DECL || info.kind == DefaultDeclKind.REEXPORT) {
+                    val stmt = info.stmt
+                    if (stmt is FunctionDeclaration && stmt.name != null) {
+                        val name = stmt.name!!.text
+                        if (name in overloadNames) continue // don't count duplicate overloads
+                        overloadNames.add(name)
+                    }
+                    declCount++
+                }
+            }
             val hasNonDeclInline = defaults.any { it.kind != DefaultDeclKind.DECL }
             val emitTs2323 = declCount >= 2
             val emitTs2528 = hasNonDeclInline || !emitTs2323
