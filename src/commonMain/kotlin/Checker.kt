@@ -5182,18 +5182,34 @@ class Checker(
                 }
             is ArrowFunction -> {
                 // Arrow function: walk the body (recurse into inner lambdas too)
-                when (val body = expr.body) {
-                    is Block -> body.statements.forEach { stmt ->
-                        checkExprForCtorParamRefsInStmt(stmt, memberName, ctorNames, source, fileName)
+                // Local var declarations inside the body shadow outer constructor params — exclude them.
+                val body = expr.body
+                if (body is Block) {
+                    val localVars = mutableSetOf<String>()
+                    collectVarDeclaredNamesInBlock(body.statements, localVars)
+                    // Also collect parameter names (they shadow ctor params in nested functions)
+                    for (param in expr.parameters) collectParamDeclaredNames(param.name, localVars)
+                    val innerCtorNames = if (localVars.isEmpty()) ctorNames else ctorNames - localVars
+                    body.statements.forEach { stmt ->
+                        checkExprForCtorParamRefsInStmt(stmt, memberName, innerCtorNames, source, fileName)
                     }
-                    is Expression -> checkExprForCtorParamRefs(body, memberName, ctorNames, source, fileName)
-                    else -> {}
+                } else if (body is Expression) {
+                    checkExprForCtorParamRefs(body, memberName, ctorNames, source, fileName)
                 }
             }
             is FunctionExpression -> {
                 // Function expression body — walk it
-                expr.body?.statements?.forEach { stmt ->
-                    checkExprForCtorParamRefsInStmt(stmt, memberName, ctorNames, source, fileName)
+                // Local var declarations inside the body shadow outer constructor params — exclude them.
+                val bodyBlock = expr.body
+                if (bodyBlock != null) {
+                    val localVars = mutableSetOf<String>()
+                    collectVarDeclaredNamesInBlock(bodyBlock.statements, localVars)
+                    // Also collect parameter names
+                    for (param in expr.parameters) collectParamDeclaredNames(param.name, localVars)
+                    val innerCtorNames = if (localVars.isEmpty()) ctorNames else ctorNames - localVars
+                    bodyBlock.statements.forEach { stmt ->
+                        checkExprForCtorParamRefsInStmt(stmt, memberName, innerCtorNames, source, fileName)
+                    }
                 }
             }
             is TemplateExpression ->
@@ -5536,9 +5552,21 @@ class Checker(
         val names: MutableSet<String> = mutableSetOf(),
         val hasArguments: Boolean = false,
         val classContext: ClassContext? = null,
+        /** Names added as type parameters — excluded from TS2552 value-position suggestions. */
+        val typeParamNames: MutableSet<String> = mutableSetOf(),
     ) {
         fun has(name: String): Boolean =
             name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
+
+        /** Returns true if [name] is a type parameter in this scope or any ancestor scope. */
+        fun isTypeParam(name: String): Boolean =
+            name in typeParamNames || parent?.isTypeParam(name) == true
+
+        /** Add a type parameter name to both [names] and [typeParamNames]. */
+        fun addTypeParam(name: String) {
+            names.add(name)
+            typeParamNames.add(name)
+        }
 
         fun child(
             hasArguments: Boolean = false,
@@ -5881,7 +5909,7 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 // Regular functions break 'this' binding — clear class context
                 val fnScope = scope.child(hasArguments = true, classContext = null)
-                stmt.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
                 // Check type parameter constraints BEFORE adding params to scope:
                 // TypeScript evaluates type constraints without function params in scope.
                 stmt.typeParameters?.forEach { tp ->
@@ -5908,7 +5936,7 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 val classCtx = buildClassContext(stmt, scope, fileName)
                 val classScope = scope.child(classContext = classCtx)
-                stmt.typeParameters?.forEach { classScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
@@ -5927,7 +5955,7 @@ class Checker(
             }
             is InterfaceDeclaration -> {
                 val ifaceScope = scope.child()
-                stmt.typeParameters?.forEach { ifaceScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
@@ -5950,7 +5978,7 @@ class Checker(
                         }
                         is MethodDeclaration -> {
                             val methodScope = ifaceScope.child()
-                            member.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                             member.typeParameters?.forEach { tp ->
                                 tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                                 tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -5973,7 +6001,7 @@ class Checker(
             }
             is TypeAliasDeclaration -> {
                 val typeScope = scope.child()
-                stmt.typeParameters?.forEach { typeScope.names.add(it.name.text) }
+                stmt.typeParameters?.forEach { typeScope.addTypeParam(it.name.text) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
@@ -6087,7 +6115,7 @@ class Checker(
             }
             is MethodDeclaration -> {
                 val methodScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
-                element.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                element.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                 element.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -6248,7 +6276,7 @@ class Checker(
                 // Regular functions break 'this' binding — clear class context
                 val fnScope = scope.child(hasArguments = true, classContext = null)
                 expr.name?.let { fnScope.names.add(it.text) }
-                expr.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                expr.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
                 addParamsToScope(expr.parameters, fnScope)
                 // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
                 if (options.target < ScriptTarget.ES2015) {
@@ -6266,7 +6294,7 @@ class Checker(
                 val classScope = scope.child(classContext = classCtx)
                 // Class expression name is in scope within its own body
                 expr.name?.let { classScope.names.add(it.text) }
-                expr.typeParameters?.forEach { classScope.names.add(it.name.text) }
+                expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
                 expr.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
@@ -6300,7 +6328,7 @@ class Checker(
                         }
                         is MethodDeclaration -> {
                             val methodScope = scope.child(hasArguments = true)
-                            prop.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            prop.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                             addParamsToScope(prop.parameters, methodScope)
                             for (param in prop.parameters) {
                                 param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -6418,7 +6446,7 @@ class Checker(
             }
             is MappedType -> {
                 val mappedScope = scope.child()
-                type.typeParameter?.let { mappedScope.names.add(it.name.text) }
+                type.typeParameter?.let { mappedScope.addTypeParam(it.name.text) }
                 type.type?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
                 type.nameType?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
             }
@@ -6433,7 +6461,7 @@ class Checker(
             }
             is FunctionType -> {
                 val fnScope = scope.child()
-                type.typeParameters?.forEach { fnScope.names.add(it.name.text) }
+                type.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
                 addParamsToScope(type.parameters, fnScope)
                 for (param in type.parameters) {
                     param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
@@ -6442,7 +6470,7 @@ class Checker(
             }
             is ConstructorType -> {
                 val ctorScope = scope.child()
-                type.typeParameters?.forEach { ctorScope.names.add(it.name.text) }
+                type.typeParameters?.forEach { ctorScope.addTypeParam(it.name.text) }
                 addParamsToScope(type.parameters, ctorScope)
                 for (param in type.parameters) {
                     param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
@@ -6457,7 +6485,7 @@ class Checker(
                         }
                         is MethodDeclaration -> {
                             val methodScope = scope.child()
-                            member.typeParameters?.forEach { methodScope.names.add(it.name.text) }
+                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                             member.typeParameters?.forEach { tp ->
                                 tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                                 tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -6514,7 +6542,7 @@ class Checker(
 
     private fun collectInferTypeNames(type: TypeNode, scope: NameScope) {
         when (type) {
-            is InferType -> scope.names.add(type.typeParameter.name.text)
+            is InferType -> scope.addTypeParam(type.typeParameter.name.text)
             is UnionType -> type.types.forEach { collectInferTypeNames(it, scope) }
             is IntersectionType -> type.types.forEach { collectInferTypeNames(it, scope) }
             is TypeReference -> type.typeArguments?.forEach { collectInferTypeNames(it, scope) }
@@ -6853,21 +6881,43 @@ class Checker(
         instanceMembers: MutableSet<String>,
     ) {
         for (member in members) {
-            val memberName = when (member) {
-                is PropertyDeclaration -> (member.name as? Identifier)?.text
-                is MethodDeclaration -> (member.name as? Identifier)?.text
-                is GetAccessor -> (member.name as? Identifier)?.text
-                is SetAccessor -> (member.name as? Identifier)?.text
-                else -> null
-            } ?: continue
-            val isStatic = when (member) {
-                is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
-                is MethodDeclaration -> ModifierFlag.Static in member.modifiers
-                is GetAccessor -> ModifierFlag.Static in member.modifiers
-                is SetAccessor -> ModifierFlag.Static in member.modifiers
-                else -> false
+            when (member) {
+                is PropertyDeclaration -> {
+                    val memberName = (member.name as? Identifier)?.text ?: continue
+                    if (ModifierFlag.Static in member.modifiers) staticMembers.add(memberName)
+                    else instanceMembers.add(memberName)
+                }
+                is MethodDeclaration -> {
+                    val memberName = (member.name as? Identifier)?.text ?: continue
+                    if (ModifierFlag.Static in member.modifiers) staticMembers.add(memberName)
+                    else instanceMembers.add(memberName)
+                }
+                is GetAccessor -> {
+                    val memberName = (member.name as? Identifier)?.text ?: continue
+                    if (ModifierFlag.Static in member.modifiers) staticMembers.add(memberName)
+                    else instanceMembers.add(memberName)
+                }
+                is SetAccessor -> {
+                    val memberName = (member.name as? Identifier)?.text ?: continue
+                    if (ModifierFlag.Static in member.modifiers) staticMembers.add(memberName)
+                    else instanceMembers.add(memberName)
+                }
+                is Constructor -> {
+                    // Constructor parameter properties (public/private/protected/readonly params)
+                    // become instance fields on the class
+                    for (param in member.parameters) {
+                        val hasModifier = ModifierFlag.Public in param.modifiers ||
+                            ModifierFlag.Private in param.modifiers ||
+                            ModifierFlag.Protected in param.modifiers ||
+                            ModifierFlag.Readonly in param.modifiers
+                        if (hasModifier) {
+                            val paramName = (param.name as? Identifier)?.text
+                            if (paramName != null) instanceMembers.add(paramName)
+                        }
+                    }
+                }
+                else -> {}
             }
-            if (isStatic) staticMembers.add(memberName) else instanceMembers.add(memberName)
         }
     }
 
@@ -7039,6 +7089,8 @@ class Checker(
             if (candidate.isEmpty()) continue  // skip empty candidates
             // Don't suggest type-only declarations (type aliases, interfaces) in value position
             if (candidate in typeOnlyNames) continue
+            // Don't suggest type parameters as replacements for value-position names
+            if (scope.isTypeParam(candidate)) continue
             // Skip candidates shorter than 3 unless case-insensitive match
             if (candidate.length < 3 && candidate.lowercase() != name.lowercase()) continue
             // Quick filter: skip if length difference is too large

@@ -9259,7 +9259,10 @@ class Transformer(
                     parameters = transformedParams,
                     body = existingBody.copy(
                         statements = bodyStatements,
-                        multiLine = propInitStatements.isNotEmpty() || existingBody.multiLine,
+                        // Mark multiLine when propInitStatements added, body was already multiLine,
+                        // OR when the constructor has parameter properties (even non-assignable destructuring ones).
+                        // TypeScript always uses multiLine format for constructors going through param-property transform.
+                        multiLine = propInitStatements.isNotEmpty() || existingBody.multiLine || paramProperties.isNotEmpty(),
                     ),
                     modifiers = stripMemberModifiers(existingConstructor.modifiers),
                     pos = existingConstructor.pos, end = existingConstructor.end,
