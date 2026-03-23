@@ -2230,7 +2230,7 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `TypeScriptCompiler.kt`
 
-- [ ] **30b. TS5055 — per-file JS output with declaration option** (~4 tests)
+- [x] **30b. TS5055 — per-file JS output with declaration option** (~4 tests)
 
   Tests expect TS5055 "Cannot write file because it would overwrite input file" for JS
   files compiled with `--declaration` but without `--outDir`. These are single-file tests
