@@ -180,7 +180,7 @@ data class CompilerOptions(
 
     val effectiveModule: ModuleKind
         get() = module ?: when {
-            target >= ScriptTarget.ES2015 -> ModuleKind.ES2015
+            effectiveTarget >= ScriptTarget.ES2015 -> ModuleKind.ES2015
             else -> ModuleKind.CommonJS
         }
 }
