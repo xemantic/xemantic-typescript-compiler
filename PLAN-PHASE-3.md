@@ -2323,11 +2323,21 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`, `Binder.kt`
 
-- [ ] **30l. Implement TS2322 — type is not assignable** (~293 tests) — *deferred*
+- [ ] **30l. Implement TS2322 — type is not assignable** (~293 tests) — **NEXT PRIORITY**
 
-  The single biggest test unlocking opportunity. Requires basic type inference for:
-  literal types, union types, object literals, arrays, and function return types.
-  Estimated to unlock 293 tests that need ONLY TS2322.
+  The single biggest test unlocking opportunity. 415 tests need ONLY TS2322,
+  and 293 would pass with just this code added (the rest also have FPs/missing).
+
+  **Implementation strategy (phased):**
+  1. Basic expression type inference: string/number/boolean/null/undefined literals,
+     variable annotations, function return types
+  2. Assignability: primitive types, literal types to widened types,
+     interface assignability (structural)
+  3. Error formatting: "Type 'X' is not assignable to type 'Y'."
+
+  Simplest first wins: `assignFromBooleanInterface` (Boolean vs boolean),
+  `assignFromNumberInterface` (Number vs number), `assignFromStringInterface`
+  (String vs string) — just wrapper object vs primitive checks.
 
   **Files:** `Checker.kt` (major new feature)
 
