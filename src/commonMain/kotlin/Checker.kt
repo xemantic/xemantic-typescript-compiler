@@ -19084,6 +19084,22 @@ class Checker(
                 diagnostics.addAll(newDiags)
             }
         }
+        // Post-filter: suppress TS7030 at positions where TS2322 fires (bare return → undefined)
+        val ts2322Positions = mutableSetOf<String>()
+        for (d in diagnostics) {
+            if (d.code == 2322) {
+                ts2322Positions.add("${d.fileName}:${d.start}")
+            }
+        }
+        if (ts2322Positions.isNotEmpty()) {
+            val filtered = diagnostics.filter { d ->
+                !(d.code == 7030 && "${d.fileName}:${d.start}" in ts2322Positions)
+            }
+            if (filtered.size != diagnostics.size) {
+                diagnostics.clear()
+                diagnostics.addAll(filtered)
+            }
+        }
     }
 
     private fun checkTypeAssignabilityInStatements(
@@ -19256,12 +19272,18 @@ class Checker(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>
     ) {
-        val expr = stmt.expression ?: return // bare return; handled by TS7030
-        val exprType = inferSimpleExprType(expr, varTypes) ?: return
+        val expr = stmt.expression
+        val exprType = if (expr != null) {
+            inferSimpleExprType(expr, varTypes) ?: return
+        } else {
+            // Bare return; → treated as returning undefined
+            "undefined"
+        }
         if (!isAssignableTo(exprType, returnType)) {
             // Squiggle goes under "return" keyword
             val returnKeywordLength = 6 // "return"
-            emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isSimpleLiteral(expr), typeParams = typeParams)
+            val isLiteral = expr == null || isSimpleLiteral(expr)
+            emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isLiteral, typeParams = typeParams)
         }
     }
 
