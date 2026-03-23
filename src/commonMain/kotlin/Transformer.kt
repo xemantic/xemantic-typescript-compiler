@@ -299,16 +299,21 @@ class Transformer(
                                 is NamedImports -> {
                                     val modSpecStr = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
                                     bindings.elements.forEach { spec ->
+                                        val exportedName = (spec.propertyName ?: spec.name).text
                                         if (spec.isTypeOnly) {
                                             topLevelTypeOnlyNames.add(spec.name.text)
                                         } else if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
                                             topLevelTypeOnlyNames.add(spec.name.text)
                                         } else if (modSpecStr.isNotEmpty() && checker?.isTypeOnlyExportName(
-                                                (spec.propertyName ?: spec.name).text, modSpecStr, currentFileName) == true) {
+                                                exportedName, modSpecStr, currentFileName) == true) {
                                             // The import is from `export type { X }` in the target file — type-only
                                             topLevelTypeOnlyNames.add(spec.name.text)
+                                        } else if (modSpecStr.isNotEmpty() && checker?.isValueExport(
+                                                exportedName, modSpecStr, currentFileName) == false) {
+                                            // The export target is a type-only symbol (interface, type alias, etc.)
+                                            topLevelTypeOnlyNames.add(spec.name.text)
                                         } else {
-                                            topLevelRuntimeNames.add((spec.propertyName ?: spec.name).text)
+                                            topLevelRuntimeNames.add(exportedName)
                                             topLevelRuntimeNames.add(spec.name.text)
                                         }
                                     }
@@ -932,10 +937,15 @@ class Transformer(
                             is NamedImports -> {
                                 val modSpecStr2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: ""
                                 bindings.elements.filter { !it.isTypeOnly }.forEach { spec ->
+                                    val exportedName2 = (spec.propertyName ?: spec.name).text
                                     if (erasedConstEnum && checker?.isConstEnumAlias(spec.name.text, currentFileName) == true) {
                                         typeOnlyDeclaredNames.add(spec.name.text)
                                     } else if (modSpecStr2.isNotEmpty() && checker?.isTypeOnlyExportName(
-                                            (spec.propertyName ?: spec.name).text, modSpecStr2, currentFileName) == true) {
+                                            exportedName2, modSpecStr2, currentFileName) == true) {
+                                        typeOnlyDeclaredNames.add(spec.name.text)
+                                    } else if (modSpecStr2.isNotEmpty() && checker?.isValueExport(
+                                            exportedName2, modSpecStr2, currentFileName) == false) {
+                                        // The export target is a type-only symbol (interface, type alias, etc.)
                                         typeOnlyDeclaredNames.add(spec.name.text)
                                     } else {
                                         runtimeDeclaredNames.add(spec.name.text)

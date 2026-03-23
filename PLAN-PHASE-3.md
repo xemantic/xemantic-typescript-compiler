@@ -2111,7 +2111,7 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Transformer.kt`
 
-- [ ] **28f. Missing `export {}` elision in error recovery** (~6 tests)
+- [x] **28f. Missing `export {}` elision in error recovery** (~6 tests)
 
   When parser error recovery produces malformed imports/exports, the emitter still produces
   `export {}` which doesn't appear in TypeScript's output. Need to suppress empty export

@@ -1642,8 +1642,11 @@ class Checker(
                 fileName.removePrefix("./").removeSuffix(".ts").removeSuffix(".tsx")
             }
             if (fileBase == baseName) return fileName
-            // For non-relative specifiers: check if file ends with baseName
+            // For non-relative specifiers: check if file ends with /baseName
             if (!isRelative && (fileBase.endsWith("/$baseName") || fileBase == baseName)) return fileName
+            // For relative specifiers in flat-directory absolute-path test layouts (e.g. @Filename: /foo.ts):
+            // fileBase = "/foo", baseName = "foo" → fileBase == "/$baseName"
+            if (isRelative && fileBase == "/$baseName") return fileName
         }
         return null
     }
