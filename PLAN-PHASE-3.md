@@ -2167,6 +2167,138 @@ Analysis of 2,789 remaining failures:
 
   **Files:** `Checker.kt`
 
+### 30. Session 2026-03-23c — Analysis-driven improvements
+
+**Analysis summary (2026-03-23c):** 7,377/10,077 tests passing. 195 tests fail despite
+needing only codes we already produce (160 single-file, 35 multi-file). Key gap categories:
+TS2304 (12 tests), TS2307 (10), TS7006 (8), TS2454 (8), TS6133 (8), TS2300 (5),
+TS2694 (4), TS5055 (4), TS1109 (4), TS2882 (3), TS2309 (3), TS5101/5107 (9).
+
+New codes with highest unlock potential: TS2322 (+293), TS2339 (+100), TS2345 (+79),
+TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+10).
+
+- [ ] **30a. TS6133 rest element in destructuring patterns** (~2 tests)
+
+  `const {a, ...bar} = foo` — rest element binding (`...rest`) in object/array
+  destructuring is not collected by `collectVarDeclNames`. The `RestElement` AST node
+  has a `name` field that needs explicit collection.
+  Tests: `unusedLocalsAndObjectSpread`, `unusedLocalsAndObjectSpread2`.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30b. TS5055 — per-file JS output with declaration option** (~4 tests)
+
+  Tests expect TS5055 "Cannot write file because it would overwrite input file" for JS
+  files compiled with `--declaration` but without `--outDir`. These are single-file tests
+  needing only TS5055 which we already produce but apparently not for the right conditions.
+  Tests: `jsFileCompilationSyntaxError`, `jsFileCompilationWithoutOut`,
+  `jsFileCompilationErrorOnDeclarationsWithJsFileReferenceWithNoOut`,
+  `jsFileCompilationNoErrorWithoutDeclarationsWithJsFileReferenceWithNoOut`.
+
+  **Files:** `TypeScriptCompiler.kt`
+
+- [ ] **30c. TS1117 duplicate computed property names** (~3 tests)
+
+  `duplicateObjectLiteralProperty_computedName{1,2,3}` — computed property names in
+  object literals with duplicate keys. Our TS1117 checker doesn't handle computed
+  property expressions (string/numeric literal keys in computed syntax).
+
+  **Files:** `Checker.kt`
+
+- [ ] **30d. TS2882 side-effect import gaps** (~3 tests)
+
+  `es6ImportWithoutFromClause`, `es6ImportWithoutFromClauseNonInstantiatedModule`,
+  `extendGlobalThis` — side-effect imports (`import "mod"`) should fire TS2882
+  "Import declaration conflicts with local declaration of 'X'" in certain contexts.
+  Need to investigate why our checker isn't firing for these specific patterns.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30e. TS2309 export assignment conflicts** (~3 tests)
+
+  `incompatibleExports1`, `incompatibleExports2`,
+  `importDeclWithExportModifierAndExportAssignmentInAmbientContext` — conflicts between
+  `export =` and named exports. Our TS2309 checker may be missing some patterns.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30f. TS2454 definite assignment gaps** (~8 tests)
+
+  Single-file tests needing only TS2454 that we don't fire. Root causes include:
+  destructuring variables in try/catch, narrowing through instanceof/typeof, and
+  forward references in type contexts.
+  Tests: `controlFlowDestructuringVariablesInTryCatch`, `narrowTypeByInstanceof`,
+  `nestedLoopTypeGuards`, `extendConstructSignatureInInterface`, etc.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30g. TS7006 implicit any parameter gaps** (~8 tests)
+
+  Tests where noImplicitAny should fire for function parameters but doesn't. Root causes
+  include: arrow functions in object literals, contextual typing callbacks, and parameter
+  initializers.
+  Tests: `arrowFunctionWithObjectLiteralBody{1,2}`, `contextualTyping38`,
+  `contextuallyTypedParametersWithInitializers1`, etc.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30h. TS2304 type parameter constraint and computed property scope** (~12 tests)
+
+  Various gaps in TS2304 checker: type parameter constraints referencing undefined types,
+  computed property names using qualified names (e.g., `[Enum.A]`), `typeof default`
+  not flagged, merged declarations scope. Requires multiple small fixes.
+  Tests: `declarationEmitComputedPropertyNameEnum2`, `defaultIsNotVisibleInLocalScope`,
+  `mergedDeclarations2`, `recursiveNamedLambdaCall`, etc.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30i. Multi-file error baseline file ordering** (~35 tests)
+
+  35 tests fail because multi-file error baselines have files in wrong order. The
+  TypeScript harness reorders files when the last `@Filename` file contains `require(`
+  or `reference path`. Our `formatErrorBaseline` doesn't implement this reordering.
+
+  **Files:** `ErrorBaselineFormatter.kt` or `TypeScriptCompiler.kt`
+
+- [ ] **30j. TS2307 module resolution gaps** (~10 tests)
+
+  Tests needing only TS2307 "Cannot find module" but not getting it. Patterns include:
+  dynamic imports, cached module resolution, and various module specifier forms we
+  don't resolve.
+  Tests: `cachedModuleResolution6`, `dynamicImportInDefaultExportExpression`,
+  `es6ExportAll`, `shorthand-property-es6-es6`, etc.
+
+  **Files:** `Checker.kt`
+
+- [ ] **30k. TS2300 duplicate identifier for class+module merging** (~5 tests)
+
+  Tests where class or function declarations merge with namespaces/modules and should
+  get TS2300. Root causes: prototype property conflicts, clodule member duplication.
+  Tests: `augmentedClassWithPrototypePropertyOnModule`, `cloduleWithDuplicateMember{1,2}`,
+  `jsFileCompilationBindDuplicateIdentifier`, `module_augmentExistingAmbientVariable`.
+
+  **Files:** `Checker.kt`, `Binder.kt`
+
+- [ ] **30l. Implement TS2322 — type is not assignable** (~293 tests) — *deferred*
+
+  The single biggest test unlocking opportunity. Requires basic type inference for:
+  literal types, union types, object literals, arrays, and function return types.
+  Estimated to unlock 293 tests that need ONLY TS2322.
+
+  **Files:** `Checker.kt` (major new feature)
+
+- [ ] **30m. Implement TS2339 — property does not exist on type** (~100 tests) — *deferred*
+
+  Second biggest unlock. Requires basic type tracking for property access validation.
+
+  **Files:** `Checker.kt` (major new feature)
+
+- [ ] **30n. Implement TS2345 — argument type not assignable** (~79 tests) — *deferred*
+
+  Requires function signature matching and argument type checking.
+
+  **Files:** `Checker.kt` (major new feature)
+
 ---
 
 ## Remaining failure analysis (session 2026-03-22d)

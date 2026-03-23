@@ -2209,8 +2209,10 @@ class Checker(
                 val count = if (hasRest) name.elements.count { it.dotDotDotToken } else name.elements.size
                 for (element in name.elements) {
                     if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
+                    // Rest elements get identifier span (no parentBindingPattern), non-rest get pattern span
                     collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt,
-                        parentBindingPattern = name, bindingElementCount = count)
+                        parentBindingPattern = if (element.dotDotDotToken) null else name,
+                        bindingElementCount = if (element.dotDotDotToken) 0 else count)
                 }
             }
             is ArrayBindingPattern -> {
@@ -12496,35 +12498,68 @@ class Checker(
             is Identifier -> name.length
             is StringLiteralNode -> name.length + 2 // quotes
             is NumericLiteralNode -> name.length
-            is ComputedPropertyName -> nameNode.end - nameNode.pos // [expr]
+            is ComputedPropertyName -> {
+                // Span covers [expr] — find the closing ] in source
+                // Can't use nameNode.end (overshoots by one token).
+                // The expression text + brackets: count from pos to closing ']'
+                val expr = nameNode.expression
+                val exprLen = when (expr) {
+                    is NumericLiteralNode -> expr.text.length
+                    is StringLiteralNode -> expr.text.length + 2 // quotes
+                    is PrefixUnaryExpression -> {
+                        val operand = expr.operand
+                        if (operand is NumericLiteralNode) 1 + operand.text.length else nameNode.end - nameNode.pos
+                    }
+                    else -> return nameNode.end - nameNode.pos
+                }
+                exprLen + 2 // [expr]
+            }
             else -> nameNode.end - nameNode.pos
         }
     }
 
     private fun getPropertyName(prop: Node): String? {
         return when (prop) {
-            is PropertyAssignment -> when (val name = prop.name) {
-                is Identifier -> name.text
-                is StringLiteralNode -> name.text
-                is NumericLiteralNode -> name.text
-                else -> null
-            }
+            is PropertyAssignment -> getPropertyKeyName(prop.name)
             is ShorthandPropertyAssignment -> prop.name.text
-            is MethodDeclaration -> when (val name = prop.name) {
-                is Identifier -> name.text
-                is StringLiteralNode -> name.text
-                is NumericLiteralNode -> name.text
-                else -> null
+            is MethodDeclaration -> getPropertyKeyName(prop.name)
+            is GetAccessor -> getPropertyKeyName(prop.name)
+            is SetAccessor -> getPropertyKeyName(prop.name)
+            else -> null
+        }
+    }
+
+    /** Evaluate a property key to its string name, including computed property expressions. */
+    private fun getPropertyKeyName(name: Node): String? {
+        return when (name) {
+            is Identifier -> name.text
+            is StringLiteralNode -> name.text
+            is NumericLiteralNode -> name.text
+            is ComputedPropertyName -> evaluateComputedPropertyName(name.expression)
+            else -> null
+        }
+    }
+
+    /** Evaluate simple constant computed property expressions to their string key value. */
+    private fun evaluateComputedPropertyName(expr: Expression): String? {
+        return when (expr) {
+            is NumericLiteralNode -> {
+                // [1] → "1", [1.5] → "1.5"
+                val d = expr.text.toDoubleOrNull() ?: return null
+                if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
             }
-            is GetAccessor -> when (val name = prop.name) {
-                is Identifier -> name.text
-                is StringLiteralNode -> name.text
-                else -> null
-            }
-            is SetAccessor -> when (val name = prop.name) {
-                is Identifier -> name.text
-                is StringLiteralNode -> name.text
-                else -> null
+            is StringLiteralNode -> expr.text  // ["+1"] → "+1"
+            is PrefixUnaryExpression -> {
+                val operand = expr.operand
+                if (operand is NumericLiteralNode) {
+                    val d = operand.text.toDoubleOrNull() ?: return null
+                    val value = when (expr.operator) {
+                        SyntaxKind.Plus -> d
+                        SyntaxKind.Minus -> -d
+                        else -> return null
+                    }
+                    if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
+                } else null
             }
             else -> null
         }
