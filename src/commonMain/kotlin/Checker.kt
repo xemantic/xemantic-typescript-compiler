@@ -19021,7 +19021,7 @@ class Checker(
                                 if (init != null) {
                                     val exprType = inferSimpleExprType(init, varTypes)
                                     if (exprType != null && !isAssignableTo(exprType, declaredType)) {
-                                        emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName)
+                                        emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(init))
                                     }
                                 }
                             }
@@ -19108,7 +19108,7 @@ class Checker(
                             if (init != null) {
                                 val exprType = inferSimpleExprType(init, varTypes)
                                 if (exprType != null && !isAssignableTo(exprType, declaredType)) {
-                                    emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName)
+                                    emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(init))
                                 }
                             }
                         }
@@ -19127,7 +19127,7 @@ class Checker(
                 if (declaredType != null) {
                     val exprType = inferSimpleExprType(expr.right, varTypes)
                     if (exprType != null && !isAssignableTo(exprType, declaredType)) {
-                        emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName)
+                        emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right))
                     }
                 }
             }
@@ -19183,6 +19183,19 @@ class Checker(
         }
     }
 
+    /** Check if an expression is a simple literal (no elaboration needed in TS2322 chain). */
+    private fun isSimpleLiteral(expr: Expression): Boolean {
+        return when (expr) {
+            is NumericLiteralNode -> true
+            is StringLiteralNode -> true
+            is NoSubstitutionTemplateLiteralNode -> true
+            is Identifier -> expr.text in setOf("null", "undefined", "true", "false", "NaN", "Infinity")
+            is ParenthesizedExpression -> isSimpleLiteral(expr.expression)
+            is PrefixUnaryExpression -> expr.operand is NumericLiteralNode
+            else -> false
+        }
+    }
+
     /** Check if sourceType is assignable to targetType. */
     private fun isAssignableTo(sourceType: String, targetType: String): Boolean {
         if (sourceType == targetType) return true
@@ -19198,10 +19211,11 @@ class Checker(
         return false
     }
 
-    private fun emitTS2322(start: Int, length: Int, sourceType: String, targetType: String, source: String, fileName: String) {
+    private fun emitTS2322(start: Int, length: Int, sourceType: String, targetType: String, source: String, fileName: String, hasElaboration: Boolean = false) {
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val message = "Type '$sourceType' is not assignable to type '$targetType'."
         diagnostics.add(Diagnostic(
-            message = "Type '$sourceType' is not assignable to type '$targetType'.",
+            message = message,
             category = DiagnosticCategory.Error,
             code = 2322,
             fileName = fileName,
@@ -19209,6 +19223,7 @@ class Checker(
             character = character,
             start = start,
             length = length,
+            messageChain = if (hasElaboration) listOf("  $message") else emptyList(),
         ))
     }
 }
