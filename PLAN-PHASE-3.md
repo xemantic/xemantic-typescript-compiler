@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,503 passing (74.4%), 2,574 failing
+- **10,077 tests**, 7,507 passing (74.5%), 2,570 failing
+- **Session 2026-03-24b**: +4 tests: FP reductions — ArrowFunction type params use addTypeParam(), unknown return type suppresses TS7030, TS2366 under strictNullChecks for non-nullable return types, TS2355 vs TS2366 for empty async bodies, callback TS7006 suppression (268→162 FP lines), yield parens in binary expressions
 - **Session 2026-03-23e/24**: +83 tests: TS2322 expanded — TypeReference (simple + generic), ReturnStatement checking, strict null checks, type parameter elaboration chain, UnionType support, bare return→undefined TS2322, TS7030 suppression at TS2322 positions. Fixes: Kotlin init order for `strictNullChecks`, TS2322 suppression when TS2304/TS2314 exists, generic TypeRef formatting, ArrayType display, type param threading, union member assignability
 - **Session 2026-03-23d**: +21 tests: TS5055 per-file JS output overwrite for multi-file tests (+4), TS1117 computed property names with identifier/property-access expressions (+2), TS2882 side-effect import check for relative specifiers (+1), TS2323 FP suppression for function overload defaults (+1), TS2322 basic primitive type assignability checker (+6), TS2322 message chain elaboration for non-literal expressions (+1), decorator expression TS2304 checking (+4), Infinity enum literal emission (+1), collectInferTypeNames extended to TypeLiteral/MappedType/IndexedAccessType, plus test ordering bonus (+1)
 - **Session 2026-03-23c**: +19 tests from analysis-driven fixes: TS6133 rest element span fix (+1), TS1117 computed property name duplicates (+1), TS1115 continue-to-non-loop label (+1), TS2309 export= in ambient modules (+3), TS1030 duplicate declare/export modifiers (+2), TS1015 parameter property without type (+1), TS2588 prefix increment through parens (+1), TS5053 reactNamespace+jsxFactory conflict (+1), DtsFileErrors section stripping (+8), numeric literal normalization for property duplicates
@@ -2335,22 +2336,26 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`
 
-- [ ] **31a. TS2304 FP reduction — type parameters in scope** (~15-20 diff tests improved) — **NEXT**
+- [x] **31a. TS2304 FP reduction — type parameters in scope** (implemented, 0 test count change)
 
-  When checking TS2304, track type parameters from enclosing generic functions/classes/type aliases
-  and exclude them from "cannot find name" errors. Current checker scope chain doesn't track type
-  params, causing FPs for `T`, `U`, `K` etc.
+  Fixed ArrowFunction type params to use `addTypeParam()` instead of `names.addAll()`.
+  Did not flip any tests because affected tests had other unrelated failures.
 
   **Files:** `Checker.kt` (scope chain in checkUnresolvedNames)
 
-- [ ] **31b. FP TS7030 reduction** (~13 diff tests improved)
+- [x] **31b. FP TS7030/TS2366/TS7006 reduction** (+3 tests)
 
-  Over-aggressive TS7030 in contexts TypeScript doesn't check: nested function expressions,
-  generator functions, async generators. Suppress for these cases.
+  - `unknown` return type suppresses TS7030 (undefined assignable to unknown)
+  - TS2366 fires under strictNullChecks for non-nullable return types with value returns
+  - TS2355 vs TS2366: empty body → TS2355, mixed returns → TS2366
+  - Callback args skip TS7006 param checking (268→162 FP lines)
+  - Yield parenthesized as right operand of binary non-assignment operators (+1 JS test)
 
-  **Files:** `Checker.kt` (checkBodyForImplicitReturn)
+  Remaining FP TS7030 on exhaustive switches requires control flow analysis.
 
-- [ ] **31c. FP TS1212 strict reserved word** (~9 diff tests)
+  **Files:** `Checker.kt`, `Emitter.kt`
+
+- [ ] **31c. FP TS1212 strict reserved word** (~9 diff tests) — *deferred*
 
   Over-aggressive reserved word checking in non-strict contexts or for identifiers
   that are only reserved in certain positions.

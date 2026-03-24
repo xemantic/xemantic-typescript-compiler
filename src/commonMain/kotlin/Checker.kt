@@ -18689,11 +18689,14 @@ class Checker(
             val ch = source[i]
             when {
                 ch == '<' || ch == '[' || ch == '(' -> { depth++; i++ }
-                ch == '>' || ch == ']' || ch == ')' -> {
+                ch == '>' || ch == ']' || ch == ')' || ch == '}' -> {
                     if (depth > 0) { depth--; i++ }
                     else break // unmatched close = end of type
                 }
-                ch == '{' -> break // start of body block
+                ch == '{' -> {
+                    if (i == start) { depth++; i++ } // TypeLiteral `{}` — enter it
+                    else break // start of body block
+                }
                 ch == '\n' || ch == '\r' -> break
                 depth > 0 -> i++ // inside delimiters: consume everything
                 ch == ',' || ch == ';' -> break
