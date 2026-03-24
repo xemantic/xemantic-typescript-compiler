@@ -15714,6 +15714,15 @@ class Checker(
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
+    /** Check if an expression is a simple literal (allowed in `declare const x = ...`). */
+    private fun isLiteralExpression(expr: Expression): Boolean = when (expr) {
+        is NumericLiteralNode -> true
+        is StringLiteralNode -> true
+        is BigIntLiteralNode -> true
+        is PrefixUnaryExpression -> expr.operator == SyntaxKind.Minus && isLiteralExpression(expr.operand)
+        else -> false
+    }
+
     private fun checkAmbientInitInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
         for (stmt in stmts) {
             val isDeclare = when (stmt) {
@@ -15749,23 +15758,27 @@ class Checker(
                 }
                 is VariableStatement -> {
                     if (ambient) {
+                        // TypeScript allows `declare const x = 123` (without type annotation) —
+                        // the literal initializer serves as the type annotation.
+                        // With explicit type annotation, TS1039 still fires.
+                        val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
                         for (d in stmt.declarationList.declarations) {
-                            val init = d.initializer
-                            if (init != null) {
-                                val start = init.pos
-                                val length = (init.end - 1 - start).coerceAtLeast(1)
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "Initializers are not allowed in ambient contexts.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 1039,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                ))
-                            }
+                            val init = d.initializer ?: continue
+                            // Skip TS1039 for `declare const x = <literal>` without type annotation
+                            if (isConst && d.type == null && isLiteralExpression(init)) continue
+                            val start = init.pos
+                            val length = (init.end - 1 - start).coerceAtLeast(1)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Initializers are not allowed in ambient contexts.",
+                                category = DiagnosticCategory.Error,
+                                code = 1039,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
                         }
                     }
                 }
