@@ -3336,8 +3336,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
                 OpenBracket -> {
                     nextToken()
-                    // Empty subscript a[] is invalid but TypeScript handles it gracefully
                     val arg = if (token == SyntaxKind.CloseBracket) {
+                        // TS1011: empty element access a[] is invalid
+                        // Report at position right after `[` (prevTokenEnd), length 0
+                        reportError("An element access expression should take an argument.", code = 1011, overrideLength = 0, overrideStart = scanner.getPrevTokenEnd())
                         OmittedExpression(pos = getPos(), end = getPos())
                     } else {
                         parseExpression()
@@ -3428,6 +3430,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                         OpenBracket -> {
                             nextToken()
                             val arg = if (token == SyntaxKind.CloseBracket) {
+                                // TS1011: empty element access a?.[] is invalid
+                                // Report at position right after `[` (prevTokenEnd), length 0
+                                reportError("An element access expression should take an argument.", code = 1011, overrideLength = 0, overrideStart = scanner.getPrevTokenEnd())
                                 OmittedExpression(pos = getPos(), end = getPos())
                             } else {
                                 parseExpression()
@@ -3525,6 +3530,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 OpenBracket -> {
                     nextToken()
                     val arg = if (token == SyntaxKind.CloseBracket) {
+                        // TS1011: empty element access a[] is invalid
+                        // Report at position right after `[` (prevTokenEnd), length 0
+                        reportError("An element access expression should take an argument.", code = 1011, overrideLength = 0, overrideStart = scanner.getPrevTokenEnd())
                         OmittedExpression(pos = getPos(), end = getPos())
                     } else {
                         parseExpression()
