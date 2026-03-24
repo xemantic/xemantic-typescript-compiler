@@ -8245,6 +8245,49 @@ class Checker(
                 }
                 if (emitted2395) continue // Don't also check for TS2300 etc.
 
+                // TS2434: A namespace declaration cannot be located prior to a class or function
+                // with which it is merged. Only fires for instantiated namespaces.
+                if (hasNamespace && (hasClass || hasFunc)) {
+                    val namespaceDecls = group.filter { it.kind == "namespace" }
+                    // Only non-declare class/function declarations trigger TS2434
+                    val classFuncDecls = group.filter { decl ->
+                        (decl.kind == "class" || decl.kind == "function") &&
+                        when (val s = decl.stmt) {
+                            is ClassDeclaration -> ModifierFlag.Declare !in s.modifiers
+                            is FunctionDeclaration -> ModifierFlag.Declare !in s.modifiers
+                            else -> true
+                        }
+                    }
+                    if (classFuncDecls.isEmpty()) {} else {
+                    // Find instantiated namespace decls that appear before any non-declare class/function decl
+                    val firstClassFuncIdx = statements.indexOfFirst { s ->
+                        classFuncDecls.any { it.stmt === s }
+                    }
+                    if (firstClassFuncIdx >= 0) {
+                        for (nsDecl in namespaceDecls) {
+                            val modDecl = nsDecl.stmt as? ModuleDeclaration ?: continue
+                            // Only instantiated namespaces trigger TS2434
+                            if (!isNamespaceInstantiated(modDecl)) continue
+                            val nsIdx = statements.indexOfFirst { it === modDecl }
+                            if (nsIdx >= 0 && nsIdx < firstClassFuncIdx) {
+                                val start = nsDecl.nameNode.pos
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "A namespace declaration cannot be located prior to a class or function with which it is merged.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2434,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = nsDecl.name.length,
+                                ))
+                            }
+                        }
+                    }
+                    }
+                }
+
                 // TS2393: Duplicate function implementation — two functions both with bodies
                 // Fires regardless of other declaration kinds (alongside TS2300 if var/class also present)
                 if (hasFunc) {
