@@ -540,6 +540,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     // to avoid misinterpreting `for (let x of ...)` or multi-line code.
                     parseExpected(SyntaxKind.Comma)
                     decls.add(parseVariableDeclaration())
+                } else if (token == SyntaxKind.Unknown && !scanner.hasPrecedingLineBreak() &&
+                    lookAhead { nextToken(); isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket }) {
+                    // Error recovery: invalid character (like `\` from an incomplete unicode escape)
+                    // appears in place of a comma in a var declaration list.
+                    // E.g., `var arg\uxxxx` → treat as `var arg, uxxxx` (matches TypeScript behavior).
+                    reportError("Invalid character.", code = 1127, overrideLength = 0)
+                    nextToken() // consume the Unknown token (the invalid character)
+                    decls.add(parseVariableDeclaration())
                 } else {
                     break
                 }
@@ -3622,6 +3630,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 // In expression context, report "Expression expected" (TS1109) not "Identifier expected" (TS1003)
                 if (isIdentifier() || isKeyword()) {
                     parseIdentifier()
+                } else if (token == SyntaxKind.Unknown) {
+                    // Unknown token = invalid character (e.g. `\` from an incomplete unicode escape).
+                    // Report TS1127 "Invalid character." but do NOT consume the token —
+                    // parseStatements' safety mechanism will skip it and discard this "statement".
+                    reportError("Invalid character.", code = 1127, overrideLength = 0)
+                    Identifier(text = "", pos = pos, end = getEnd())
                 } else {
                     reportError("Expression expected.", code = 1109)
                     Identifier(text = "", pos = pos, end = getEnd())
@@ -4839,7 +4853,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val pos = getPos()
         if (isIdentifier() || isKeyword()) {
             val value = scanner.getTokenValue()
-            val raw = scanner.getTokenText()
+            // Use corrected raw text when the identifier starts with an invalid unicode escape
+            // (e.g. `\u0031a` where `1` is not a valid identifier start → corrected to `u0031a`).
+            val raw = scanner.getCorrectedRawText() ?: scanner.getTokenText()
             // Only store rawText if it differs (contains \uXXXX escapes)
             val rawText = if (raw != value) raw else null
             // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
@@ -4868,7 +4884,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             else -> leading
         }
         val value = scanner.getTokenValue()
-        val raw = scanner.getTokenText()
+        // Use corrected raw text when the identifier starts with an invalid unicode escape
+        val raw = scanner.getCorrectedRawText() ?: scanner.getTokenText()
         val rawText = if (raw != value) raw else null
         // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
         if (scanner.hasInvalidUnicodeEscapeInToken()) {
