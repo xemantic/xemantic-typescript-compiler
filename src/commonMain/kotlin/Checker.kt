@@ -8238,7 +8238,8 @@ class Checker(
                 if (emitted2395) continue // Don't also check for TS2300 etc.
 
                 // TS2393: Duplicate function implementation — two functions both with bodies
-                if (hasFunc && !hasClass && !hasVar && !hasNamespace) {
+                // Fires regardless of other declaration kinds (alongside TS2300 if var/class also present)
+                if (hasFunc) {
                     val funcDecls = group.filter { it.kind == "function" }
                     val funcBodies = funcDecls.filter { decl ->
                         val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
@@ -8259,7 +8260,8 @@ class Checker(
                                 length = decl.name.length,
                             ))
                         }
-                        continue
+                        // Only skip TS2300 check if ONLY functions are involved (pure overload scenario)
+                        if (!hasClass && !hasVar && !hasNamespace) continue
                     }
                 }
 
