@@ -2091,7 +2091,9 @@ class Transformer(
         // Rewrite references to "direct" exported vars (exports.x = value, no local var kept)
         // and conflicting exported names (import/export same name — need (0, exports.name)() form).
         // References to these names throughout the body must become exports.name.
-        val allExportRewriteNames = directExportedVarNames + conflictingExportedNames
+        // Built-in globals should not be rewritten to exports.X even if shadowed by local exports
+        val jsBuiltinGlobals = setOf("Infinity", "NaN", "undefined")
+        val allExportRewriteNames = (directExportedVarNames + conflictingExportedNames) - jsBuiltinGlobals
         if (allExportRewriteNames.isNotEmpty()) {
             val exportRewriteMap: Map<String, Expression> = allExportRewriteNames.associateWith { name ->
                 PropertyAccessExpression(
