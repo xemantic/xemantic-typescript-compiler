@@ -253,6 +253,8 @@ class Checker(
         checkConstructorParamInInitializers()
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
         checkTypeAssignability()
+        // 65. Check invalid assignment targets (TS2364)
+        checkInvalidAssignmentTargets()
     }
 
     // -----------------------------------------------------------------------
@@ -20014,5 +20016,164 @@ class Checker(
             length = length,
             messageChain = chain,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2364: Invalid assignment target
+    // -----------------------------------------------------------------------
+
+    private fun checkInvalidAssignmentTargets() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkInvalidAssignInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkInvalidAssignInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkInvalidAssignInStatement(stmt, source, fileName)
+    }
+
+    private fun checkInvalidAssignInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> checkInvalidAssignInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkInvalidAssignInExpr(it, source, fileName) }
+            is Block -> checkInvalidAssignInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkInvalidAssignInExpr(stmt.expression, source, fileName)
+                checkInvalidAssignInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkInvalidAssignInStatement(it, source, fileName) }
+            }
+            is ForStatement -> {
+                stmt.condition?.let { checkInvalidAssignInExpr(it, source, fileName) }
+                stmt.incrementor?.let { checkInvalidAssignInExpr(it, source, fileName) }
+                checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> {
+                checkInvalidAssignInExpr(stmt.expression, source, fileName)
+                checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkInvalidAssignInExpr(stmt.expression, source, fileName)
+                checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            }
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkInvalidAssignInStatements(clause.statements, source, fileName)
+                        is DefaultClause -> checkInvalidAssignInStatements(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkInvalidAssignInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                        is Constructor -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                        is PropertyDeclaration -> member.initializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is LabeledStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkInvalidAssignInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                // Check if this is an assignment
+                if (expr.operator == SyntaxKind.Equals) {
+                    if (!isValidAssignmentTarget(expr.left)) {
+                        val start = expr.left.pos
+                        val length = expressionTrueEnd(expr.left) - start
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "The left-hand side of an assignment expression must be a variable or a property access.",
+                            category = DiagnosticCategory.Error,
+                            code = 2364,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+                checkInvalidAssignInExpr(expr.left, source, fileName)
+                checkInvalidAssignInExpr(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkInvalidAssignInExpr(expr.condition, source, fileName)
+                checkInvalidAssignInExpr(expr.whenTrue, source, fileName)
+                checkInvalidAssignInExpr(expr.whenFalse, source, fileName)
+            }
+            is ParenthesizedExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is ArrowFunction -> {
+                when (val body = expr.body) {
+                    is Block -> checkInvalidAssignInStatements(body.statements, source, fileName)
+                    is Expression -> checkInvalidAssignInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> expr.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+            is CallExpression -> {
+                for (arg in expr.arguments) checkInvalidAssignInExpr(arg, source, fileName)
+            }
+            is TaggedTemplateExpression -> checkInvalidAssignInExpr(expr.tag, source, fileName)
+            is PrefixUnaryExpression -> checkInvalidAssignInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkInvalidAssignInExpr(expr.operand, source, fileName)
+            is SpreadElement -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is ArrayLiteralExpression -> {
+                for (el in expr.elements) checkInvalidAssignInExpr(el, source, fileName)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkInvalidAssignInExpr(prop.initializer, source, fileName)
+                        is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
+                        is SpreadAssignment -> checkInvalidAssignInExpr(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) checkInvalidAssignInExpr(span.expression, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Check if an expression is a valid assignment target (LHS of =). */
+    private fun isValidAssignmentTarget(expr: Expression): Boolean {
+        return when (expr) {
+            is Identifier -> true
+            is PropertyAccessExpression -> true
+            is ElementAccessExpression -> true
+            is ParenthesizedExpression -> isValidAssignmentTarget(expr.expression)
+            is NonNullExpression -> isValidAssignmentTarget(expr.expression)
+            // Destructuring patterns are valid (array/object literal on LHS)
+            is ArrayLiteralExpression -> true
+            is ObjectLiteralExpression -> true
+            else -> false
+        }
     }
 }
