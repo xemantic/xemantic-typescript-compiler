@@ -13699,7 +13699,33 @@ class Checker(
                     walkForConstWithoutInit(listOf(stmt.thenStatement), source, fileName)
                     stmt.elseStatement?.let { walkForConstWithoutInit(listOf(it), source, fileName) }
                 }
-                is ForStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
+                is ForStatement -> {
+                    // Check initializer for const without init: for(const c9; ...)
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.ConstKeyword) {
+                        for (decl in init.declarations) {
+                            if (decl.initializer == null) {
+                                val nameNode = decl.name
+                                if (nameNode is Identifier) {
+                                    val start = nameNode.pos
+                                    val length = nameNode.text.length
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "'const' declarations must be initialized.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 1155,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                    walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
+                }
                 is WhileStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
                 is DoStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
                 is SwitchStatement -> {
