@@ -5391,6 +5391,24 @@ class Checker(
                                     }
                                 }
                                 is PropertyDeclaration -> {
+                                    // TS7008: Member without type annotation in ambient class
+                                    if (member.type == null && member.initializer == null) {
+                                        val name = member.name
+                                        if (name is Identifier && name.text.isNotEmpty()) {
+                                            val start = name.pos
+                                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                            diagnostics.add(Diagnostic(
+                                                message = "Member '${name.text}' implicitly has an 'any' type.",
+                                                category = DiagnosticCategory.Error,
+                                                code = 7008,
+                                                fileName = fileName,
+                                                line = line,
+                                                character = character,
+                                                start = start,
+                                                length = name.text.length,
+                                            ))
+                                        }
+                                    }
                                     // Property with function type gets TS7006 for both public AND private
                                     // e.g. `pub_f10: (x) => string` and `priv_f10: (x) => string`
                                     checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
@@ -5410,6 +5428,24 @@ class Checker(
                         when (member) {
                             is MethodDeclaration -> checkParamsForImplicitAny(member.parameters, source, fileName)
                             is PropertyDeclaration -> {
+                                if (member.type == null && member.initializer == null) {
+                                    // TS7008: Member implicitly has an 'any' type
+                                    val name = member.name
+                                    if (name is Identifier && name.text.isNotEmpty()) {
+                                        val start = name.pos
+                                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                        diagnostics.add(Diagnostic(
+                                            message = "Member '${name.text}' implicitly has an 'any' type.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 7008,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = start,
+                                            length = name.text.length,
+                                        ))
+                                    }
+                                }
                                 // Property with function type annotation: `f10: (x) => string`
                                 // Parameters in function type annotations also get TS7006
                                 checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
