@@ -5358,7 +5358,6 @@ class Checker(
     private fun checkImplicitAnyParameters() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
         }
@@ -5391,8 +5390,9 @@ class Checker(
                                     }
                                 }
                                 is PropertyDeclaration -> {
-                                    // TS7008: Member without type annotation in ambient class
-                                    if (member.type == null && member.initializer == null) {
+                                    // TS7008: Member without type annotation in ambient class (public only)
+                                    if (member.type == null && member.initializer == null
+                                        && ModifierFlag.Private !in member.modifiers) {
                                         val name = member.name
                                         if (name is Identifier && name.text.isNotEmpty()) {
                                             val start = name.pos
@@ -5456,6 +5456,25 @@ class Checker(
                 }
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
+                        // TS7005: Variable implicitly has an 'any' type (ambient/declare declarations only)
+                        if (decl.type == null && decl.initializer == null
+                            && ModifierFlag.Declare in stmt.modifiers) {
+                            val name = decl.name
+                            if (name is Identifier && name.text.isNotEmpty()) {
+                                val start = name.pos
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Variable '${name.text}' implicitly has an 'any' type.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 7005,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = name.text.length,
+                                ))
+                            }
+                        }
                         // Check function type annotation: `var f: (x) => string` → TS7006 for `x`
                         checkImplicitAnyInTypeAnnotation(decl.type, source, fileName)
                         decl.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
