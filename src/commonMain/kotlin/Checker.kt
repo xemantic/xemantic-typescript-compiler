@@ -8212,8 +8212,39 @@ class Checker(
                 }
             }
 
-            // TS2567: Enum declarations can only merge with namespace or other enum declarations
+            // TS2428: All declarations of interface must have identical type parameters.
             val hasInterface = "interface" in kinds
+            if (hasInterface) {
+                val ifaceDecls = group.filter { it.kind == "interface" }.mapNotNull { it.stmt as? InterfaceDeclaration }
+                if (ifaceDecls.size >= 2) {
+                    // Compare type parameter signatures: count and names
+                    val firstDecl = ifaceDecls.first()
+                    val firstSig = firstDecl.typeParameters?.map { it.name.text } ?: emptyList()
+                    val mismatch = ifaceDecls.drop(1).any { decl ->
+                        val sig = decl.typeParameters?.map { it.name.text } ?: emptyList()
+                        sig.size != firstSig.size || sig != firstSig
+                    }
+                    if (mismatch) {
+                        // Fire TS2428 on ALL declarations
+                        for (decl in ifaceDecls) {
+                            val start = decl.name.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "All declarations of '${decl.name.text}' must have identical type parameters.",
+                                category = DiagnosticCategory.Error,
+                                code = 2428,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = decl.name.text.length,
+                            ))
+                        }
+                    }
+                }
+            }
+
+            // TS2567: Enum declarations can only merge with namespace or other enum declarations
             if (hasEnum && (hasClass || hasFunc || hasVar || hasInterface)) {
                 for (decl in group) {
                     if (decl.kind == "namespace") continue // namespace+enum is allowed
