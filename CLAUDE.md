@@ -189,7 +189,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2552 (spelling suggestions), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,511 / 10,077 tests passing (74.5%)**, up from 7,148/10,120 (session 2026-03-21b). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345 — structural typing, generic instantiation), parser error recovery (TS1005/TS1109 FPs), CJS multi-file transforms. ES5/ES3/AMD/System/UMD JS emit tests skipped (475 tests removed — deprecated in TypeScript 6.0, removed in 7.0/tsgo). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, decorator metadata.
+**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2552 (spelling suggestions), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,512 / 10,077 tests passing (74.5%)**, up from 7,148/10,120 (session 2026-03-21b). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345 — structural typing, generic instantiation), parser error recovery (TS1005/TS1109 FPs), CJS multi-file transforms. ES5/ES3/AMD/System/UMD JS emit tests skipped (475 tests removed — deprecated in TypeScript 6.0, removed in 7.0/tsgo). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, decorator metadata.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -198,7 +198,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
 2. Implement it — the item describes the deliverable
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. Verify no regressions from the **7,511 currently passing tests**
+4. Verify no regressions from the **7,512 currently passing tests**
 5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
@@ -207,7 +207,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 7,511 currently passing tests must continue to pass after every change.
+- **No regressions** — the 7,512 currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 

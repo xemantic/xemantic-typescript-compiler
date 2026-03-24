@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,507 passing (74.5%), 2,570 failing
+- **10,077 tests**, 7,512 passing (74.5%), 2,565 failing
 - **Session 2026-03-24b**: +4 tests: FP reductions — ArrowFunction type params use addTypeParam(), unknown return type suppresses TS7030, TS2366 under strictNullChecks for non-nullable return types, TS2355 vs TS2366 for empty async bodies, callback TS7006 suppression (268→162 FP lines), yield parens in binary expressions
 - **Session 2026-03-23e/24**: +83 tests: TS2322 expanded — TypeReference (simple + generic), ReturnStatement checking, strict null checks, type parameter elaboration chain, UnionType support, bare return→undefined TS2322, TS7030 suppression at TS2322 positions. Fixes: Kotlin init order for `strictNullChecks`, TS2322 suppression when TS2304/TS2314 exists, generic TypeRef formatting, ArrayType display, type param threading, union member assignability
 - **Session 2026-03-23d**: +21 tests: TS5055 per-file JS output overwrite for multi-file tests (+4), TS1117 computed property names with identifier/property-access expressions (+2), TS2882 side-effect import check for relative specifiers (+1), TS2323 FP suppression for function overload defaults (+1), TS2322 basic primitive type assignability checker (+6), TS2322 message chain elaboration for non-literal expressions (+1), decorator expression TS2304 checking (+4), Infinity enum literal emission (+1), collectInferTypeNames extended to TypeLiteral/MappedType/IndexedAccessType, plus test ordering bonus (+1)
