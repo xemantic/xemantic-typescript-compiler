@@ -680,7 +680,7 @@ class TypeScriptCompiler {
                 // and not files from node_modules which TypeScript never re-emits)
                 if (file.fileName.endsWith(".json") && options.outDir != null
                     && baseName != "tsconfig.json" && baseName != "package.json"
-                    && !file.fileName.contains("/node_modules/")) {
+                    && !file.fileName.contains("node_modules/")) {
                     val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
                     if (options.fullEmitPaths) {
                         val outDir = resolvedOutDir!!.trimEnd('/')
@@ -756,7 +756,7 @@ class TypeScriptCompiler {
                 if (isDtsFile) continue
 
                 // node_modules files are never re-emitted by TypeScript (they're third-party code)
-                if (file.fileName.contains("/node_modules/")) continue
+                if (file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")) continue
 
                 diagnostics.addAll(parser.getDiagnostics())
 

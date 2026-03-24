@@ -16219,6 +16219,9 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // In module files, top-level declarations are module-scoped — they don't conflict
+            // with built-in globals like `globalThis`. TS2397 only fires in script files.
+            if (isModuleFile(result.sourceFile.statements)) continue
             val source = result.sourceFile.text
             checkBuiltinGlobalInStatements(result.sourceFile.statements, source, fileName)
         }
