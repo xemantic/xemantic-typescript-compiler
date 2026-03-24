@@ -18409,7 +18409,7 @@ class Checker(
                     ))
                 }
                 hasAnyReturn -> {
-                    // TS7030: some paths return with a value, some don't
+                    // TS7030: some paths return with a value, some don't (for nullable/unknown return types)
                     diagnostics.add(Diagnostic(
                         message = "Not all code paths return a value.",
                         category = DiagnosticCategory.Error,
