@@ -6713,6 +6713,10 @@ class Checker(
             is FunctionType -> {
                 val fnScope = scope.child()
                 type.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
+                type.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
+                }
                 addParamsToScope(type.parameters, fnScope)
                 for (param in type.parameters) {
                     param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
@@ -6722,6 +6726,10 @@ class Checker(
             is ConstructorType -> {
                 val ctorScope = scope.child()
                 type.typeParameters?.forEach { ctorScope.addTypeParam(it.name.text) }
+                type.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
+                }
                 addParamsToScope(type.parameters, ctorScope)
                 for (param in type.parameters) {
                     param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
