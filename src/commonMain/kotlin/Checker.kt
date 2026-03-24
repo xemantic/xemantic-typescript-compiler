@@ -5525,7 +5525,38 @@ class Checker(
                 }
             }
             is CallExpression -> {
-                expr.arguments.forEach { checkImplicitAnyInExpr(it, source, fileName) }
+                // Callback args get contextual typing — skip TS7006 for their params
+                for (arg in expr.arguments) {
+                    when (arg) {
+                        is ArrowFunction -> {
+                            // Skip param checking — types inferred from call context
+                            when (val body = arg.body) {
+                                is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
+                                is Expression -> checkImplicitAnyInExpr(body, source, fileName)
+                                else -> {}
+                            }
+                        }
+                        is FunctionExpression -> {
+                            // Skip param checking — types inferred from call context
+                            checkImplicitAnyInStatements(arg.body.statements, source, fileName)
+                        }
+                        else -> checkImplicitAnyInExpr(arg, source, fileName)
+                    }
+                }
+            }
+            is NewExpression -> {
+                // Same as CallExpression — constructor args get contextual typing
+                for (arg in (expr.arguments ?: emptyList())) {
+                    when (arg) {
+                        is ArrowFunction -> when (val body = arg.body) {
+                            is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
+                            is Expression -> checkImplicitAnyInExpr(body, source, fileName)
+                            else -> {}
+                        }
+                        is FunctionExpression -> checkImplicitAnyInStatements(arg.body.statements, source, fileName)
+                        else -> checkImplicitAnyInExpr(arg, source, fileName)
+                    }
+                }
             }
             is BinaryExpression -> {
                 var current: Expression = expr
@@ -6349,9 +6380,11 @@ class Checker(
             }
             is ArrowFunction -> {
                 val arrowScope = scope.child(hasArguments = false)
-                arrowScope.names.addAll(
-                    expr.typeParameters?.map { it.name.text } ?: emptyList()
-                )
+                expr.typeParameters?.forEach { arrowScope.addTypeParam(it.name.text) }
+                expr.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
+                    tp.default?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
+                }
                 addParamsToScope(expr.parameters, arrowScope)
                 // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
                 if (options.target < ScriptTarget.ES2015) {
@@ -16530,9 +16563,11 @@ class Checker(
             // - target >= ES2015 (implicit strict)
             // - "use strict" prologue directive
             // - module file (ESM is strict)
+            val isModule = result.sourceFile.statements.any { it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment }
             val isStrict = options.target >= ScriptTarget.ES2015 ||
                 options.strict == true ||
                 options.alwaysStrict == true ||
+                isModule ||
                 result.sourceFile.statements.firstOrNull()?.let { stmt ->
                     stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                         (stmt.expression as StringLiteralNode).text == "use strict"
@@ -18393,10 +18428,15 @@ class Checker(
             val (line, character) = getLineAndCharacterOfPosition(source, start)
 
             when {
-                // TS2366: noImplicitReturns + non-async + definitely non-nullable return type
+                // TS2366: non-nullable return type with some value returns under strictNullChecks,
+                // or noImplicitReturns without value returns outside try blocks.
                 // "Function lacks ending return statement and return type does not include 'undefined'."
-                // Only fires when there are no value-returning paths outside try blocks.
-                options.noImplicitReturns && !isAsync && isDefinitelyNonNullable && !hasAnyReturnOutsideTry(body.statements) -> {
+                // Under strictNullChecks, undefined is NOT assignable to non-nullable types,
+                // so implicit return (returning undefined) is a type error.
+                isDefinitelyNonNullable && hasAnyReturn && (
+                    strictNullChecks ||
+                    (options.noImplicitReturns && !hasAnyReturnOutsideTry(body.statements))
+                ) -> {
                     diagnostics.add(Diagnostic(
                         message = "Function lacks ending return statement and return type does not include 'undefined'.",
                         category = DiagnosticCategory.Error,
@@ -18686,7 +18726,7 @@ class Checker(
      * Returns true if the type name represents void, undefined, or any.
      */
     private fun isVoidLikeTypeName(name: String): Boolean {
-        return name == "void" || name == "undefined" || name == "any" || name == "never"
+        return name == "void" || name == "undefined" || name == "any" || name == "never" || name == "unknown"
     }
 
     /**
