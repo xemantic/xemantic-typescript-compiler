@@ -2405,9 +2405,65 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt` (major new feature)
 
+- [ ] **32a. TS7019 rest parameter implicit any** (~3 tests)
+
+  Rest parameters without type annotation need TS7019 ("implicitly has an 'any[]' type") not TS7006.
+  Extend `checkImplicitAny` to detect `DotDotDotToken` and use code 7019 with `'any[]'` message.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32b. TS6133 type params in call/construct signatures** (~2 tests)
+
+  Unused type params in constructor/call signatures within type literals not checked.
+  Extend `checkUnusedTypeParameters` to scan type literal `ConstructSignature`/`CallSignature` members.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32c. TS6198 shorthand underscore destructuring** (~1 test)
+
+  `const { _a1, _b1 } = ...` — shorthand destructuring where bound name starts with `_` should
+  still fire TS6198 if ALL elements unused. Only renaming `{ a: _a }` suppresses unused warning.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32d. TS2441 reserved name for import= aliases** (~2 tests)
+
+  `import exports = m.c` and `import require = m.c` at module top level collide with CJS reserved names.
+  Extend existing TS2441 check to cover ImportEqualsDeclaration in modules.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32e. TS1250 block-scoped function declaration in ES5 strict** (~2 tests)
+
+  Function declarations inside blocks (if/for/while) are illegal in ES5 strict mode.
+  Check `FunctionDeclaration` parent is a `Block` and target < ES2015.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32f. TS2450 const enum + file-level forward references** (~1 test)
+
+  Missing TS2450 for const enums used inside functions and file-level forward references.
+  Extend `checkUseBeforeDeclaration` to handle const enums and file-level enum forward refs.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32g. TS2393 duplicate function implementation alongside TS2300** (~3 tests)
+
+  When function declarations are duplicated, TS2393 should fire alongside TS2300.
+  Detect when TS2300 fires on FunctionDeclarations and also emit TS2393.
+
+  **Files:** `Checker.kt`
+
+- [ ] **32h. TS2354 importHelpers check** (~5 tests)
+
+  When `importHelpers: true` but tslib resolution fails, emit TS2354 on syntax requiring helpers.
+  Check for decorators, spread, async, etc. and emit TS2354 if module target requires helpers.
+
+  **Files:** `Checker.kt`
+
 ---
 
-## Remaining failure analysis (session 2026-03-24)
+## Remaining failure analysis (session 2026-03-24b)
 
 **Tests passing**: 7,503 / 10,077 (74.4%)
 

@@ -1872,15 +1872,10 @@ class Checker(
             .groupBy { it.parentBindingPattern!! }
         for ((pattern, decls) in declsByPattern) {
             val totalCount = decls.first().bindingElementCount
-            // Count shorthand underscore-prefixed elements (e.g., `{ _a1 }` not `{ a: _a1 }`)
-            // These are unused by convention but count toward TS6198 "all unused"
-            val shorthandUnderscoreCount = if (pattern is ObjectBindingPattern) {
-                pattern.elements.count { elem ->
-                    elem.propertyName == null && (elem.name as? Identifier)?.text?.startsWith("_") == true
-                            && !elem.dotDotDotToken
-                }
-            } else 0
-            if (decls.size + shorthandUnderscoreCount == totalCount && totalCount > 1) {
+            // Shorthand underscore-prefixed elements (e.g., `{ _a1 }` not `{ a: _a1 }`)
+            // are already included in `decls` (not skipped at the filter above), so no
+            // separate counting is needed — just compare decls.size with totalCount.
+            if (decls.size == totalCount && totalCount > 1) {
                 ts6198Patterns.add(pattern)
                 val patStart = pattern.pos
                 val spanLength = computeBindingPatternSpan(source, patStart, pattern)
@@ -2916,6 +2911,8 @@ class Checker(
                 // Check initializer expressions for nested function-likes
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { checkUnusedInExpr(it, source, fileName) }
+                    // Check unused type params in type annotations (ConstructorType, FunctionType, TypeLiteral)
+                    decl.type?.let { checkUnusedTypeParamsInType(it, source, fileName) }
                 }
             }
             is ExpressionStatement -> {
@@ -3838,6 +3835,72 @@ class Checker(
 
         // Check local declarations in the body
         checkUnusedInStatements(bodyStatements, source, fileName, isTopLevel = false)
+    }
+
+    /**
+     * Check for unused type parameters defined within type annotations.
+     * Handles: ConstructorType `new <T,U>(a:T)=>void`, FunctionType `<T,U>(a:T)=>void`,
+     * and TypeLiteral members with ConstructSignature/CallSignature.
+     */
+    private fun checkUnusedTypeParamsInType(type: TypeNode, source: String, fileName: String) {
+        if (!options.noUnusedLocals && !options.noUnusedParameters) return
+        when (type) {
+            is ConstructorType -> {
+                checkTypeParamsInSignature(type.typeParameters, type.parameters, type.type, source, fileName)
+            }
+            is FunctionType -> {
+                checkTypeParamsInSignature(type.typeParameters, type.parameters, type.type, source, fileName)
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            // Call signatures (name=""), construct signatures (name="new"), and methods
+                            checkTypeParamsInSignature(member.typeParameters, member.parameters, member.type, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is UnionType -> type.types.forEach { checkUnusedTypeParamsInType(it, source, fileName) }
+            is IntersectionType -> type.types.forEach { checkUnusedTypeParamsInType(it, source, fileName) }
+            is ParenthesizedType -> checkUnusedTypeParamsInType(type.type, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Check unused type params for a single signature (construct/call/method). */
+    private fun checkTypeParamsInSignature(
+        typeParameters: List<TypeParameter>?,
+        parameters: List<Parameter>,
+        returnType: TypeNode?,
+        source: String,
+        fileName: String,
+    ) {
+        if (typeParameters.isNullOrEmpty()) return
+        val scope = UnusedScope()
+        for (tp in typeParameters) {
+            if (!tp.name.text.startsWith("_")) {
+                scope.declarations.add(UnusedDecl(
+                    name = tp.name.text,
+                    nameNode = tp.name,
+                    declNode = tp,
+                    isExported = false,
+                    isParameter = false,
+                    isTypeOnly = true,
+                ))
+            }
+        }
+        // Collect refs from constraints, param types, return type
+        for (tp in typeParameters) {
+            tp.constraint?.let { collectTypeRefs(it, scope) }
+            tp.default?.let { collectTypeRefs(it, scope) }
+        }
+        for (param in parameters) {
+            param.type?.let { collectTypeRefs(it, scope) }
+        }
+        returnType?.let { collectTypeRefs(it, scope) }
+        reportUnusedTypeParams(scope, typeParameters, source, fileName)
     }
 
     /** Collect type identifier references from a type node. */
@@ -5643,9 +5706,12 @@ class Checker(
             // Skip if parameter has type annotation or initializer
             if (param.type != null) continue
             if (param.initializer != null) continue
-            // Skip `this` parameter and error-recovery placeholders (empty name)
+            // Skip `this` parameter
             val name = param.name
-            if (name is Identifier && (name.text == "this" || name.text.isEmpty())) continue
+            if (name is Identifier && name.text == "this") continue
+            // Skip error-recovery placeholders (empty name) unless it's a rest parameter
+            // e.g. `function t1(...) {}` — TS7019 fires with name "(Missing)"
+            if (name is Identifier && name.text.isEmpty() && !param.dotDotDotToken) continue
             // Skip destructured parameters (they get separate diagnostics)
             if (name !is Identifier) continue
             // Skip parameter properties (public/private/etc. modifiers) — TS7006 already
@@ -5654,12 +5720,13 @@ class Checker(
 
             if (param.dotDotDotToken) {
                 // TS7019: Rest parameter implicitly has an 'any[]' type
+                val displayName = if (name is Identifier && name.text.isEmpty()) "(Missing)" else (name as Identifier).text
                 // Span covers `...name` (3 chars for `...` + name length)
                 val start = name.pos - 3 // position of `...`
-                val length = 3 + name.text.length
+                val length = 3 + (if (name is Identifier) name.text.length else 0)
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
-                    message = "Rest parameter '${name.text}' implicitly has an 'any[]' type.",
+                    message = "Rest parameter '$displayName' implicitly has an 'any[]' type.",
                     category = DiagnosticCategory.Error,
                     code = 7019,
                     fileName = fileName,
