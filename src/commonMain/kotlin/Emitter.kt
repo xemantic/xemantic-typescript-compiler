@@ -3005,7 +3005,11 @@ class Emitter(
                         binNode.operatorTrailingComments?.forEach { write(it.text); write(" ") }
                     }
                 }
+                // yield has assignment-level precedence — parenthesize as binary right operand
+                val yieldParens = binNode.right is YieldExpression && rightConditionalNeedsParens(binNode.operator)
+                if (yieldParens) write("(")
                 emitExpression(binNode.right)
+                if (yieldParens) write(")")
                 if (rightIndented) indentLevel--
             }
             return
@@ -3076,9 +3080,12 @@ class Emitter(
             emitExpression(node.left)
         }
         val op = operatorToString(node.operator)
-        // Helper to emit the right operand, adding parens if it's a synthetic ConditionalExpression.
+        // Helper to emit the right operand, adding parens for ConditionalExpression or YieldExpression.
+        // yield has assignment-level precedence, same as ternary — needs parens in same positions.
         fun emitRight() {
-            if (node.right is ConditionalExpression && rightConditionalNeedsParens(node.operator)) {
+            val needsParens = ((node.right is ConditionalExpression || node.right is YieldExpression)
+                && rightConditionalNeedsParens(node.operator))
+            if (needsParens) {
                 write("(")
                 emitExpression(node.right)
                 write(")")
