@@ -7852,6 +7852,7 @@ class Checker(
             }
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
+                    checkDuplicatesInType(decl.type, source, fileName)
                     decl.initializer?.let { checkDuplicatesInExpr(it, source, fileName) }
                 }
             }
