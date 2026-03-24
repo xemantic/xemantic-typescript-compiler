@@ -1205,7 +1205,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             afterOpenParen = trailingComments()
             val name = parseBindingNameOrPattern()
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
-            val initializer = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+            val initializer = if (parseOptional(SyntaxKind.Equals)) {
+                val initPos = getPos()
+                val expr = parseAssignmentExpression()
+                reportError("Catch clause variable cannot have an initializer.", code = 1197, overrideStart = initPos, overrideLength = scanner.getPrevTokenEnd() - initPos)
+                expr
+            } else null
             beforeCloseParen = trailingComments()
             parseExpected(SyntaxKind.CloseParen)
             afterCloseParen = trailingComments()
