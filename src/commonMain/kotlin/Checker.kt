@@ -13353,7 +13353,14 @@ class Checker(
                         is SetAccessor -> member.body
                         else -> null
                     }
-                    body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, mutableSetOf()) }
+                    // Pass outer constNames so class/enum assignments in methods are caught
+                    body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableSet()) }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    checkConstAssignmentInStatements(body.statements, source, fileName, constNames.toMutableSet())
                 }
             }
             is LabeledStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
@@ -13450,8 +13457,24 @@ class Checker(
         val length = id.text.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         // Check if the name is a class (TS2629) or enum (TS2628) rather than const (TS2588)
+        // Search file locals, globals, and namespace exports recursively
         val binderResult = fileResults[fileName]
-        val symbol = binderResult?.locals?.get(id.text) ?: globals[id.text]
+        var symbol = binderResult?.locals?.get(id.text) ?: globals[id.text]
+        if (symbol == null && binderResult != null) {
+            // Search inside namespace exports
+            fun searchExports(table: SymbolTable): Symbol? {
+                for ((_, sym) in table) {
+                    if (sym.exports != null) {
+                        val found = sym.exports!![id.text]
+                        if (found != null) return found
+                        val deeper = searchExports(sym.exports!!)
+                        if (deeper != null) return deeper
+                    }
+                }
+                return null
+            }
+            symbol = searchExports(binderResult.locals)
+        }
         val (message, code) = when {
             symbol?.flags?.hasAny(SymbolFlags.Class) == true ->
                 "Cannot assign to '${id.text}' because it is a class." to 2629
