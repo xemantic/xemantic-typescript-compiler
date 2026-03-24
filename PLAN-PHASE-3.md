@@ -2423,24 +2423,21 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`
 
-- [ ] **32d. TS2441 reserved name for import= aliases** (~2 tests)
+- [x] **32d. TS2441 reserved name for import= aliases** (+2 tests)
 
-  `import exports = m.c` and `import require = m.c` at module top level collide with CJS reserved names.
-  Extend existing TS2441 check to cover ImportEqualsDeclaration in modules.
-
-  **Files:** `Checker.kt`
-
-- [ ] **32e. TS1250 block-scoped function declaration in ES5 strict** (~2 tests)
-
-  Function declarations inside blocks (if/for/while) are illegal in ES5 strict mode.
-  Check `FunctionDeclaration` parent is a `Block` and target < ES2015.
+  Extended TS2441 to cover ImportEqualsDeclaration and ModuleDeclaration for exports/require names.
 
   **Files:** `Checker.kt`
 
-- [ ] **32f. TS2450 const enum + file-level forward references** (~1 test)
+- [x] **32e. TS1250 block-scoped function declaration in ES5** (+1 test)
 
-  Missing TS2450 for const enums used inside functions and file-level forward references.
-  Extend `checkUseBeforeDeclaration` to handle const enums and file-level enum forward refs.
+  Fire TS1250 for target <= ES5 without requiring strict mode.
+
+  **Files:** `Checker.kt`
+
+- [x] **32f. TS2450 const enum + verbatimModuleSyntax** (+2 tests)
+
+  Treat const enums as block-scoped under verbatimModuleSyntax (same as isolatedModules).
 
   **Files:** `Checker.kt`
 
