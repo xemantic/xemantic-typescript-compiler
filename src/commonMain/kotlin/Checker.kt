@@ -13261,6 +13261,10 @@ class Checker(
                     }
                 }
             }
+            // Collect class names — classes are also immutable bindings (TS2629)
+            if (stmt is ClassDeclaration && stmt.name != null) {
+                constNames.add(stmt.name!!.text)
+            }
             // Check for assignments to const variables
             checkConstAssignmentInStatement(stmt, source, fileName, constNames)
         }
@@ -13443,10 +13447,21 @@ class Checker(
         val start = id.pos
         val length = id.text.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // Check if the name is a class (TS2629) or enum (TS2628) rather than const (TS2588)
+        val binderResult = fileResults[fileName]
+        val symbol = binderResult?.locals?.get(id.text) ?: globals[id.text]
+        val (message, code) = when {
+            symbol?.flags?.hasAny(SymbolFlags.Class) == true ->
+                "Cannot assign to '${id.text}' because it is a class." to 2629
+            symbol?.flags?.hasAny(SymbolFlags.Enum) == true ->
+                "Cannot assign to '${id.text}' because it is an enum." to 2628
+            else ->
+                "Cannot assign to '${id.text}' because it is a constant." to 2588
+        }
         diagnostics.add(Diagnostic(
-            message = "Cannot assign to '${id.text}' because it is a constant.",
+            message = message,
             category = DiagnosticCategory.Error,
-            code = 2588,
+            code = code,
             fileName = fileName,
             line = line,
             character = character,
