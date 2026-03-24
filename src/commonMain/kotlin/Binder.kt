@@ -376,6 +376,9 @@ class Binder(private val options: CompilerOptions) {
         if (existing.hasAny(SymbolFlags.Interface) && incoming.hasAny(SymbolFlags.Interface)) return true
         // Module + Module
         if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Module)) return true
+        // Interface + Module
+        if (existing.hasAny(SymbolFlags.Interface) && incoming.hasAny(SymbolFlags.Module)) return true
+        if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Interface)) return true
         // Class + Module
         if (existing.hasAny(SymbolFlags.Class) && incoming.hasAny(SymbolFlags.Module)) return true
         if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Class)) return true
