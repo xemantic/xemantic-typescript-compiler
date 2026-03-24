@@ -2454,6 +2454,41 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`
 
+- [x] **32i. TS2441 skip uninstantiated namespaces** (+1 test)
+
+  Skip uninstantiated namespaces (only types/interfaces) for TS2441 — no runtime conflict.
+
+- [x] **32j. TS2554 span fix + TS6211 related info** (+1 test)
+
+  Use expressionTrueEnd for callee span. Add TS6211 "binding pattern not provided" related info.
+
+- [x] **32k. TS2304 type param constraints in FunctionType/ConstructorType** (+2 tests)
+
+  Check unresolved names in type param constraints within FunctionType and ConstructorType in type annotations.
+
+- [x] **32l. TS1155 const without init in for-loop initializers** (+1 test)
+
+  Check for-loop initializer VariableDeclarationList for const declarations without initializers.
+
+- [x] **32m. TS2872 arrow/function always truthy** (+2 tests)
+
+  ArrowFunction and FunctionExpression are always truthy. Added to isAlwaysTruthyExpr.
+  Improved expressionTrueEnd for ArrowFunction, CallExpression, NewExpression.
+
+---
+
+## Remaining failure analysis (session 2026-03-24c)
+
+**Tests passing**: 7,532 / 10,077 (74.7%)
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Error "none produced" | ~1,570 | Need type checker: TS2322, TS2345, TS2339 |
+| Error diff | ~714 | FP: TS1109 (342), TS1005 (261), TS2304 (164), TS7006 (162) |
+| JS emit | ~261 | Multi-file: 186, single-file: 75 |
+
+**Key bottleneck:** ~70% of remaining failures need type inference infrastructure.
+
 ---
 
 ## Remaining failure analysis (session 2026-03-24b)
