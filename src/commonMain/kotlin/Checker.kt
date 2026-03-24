@@ -8157,6 +8157,61 @@ class Checker(
                 }
             }
 
+            // TS2432: In merged enums, only one declaration can omit initializer for first element.
+            // Also check TS2300 for duplicate member names across merged enum declarations.
+            if (hasEnum) {
+                val enumDecls = group.filter { it.kind == "enum" }.mapNotNull { it.stmt as? EnumDeclaration }
+                if (enumDecls.size >= 2) {
+                    // TS2432: count how many declarations have their first member without an initializer
+                    val declsWithUninitFirst = enumDecls.filter { decl ->
+                        decl.members.isNotEmpty() && decl.members.first().initializer == null
+                    }
+                    if (declsWithUninitFirst.size >= 2) {
+                        // Fire TS2432 on all but the first one that omits the initializer
+                        for (decl in declsWithUninitFirst.drop(1)) {
+                            val firstMember = decl.members.first()
+                            val memberName = firstMember.name
+                            val start = memberName.pos
+                            val nameLen = when (memberName) {
+                                is Identifier -> memberName.text.length
+                                is StringLiteralNode -> memberName.text.length + 2
+                                else -> memberName.end - memberName.pos
+                            }
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "In an enum with multiple declarations, only one declaration can omit an initializer for its first enum element.",
+                                category = DiagnosticCategory.Error,
+                                code = 2432,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = nameLen,
+                            ))
+                        }
+                    }
+                    // TS2300 for duplicate member names across merged enum declarations
+                    val allMemberNames = mutableMapOf<String, MutableList<Node>>()
+                    for (decl in enumDecls) {
+                        for (m in decl.members) {
+                            val text = when (val n = m.name) {
+                                is Identifier -> n.text
+                                is StringLiteralNode -> n.text
+                                else -> continue
+                            }
+                            allMemberNames.getOrPut(text) { mutableListOf() }.add(m.name)
+                        }
+                    }
+                    for ((name, nodes) in allMemberNames) {
+                        if (nodes.size >= 2) {
+                            for (node in nodes) {
+                                emitDuplicate2300(name, node, source, fileName)
+                            }
+                        }
+                    }
+                }
+            }
+
             // TS2567: Enum declarations can only merge with namespace or other enum declarations
             val hasInterface = "interface" in kinds
             if (hasEnum && (hasClass || hasFunc || hasVar || hasInterface)) {
