@@ -17967,64 +17967,66 @@ class Checker(
 
     private fun checkImportHelpersWithoutTslib() {
         if (!options.importHelpers) return
-        if (!options.esModuleInterop) return
         // Check if tslib is available in the compilation files
         val hasTslib = binderResults.any { it.sourceFile.fileName.contains("tslib") }
         if (hasTslib) return
 
         val em = options.effectiveModule
-        // esModuleInterop helpers are needed for CJS/AMD/UMD (not System) modules
-        val needsHelpers = em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
-                em == ModuleKind.UMD || em.isNodeNext
+        // esModuleInterop helpers needed for CJS/AMD/UMD/NodeNext (not System/ES) modules
+        val needsEsmHelpers = options.esModuleInterop && (em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
+                em == ModuleKind.UMD || em.isNodeNext)
+        // Class extends helpers needed when target < ES2015 (raw target)
+        val needsExtendsHelper = options.target <= ScriptTarget.ES5
+        // Decorator helpers always needed when experimentalDecorators is set
+        val needsDecoratorHelper = options.experimentalDecorators
 
-        if (!needsHelpers) return
+        if (!needsEsmHelpers && !needsExtendsHelper && !needsDecoratorHelper) return
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
 
+            val isModule = isModuleFile(result.sourceFile.statements)
+
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
-                    is ExportDeclaration -> {
+                    is ExportDeclaration -> if (needsEsmHelpers) {
                         if (stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
                             val clause = stmt.exportClause
-                            // export { default } from "..." needs __importDefault helper
                             if (clause is NamedExports) {
                                 for (spec in clause.elements) {
                                     if (spec.isTypeOnly) continue
                                     val importedName = (spec.propertyName ?: spec.name).text
                                     if (importedName == "default") {
-                                        // Span: for "default as a" use propertyName.pos to name.end
-                                        // For plain "default" use name.pos to name.end (trimmed to text length)
                                         val startNode = spec.propertyName ?: spec.name
                                         val endNode = if (spec.propertyName != null) spec.name else spec.name
                                         val spanStart = startNode.pos
-                                        // Use text length for simple case, full span for aliased
                                         val spanLen = if (spec.propertyName != null) {
                                             endNode.pos + endNode.text.length - spanStart
                                         } else {
                                             startNode.text.length
                                         }
-                                        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-                                        diagnostics.add(Diagnostic(
-                                            message = "This syntax requires an imported helper but module 'tslib' cannot be found.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 2354,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = spanStart,
-                                            length = spanLen,
-                                        ))
+                                        emitTS2354(spanStart, spanLen, source, fileName)
                                     }
                                 }
                             }
                         }
                     }
-                    is ImportDeclaration -> {
-                        if (!stmt.importClause?.isTypeOnly.let { it == true }) {
-                            val bindings = stmt.importClause?.namedBindings
+                    is ImportDeclaration -> if (needsEsmHelpers) {
+                        if (stmt.importClause?.isTypeOnly != true) {
+                            val clause = stmt.importClause ?: continue
+                            val bindings = clause.namedBindings
+                            // import * as X from "..." needs __importStar
+                            if (bindings is NamespaceImport) {
+                                // Span covers whole import statement (from import keyword to semicolon)
+                                val spanStart = stmt.pos
+                                // Find end of statement line (up to and including semicolon)
+                                val lineEnd = source.indexOf('\n', spanStart).let { if (it < 0) source.length else it }
+                                val spanLen = source.substring(spanStart, lineEnd).trimEnd().length
+                                emitTS2354(spanStart, spanLen, source, fileName)
+                            }
+                            // import { default as X } from "..." needs __importDefault
                             if (bindings is NamedImports) {
                                 for (spec in bindings.elements) {
                                     if (spec.isTypeOnly) continue
@@ -18038,23 +18040,97 @@ class Checker(
                                         } else {
                                             startNode.text.length
                                         }
-                                        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-                                        diagnostics.add(Diagnostic(
-                                            message = "This syntax requires an imported helper but module 'tslib' cannot be found.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 2354,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = spanStart,
-                                            length = spanLen,
-                                        ))
+                                        emitTS2354(spanStart, spanLen, source, fileName)
                                     }
                                 }
                             }
                         }
                     }
+                    is ClassDeclaration -> {
+                        // Class extends with target < ES2015 needs __extends helper (module files only)
+                        if (needsExtendsHelper && isModule) {
+                            val heritageClauses = stmt.heritageClauses
+                            if (heritageClauses != null) {
+                                for (clause in heritageClauses) {
+                                    if (clause.token == SyntaxKind.ExtendsKeyword && clause.types.isNotEmpty()) {
+                                        // Span covers "extends ClassName" — find the extent from clause.pos
+                                        // to end of the type expression text
+                                        val spanStart = clause.pos
+                                        val firstType = clause.types.first()
+                                        // Use expressionTrueEnd to get accurate span
+                                        val typeEnd = expressionTrueEnd(firstType.expression)
+                                        val spanLen = typeEnd - spanStart
+                                        emitTS2354(spanStart, spanLen, source, fileName)
+                                    }
+                                }
+                            }
+                        }
+                        // Decorators need __decorate helper (module files only)
+                        if (needsDecoratorHelper && isModule) {
+                            checkDecoratorHelperOnClass(stmt, source, fileName)
+                        }
+                    }
                     else -> {}
+                }
+            }
+        }
+    }
+
+    private fun emitTS2354(spanStart: Int, spanLen: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+        diagnostics.add(Diagnostic(
+            message = "This syntax requires an imported helper but module 'tslib' cannot be found.",
+            category = DiagnosticCategory.Error,
+            code = 2354,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = spanStart,
+            length = spanLen,
+        ))
+    }
+
+    private fun checkDecoratorHelperOnClass(stmt: ClassDeclaration, source: String, fileName: String) {
+        // Check if the class or any of its members have decorators
+        val firstDecorator = stmt.decorators?.firstOrNull()
+        if (firstDecorator != null) {
+            // Span covers the first decorator including @
+            val spanStart = firstDecorator.pos
+            val lineEnd = source.indexOf('\n', spanStart).let { if (it < 0) source.length else it }
+            val spanLen = source.substring(spanStart, lineEnd).trimEnd().length
+            emitTS2354(spanStart, spanLen, source, fileName)
+            return
+        }
+        // Also check member decorators (methods, properties, parameters)
+        for (member in stmt.members) {
+            val memberDec = when (member) {
+                is MethodDeclaration -> member.decorators?.firstOrNull()
+                is PropertyDeclaration -> member.decorators?.firstOrNull()
+                is GetAccessor -> member.decorators?.firstOrNull()
+                is SetAccessor -> member.decorators?.firstOrNull()
+                else -> null
+            }
+            if (memberDec != null) {
+                val spanStart = memberDec.pos
+                val lineEnd = source.indexOf('\n', spanStart).let { if (it < 0) source.length else it }
+                val spanLen = source.substring(spanStart, lineEnd).trimEnd().length
+                emitTS2354(spanStart, spanLen, source, fileName)
+                return
+            }
+            // Check parameter decorators
+            val params = when (member) {
+                is MethodDeclaration -> member.parameters
+                is Constructor -> member.parameters
+                else -> emptyList()
+            }
+            for (param in params) {
+                val paramDec = param.decorators?.firstOrNull()
+                if (paramDec != null) {
+                    val spanStart = paramDec.pos
+                    val lineEnd = source.indexOf('\n', spanStart).let { if (it < 0) source.length else it }
+                    val spanLen = source.substring(spanStart, lineEnd).trimEnd().length
+                    emitTS2354(spanStart, spanLen, source, fileName)
+                    return
                 }
             }
         }
