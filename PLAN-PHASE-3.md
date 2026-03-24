@@ -2405,24 +2405,21 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt` (major new feature)
 
-- [ ] **32a. TS7019 rest parameter implicit any** (~3 tests)
+- [x] **32a. TS7019 rest parameter implicit any** (~3 tests)
 
-  Rest parameters without type annotation need TS7019 ("implicitly has an 'any[]' type") not TS7006.
-  Extend `checkImplicitAny` to detect `DotDotDotToken` and use code 7019 with `'any[]'` message.
-
-  **Files:** `Checker.kt`
-
-- [ ] **32b. TS6133 type params in call/construct signatures** (~2 tests)
-
-  Unused type params in constructor/call signatures within type literals not checked.
-  Extend `checkUnusedTypeParameters` to scan type literal `ConstructSignature`/`CallSignature` members.
+  Handle rest params with missing names using "(Missing)" display name. (+0 tests — other tests need noImplicitAny default)
 
   **Files:** `Checker.kt`
 
-- [ ] **32c. TS6198 shorthand underscore destructuring** (~1 test)
+- [x] **32b. TS6133 type params in call/construct signatures** (+2 tests)
 
-  `const { _a1, _b1 } = ...` — shorthand destructuring where bound name starts with `_` should
-  still fire TS6198 if ALL elements unused. Only renaming `{ a: _a }` suppresses unused warning.
+  Check unused type params in ConstructorType, FunctionType, and TypeLiteral members.
+
+  **Files:** `Checker.kt`
+
+- [x] **32c. TS6198 shorthand underscore destructuring** (+1 test)
+
+  Fix double-counting: shorthand underscore elements already in unusedDecls were also counted in shorthandUnderscoreCount.
 
   **Files:** `Checker.kt`
 
