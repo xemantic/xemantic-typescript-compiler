@@ -2357,10 +2357,41 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
 - [ ] **31c. FP TS1212 strict reserved word** (~9 diff tests) — *deferred*
 
-  Over-aggressive reserved word checking in non-strict contexts or for identifiers
-  that are only reserved in certain positions.
+  `target >= ES2015` doesn't imply strict mode globally. Need to separate `isES2015Plus`
+  (affects `let`/`yield`) from `isStrictMode` (affects `public`/`private`/`protected`/etc).
+  Requires threading two flags through the walker functions.
 
   **Files:** `Checker.kt`
+
+- [x] **31d. TS7008 member implicitly has 'any' type** (+2 tests)
+
+  Interface and ambient class property members without type annotations now get TS7008.
+
+  **Files:** `Checker.kt`
+
+- [x] **31e. TypeLiteral {} squiggle span fix** (+1 test)
+
+  `getRetTypeSpanLength` now handles `{}` at start position by entering braces with depth tracking.
+
+  **Files:** `Checker.kt`
+
+- [x] **31f. CJS built-in globals exclusion** (+1 test)
+
+  `Infinity`, `NaN`, `undefined` excluded from CJS export rewrite map.
+
+  **Files:** `Transformer.kt`
+
+- [x] **31g. Yield parens in binary expressions** (+1 test)
+
+  `yield` parenthesized as right operand of non-assignment binary operators.
+
+  **Files:** `Emitter.kt`
+
+- [x] **31h. isolatedModules decorator metadata Object fallback** (0 test change, improved diff)
+
+  Qualified name types in decorator metadata emit `Object` under `isolatedModules`.
+
+  **Files:** `Transformer.kt`
 
 - [ ] **30m. Implement TS2339 — property does not exist on type** (~100 tests) — *deferred*
 
