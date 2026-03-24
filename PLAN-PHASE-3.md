@@ -14,7 +14,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 ## Current State
 
 - **10,077 tests**, 7,503 passing (74.4%), 2,574 failing
-- **Session 2026-03-23e**: +83 tests: TS2322 expanded — TypeReference (simple + generic), ReturnStatement checking, strict null checks, type parameter elaboration chain, UnionType support, bare return→undefined TS2322, TS7030 suppression at TS2322 positions. Fixes: Kotlin init order for `strictNullChecks`, TS2322 suppression when TS2304/TS2314 exists, generic TypeRef formatting, ArrayType display, type param threading, union member assignability
+- **Session 2026-03-23e/24**: +83 tests: TS2322 expanded — TypeReference (simple + generic), ReturnStatement checking, strict null checks, type parameter elaboration chain, UnionType support, bare return→undefined TS2322, TS7030 suppression at TS2322 positions. Fixes: Kotlin init order for `strictNullChecks`, TS2322 suppression when TS2304/TS2314 exists, generic TypeRef formatting, ArrayType display, type param threading, union member assignability
 - **Session 2026-03-23d**: +21 tests: TS5055 per-file JS output overwrite for multi-file tests (+4), TS1117 computed property names with identifier/property-access expressions (+2), TS2882 side-effect import check for relative specifiers (+1), TS2323 FP suppression for function overload defaults (+1), TS2322 basic primitive type assignability checker (+6), TS2322 message chain elaboration for non-literal expressions (+1), decorator expression TS2304 checking (+4), Infinity enum literal emission (+1), collectInferTypeNames extended to TypeLiteral/MappedType/IndexedAccessType, plus test ordering bonus (+1)
 - **Session 2026-03-23c**: +19 tests from analysis-driven fixes: TS6133 rest element span fix (+1), TS1117 computed property name duplicates (+1), TS1115 continue-to-non-loop label (+1), TS2309 export= in ambient modules (+3), TS1030 duplicate declare/export modifiers (+2), TS1015 parameter property without type (+1), TS2588 prefix increment through parens (+1), TS5053 reactNamespace+jsxFactory conflict (+1), DtsFileErrors section stripping (+8), numeric literal normalization for property duplicates
 - **Session 2026-03-23b**: TS7030/TS2355/TS2366 implicit return checks redesigned (+5 tests): `retTypeClass` classification (truly-void/pure-undefined/nullable/non-void), empty `return;` in non-void functions → TS7030 at `return;`, mixed empty+value returns without annotation → TS7030 at empty returns, `getRetTypeSpanLength` fixed for FunctionType and `=>` arrow in type spans
@@ -2325,23 +2325,15 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`, `Binder.kt`
 
-- [ ] **30l. Implement TS2322 — type is not assignable** (~293 tests) — **NEXT PRIORITY**
+- [x] **30l. Implement TS2322 — type is not assignable** (~293 tests, +83 achieved) — **DONE (basic)**
 
-  The single biggest test unlocking opportunity. 415 tests need ONLY TS2322,
-  and 293 would pass with just this code added (the rest also have FPs/missing).
+  Implemented: TypeReference (simple + generic), ReturnStatement checking,
+  strict null checks, type parameter elaboration chain, UnionType support,
+  bare return→undefined, TS7030 suppression at TS2322 positions.
+  Remaining ~170 tests need: structural type compatibility, type inference from
+  initializers/function calls, property access, generic instantiation.
 
-  **Implementation strategy (phased):**
-  1. Basic expression type inference: string/number/boolean/null/undefined literals,
-     variable annotations, function return types
-  2. Assignability: primitive types, literal types to widened types,
-     interface assignability (structural)
-  3. Error formatting: "Type 'X' is not assignable to type 'Y'."
-
-  Simplest first wins: `assignFromBooleanInterface` (Boolean vs boolean),
-  `assignFromNumberInterface` (Number vs number), `assignFromStringInterface`
-  (String vs string) — just wrapper object vs primitive checks.
-
-  **Files:** `Checker.kt` (major new feature)
+  **Files:** `Checker.kt`
 
 - [ ] **30m. Implement TS2339 — property does not exist on type** (~100 tests) — *deferred*
 
