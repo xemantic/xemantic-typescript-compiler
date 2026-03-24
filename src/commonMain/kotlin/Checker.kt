@@ -255,6 +255,8 @@ class Checker(
         checkTypeAssignability()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
+        // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
+        checkTsSyntaxInJsFiles()
     }
 
     // -----------------------------------------------------------------------
@@ -20190,5 +20192,245 @@ class Checker(
             is ObjectLiteralExpression -> true
             else -> false
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS8xxx: TypeScript syntax in JavaScript files
+    // -----------------------------------------------------------------------
+
+    private fun checkTsSyntaxInJsFiles() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!fileName.endsWith(".js") && !fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            checkTsSyntaxInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkTsSyntaxInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkTsSyntaxInStatement(stmt, source, fileName)
+    }
+
+    private fun checkTsSyntaxInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is InterfaceDeclaration -> {
+                emitTs8xxx(stmt.name, "'interface' declarations can only be used in TypeScript files.", 8006, source, fileName)
+            }
+            is EnumDeclaration -> {
+                emitTs8xxx(stmt.name, "'enum' declarations can only be used in TypeScript files.", 8006, source, fileName)
+            }
+            is ModuleDeclaration -> {
+                if (stmt.name is StringLiteralNode) {
+                    // `declare module "foo" {}` - skip, this is ambient module declaration
+                } else {
+                    emitTs8xxx(stmt.name, "'namespace' declarations can only be used in TypeScript files.", 8006, source, fileName)
+                }
+            }
+            is TypeAliasDeclaration -> {
+                emitTs8xxx(stmt.name, "Type aliases can only be used in TypeScript files.", 8008, source, fileName)
+            }
+            is ImportEqualsDeclaration -> {
+                val start = stmt.pos
+                val importEnd = source.indexOf("import", start)
+                if (importEnd >= 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, importEnd)
+                    diagnostics.add(Diagnostic(
+                        message = "'import ... =' can only be used in TypeScript files.",
+                        category = DiagnosticCategory.Error,
+                        code = 8002,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = importEnd,
+                        length = 6, // "import"
+                    ))
+                }
+            }
+            is ExportAssignment -> {
+                if (stmt.isExportEquals) {
+                    val start = stmt.pos
+                    // Find "export" in source near stmt.pos
+                    val exportStart = source.indexOf("export", start)
+                    if (exportStart >= 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, exportStart)
+                        diagnostics.add(Diagnostic(
+                            message = "'export =' can only be used in TypeScript files.",
+                            category = DiagnosticCategory.Error,
+                            code = 8003,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = exportStart,
+                            length = 11, // "export = ..."
+                        ))
+                    }
+                }
+            }
+            is FunctionDeclaration -> {
+                // Check type parameters (TS8004)
+                if (!stmt.typeParameters.isNullOrEmpty()) {
+                    val typeParam = stmt.typeParameters!!.first()
+                    emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                }
+                // Check parameter types (TS8010)
+                for (param in stmt.parameters) {
+                    if (param.type != null) {
+                        emitTs8xxxForType(param.type!!, source, fileName)
+                    }
+                }
+                // Check return type (TS8010)
+                if (stmt.type != null) {
+                    emitTs8xxxForType(stmt.type!!, source, fileName)
+                }
+                stmt.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                // Check type parameters (TS8004)
+                if (!stmt.typeParameters.isNullOrEmpty()) {
+                    val typeParam = stmt.typeParameters!!.first()
+                    emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                }
+                // Check implements clause (TS8005)
+                val hasImplements = stmt.heritageClauses?.any { it.token == SyntaxKind.ImplementsKeyword } == true
+                if (hasImplements) {
+                    // Find "implements" keyword position
+                    val classEnd = stmt.name?.end ?: stmt.pos
+                    val implIdx = source.indexOf("implements", classEnd)
+                    if (implIdx >= 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, implIdx)
+                        diagnostics.add(Diagnostic(
+                            message = "'implements' clauses can only be used in TypeScript files.",
+                            category = DiagnosticCategory.Error,
+                            code = 8005,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = implIdx,
+                            length = 10, // "implements"
+                        ))
+                    }
+                }
+                for (member in stmt.members) {
+                    checkTsSyntaxInClassMember(member, source, fileName)
+                }
+            }
+            is VariableStatement -> {
+                // Check for declare modifier (TS8009)
+                if (ModifierFlag.Declare in stmt.modifiers) {
+                    emitTs8xxxDeclare(stmt.pos, source, fileName)
+                }
+                // Check variable type annotations
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) {
+                        emitTs8xxxForType(decl.type!!, source, fileName)
+                    }
+                }
+            }
+            is Block -> checkTsSyntaxInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkTsSyntaxInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkTsSyntaxInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkTsSyntaxInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkTsSyntaxInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkTsSyntaxInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkTsSyntaxInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkTsSyntaxInStatement(stmt.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkTsSyntaxInClassMember(member: ClassElement, source: String, fileName: String) {
+        when (member) {
+            is MethodDeclaration -> {
+                // Check parameter types and return type
+                for (param in member.parameters) {
+                    if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
+                    // Check parameter modifiers (public/private/etc.) — TS8012
+                    if (param.modifiers.any { isParameterPropertyModifier(it) }) {
+                        val modStart = param.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, modStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Parameter modifiers can only be used in TypeScript files.",
+                            category = DiagnosticCategory.Error,
+                            code = 8012,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = modStart,
+                            length = 6, // approximate modifier length
+                        ))
+                    }
+                }
+                if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
+                member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
+            }
+            is Constructor -> {
+                for (param in member.parameters) {
+                    if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
+                }
+                member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
+            }
+            is PropertyDeclaration -> {
+                if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
+                // Check declare modifier (TS8009)
+                if (ModifierFlag.Declare in member.modifiers) {
+                    emitTs8xxxDeclare(member.pos, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTs8xxx(nameNode: Node, message: String, code: Int, source: String, fileName: String) {
+        val start = nameNode.pos
+        val length = when (nameNode) {
+            is Identifier -> nameNode.text.length
+            else -> nameNode.end - nameNode.pos
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTs8xxxForType(type: TypeNode, source: String, fileName: String) {
+        val start = type.pos
+        val length = type.end - type.pos
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type annotations can only be used in TypeScript files.",
+            category = DiagnosticCategory.Error,
+            code = 8010,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTs8xxxDeclare(stmtPos: Int, source: String, fileName: String) {
+        val declareIdx = source.indexOf("declare", stmtPos)
+        if (declareIdx < 0 || declareIdx > stmtPos + 20) return
+        val (line, character) = getLineAndCharacterOfPosition(source, declareIdx)
+        diagnostics.add(Diagnostic(
+            message = "The 'declare' modifier can only be used in TypeScript files.",
+            category = DiagnosticCategory.Error,
+            code = 8009,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = declareIdx,
+            length = 7, // "declare"
+        ))
     }
 }
