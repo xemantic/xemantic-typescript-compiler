@@ -2441,17 +2441,16 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`
 
-- [ ] **32g. TS2393 duplicate function implementation alongside TS2300** (~3 tests)
+- [x] **32g. TS2393 duplicate function implementation alongside TS2300** (+1 test)
 
-  When function declarations are duplicated, TS2393 should fire alongside TS2300.
-  Detect when TS2300 fires on FunctionDeclarations and also emit TS2393.
+  Fire TS2393 for duplicate function implementations regardless of other declaration kinds.
 
   **Files:** `Checker.kt`
 
-- [ ] **32h. TS2354 importHelpers check** (~5 tests)
+- [x] **32h. TS2354 importHelpers check** (+3 tests)
 
-  When `importHelpers: true` but tslib resolution fails, emit TS2354 on syntax requiring helpers.
-  Check for decorators, spread, async, etc. and emit TS2354 if module target requires helpers.
+  Extended TS2354: namespace imports (__importStar), class extends (__extends), decorators (__decorate).
+  Only fires in module files.
 
   **Files:** `Checker.kt`
 

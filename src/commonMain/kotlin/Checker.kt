@@ -14145,7 +14145,9 @@ class Checker(
                     }
                     is ModuleDeclaration -> {
                         // export namespace exports {} / export namespace require {}
-                        if (ModifierFlag.Declare !in stmt.modifiers && stmt.name is Identifier) names.add(stmt.name as Identifier)
+                        // Skip uninstantiated namespaces (only types/interfaces) — no runtime conflict
+                        if (ModifierFlag.Declare !in stmt.modifiers && stmt.name is Identifier
+                            && isNamespaceInstantiated(stmt)) names.add(stmt.name as Identifier)
                     }
                     else -> {}
                 }
@@ -17988,8 +17990,10 @@ class Checker(
             val source = result.sourceFile.text
 
             val isModule = isModuleFile(result.sourceFile.statements)
+            val ts2354StartCount = diagnostics.count { it.code == 2354 && it.fileName == fileName }
 
             for (stmt in result.sourceFile.statements) {
+                if (diagnostics.count { it.code == 2354 && it.fileName == fileName } > ts2354StartCount) break
                 when (stmt) {
                     is ExportDeclaration -> if (needsEsmHelpers) {
                         if (stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
@@ -18047,26 +18051,25 @@ class Checker(
                         }
                     }
                     is ClassDeclaration -> {
+                        var emittedForClass = false
                         // Class extends with target < ES2015 needs __extends helper (module files only)
                         if (needsExtendsHelper && isModule) {
                             val heritageClauses = stmt.heritageClauses
                             if (heritageClauses != null) {
                                 for (clause in heritageClauses) {
                                     if (clause.token == SyntaxKind.ExtendsKeyword && clause.types.isNotEmpty()) {
-                                        // Span covers "extends ClassName" — find the extent from clause.pos
-                                        // to end of the type expression text
                                         val spanStart = clause.pos
                                         val firstType = clause.types.first()
-                                        // Use expressionTrueEnd to get accurate span
                                         val typeEnd = expressionTrueEnd(firstType.expression)
                                         val spanLen = typeEnd - spanStart
                                         emitTS2354(spanStart, spanLen, source, fileName)
+                                        emittedForClass = true
                                     }
                                 }
                             }
                         }
-                        // Decorators need __decorate helper (module files only)
-                        if (needsDecoratorHelper && isModule) {
+                        // Decorators need __decorate helper (module files only) — skip if already emitted
+                        if (!emittedForClass && needsDecoratorHelper && isModule) {
                             checkDecoratorHelperOnClass(stmt, source, fileName)
                         }
                     }
