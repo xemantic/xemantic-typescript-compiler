@@ -14137,6 +14137,14 @@ class Checker(
                             }
                         }
                     }
+                    is ImportEqualsDeclaration -> {
+                        // import exports = m.c; import require = m.c;
+                        names.add(stmt.name)
+                    }
+                    is ModuleDeclaration -> {
+                        // export namespace exports {} / export namespace require {}
+                        if (ModifierFlag.Declare !in stmt.modifiers && stmt.name is Identifier) names.add(stmt.name as Identifier)
+                    }
                     else -> {}
                 }
                 for (name in names) {
@@ -14159,18 +14167,14 @@ class Checker(
     }
 
     // TS1250: Function declarations not allowed inside blocks in strict mode targeting ES5
+    // TypeScript fires this for target < ES2015 (raw target, not effective) regardless of
+    // explicit strict mode — block-scoped functions are undefined behavior in ES5.
     private fun checkBlockScopedFunctionDeclarations() {
+        if (options.target > ScriptTarget.ES5) return
         for (result in binderResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
-            // Determine if file is in strict mode
-            val isStrict = options.alwaysStrict == true || options.strict ||
-                (result.sourceFile.statements.firstOrNull()?.let {
-                    it is ExpressionStatement && it.expression is StringLiteralNode &&
-                        ((it.expression as StringLiteralNode).text == "use strict")
-                } == true)
-            if (!isStrict) continue
 
             checkBlockFuncDeclInStatements(result.sourceFile.statements, source, fileName, inBlock = false)
         }
@@ -14468,9 +14472,9 @@ class Checker(
                 // declare enum has no temporal dead zone
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 // const enum values are inlined at compile time — no temporal dead zone
-                // EXCEPT with isolatedModules: true, where cross-file inlining isn't done
+                // EXCEPT with isolatedModules/verbatimModuleSyntax, where inlining is suppressed
                 val isConst = ModifierFlag.Const in stmt.modifiers
-                if (!isConst || options.isolatedModules) {
+                if (!isConst || options.isolatedModules || options.verbatimModuleSyntax) {
                     decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true)
                 }
             }
