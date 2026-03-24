@@ -10053,7 +10053,7 @@ class Checker(
         }
     }
 
-    /** Only flag simple literal expressions to avoid false positives. */
+    /** Only flag simple literal expressions and function expressions to avoid false positives. */
     private fun isAlwaysTruthyExpr(expr: Expression): Boolean {
         return when (expr) {
             is StringLiteralNode -> expr.text.isNotEmpty()
@@ -10062,6 +10062,9 @@ class Checker(
                 value != 0.0 && !value.isNaN()
             }
             is ParenthesizedExpression -> isAlwaysTruthyExpr(expr.expression)
+            // Function expressions and arrow functions are always truthy (objects)
+            is ArrowFunction -> true
+            is FunctionExpression -> true
             else -> false
         }
     }
@@ -10072,7 +10075,7 @@ class Checker(
         val length = when (expr) {
             is StringLiteralNode -> (expr.rawText?.length ?: expr.text.length) + 2 // +2 for quotes
             is NumericLiteralNode -> expr.text.length
-            else -> (expr.end - 1 - start).coerceAtLeast(1)
+            else -> expressionTrueEnd(expr) - start
         }
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
@@ -15659,6 +15662,26 @@ class Checker(
         is PropertyAccessExpression -> expr.name.pos + expr.name.text.length
         is ElementAccessExpression -> expressionTrueEnd(expr.argumentExpression) + 1 // +1 for ]
         is NonNullExpression -> expressionTrueEnd(expr.expression) + 1 // +1 for !
+        is CallExpression -> {
+            // end of closing ) after arguments
+            if (expr.arguments.isNotEmpty()) expressionTrueEnd(expr.arguments.last()) + 1
+            else expr.end // fallback for empty arg lists
+        }
+        is NewExpression -> {
+            // new Foo() — end of closing ) after arguments
+            if (expr.arguments?.isNotEmpty() == true) expressionTrueEnd(expr.arguments!!.last()) + 1
+            else if (expr.arguments != null) expressionTrueEnd(expr.expression) + 2 // +2 for ()
+            else expressionTrueEnd(expr.expression)
+        }
+        is ArrowFunction -> {
+            // Arrow function body end
+            val body = expr.body
+            when (body) {
+                is Block -> body.end - 1  // end includes next token; -1 for }
+                is Expression -> expressionTrueEnd(body)
+                else -> expr.end
+            }
+        }
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
