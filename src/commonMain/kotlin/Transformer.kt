@@ -8797,7 +8797,8 @@ class Transformer(
                                 syntheticId("Number")
                             // If the base is a runtime value (not type-only), emit the qualified name
                             // as a property access expression (e.g., `db.db` for CJS module member types)
-                            baseName != null && baseName !in topLevelTypeOnlyNames ->
+                            // Under isolatedModules, can't verify cross-file types → Object
+                            baseName != null && baseName !in topLevelTypeOnlyNames && !options.isolatedModules ->
                                 qualifiedNameToPropertyAccess(typeNode.typeName as QualifiedName)
                             else -> syntheticId("Object")
                         }
