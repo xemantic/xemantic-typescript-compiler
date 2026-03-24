@@ -2335,6 +2335,28 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
 
   **Files:** `Checker.kt`
 
+- [ ] **31a. TS2304 FP reduction — type parameters in scope** (~15-20 diff tests improved) — **NEXT**
+
+  When checking TS2304, track type parameters from enclosing generic functions/classes/type aliases
+  and exclude them from "cannot find name" errors. Current checker scope chain doesn't track type
+  params, causing FPs for `T`, `U`, `K` etc.
+
+  **Files:** `Checker.kt` (scope chain in checkUnresolvedNames)
+
+- [ ] **31b. FP TS7030 reduction** (~13 diff tests improved)
+
+  Over-aggressive TS7030 in contexts TypeScript doesn't check: nested function expressions,
+  generator functions, async generators. Suppress for these cases.
+
+  **Files:** `Checker.kt` (checkBodyForImplicitReturn)
+
+- [ ] **31c. FP TS1212 strict reserved word** (~9 diff tests)
+
+  Over-aggressive reserved word checking in non-strict contexts or for identifiers
+  that are only reserved in certain positions.
+
+  **Files:** `Checker.kt`
+
 - [ ] **30m. Implement TS2339 — property does not exist on type** (~100 tests) — *deferred*
 
   Second biggest unlock. Requires basic type tracking for property access validation.
@@ -2346,6 +2368,21 @@ TS2353 (+30), TS2728 (+16), TS2352 (+16), TS2305 (+12), TS2367 (+11), TS6210 (+1
   Requires function signature matching and argument type checking.
 
   **Files:** `Checker.kt` (major new feature)
+
+---
+
+## Remaining failure analysis (session 2026-03-24)
+
+**Tests passing**: 7,503 / 10,077 (74.4%)
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Error "none produced" | 1,570 | Dominated by TS2322 (167), TS2339 (80), TS2345 (56) |
+| Error diff | 741 | Top FPs: TS1109 (42), TS7006 (36), TS2304 (37), TS1005 (25) |
+| JS emit | 263 | Multi-file paths (42), CJS helpers (28), comments (23) |
+
+**Key bottleneck:** ~70% of remaining failures (1,800+) need type inference infrastructure.
+Quick wins can push to ~7,550-7,600; meaningful progress beyond requires type checker expansion.
 
 ---
 
