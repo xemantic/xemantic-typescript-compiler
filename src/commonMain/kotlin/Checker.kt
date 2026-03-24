@@ -9770,24 +9770,41 @@ class Checker(
      * Extract type parameter info from a symbol's declarations.
      */
     private fun getTypeParamInfoFromSymbol(symbol: Symbol): TypeParamInfo? {
+        var foundClassLike = false
         for (decl in symbol.declarations) {
-            val typeParams = when (decl) {
-                is ClassDeclaration -> decl.typeParameters
-                is InterfaceDeclaration -> decl.typeParameters
-                is TypeAliasDeclaration -> decl.typeParameters
-                else -> null
-            }
-            if (typeParams != null && typeParams.isNotEmpty()) {
-                val isTypeAlias = decl is TypeAliasDeclaration
-                val displayName = if (isTypeAlias) {
-                    symbol.name
-                } else {
-                    "${symbol.name}<${typeParams.joinToString(", ") { it.name.text }}>"
+            when (decl) {
+                is ClassDeclaration -> {
+                    foundClassLike = true
+                    val typeParams = decl.typeParameters
+                    if (!typeParams.isNullOrEmpty()) {
+                        val minRequired = typeParams.count { it.default == null }
+                        return TypeParamInfo(minRequired, typeParams.size,
+                            "${symbol.name}<${typeParams.joinToString(", ") { it.name.text }}>")
+                    }
                 }
-                val minRequired = typeParams.count { it.default == null }
-                return TypeParamInfo(minRequired, typeParams.size, displayName)
+                is InterfaceDeclaration -> {
+                    foundClassLike = true
+                    val typeParams = decl.typeParameters
+                    if (!typeParams.isNullOrEmpty()) {
+                        val minRequired = typeParams.count { it.default == null }
+                        return TypeParamInfo(minRequired, typeParams.size,
+                            "${symbol.name}<${typeParams.joinToString(", ") { it.name.text }}>")
+                    }
+                }
+                is TypeAliasDeclaration -> {
+                    foundClassLike = true
+                    val typeParams = decl.typeParameters
+                    if (!typeParams.isNullOrEmpty()) {
+                        val minRequired = typeParams.count { it.default == null }
+                        return TypeParamInfo(minRequired, typeParams.size, symbol.name)
+                    }
+                }
+                else -> {}
             }
         }
+        // If the symbol has a class/interface/type-alias declaration with 0 type params,
+        // it shadows any global builtin with the same name — return (0, 0) to suppress TS2314.
+        if (foundClassLike) return TypeParamInfo(0, 0, symbol.name)
         return null
     }
 
@@ -9803,6 +9820,7 @@ class Checker(
             else -> return false
         }
         val info = getTypeParamInfo(name) ?: return false
+        if (info.maxTotal == 0) return false // non-generic local type → TS2315, not TS2314
         if (info.minRequired != info.maxTotal) return false
         val providedCount = type.typeArguments?.size ?: 0
         return providedCount != info.maxTotal
@@ -9831,9 +9849,14 @@ class Checker(
         if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
         if (name in KEYWORD_IDENTIFIERS) return
         if (!scope.has(name)) return
+        // Type parameters cannot trigger TS2314 — they are not generic type constructors
+        if (scope.isTypeParam(name)) return
 
         // Look up type parameter info
         val info = getTypeParamInfo(name) ?: return
+
+        // Non-generic local types (0 type params) used with type args → TS2315, not TS2314
+        if (info.maxTotal == 0) return
 
         // Skip types with default type params — they need TS2707 not TS2314
         if (info.minRequired != info.maxTotal) return
@@ -9896,6 +9919,9 @@ class Checker(
         if (!scope.has(name)) return
 
         val info = getTypeParamInfo(name) ?: return
+
+        // Non-generic local types (0 type params) used with type args → TS2315, not TS2314
+        if (info.maxTotal == 0) return
 
         // Skip types with default type params — they need TS2707 not TS2314
         if (info.minRequired != info.maxTotal) return
