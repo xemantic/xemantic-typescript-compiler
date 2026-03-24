@@ -12088,7 +12088,7 @@ class Checker(
         fileName: String,
     ) {
         val start = calleeExpr.pos
-        val length = calleeExpr.end - start
+        val length = expressionTrueEnd(calleeExpr) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
