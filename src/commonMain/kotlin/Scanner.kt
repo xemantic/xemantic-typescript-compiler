@@ -75,6 +75,14 @@ class Scanner(private val text: String) {
     /** Position of the invalid unicode escape within the source (for error reporting). */
     private var invalidUnicodeEscapePos: Int = -1
 
+    /**
+     * When an identifier starts with an invalid \uXXXX escape (decodes to non-identifier-start),
+     * TypeScript strips the leading `\` from the emitted text. This field holds the corrected
+     * raw text (source text with the leading `\` removed), or null if no correction is needed.
+     * E.g., for `\u0031a` (decodes to `1a`, invalid start), correctedRawText = "u0031a".
+     */
+    private var correctedRawText: String? = null
+
     /** Whether the last scanned template literal token was unterminated. */
     private var tokenIsUnterminated: Boolean = false
 
@@ -83,6 +91,13 @@ class Scanner(private val text: String) {
 
     /** Returns the source position of the invalid unicode escape, or -1 if none. */
     fun getInvalidUnicodeEscapePos(): Int = invalidUnicodeEscapePos
+
+    /**
+     * Returns the corrected raw text for identifiers with an invalid leading \uXXXX escape,
+     * or null if no correction is needed. When non-null, use this instead of getTokenText()
+     * as the rawText for the identifier (strips the leading backslash).
+     */
+    fun getCorrectedRawText(): String? = correctedRawText
 
     /** Returns true if the last scanned template literal was unterminated. */
     fun isTokenUnterminated(): Boolean = tokenIsUnterminated
@@ -214,6 +229,7 @@ class Scanner(private val text: String) {
         tokenValue = ""
         hasInvalidUnicodeEscape = false
         invalidUnicodeEscapePos = -1
+        correctedRawText = null
 
         if (pos >= end) {
             token = SyntaxKind.EndOfFile
@@ -228,7 +244,7 @@ class Scanner(private val text: String) {
             isIdentifierStart(ch) ||
                     (ch.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) ||
                     (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' &&
-                    pos + 2 < end && (text[pos + 2] == '{' || isHexDigit(text[pos + 2]))) -> scanIdentifierOrKeyword()
+                    pos + 2 < end && (text[pos + 2] == '{' || isUnicodeEscape4Hex(pos + 2))) -> scanIdentifierOrKeyword()
 
             // Numeric literals
             isDigit(ch) -> scanNumericLiteral()
@@ -559,6 +575,18 @@ class Scanner(private val text: String) {
         return pos < end && (text[pos] == '{' || isHexDigit(text[pos]))
     }
 
+    /**
+     * Returns true if the text starting at [startPos] contains exactly 4 hex digits,
+     * suitable for a `\uXXXX` escape (non-brace form).
+     * Used to distinguish valid 4-digit unicode escapes from incomplete sequences like `\u003`.
+     */
+    private fun isUnicodeEscape4Hex(startPos: Int): Boolean =
+        startPos + 3 < end &&
+        isHexDigit(text[startPos]) &&
+        isHexDigit(text[startPos + 1]) &&
+        isHexDigit(text[startPos + 2]) &&
+        isHexDigit(text[startPos + 3])
+
     private fun scanIdentifierOrKeyword(): SyntaxKind {
         val start = pos
         // Check if this identifier starts with a \uXXXX escape sequence
@@ -578,16 +606,18 @@ class Scanner(private val text: String) {
                 pos += 2
                 continue
             }
-            // Only treat \u as mid-identifier escape if followed by hex digit or '{'
+            // Only treat \u as mid-identifier escape if followed by '{' or exactly 4 hex digits.
+            // Incomplete sequences like \u003 (3 hex digits) terminate the identifier — the \
+            // will be scanned separately as an Unknown (invalid character) token.
             if (ch == '\\' && pos + 1 < end && text[pos + 1] == 'u') {
                 val savedPos = pos
                 pos += 2 // skip '\u' to check what follows
-                val hasValidEscapeStart = looksLikeUnicodeEscape()
+                val hasValidEscapeStart = pos < end && (text[pos] == '{' || isUnicodeEscape4Hex(pos))
                 pos = savedPos // restore
                 if (hasValidEscapeStart) {
                     return scanIdentifierWithEscapes(start)
                 } else {
-                    break // stop identifier at \u that has no valid hex following
+                    break // stop identifier at \u that has no valid 4-hex-digit escape following
                 }
             }
             if (!isIdentifierPart(ch)) break
@@ -657,6 +687,10 @@ class Scanner(private val text: String) {
         if (prefixLen == 0 && firstDecodedChar != null && !isIdentifierStart(firstDecodedChar)) {
             hasInvalidUnicodeEscape = true
             if (invalidUnicodeEscapePos < 0) invalidUnicodeEscapePos = tokenPos // start of escape at token start
+            // TypeScript strips the leading `\` from the emitted text for this case.
+            // E.g., `\u0031a` (decodes to `1a`, invalid start) should emit as `u0031a`.
+            // Store the corrected raw text (source text with leading `\` removed).
+            correctedRawText = text.substring(tokenPos + 1, pos)
         }
         tokenValue = sb.toString()
         val keywordKind = KEYWORDS[tokenValue]
