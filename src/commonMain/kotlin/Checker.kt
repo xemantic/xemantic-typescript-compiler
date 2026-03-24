@@ -11745,6 +11745,7 @@ class Checker(
         val maxParams: Int,     // total params (required + optional)
         val hasRest: Boolean,   // has ...rest param
         val isOverloaded: Boolean, // has multiple declarations (skip checking)
+        val parameters: List<Parameter> = emptyList(), // actual parameter nodes (for related info)
     )
 
     private fun collectFuncDecls(
@@ -11805,7 +11806,7 @@ class Checker(
                 required++
             }
         }
-        return FuncParamInfo(required, total, hasRest, isOverloaded = false)
+        return FuncParamInfo(required, total, hasRest, isOverloaded = false, parameters = parameters)
     }
 
     private fun checkArgCountInStatements(
@@ -11951,7 +11952,7 @@ class Checker(
                         if (argCount > info.maxParams) {
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
                         } else if (argCount < info.minParams) {
-                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName)
+                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
                         }
                     }
                 }
@@ -12097,10 +12098,37 @@ class Checker(
         calleeExpr: Expression,
         source: String,
         fileName: String,
+        parameters: List<Parameter> = emptyList(),
     ) {
         val start = calleeExpr.pos
         val length = expressionTrueEnd(calleeExpr) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // Check if the first missing parameter is a binding pattern → emit TS6211 related info
+        val relatedInfo = mutableListOf<Diagnostic>()
+        if (parameters.isNotEmpty()) {
+            // Find the first missing parameter (at index `actual`, skipping `this` params)
+            val nonThisParams = parameters.filter {
+                !(it.name is Identifier && (it.name as Identifier).text == "this")
+            }
+            if (actual < nonThisParams.size) {
+                val missingParam = nonThisParams[actual]
+                if (missingParam.name is ObjectBindingPattern || missingParam.name is ArrayBindingPattern) {
+                    val paramStart = missingParam.name.pos
+                    val paramLen = missingParam.name.end - paramStart
+                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                    relatedInfo.add(Diagnostic(
+                        message = "An argument matching this binding pattern was not provided.",
+                        category = DiagnosticCategory.Message,
+                        code = 6211,
+                        fileName = fileName,
+                        line = relLine,
+                        character = relChar,
+                        start = paramStart,
+                        length = paramLen,
+                    ))
+                }
+            }
+        }
         diagnostics.add(Diagnostic(
             message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
             category = DiagnosticCategory.Error,
@@ -12110,6 +12138,7 @@ class Checker(
             character = character,
             start = start,
             length = length,
+            relatedInformation = relatedInfo.ifEmpty { emptyList() },
         ))
     }
 
