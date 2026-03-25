@@ -705,9 +705,16 @@ class TypeScriptCompiler {
                 if (!isTsFile && !isJsFile) {
                     continue
                 }
-                // Plain .js/.mjs/.cjs: only when outDir/outFile is set (avoids overwriting sources)
+                // Track whether this JS file should be skipped for emit but still parsed/bound/checked
+                var skipJsEmit = false
+                // Plain .js/.mjs/.cjs: only emit when outDir/outFile is set (avoids overwriting sources)
+                // But still parse/bind/check when allowJs is set (for TS8xxx, TS2451, etc.)
                 if (isPureJsFile && options.outDir == null && options.outFile == null) {
-                    continue
+                    if (options.allowJs) {
+                        skipJsEmit = true
+                    } else {
+                        continue
+                    }
                 }
                 // .jsx (JavaScript+JSX): without outDir/outFile, skip if no allowJs OR source is empty
                 // (empty .jsx files have no TypeScript content to transform)
@@ -759,6 +766,9 @@ class TypeScriptCompiler {
                 if (file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")) continue
 
                 diagnostics.addAll(parser.getDiagnostics())
+
+                // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
+                if (skipJsEmit) continue
 
                 // Extract relative imports for dependency ordering
                 importDeps[file.fileName] = extractRelativeImports(
