@@ -2612,6 +2612,50 @@ Quick wins can push to ~7,550-7,600; meaningful progress beyond requires type ch
 | `.errors.txt` (bare + parameterized) | ~9,055 | ~1-5% (mostly parser-only errors initially) |
 | **Total** | **~18,459** | **~55-60%** |
 
+### 33. Session 2026-03-25a analysis — remaining failure categories
+
+Analysis of 2,492 remaining failures (75.3% passing):
+
+**Error baseline failures: 2,235**
+- "None produced" (need type checker): 1,563
+- Error diff (FP + missing codes): 672
+
+**JS emit failures: 257**
+- "None produced" (multi-file import resolution): 82
+- Error diff contamination: 29
+- Code differences: ~146
+
+**Top FP codes (extra errors we produce):**
+- TS1005: 269, TS1109: 238 (parser error recovery — needs per-test investigation)
+- TS7006: 180 (implicit any — some legitimate, ~50% FP from contextual typing)
+- TS2304: 168 (cannot find name — ~30% FP from incomplete scope resolution)
+
+**Top missing codes (errors we should produce but don't):**
+- TS2322: 558 (type assignability — needs structural typing)
+- TS2339: 200 (property access — needs type tracking)
+- TS2345: 161 (argument assignability — needs function signatures)
+- TS2304: 157 (cannot find name — needs cross-module resolution)
+- TS2454: 124 (definite assignment — needs control flow analysis)
+
+**Actionable items (not yet implemented, medium difficulty):**
+- [ ] **33a. TS8xxx remaining coverage for JS files** (~10 tests)
+  - TS8002 import= full statement span (not just "import" keyword)
+  - TS8005 implements priority over TS2304
+  - Ambient var declaration syntax in JS (TS8009)
+  - Type arguments on calls (TS8011)
+- [ ] **33b. Suppress checker diagnostics in JS files without checkJs** (~5 tests)
+  - TS2693 type used as value
+  - TS2300 duplicate identifiers
+  - TS2434 namespace before class
+  - TS2322 type assignability
+- [ ] **33c. CJS multi-file transform improvements** (~20 tests)
+  - Self-referencing exports qualification
+  - Import alias preservation for non-type-only
+  - First-statement comment hoisting
+- [ ] **33d. Parser error recovery reduction** (~50 tests)
+  - TS1005 FP in object literal patterns
+  - TS1109 FP in complex expressions
+
 ---
 
 ## Success criteria
