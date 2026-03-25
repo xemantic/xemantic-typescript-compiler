@@ -20295,12 +20295,8 @@ class Checker(
                     val typeParam = stmt.typeParameters!!.first()
                     emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
                 }
-                // Check parameter types (TS8010)
-                for (param in stmt.parameters) {
-                    if (param.type != null) {
-                        emitTs8xxxForType(param.type!!, source, fileName)
-                    }
-                }
+                // Check parameter types (TS8010), optional params (TS8009)
+                checkTsSyntaxInParams(stmt.parameters, source, fileName)
                 // Check return type (TS8010)
                 if (stmt.type != null) {
                     emitTs8xxxForType(stmt.type!!, source, fileName)
@@ -20308,6 +20304,24 @@ class Checker(
                 stmt.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
             }
             is ClassDeclaration -> {
+                // Check abstract modifier (TS8009) — search backward from class pos since pos may be at 'class' keyword
+                if (ModifierFlag.Abstract in stmt.modifiers) {
+                    val searchFrom = maxOf(0, stmt.pos - 30)
+                    val idx = source.indexOf("abstract", searchFrom)
+                    if (idx >= 0 && idx < stmt.pos + 2) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, idx)
+                        diagnostics.add(Diagnostic(
+                            message = "The 'abstract' modifier can only be used in TypeScript files.",
+                            category = DiagnosticCategory.Error,
+                            code = 8009,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = idx,
+                            length = 8,
+                        ))
+                    }
+                }
                 // Check type parameters (TS8004)
                 if (!stmt.typeParameters.isNullOrEmpty()) {
                     val typeParam = stmt.typeParameters!!.first()
@@ -20342,12 +20356,20 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) {
                     emitTs8xxxDeclare(stmt.pos, source, fileName)
                 }
-                // Check variable type annotations
+                // Check variable type annotations and initializer expressions
                 for (decl in stmt.declarationList.declarations) {
                     if (decl.type != null) {
                         emitTs8xxxForType(decl.type!!, source, fileName)
                     }
+                    // Walk into initializer to find ClassExpression type params etc.
+                    decl.initializer?.let { checkTsSyntaxInExpression(it, source, fileName) }
                 }
+            }
+            is ExpressionStatement -> {
+                checkTsSyntaxInExpression(stmt.expression, source, fileName)
+            }
+            is ReturnStatement -> {
+                stmt.expression?.let { checkTsSyntaxInExpression(it, source, fileName) }
             }
             is Block -> checkTsSyntaxInStatements(stmt.statements, source, fileName)
             is IfStatement -> {
@@ -20364,44 +20386,235 @@ class Checker(
     }
 
     private fun checkTsSyntaxInClassMember(member: ClassElement, source: String, fileName: String) {
+        // Get modifiers and pos from the specific member type
+        val modifiers: Set<ModifierFlag>
+        val memberPos: Int
+        when (member) {
+            is MethodDeclaration -> { modifiers = member.modifiers; memberPos = member.pos }
+            is Constructor -> { modifiers = member.modifiers; memberPos = member.pos }
+            is PropertyDeclaration -> { modifiers = member.modifiers; memberPos = member.pos }
+            is GetAccessor -> { modifiers = member.modifiers; memberPos = member.pos }
+            is SetAccessor -> { modifiers = member.modifiers; memberPos = member.pos }
+            else -> { modifiers = emptySet(); memberPos = 0 }
+        }
+        // Check access modifiers (public/private/protected) on class members — TS8009
+        checkTsSyntaxAccessModifier(modifiers, memberPos, source, fileName)
+        // Check abstract modifier on members — TS8009
+        if (ModifierFlag.Abstract in modifiers) {
+            emitTs8xxxModifier("abstract", memberPos, 8, source, fileName)
+        }
         when (member) {
             is MethodDeclaration -> {
-                // Check parameter types and return type
-                for (param in member.parameters) {
-                    if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
-                    // Check parameter modifiers (public/private/etc.) — TS8012
-                    if (param.modifiers.any { isParameterPropertyModifier(it) }) {
-                        val modStart = param.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, modStart)
-                        diagnostics.add(Diagnostic(
-                            message = "Parameter modifiers can only be used in TypeScript files.",
-                            category = DiagnosticCategory.Error,
-                            code = 8012,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = modStart,
-                            length = 6, // approximate modifier length
-                        ))
+                // Check optional ? modifier (TS8009)
+                if (member.questionToken) {
+                    // Find ? after the method name
+                    val nameEnd = member.name.pos + ((member.name as? Identifier)?.text?.length ?: 1)
+                    val qIdx = source.indexOf('?', nameEnd)
+                    if (qIdx >= 0 && qIdx < nameEnd + 5) {
+                        emitTs8xxxQuestionToken(qIdx, source, fileName)
                     }
                 }
+                // Check type parameters (TS8004)
+                if (!member.typeParameters.isNullOrEmpty()) {
+                    val typeParam = member.typeParameters!!.first()
+                    emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                }
+                // Check parameter types, optional params
+                checkTsSyntaxInParams(member.parameters, source, fileName)
                 if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
                 member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
             }
             is Constructor -> {
+                // Check constructor parameters — types and modifiers (TS8012)
                 for (param in member.parameters) {
                     if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
+                    if (param.questionToken) {
+                        findQuestionTokenPos(param, source)?.let { emitTs8xxxQuestionToken(it, source, fileName) }
+                    }
+                    // Check parameter modifiers (public/private/etc.) — TS8012
+                    if (param.modifiers.any { isParameterPropertyModifier(it) }) {
+                        emitTs8xxxParamModifier(param.pos, source, fileName)
+                    }
                 }
                 member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
             }
             is PropertyDeclaration -> {
+                // Check optional ? modifier (TS8009)
+                if (member.questionToken) {
+                    val nameEnd = member.name.pos + ((member.name as? Identifier)?.text?.length ?: 1)
+                    val qIdx = source.indexOf('?', nameEnd)
+                    if (qIdx >= 0 && qIdx < nameEnd + 5) {
+                        emitTs8xxxQuestionToken(qIdx, source, fileName)
+                    }
+                }
                 if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
                 // Check declare modifier (TS8009)
                 if (ModifierFlag.Declare in member.modifiers) {
                     emitTs8xxxDeclare(member.pos, source, fileName)
                 }
             }
+            is GetAccessor -> {
+                if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
+                member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
+            }
+            is SetAccessor -> {
+                for (param in member.parameters) {
+                    if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
+                }
+                member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
+            }
             else -> {}
+        }
+    }
+
+    /** Check parameters for type annotations (TS8010) and optional ? modifiers (TS8009). */
+    private fun checkTsSyntaxInParams(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
+            if (param.questionToken) {
+                findQuestionTokenPos(param, source)?.let { emitTs8xxxQuestionToken(it, source, fileName) }
+            }
+        }
+    }
+
+    /** Find the position of the ? token after a parameter name. */
+    private fun findQuestionTokenPos(param: Parameter, source: String): Int? {
+        val nameEnd = param.name.pos + when (val n = param.name) {
+            is Identifier -> n.text.length
+            else -> 1
+        }
+        val qIdx = source.indexOf('?', nameEnd)
+        return if (qIdx >= 0 && qIdx < nameEnd + 5) qIdx else null
+    }
+
+    /** Walk expression tree to find TypeScript-only syntax (non-null assertions, type assertions, class expressions). */
+    private fun checkTsSyntaxInExpression(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is NonNullExpression -> {
+                // TS8013: Non-null assertions can only be used in TypeScript files
+                // Span covers the entire expression including the `!`
+                val start = expr.pos
+                val length = expressionTrueEnd(expr) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Non-null assertions can only be used in TypeScript files.",
+                        category = DiagnosticCategory.Error,
+                        code = 8013,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                checkTsSyntaxInExpression(expr.expression, source, fileName)
+            }
+            is ClassExpression -> {
+                // Check type parameters on class expressions (TS8004)
+                if (!expr.typeParameters.isNullOrEmpty()) {
+                    val typeParam = expr.typeParameters!!.first()
+                    emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                }
+                for (member in expr.members) {
+                    checkTsSyntaxInClassMember(member, source, fileName)
+                }
+            }
+            is ParenthesizedExpression -> checkTsSyntaxInExpression(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                checkTsSyntaxInExpression(expr.left, source, fileName)
+                checkTsSyntaxInExpression(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkTsSyntaxInExpression(expr.condition, source, fileName)
+                checkTsSyntaxInExpression(expr.whenTrue, source, fileName)
+                checkTsSyntaxInExpression(expr.whenFalse, source, fileName)
+            }
+            is AsExpression -> {
+                // TS8016: Type assertion expressions can only be used in TypeScript files
+                val start = expr.pos
+                val length = expressionTrueEnd(expr) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type assertion expressions can only be used in TypeScript files.",
+                        category = DiagnosticCategory.Error,
+                        code = 8016,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Check for public/private/protected access modifiers — TS8009 */
+    private fun checkTsSyntaxAccessModifier(modifiers: Set<ModifierFlag>, pos: Int, source: String, fileName: String) {
+        if (ModifierFlag.Public in modifiers) {
+            emitTs8xxxModifier("public", pos, 6, source, fileName)
+        } else if (ModifierFlag.Private in modifiers) {
+            emitTs8xxxModifier("private", pos, 7, source, fileName)
+        } else if (ModifierFlag.Protected in modifiers) {
+            emitTs8xxxModifier("protected", pos, 9, source, fileName)
+        }
+    }
+
+    /** Emit TS8009 for a modifier keyword found near the given pos. */
+    private fun emitTs8xxxModifier(keyword: String, nearPos: Int, keywordLen: Int, source: String, fileName: String) {
+        val idx = source.indexOf(keyword, nearPos)
+        if (idx < 0 || idx > nearPos + 30) return
+        val (line, character) = getLineAndCharacterOfPosition(source, idx)
+        diagnostics.add(Diagnostic(
+            message = "The '$keyword' modifier can only be used in TypeScript files.",
+            category = DiagnosticCategory.Error,
+            code = 8009,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = idx,
+            length = keywordLen,
+        ))
+    }
+
+    /** Emit TS8009 for a ? token at the given position. */
+    private fun emitTs8xxxQuestionToken(pos: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "The '?' modifier can only be used in TypeScript files.",
+            category = DiagnosticCategory.Error,
+            code = 8009,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = pos,
+            length = 1, // "?"
+        ))
+    }
+
+    /** Emit TS8012 for parameter modifier (public/private/protected/readonly). */
+    private fun emitTs8xxxParamModifier(paramPos: Int, source: String, fileName: String) {
+        // Find the first modifier keyword near paramPos
+        val modifiers = listOf("public" to 6, "private" to 7, "protected" to 9, "readonly" to 8)
+        for ((kw, len) in modifiers) {
+            val idx = source.indexOf(kw, paramPos)
+            if (idx >= 0 && idx < paramPos + 20) {
+                val (line, character) = getLineAndCharacterOfPosition(source, idx)
+                diagnostics.add(Diagnostic(
+                    message = "Parameter modifiers can only be used in TypeScript files.",
+                    category = DiagnosticCategory.Error,
+                    code = 8012,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = idx,
+                    length = len,
+                ))
+                return
+            }
         }
     }
 
