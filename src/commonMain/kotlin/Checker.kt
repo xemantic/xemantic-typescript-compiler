@@ -5809,6 +5809,8 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // Skip JS files without checkJs — TS2304/TS2552 not applicable
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
             // File-level scope: binder locals + globals + known globals.
             // Skip ambient external modules (`declare module "foo"`) — their string-literal names
@@ -11467,8 +11469,8 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
-            // Skip JS files — TS8017 handles this instead
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            // Skip JS files — TS8017 handles bodiless functions in JS
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
             checkMissingImplInStatements(result.sourceFile.statements, source, fileName)
         }
@@ -11679,7 +11681,7 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             // Skip JS files — TS8017 handles bodiless functions
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
             checkTS7010InStatements(result.sourceFile.statements, source, fileName)
         }
@@ -18726,7 +18728,7 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             // Skip JS files — return type checks (TS2355/TS7030/TS2366) don't apply
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
             walkForImplicitReturns(result.sourceFile.statements, source, fileName)
         }
