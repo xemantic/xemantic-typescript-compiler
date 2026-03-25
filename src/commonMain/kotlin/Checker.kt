@@ -20348,10 +20348,23 @@ class Checker(
                 // Check implements clause (TS8005)
                 val hasImplements = stmt.heritageClauses?.any { it.token == SyntaxKind.ImplementsKeyword } == true
                 if (hasImplements) {
-                    // Find "implements" keyword position
-                    val classEnd = stmt.name?.end ?: stmt.pos
-                    val implIdx = source.indexOf("implements", classEnd)
+                    // Find "implements" keyword position — use name pos + length (not name.end which overshoots)
+                    val nameEnd = stmt.name?.let { it.pos + ((it as? Identifier)?.text?.length ?: 1) } ?: stmt.pos
+                    val implIdx = source.indexOf("implements", nameEnd)
                     if (implIdx >= 0) {
+                        // Span covers "implements <types>" — find the end of the implements clause
+                        val implClause = stmt.heritageClauses?.find { it.token == SyntaxKind.ImplementsKeyword }
+                        val implEnd = implClause?.let { clause ->
+                            // Compute true end from last type in the clause
+                            val lastType = clause.types.lastOrNull()
+                            if (lastType != null) {
+                                val typeExpr = lastType.expression
+                                when (typeExpr) {
+                                    is Identifier -> typeExpr.pos + typeExpr.text.length
+                                    else -> lastType.end
+                                }
+                            } else implIdx + 10
+                        } ?: (implIdx + 10)
                         val (line, character) = getLineAndCharacterOfPosition(source, implIdx)
                         diagnostics.add(Diagnostic(
                             message = "'implements' clauses can only be used in TypeScript files.",
@@ -20361,7 +20374,7 @@ class Checker(
                             line = line,
                             character = character,
                             start = implIdx,
-                            length = 10, // "implements"
+                            length = implEnd - implIdx,
                         ))
                     }
                 }
