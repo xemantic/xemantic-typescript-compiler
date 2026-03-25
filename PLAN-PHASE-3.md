@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,559 passing (75.0%), 2,518 failing
+- **10,077 tests**, 7,585 passing (75.3%), 2,492 failing
+- **Session 2026-03-25a**: +26 tests: JS file checker pipeline (parse/bind/check .js with allowJs even without outDir), TS8xxx extensions (ClassExpression type params, optional ?, abstract, public/private, NonNullExpression, AsExpression, TS8017 overloads), TS8010 span fix, suppress TS2390/TS2391/TS7010/TS2355/TS2304 in JS without checkJs, decoratorInJsFile fixes
 - **Session 2026-03-24d**: +27 tests: TS1197 catch clause initializer, Interface+Module binder merge, TS2314 FP for non-generic locals, TS2397 module file suppression, node_modules relative path fix, invalid unicode escape handling, TS2434 namespace-before-class/function, TS2432 merged enum first-element initializer + cross-decl TS2300, TS2428 interface type param mismatch, duplicate properties in var type annotations, TS2364 invalid assignment targets, TS2629/TS2628 class/enum assignment, TS1011 empty element access, TS2629 namespace scope propagation, TS8xxx JS-file syntax checks
 - **Session 2026-03-24c**: +20 tests: TS6133 type params, TS6198 shorthand destructuring, TS2441 import= aliases, TS1250 ES5 target, TS2450 const enum block-scoped, TS2393+TS2300, TS2354 namespace imports, TS2304 type param constraints, TS1155 const in for-loops, TS2872 arrow/function truthy, TS6211 binding pattern, TS1039 declare const
 - **Session 2026-03-24b**: +4 tests: FP reductions — ArrowFunction type params use addTypeParam(), unknown return type suppresses TS7030, TS2366 under strictNullChecks for non-nullable return types, TS2355 vs TS2366 for empty async bodies, callback TS7006 suppression (268→162 FP lines), yield parens in binary expressions
