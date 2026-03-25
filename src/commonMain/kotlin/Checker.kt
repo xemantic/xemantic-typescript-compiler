@@ -11467,6 +11467,8 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // Skip JS files — TS8017 handles this instead
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
             checkMissingImplInStatements(result.sourceFile.statements, source, fileName)
         }
@@ -11676,6 +11678,8 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // Skip JS files — TS8017 handles bodiless functions
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
             checkTS7010InStatements(result.sourceFile.statements, source, fileName)
         }
@@ -18721,6 +18725,8 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // Skip JS files — return type checks (TS2355/TS7030/TS2366) don't apply
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
             walkForImplicitReturns(result.sourceFile.statements, source, fileName)
         }
@@ -20290,18 +20296,26 @@ class Checker(
                 }
             }
             is FunctionDeclaration -> {
-                // Check type parameters (TS8004)
-                if (!stmt.typeParameters.isNullOrEmpty()) {
-                    val typeParam = stmt.typeParameters!!.first()
-                    emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                // TS8017: Signature declarations without body — takes priority over other TS8xxx
+                if (stmt.body == null) {
+                    val nameNode = stmt.name
+                    if (nameNode != null) {
+                        emitTs8xxx(nameNode, "Signature declarations can only be used in TypeScript files.", 8017, source, fileName)
+                    }
+                } else {
+                    // Check type parameters (TS8004)
+                    if (!stmt.typeParameters.isNullOrEmpty()) {
+                        val typeParam = stmt.typeParameters!!.first()
+                        emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                    }
+                    // Check parameter types (TS8010), optional params (TS8009)
+                    checkTsSyntaxInParams(stmt.parameters, source, fileName)
+                    // Check return type (TS8010)
+                    if (stmt.type != null) {
+                        emitTs8xxxForType(stmt.type!!, source, fileName)
+                    }
+                    checkTsSyntaxInStatements(stmt.body!!.statements, source, fileName)
                 }
-                // Check parameter types (TS8010), optional params (TS8009)
-                checkTsSyntaxInParams(stmt.parameters, source, fileName)
-                // Check return type (TS8010)
-                if (stmt.type != null) {
-                    emitTs8xxxForType(stmt.type!!, source, fileName)
-                }
-                stmt.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
             }
             is ClassDeclaration -> {
                 // Check abstract modifier (TS8009) — search backward from class pos since pos may be at 'class' keyword
@@ -20405,6 +20419,11 @@ class Checker(
         }
         when (member) {
             is MethodDeclaration -> {
+                // TS8017: Signature declarations without body — takes priority over other checks
+                if (member.body == null) {
+                    emitTs8xxx(member.name, "Signature declarations can only be used in TypeScript files.", 8017, source, fileName)
+                    return
+                }
                 // Check optional ? modifier (TS8009)
                 if (member.questionToken) {
                     // Find ? after the method name
@@ -20425,6 +20444,25 @@ class Checker(
                 member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
             }
             is Constructor -> {
+                // TS8017: Constructor signature without body
+                if (member.body == null) {
+                    // Span covers "constructor" keyword
+                    val ctorIdx = source.indexOf("constructor", memberPos)
+                    if (ctorIdx >= 0 && ctorIdx < memberPos + 30) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, ctorIdx)
+                        diagnostics.add(Diagnostic(
+                            message = "Signature declarations can only be used in TypeScript files.",
+                            category = DiagnosticCategory.Error,
+                            code = 8017,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = ctorIdx,
+                            length = 11, // "constructor"
+                        ))
+                    }
+                    return
+                }
                 // Check constructor parameters — types and modifiers (TS8012)
                 for (param in member.parameters) {
                     if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
@@ -20639,7 +20677,13 @@ class Checker(
 
     private fun emitTs8xxxForType(type: TypeNode, source: String, fileName: String) {
         val start = type.pos
-        val length = type.end - type.pos
+        // type.end overshoots (includes next token's start), so compute true length
+        // by trimming trailing whitespace/semicolons/delimiters from the source span
+        var trueEnd = type.end
+        while (trueEnd > start && source.getOrNull(trueEnd - 1)?.let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ';' || it == ')' || it == '}' || it == ',' || it == '{' } == true) {
+            trueEnd--
+        }
+        val length = trueEnd - start
         if (length <= 0) return
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
