@@ -8848,6 +8848,8 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // Skip JS files — TS1203 doesn't apply to JS
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
 
             for (stmt in result.sourceFile.statements) {
@@ -20701,7 +20703,9 @@ class Checker(
     }
 
     private fun emitTs8xxxDeclare(stmtPos: Int, source: String, fileName: String) {
-        val declareIdx = source.indexOf("declare", stmtPos)
+        // Search backward from stmtPos since stmt.pos may be at keyword after 'declare'
+        val searchFrom = maxOf(0, stmtPos - 20)
+        val declareIdx = source.indexOf("declare", searchFrom)
         if (declareIdx < 0 || declareIdx > stmtPos + 20) return
         val (line, character) = getLineAndCharacterOfPosition(source, declareIdx)
         diagnostics.add(Diagnostic(
