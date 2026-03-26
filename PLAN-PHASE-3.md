@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,588 passing (75.3%), 2,489 failing
+- **10,077 tests**, 7,594 passing (75.4%), 2,483 failing
+- **Session 2026-03-26a**: +6 tests: TS8002 import= full span, TS8016 AsExpression type-node span, TS2434 ambient module FP suppression, TS1254 const non-literal ambient, TS8026 generic extends in JS files, TypePredicate parser node + TS2322 return type fix
 - **Session 2026-03-25a**: +26 tests: JS file checker pipeline (parse/bind/check .js with allowJs even without outDir), TS8xxx extensions (ClassExpression type params, optional ?, abstract, public/private, NonNullExpression, AsExpression, TS8017 overloads), TS8010 span fix, suppress TS2390/TS2391/TS7010/TS2355/TS2304 in JS without checkJs, decoratorInJsFile fixes
 - **Session 2026-03-24d**: +27 tests: TS1197 catch clause initializer, Interface+Module binder merge, TS2314 FP for non-generic locals, TS2397 module file suppression, node_modules relative path fix, invalid unicode escape handling, TS2434 namespace-before-class/function, TS2432 merged enum first-element initializer + cross-decl TS2300, TS2428 interface type param mismatch, duplicate properties in var type annotations, TS2364 invalid assignment targets, TS2629/TS2628 class/enum assignment, TS1011 empty element access, TS2629 namespace scope propagation, TS8xxx JS-file syntax checks
 - **Session 2026-03-24c**: +20 tests: TS6133 type params, TS6198 shorthand destructuring, TS2441 import= aliases, TS1250 ES5 target, TS2450 const enum block-scoped, TS2393+TS2300, TS2354 namespace imports, TS2304 type param constraints, TS1155 const in for-loops, TS2872 arrow/function truthy, TS6211 binding pattern, TS1039 declare const
@@ -2638,11 +2639,14 @@ Analysis of 2,492 remaining failures (75.3% passing):
 - TS2454: 124 (definite assignment — needs control flow analysis)
 
 **Actionable items (not yet implemented, medium difficulty):**
-- [ ] **33a. TS8xxx remaining coverage for JS files** (~10 tests)
-  - TS8002 import= full statement span (not just "import" keyword)
-  - TS8005 implements priority over TS2304
-  - Ambient var declaration syntax in JS (TS8009)
-  - Type arguments on calls (TS8011)
+- [x] **33a. TS8xxx remaining coverage + FP reductions** (+6 tests)
+  - TS8002 import= full statement span — FIXED (+1)
+  - TS8016 AsExpression span covers type node — FIXED (test still needs JSX)
+  - TS2434 FP suppression in ambient (declare) modules — FIXED (+2)
+  - TS1254 vs TS1039 for const non-literal in ambient — FIXED (+1)
+  - TS8026 instead of TS2314 for generic extends in JS files — FIXED (+1)
+  - TypePredicate parser node creation + TS2322 return type fix — FIXED (+1)
+  - TS8005 implements/TS8009 ambient/TS8011 type args — deferred (need JSX/type checker)
 - [ ] **33b. Suppress checker diagnostics in JS files without checkJs** (~5 tests)
   - TS2693 type used as value
   - TS2300 duplicate identifiers

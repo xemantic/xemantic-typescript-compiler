@@ -4517,8 +4517,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // and parse the actual predicate type. Since we erase all types, the exact
         // node returned doesn't matter as long as we consume the right tokens.
         if (token == SyntaxKind.IsKeyword) {
+            val paramName = type  // The type parsed so far is actually the parameter name
             nextToken()  // consume 'is'
-            type = parseIntersectionOrHigherType()
+            val predicateType = parseIntersectionOrHigherType()
+            type = TypePredicate(
+                parameterName = paramName,
+                type = predicateType,
+                pos = pos,
+                end = getEnd()
+            )
         }
         if (token == SyntaxKind.Bar) {
             val types = mutableListOf(type)

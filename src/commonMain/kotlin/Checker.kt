@@ -7892,8 +7892,9 @@ class Checker(
             is ModuleDeclaration -> {
                 when (val body = stmt.body) {
                     is ModuleBlock -> {
+                        val ambient = ModifierFlag.Declare in stmt.modifiers
                         checkDuplicatesInStatements(body.statements, source, fileName)
-                        checkDuplicateDeclarations(body.statements, source, fileName)
+                        checkDuplicateDeclarations(body.statements, source, fileName, isAmbientContext = ambient)
                     }
                     else -> {}
                 }
@@ -8078,6 +8079,7 @@ class Checker(
         statements: List<Statement>,
         source: String,
         fileName: String,
+        isAmbientContext: Boolean = false,
     ) {
         // Collect all declaration names with their kind and node
         data class DeclInfo(val name: String, val kind: String, val nameNode: Node, val stmt: Statement? = null)
@@ -8340,7 +8342,7 @@ class Checker(
 
                 // TS2434: A namespace declaration cannot be located prior to a class or function
                 // with which it is merged. Only fires for instantiated namespaces.
-                if (hasNamespace && (hasClass || hasFunc)) {
+                if (hasNamespace && (hasClass || hasFunc) && !isAmbientContext) {
                     val namespaceDecls = group.filter { it.kind == "namespace" }
                     // Only non-declare class/function declarations trigger TS2434
                     val classFuncDecls = group.filter { decl ->
@@ -10079,16 +10081,31 @@ class Checker(
         }
 
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "Generic type '${info.displayName}' requires ${info.maxTotal} type argument(s).",
-            category = DiagnosticCategory.Error,
-            code = 2314,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-        ))
+        // In JS files, use TS8026 instead of TS2314 for heritage clauses without type args
+        val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx")
+        if (isJsFile && providedCount == 0) {
+            diagnostics.add(Diagnostic(
+                message = "Expected ${info.displayName} type arguments; provide these with an '@extends' tag.",
+                category = DiagnosticCategory.Error,
+                code = 8026,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } else {
+            diagnostics.add(Diagnostic(
+                message = "Generic type '${info.displayName}' requires ${info.maxTotal} type argument(s).",
+                category = DiagnosticCategory.Error,
+                code = 2314,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -15975,10 +15992,13 @@ class Checker(
                             val start = init.pos
                             val length = (init.end - 1 - start).coerceAtLeast(1)
                             val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            // TS1254 for `declare const x = <non-literal>` without type annotation
+                            val useTs1254 = isConst && d.type == null && !isLiteralExpression(init)
                             diagnostics.add(Diagnostic(
-                                message = "Initializers are not allowed in ambient contexts.",
+                                message = if (useTs1254) "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
+                                    else "Initializers are not allowed in ambient contexts.",
                                 category = DiagnosticCategory.Error,
-                                code = 1039,
+                                code = if (useTs1254) 1254 else 1039,
                                 fileName = fileName,
                                 line = line,
                                 character = character,
@@ -19901,6 +19921,7 @@ class Checker(
                 // Use "|" prefix to mark as union type for assignability checking
                 "|${memberTypes.joinToString(" | ")}"
             }
+            is TypePredicate -> "boolean" // Type predicates return boolean
             else -> null
         }
     }
@@ -20264,9 +20285,12 @@ class Checker(
             }
             is ImportEqualsDeclaration -> {
                 val start = stmt.pos
-                val importEnd = source.indexOf("import", start)
-                if (importEnd >= 0) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, importEnd)
+                val importStart = source.indexOf("import", start)
+                if (importStart >= 0) {
+                    // Span covers the full statement including semicolon
+                    val semiPos = source.indexOf(';', importStart)
+                    val stmtLength = if (semiPos >= 0) semiPos - importStart + 1 else stmt.end - importStart
+                    val (line, character) = getLineAndCharacterOfPosition(source, importStart)
                     diagnostics.add(Diagnostic(
                         message = "'import ... =' can only be used in TypeScript files.",
                         category = DiagnosticCategory.Error,
@@ -20274,8 +20298,8 @@ class Checker(
                         fileName = fileName,
                         line = line,
                         character = character,
-                        start = importEnd,
-                        length = 6, // "import"
+                        start = importStart,
+                        length = stmtLength,
                     ))
                 }
             }
@@ -20587,8 +20611,14 @@ class Checker(
             }
             is AsExpression -> {
                 // TS8016: Type assertion expressions can only be used in TypeScript files
-                val start = expr.pos
-                val length = expressionTrueEnd(expr) - start
+                // Span covers just the type node (e.g., "number" in "0 as number")
+                val typeNode = expr.type
+                val start = typeNode.pos
+                var trueEnd = typeNode.end
+                while (trueEnd > start && source.getOrNull(trueEnd - 1)?.let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ';' || it == ')' || it == '}' || it == ',' } == true) {
+                    trueEnd--
+                }
+                val length = trueEnd - start
                 if (length > 0) {
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
