@@ -7895,7 +7895,11 @@ class Checker(
                 checkDuplicateParams(stmt.parameters, source, fileName)
                 checkDuplicatesInType(stmt.type, source, fileName)
                 for (param in stmt.parameters) checkDuplicatesInType(param.type, source, fileName)
-                stmt.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
+                stmt.body?.let {
+                    checkDuplicatesInStatements(it.statements, source, fileName)
+                    // Check for duplicate declarations within function body
+                    checkDuplicateDeclarations(it.statements, source, fileName)
+                }
             }
             is ClassDeclaration -> {
                 checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
@@ -8190,6 +8194,41 @@ class Checker(
                 is ImportEqualsDeclaration -> {
                     val name = stmt.name
                     decls.add(DeclInfo(name.text, "import=", name))
+                }
+                // Collect hoisted var declarations from for-loop initializers.
+                // var is function-scoped, so `for (var x; ;)` creates a declaration at this level.
+                is ForStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (decl in init.declarations) {
+                            val name = decl.name
+                            if (name is Identifier) {
+                                decls.add(DeclInfo(name.text, "var", name))
+                            }
+                        }
+                    }
+                }
+                is ForInStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (decl in init.declarations) {
+                            val name = decl.name
+                            if (name is Identifier) {
+                                decls.add(DeclInfo(name.text, "var", name))
+                            }
+                        }
+                    }
+                }
+                is ForOfStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (decl in init.declarations) {
+                            val name = decl.name
+                            if (name is Identifier) {
+                                decls.add(DeclInfo(name.text, "var", name))
+                            }
+                        }
+                    }
                 }
                 else -> {}
             }
