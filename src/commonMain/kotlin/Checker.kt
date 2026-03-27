@@ -124,9 +124,8 @@ class Checker(
         // 11. Check export assignment conflicts (TS2309)
         checkExportAssignmentConflicts()
         // 12. Check strict mode identifier restrictions (TS1100)
-        if (options.alwaysStrict == true || options.strict) {
-            checkStrictModeIdentifiers()
-        }
+        // Runs unconditionally — per-file strict mode detection inside
+        checkStrictModeIdentifiers()
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
         checkClassStrictModeIdentifiers()
         // 13. Check export= in ES module files (TS1203)
@@ -9710,11 +9709,24 @@ class Checker(
      */
     private fun checkStrictModeIdentifiers() {
         val restricted = setOf("arguments", "eval")
+        // Global strict mode from compiler options
+        val globalStrict = options.alwaysStrict == true || options.strict
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
+            // Per-file strict mode: options + "use strict" prologue + module file
+            val isModule = result.sourceFile.statements.any {
+                it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment
+            }
+            val hasUseStrict = result.sourceFile.statements.firstOrNull()?.let { stmt ->
+                stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
+                    (stmt.expression as StringLiteralNode).text == "use strict"
+            } == true
+            // Module files get TS1215 instead of TS1100 — skip TS1100 for them
+            if (globalStrict || hasUseStrict) {
+                checkStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
+            }
         }
     }
 
