@@ -10063,6 +10063,8 @@ class Checker(
                     checkStrictModeBindingName(decl.name, source, fileName, restricted)
                     // Recurse into function/arrow initializers to check nested declarations
                     decl.initializer?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
+                    // Check type annotations for function type parameter names
+                    decl.type?.let { checkStrictModeInTypeNode(it, source, fileName, restricted) }
                 }
             }
             is FunctionDeclaration -> {
@@ -10256,6 +10258,63 @@ class Checker(
                 start = start,
                 length = name.text.length,
             ))
+        }
+    }
+
+    /**
+     * Walk a type annotation to find function type parameter names for TS1100.
+     * Checks FunctionType, ConstructorType, TypeLiteral members.
+     */
+    private fun checkStrictModeInTypeNode(
+        type: TypeNode,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (type) {
+            is FunctionType -> {
+                for (param in type.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                checkStrictModeInTypeNode(type.type, source, fileName, restricted)
+            }
+            is ConstructorType -> {
+                for (param in type.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                checkStrictModeInTypeNode(type.type, source, fileName, restricted)
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            for (param in member.parameters) {
+                                checkStrictModeBindingName(param.name, source, fileName, restricted)
+                            }
+                        }
+                        is Constructor -> {
+                            for (param in member.parameters) {
+                                checkStrictModeBindingName(param.name, source, fileName, restricted)
+                            }
+                        }
+                        is IndexSignature -> {
+                            for (param in member.parameters) {
+                                checkStrictModeBindingName(param.name, source, fileName, restricted)
+                            }
+                        }
+                        is PropertyDeclaration -> {
+                            // Walk property type annotations (e.g., prop: (arguments) => void)
+                            member.type?.let { checkStrictModeInTypeNode(it, source, fileName, restricted) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is UnionType -> for (t in type.types) checkStrictModeInTypeNode(t, source, fileName, restricted)
+            is IntersectionType -> for (t in type.types) checkStrictModeInTypeNode(t, source, fileName, restricted)
+            is ParenthesizedType -> checkStrictModeInTypeNode(type.type, source, fileName, restricted)
+            is ArrayType -> checkStrictModeInTypeNode(type.elementType, source, fileName, restricted)
+            else -> {}
         }
     }
 
