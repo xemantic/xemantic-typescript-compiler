@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,607 passing (75.5%), 2,470 failing
+- **10,077 tests**, 7,610 passing (75.5%), 2,467 failing
 - **Session 2026-03-26a**: +8 tests: TS8002 import= full span, TS8016 AsExpression type-node span, TS2434 ambient module FP suppression, TS1254 const non-literal ambient, TS8026 generic extends in JS files, TypePredicate parser node + TS2322 return type fix, TS2663→TS2304 in typeof type positions, TS2724 namespace member spelling suggestions
 - **Session 2026-03-25a**: +26 tests: JS file checker pipeline (parse/bind/check .js with allowJs even without outDir), TS8xxx extensions (ClassExpression type params, optional ?, abstract, public/private, NonNullExpression, AsExpression, TS8017 overloads), TS8010 span fix, suppress TS2390/TS2391/TS7010/TS2355/TS2304 in JS without checkJs, decoratorInJsFile fixes
 - **Session 2026-03-24d**: +27 tests: TS1197 catch clause initializer, Interface+Module binder merge, TS2314 FP for non-generic locals, TS2397 module file suppression, node_modules relative path fix, invalid unicode escape handling, TS2434 namespace-before-class/function, TS2432 merged enum first-element initializer + cross-decl TS2300, TS2428 interface type param mismatch, duplicate properties in var type annotations, TS2364 invalid assignment targets, TS2629/TS2628 class/enum assignment, TS1011 empty element access, TS2629 namespace scope propagation, TS8xxx JS-file syntax checks
@@ -2681,6 +2681,7 @@ Analysis of 2,492 remaining failures (75.3% passing):
   - TS2872: add `ObjectLiteralExpression`/`ArrayLiteralExpression`/`ClassExpression` to `isAlwaysTruthyExpr` + fix `expressionTrueEnd` for object/array literals (+1)
   - TS2389: add `NumericLiteralNode` handling in `checkMissingImplInClass`, `findMethodImplementation`, `emitTS2389`, `emitTS2393` (+1)
   - TS1191: pass `outerModifiers` to `ImportDeclaration` constructors in `parseImportDeclaration` + fix export keyword position in diagnostic (+7)
+  - TS2882: extend bare specifier side-effect import checking in multi-file mode (+3)
 
 - [ ] **34c. Module format detection for ESM files** (~2 tests) — *deferred*
   - `nodeNextImportModeImplicitIndexResolution`: needs module resolution errors (none-produced)
