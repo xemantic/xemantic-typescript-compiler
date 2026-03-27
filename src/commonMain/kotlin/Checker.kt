@@ -4788,8 +4788,13 @@ class Checker(
                 expr.arguments?.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName) }
             }
             is BinaryExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.left, source, fileName)
-                checkDefiniteAssignmentInExprContext(expr.right, source, fileName)
+                // Iterative left-spine walk to avoid StackOverflow on deep binary chains
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkDefiniteAssignmentInExprContext(current.right, source, fileName)
+                    current = current.left
+                }
+                checkDefiniteAssignmentInExprContext(current, source, fileName)
             }
             is ParenthesizedExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
             is ConditionalExpression -> {
@@ -8968,6 +8973,23 @@ class Checker(
     private fun checkUnresolvedModules() {
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
 
+        // Collect ambient module names (declare module "X") from all files including .d.ts
+        // so that side-effect imports like `import "Map"` don't get TS2882 when "Map" is
+        // declared as an ambient module in a referenced .d.ts file.
+        val ambientModuleNames = mutableSetOf<String>()
+        if (isMultiFile) {
+            for (result in binderResults) {
+                for (stmt in result.sourceFile.statements) {
+                    if (stmt is ModuleDeclaration) {
+                        val name = stmt.name
+                        if (name is StringLiteralNode) {
+                            ambientModuleNames.add(name.text)
+                        }
+                    }
+                }
+            }
+        }
+
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -9000,10 +9022,11 @@ class Checker(
                             if (resolveModuleSpecifier(moduleName) == null) {
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
-                        } else {
+                        } else if (moduleName !in ambientModuleNames) {
                             // Bare (non-relative) side-effect imports: TypeScript always
                             // considers these unresolvable without node_modules/paths config.
                             // Skip for AMD/System/UMD where bare specifiers are provided externally.
+                            // Also skip when the specifier matches a declared ambient module.
                             val mod = options.module
                             if (mod != ModuleKind.AMD && mod != ModuleKind.System && mod != ModuleKind.UMD) {
                                 emitTS2882(specifier, moduleName, source, fileName)
@@ -10244,7 +10267,7 @@ class Checker(
         when (expr) {
             is BinaryExpression -> {
                 if (expr.operator == SyntaxKind.BarBar) {
-                    if (isAlwaysTruthyExpr(expr.left)) {
+                    if (isAlwaysTruthyForOrExpr(expr.left)) {
                         emitTS2872(expr.left, source, fileName)
                     }
                 }
@@ -10252,7 +10275,7 @@ class Checker(
                 var current: Expression = expr
                 while (current is BinaryExpression) {
                     if (current.operator == SyntaxKind.BarBar && current !== expr) {
-                        if (isAlwaysTruthyExpr(current.left)) {
+                        if (isAlwaysTruthyForOrExpr(current.left)) {
                             emitTS2872(current.left, source, fileName)
                         }
                     }
@@ -10297,12 +10320,30 @@ class Checker(
                 value != 0.0 && !value.isNaN()
             }
             is ParenthesizedExpression -> isAlwaysTruthyExpr(expr.expression)
-            // Function expressions, arrow functions, and literal objects/arrays are always truthy (objects)
             is ArrowFunction -> true
             is FunctionExpression -> true
             is ObjectLiteralExpression -> true
             is ArrayLiteralExpression -> true
             is ClassExpression -> true
+            is RegularExpressionLiteralNode -> true
+            is NewExpression -> true
+            else -> false
+        }
+    }
+
+    /**
+     * TypeScript only flags these expression kinds in `||` contexts (LHS of ||).
+     * Numeric/string literals and `new` expressions are NOT flagged in `||`.
+     */
+    private fun isAlwaysTruthyForOrExpr(expr: Expression): Boolean {
+        return when (expr) {
+            is ParenthesizedExpression -> isAlwaysTruthyForOrExpr(expr.expression)
+            is ArrowFunction -> true
+            is FunctionExpression -> true
+            is ObjectLiteralExpression -> true
+            is ArrayLiteralExpression -> true
+            is ClassExpression -> true
+            is RegularExpressionLiteralNode -> true
             else -> false
         }
     }
