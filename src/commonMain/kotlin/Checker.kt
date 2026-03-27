@@ -4828,7 +4828,7 @@ class Checker(
             when (stmt) {
                 is ClassDeclaration -> {
                     if (ModifierFlag.Declare in stmt.modifiers) continue
-                    if (ModifierFlag.Abstract in stmt.modifiers) continue
+                    // Abstract classes still need TS2564 for non-abstract properties
                     checkClassPropertyInit(stmt.members, source, fileName)
                 }
                 is ModuleDeclaration -> {
