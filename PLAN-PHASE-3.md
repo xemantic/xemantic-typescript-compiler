@@ -13,8 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,594 passing (75.4%), 2,483 failing
-- **Session 2026-03-26a**: +6 tests: TS8002 import= full span, TS8016 AsExpression type-node span, TS2434 ambient module FP suppression, TS1254 const non-literal ambient, TS8026 generic extends in JS files, TypePredicate parser node + TS2322 return type fix
+- **10,077 tests**, 7,596 passing (75.4%), 2,481 failing
+- **Session 2026-03-26a**: +8 tests: TS8002 import= full span, TS8016 AsExpression type-node span, TS2434 ambient module FP suppression, TS1254 const non-literal ambient, TS8026 generic extends in JS files, TypePredicate parser node + TS2322 return type fix, TS2663→TS2304 in typeof type positions, TS2724 namespace member spelling suggestions
 - **Session 2026-03-25a**: +26 tests: JS file checker pipeline (parse/bind/check .js with allowJs even without outDir), TS8xxx extensions (ClassExpression type params, optional ?, abstract, public/private, NonNullExpression, AsExpression, TS8017 overloads), TS8010 span fix, suppress TS2390/TS2391/TS7010/TS2355/TS2304 in JS without checkJs, decoratorInJsFile fixes
 - **Session 2026-03-24d**: +27 tests: TS1197 catch clause initializer, Interface+Module binder merge, TS2314 FP for non-generic locals, TS2397 module file suppression, node_modules relative path fix, invalid unicode escape handling, TS2434 namespace-before-class/function, TS2432 merged enum first-element initializer + cross-decl TS2300, TS2428 interface type param mismatch, duplicate properties in var type annotations, TS2364 invalid assignment targets, TS2629/TS2628 class/enum assignment, TS1011 empty element access, TS2629 namespace scope propagation, TS8xxx JS-file syntax checks
 - **Session 2026-03-24c**: +20 tests: TS6133 type params, TS6198 shorthand destructuring, TS2441 import= aliases, TS1250 ES5 target, TS2450 const enum block-scoped, TS2393+TS2300, TS2354 namespace imports, TS2304 type param constraints, TS1155 const in for-loops, TS2872 arrow/function truthy, TS6211 binding pattern, TS1039 declare const
