@@ -4332,6 +4332,9 @@ class Checker(
             is LabeledStatement -> {
                 checkUsesOfUninitialized(stmt.statement, uninitialized, source, fileName)
             }
+            is ExportAssignment -> {
+                findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+            }
             else -> {}
         }
     }
@@ -10283,9 +10286,12 @@ class Checker(
                 value != 0.0 && !value.isNaN()
             }
             is ParenthesizedExpression -> isAlwaysTruthyExpr(expr.expression)
-            // Function expressions and arrow functions are always truthy (objects)
+            // Function expressions, arrow functions, and literal objects/arrays are always truthy (objects)
             is ArrowFunction -> true
             is FunctionExpression -> true
+            is ObjectLiteralExpression -> true
+            is ArrayLiteralExpression -> true
+            is ClassExpression -> true
             else -> false
         }
     }
@@ -11633,6 +11639,7 @@ class Checker(
                 val name = when (val n = member.name) {
                     is Identifier -> n.text
                     is StringLiteralNode -> n.text
+                    is NumericLiteralNode -> n.text
                     else -> continue
                 }
                 // Include static qualifier in the key to distinguish instance vs static
@@ -11681,6 +11688,7 @@ class Checker(
         val name = when (nameNode) {
             is Identifier -> nameNode.text
             is StringLiteralNode -> nameNode.text
+            is NumericLiteralNode -> nameNode.text
             else -> return
         }
         val length = name.length
@@ -11708,6 +11716,7 @@ class Checker(
                 val nextName = when (val n = next.name) {
                     is Identifier -> n.text
                     is StringLiteralNode -> n.text
+                    is NumericLiteralNode -> n.text
                     else -> null
                 }
                 if (nextName == name) {
@@ -11922,6 +11931,7 @@ class Checker(
         val name = when (nameNode) {
             is Identifier -> nameNode.text
             is StringLiteralNode -> "\"${nameNode.text}\""
+            is NumericLiteralNode -> nameNode.text
             else -> return
         }
         val length = name.length
@@ -14609,8 +14619,14 @@ class Checker(
             val fileName = result.sourceFile.fileName
             for (stmt in result.sourceFile.statements) {
                 if (stmt is ImportDeclaration && ModifierFlag.Export in stmt.modifiers) {
-                    // Squiggle covers the 'export' keyword
-                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    // Squiggle covers the 'export' keyword which precedes 'import'
+                    // Search backwards from stmt.pos to find 'export'
+                    var exportPos = stmt.pos
+                    val searchStart = maxOf(0, stmt.pos - 20)
+                    val prefix = source.substring(searchStart, stmt.pos)
+                    val idx = prefix.lastIndexOf("export")
+                    if (idx >= 0) exportPos = searchStart + idx
+                    val (line, character) = getLineAndCharacterOfPosition(source, exportPos)
                     diagnostics.add(Diagnostic(
                         message = "An import declaration cannot have modifiers.",
                         category = DiagnosticCategory.Error,
@@ -14618,7 +14634,7 @@ class Checker(
                         fileName = fileName,
                         line = line,
                         character = character,
-                        start = stmt.pos,
+                        start = exportPos,
                         length = 6, // "export"
                     ))
                 }
@@ -15964,6 +15980,15 @@ class Checker(
             if (expr.arguments?.isNotEmpty() == true) expressionTrueEnd(expr.arguments!!.last()) + 1
             else if (expr.arguments != null) expressionTrueEnd(expr.expression) + 2 // +2 for ()
             else expressionTrueEnd(expr.expression)
+        }
+        is ObjectLiteralExpression -> {
+            // closeBracePos is position of `}`, +1 for the char itself
+            if (expr.closeBracePos >= 0) expr.closeBracePos + 1 else expr.end
+        }
+        is ArrayLiteralExpression -> {
+            // Last element end + closing `]`
+            if (expr.elements.isNotEmpty()) expressionTrueEnd(expr.elements.last()) + 1
+            else expr.pos + 2 // empty `[]`
         }
         is ArrowFunction -> {
             // Arrow function body end

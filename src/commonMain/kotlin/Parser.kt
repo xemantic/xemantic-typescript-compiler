@@ -2048,7 +2048,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             parseImportAttributes()
             parseSemicolon()
             val trailing = trailingComments()
-            return ImportDeclaration(moduleSpecifier = spec, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
+            return ImportDeclaration(moduleSpecifier = spec, modifiers = outerModifiers, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
         }
 
         // import clause from "module"
@@ -2061,6 +2061,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         return ImportDeclaration(
             importClause = clause,
             moduleSpecifier = moduleSpec,
+            modifiers = outerModifiers,
             pos = pos,
             end = getEnd(),
             leadingComments = comments,
