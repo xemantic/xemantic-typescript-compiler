@@ -7063,17 +7063,16 @@ class Checker(
     ) {
         // typeof X in type position — the identifier is a value reference, so spelling
         // suggestions (TS2552) are allowed, but class-member suggestions (TS2662/TS2663) are not.
-        // We use inTypePosition = false so TS2552 can fire, relying on the fact that
-        // typeof operands don't appear inside a class body where TS2662/TS2663 would trigger.
+        // TypeScript emits plain TS2304 (not TS2663) for `typeof a` in class property types.
         when (name) {
             is Identifier -> {
-                checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = false)
+                checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = false, suppressClassSuggestion = true)
             }
             is QualifiedName -> {
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
                 if (leftmost is Identifier) {
-                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = false)
+                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = false, suppressClassSuggestion = true)
                 }
             }
             else -> {}
@@ -7256,6 +7255,7 @@ class Checker(
         source: String,
         fileName: String,
         inTypePosition: Boolean = false,
+        suppressClassSuggestion: Boolean = false,
     ) {
         // Skip empty/synthetic names or non-identifier text from parser recovery
         if (name.isEmpty()) return
@@ -7270,8 +7270,8 @@ class Checker(
         val (line, character) = getLineAndCharacterOfPosition(source, start)
 
         // Check for did-you-mean static/instance member suggestion
-        // In type positions (e.g., `typeof x` operand), TypeScript emits TS2304 only (no suggestions)
-        val classCtx = if (inTypePosition) null else scope.classContext
+        // In type positions and typeof contexts, suppress TS2662/TS2663
+        val classCtx = if (inTypePosition || suppressClassSuggestion) null else scope.classContext
         if (classCtx != null) {
             if (name in classCtx.staticMembers) {
                 diagnostics.add(Diagnostic(

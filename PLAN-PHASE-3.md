@@ -2647,11 +2647,9 @@ Analysis of 2,492 remaining failures (75.3% passing):
   - TS8026 instead of TS2314 for generic extends in JS files — FIXED (+1)
   - TypePredicate parser node creation + TS2322 return type fix — FIXED (+1)
   - TS8005 implements/TS8009 ambient/TS8011 type args — deferred (need JSX/type checker)
-- [ ] **33b. Suppress checker diagnostics in JS files without checkJs** (~5 tests)
-  - TS2693 type used as value
-  - TS2300 duplicate identifiers
-  - TS2434 namespace before class
-  - TS2322 type assignability
+- [x] **33b. Suppress checker diagnostics in JS files without checkJs** (0 new tests)
+  - Already comprehensive — checkJs gating works correctly
+  - Remaining JS file failures need JSDoc parsing or cross-file type checking
 - [ ] **33c. CJS multi-file transform improvements** (~20 tests)
   - Self-referencing exports qualification
   - Import alias preservation for non-type-only
