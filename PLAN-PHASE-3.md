@@ -13,7 +13,8 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,612 passing (75.5%), 2,465 failing
+- **10,077 tests**, 7,617 passing (75.6%), 2,460 failing
+- **Session 2026-03-27b**: +5 tests: TS2882 FP suppression for ambient module specifiers in multi-file mode, TS2872 split isAlwaysTruthyExpr (|| context excludes numeric/string/new), deep binary StackOverflow fix in checkDefiniteAssignmentInExprContext
 - **Session 2026-03-27**: +16 tests: TS7030/TS2355 suppression without strictNullChecks, TS2454 ExportAssignment, TS2872 object/array literal truthiness, TS2389/TS2393 NumericLiteralNode, TS1191 import outerModifiers + position fix, TS2882 bare specifier in multi-file, TS2564 abstract class properties
 - **Session 2026-03-26a**: +8 tests: TS8002 import= full span, TS8016 AsExpression type-node span, TS2434 ambient module FP suppression, TS1254 const non-literal ambient, TS8026 generic extends in JS files, TypePredicate parser node + TS2322 return type fix, TS2663→TS2304 in typeof type positions, TS2724 namespace member spelling suggestions
 - **Session 2026-03-25a**: +26 tests: JS file checker pipeline (parse/bind/check .js with allowJs even without outDir), TS8xxx extensions (ClassExpression type params, optional ?, abstract, public/private, NonNullExpression, AsExpression, TS8017 overloads), TS8010 span fix, suppress TS2390/TS2391/TS7010/TS2355/TS2304 in JS without checkJs, decoratorInJsFile fixes
@@ -2702,6 +2703,60 @@ Analysis of 2,492 remaining failures (75.3% passing):
 - [ ] **34f. TS1005/TS1109 parser error recovery cascade** (~81 tests) — *deferred*
   - 66 tests affected by TS1005 FPs, 37 by TS1109 FPs
   - Highest regression risk — each change affects many tests
+
+### Session 2026-03-27b — Deep analysis and targeted FP reductions
+
+Analysis: 2,462 failing tests categorized:
+- 1,521 "none produced" (need full type checker: TS2322, TS2339, TS2345)
+- 940 diff failures: 443 only-missing, 216 mixed FP+missing, 14 pure FP, 67 parse
+- 257 JS emit failures: 51 file ordering, 26 CJS ordering, 14 parser, 12 private fields
+
+Only 11 error baseline tests are pure FPs (would pass by suppressing wrong diagnostics):
+- 3 TS7006 (contextual typing — needs type inference)
+- 2 TS1005 (parser recovery — high regression risk)
+- 1 TS2366 (exhaustive switch — needs control flow)
+- 1 TS7029 (never-returning function — needs control flow)
+- 1 TS2304 (TS-1 mechanism — cosmetic)
+- 1 TS2322 (pretty format — ANSI codes)
+- 1 TS2683 (@this JSDoc — needs JSDoc parsing)
+- 1 TS6133 (indexed access — needs type narrowing)
+
+Implemented fixes:
+- [x] **35a. TS2882 FP for ambient module side-effect imports** (+3 tests)
+  Suppress TS2882 for bare specifier side-effect imports when the specifier
+  matches a `declare module "X"` in any compilation file (including .d.ts).
+  Tests: moduleAugmentationInAmbientModule2/3/4.
+
+- [x] **35b. TS2872 split for || vs if/else contexts** (+1 test)
+  TypeScript only flags object-like expressions (function, arrow, object, array,
+  class, regex) as always-truthy in `||` contexts. Numeric literals, string
+  literals, and `new` expressions are NOT flagged in `||` but ARE flagged in
+  `if`/`else if` conditions. Split `isAlwaysTruthyExpr` (full, for if/else)
+  from `isAlwaysTruthyForOrExpr` (restricted, for `||`).
+  Test: contextuallyTypingOrOperator.
+
+- [x] **35c. Deep binary expression StackOverflow** (+1 test, crash fix)
+  Convert `checkDefiniteAssignmentInExprContext` binary expression traversal
+  to iterative left-spine walk. Prevents StackOverflow on deeply nested binary
+  chains (binderBinaryExpressionStress). Error baseline now passes; JS test
+  still fails (separate issue).
+
+Key findings (investigated but not fixable):
+- **TS1212 strictness**: `target >= ES2015` is needed for `let` reserved word checks
+  but causes FP TS1212 for `public`/`private`/`protected` when `alwaysStrict: false`.
+  Removing `target >= ES2015` from strict check causes 6 regressions (let-related tests).
+  TypeScript has more granular strictness levels we don't model.
+- **Multi-file JS output ordering**: topologicalSort + reference path deps tried but
+  the ordering algorithm needs deeper investigation — reference paths aren't matching.
+- **`'use strict'` single quotes**: CJS transform strips source `'use strict'` and
+  emitter adds `"use strict"` with double quotes. Would need emitter to track original
+  quoting from source.
+
+**Remaining ceiling analysis**: Without implementing full structural type checking
+(TS2322/TS2339/TS2345), the maximum achievable is ~77% (7,770 tests). The 1,521
+"none produced" tests are blocked on the type system. The next ~150 tests could be
+gained from: multi-file JS ordering (~50), private fields transform (~12), decorator
+static members (~8), parser error recovery (~50, high risk), contextual typing (~27).
 
 ---
 

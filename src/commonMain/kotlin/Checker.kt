@@ -35,6 +35,8 @@ class Checker(
     private val binderResults: List<BinderResult>,
     /** True when the source had @Filename directives (multi-file test input). */
     private val isMultiFileSource: Boolean = false,
+    /** When true, only run targeted checks (TS1210 etc.) — used for emitDeclarationOnly. */
+    private val declarationOnly: Boolean = false,
 ) {
     /** Merged symbol tables from all files (global scope). */
     private val globals: SymbolTable = symbolTable()
@@ -80,6 +82,13 @@ class Checker(
         computeAllEnumValues()
         // 3. Track import references across all files
         trackAllImportReferences()
+
+        // For declarationOnly mode, only run class strict-mode checks (TS1210)
+        if (declarationOnly) {
+            checkClassStrictModeIdentifiers()
+        }
+
+        if (!declarationOnly) {
         // 4. Check for unused declarations (TS6133/TS6196)
         if (options.noUnusedLocals || options.noUnusedParameters) {
             checkUnusedDeclarations()
@@ -116,6 +125,8 @@ class Checker(
         if (options.alwaysStrict == true || options.strict) {
             checkStrictModeIdentifiers()
         }
+        // 12b. Check class body strict mode (TS1210) — class bodies are always strict
+        checkClassStrictModeIdentifiers()
         // 13. Check export= in ES module files (TS1203)
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
@@ -257,6 +268,7 @@ class Checker(
         checkInvalidAssignmentTargets()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
+        } // end if (!declarationOnly)
     }
 
     // -----------------------------------------------------------------------
@@ -9418,6 +9430,202 @@ class Checker(
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Class body strict mode checking (TS1210)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS1210: "Code contained in a class is evaluated in JavaScript's strict mode
+     * which does not allow this use of '{0}'."
+     * Class bodies are always strict — regardless of alwaysStrict/strict options.
+     * Fires for `arguments` and `eval` as parameter names or variable declaration
+     * names inside class constructors, methods, and accessors.
+     */
+    private fun checkClassStrictModeIdentifiers() {
+        val restricted = setOf("arguments", "eval")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            findClassesInStatements(result.sourceFile.statements, source, fileName, restricted)
+        }
+    }
+
+    private fun findClassesInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    checkClassMembersForTS1210(stmt.members, source, fileName, restricted)
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        findClassesInStatements(body.statements, source, fileName, restricted)
+                    }
+                }
+                is Block -> findClassesInStatements(stmt.statements, source, fileName, restricted)
+                is IfStatement -> {
+                    findClassesInStatement(stmt.thenStatement, source, fileName, restricted)
+                    stmt.elseStatement?.let { findClassesInStatement(it, source, fileName, restricted) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun findClassesInStatement(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (stmt) {
+            is Block -> findClassesInStatements(stmt.statements, source, fileName, restricted)
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                checkClassMembersForTS1210(stmt.members, source, fileName, restricted)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkClassMembersForTS1210(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (member in members) {
+            when (member) {
+                is Constructor -> {
+                    for (param in member.parameters) {
+                        checkNameForTS1210(param.name, source, fileName, restricted)
+                    }
+                    member.body?.let { checkStatementsForTS1210(it.statements, source, fileName, restricted) }
+                }
+                is MethodDeclaration -> {
+                    for (param in member.parameters) {
+                        checkNameForTS1210(param.name, source, fileName, restricted)
+                    }
+                    member.body?.let { checkStatementsForTS1210(it.statements, source, fileName, restricted) }
+                }
+                is GetAccessor -> {
+                    member.body?.let { checkStatementsForTS1210(it.statements, source, fileName, restricted) }
+                }
+                is SetAccessor -> {
+                    for (param in member.parameters) {
+                        checkNameForTS1210(param.name, source, fileName, restricted)
+                    }
+                    member.body?.let { checkStatementsForTS1210(it.statements, source, fileName, restricted) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkStatementsForTS1210(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        checkNameForTS1210(decl.name, source, fileName, restricted)
+                    }
+                }
+                is Block -> checkStatementsForTS1210(stmt.statements, source, fileName, restricted)
+                is IfStatement -> {
+                    checkStatementForTS1210(stmt.thenStatement, source, fileName, restricted)
+                    stmt.elseStatement?.let { checkStatementForTS1210(it, source, fileName, restricted) }
+                }
+                is ForStatement -> {
+                    when (val init = stmt.initializer) {
+                        is VariableDeclarationList -> {
+                            for (decl in init.declarations) {
+                                checkNameForTS1210(decl.name, source, fileName, restricted)
+                            }
+                        }
+                        else -> {}
+                    }
+                    checkStatementForTS1210(stmt.statement, source, fileName, restricted)
+                }
+                is ForInStatement -> checkStatementForTS1210(stmt.statement, source, fileName, restricted)
+                is ForOfStatement -> checkStatementForTS1210(stmt.statement, source, fileName, restricted)
+                is WhileStatement -> checkStatementForTS1210(stmt.statement, source, fileName, restricted)
+                is DoStatement -> checkStatementForTS1210(stmt.statement, source, fileName, restricted)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkStatementsForTS1210(clause.statements, source, fileName, restricted)
+                            is DefaultClause -> checkStatementsForTS1210(clause.statements, source, fileName, restricted)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkStatementsForTS1210(stmt.tryBlock.statements, source, fileName, restricted)
+                    stmt.catchClause?.let {
+                        it.variableDeclaration?.let { v -> checkNameForTS1210(v.name, source, fileName, restricted) }
+                        checkStatementsForTS1210(it.block.statements, source, fileName, restricted)
+                    }
+                    stmt.finallyBlock?.let { checkStatementsForTS1210(it.statements, source, fileName, restricted) }
+                }
+                is LabeledStatement -> checkStatementForTS1210(stmt.statement, source, fileName, restricted)
+                // Nested function declarations DON'T get TS1210 — they have their own scope
+                // Class expressions inside class bodies DO get checked
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        checkClassMembersForTS1210(stmt.members, source, fileName, restricted)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkStatementForTS1210(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (stmt) {
+            is Block -> checkStatementsForTS1210(stmt.statements, source, fileName, restricted)
+            else -> checkStatementsForTS1210(listOf(stmt), source, fileName, restricted)
+        }
+    }
+
+    private fun checkNameForTS1210(
+        name: Node,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        if (name is Identifier && name.text in restricted) {
+            val start = name.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of '${name.text}'. For more information, see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode.",
+                category = DiagnosticCategory.Error,
+                code = 1210,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = name.text.length,
+            ))
+        }
+    }
+
     private fun checkStrictModeInStatements(
         statements: List<Statement>,
         source: String,
@@ -9519,27 +9727,30 @@ class Checker(
         fileName: String,
         restricted: Set<String>,
     ) {
+        // TS1210 handles arguments/eval in class bodies — only check non-arguments/eval
+        // names for TS1100 here to avoid duplicate diagnostics.
+        val nonClassRestricted = restricted - setOf("arguments", "eval")
         when (member) {
             is MethodDeclaration -> {
                 for (param in member.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                    checkStrictModeBindingName(param.name, source, fileName, nonClassRestricted)
                 }
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
             }
             is Constructor -> {
                 for (param in member.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                    checkStrictModeBindingName(param.name, source, fileName, nonClassRestricted)
                 }
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
             }
             is GetAccessor -> {
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
             }
             is SetAccessor -> {
                 for (param in member.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                    checkStrictModeBindingName(param.name, source, fileName, nonClassRestricted)
                 }
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
             }
             else -> {}
         }
