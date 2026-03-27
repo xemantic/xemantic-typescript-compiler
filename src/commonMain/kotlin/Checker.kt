@@ -8990,13 +8990,24 @@ class Checker(
                     else -> continue
                 }
                 if (isMultiFile) {
-                    // In multi-file mode, only check side-effect imports with relative specifiers
-                    // that can't resolve to any compilation file. Bare specifiers are too hard
-                    // to resolve correctly (depends on module kind — AMD uses bare names).
+                    // In multi-file mode, check side-effect imports that can't resolve to
+                    // any compilation file. For AMD modules, bare specifiers may be provided
+                    // externally, so skip TS2882 for AMD/System.
                     if (isSideEffectImport) {
                         val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
-                        if (isRelative && resolveModuleSpecifier(moduleName) == null) {
-                            emitTS2882(specifier, moduleName, source, fileName)
+                        if (isRelative) {
+                            // Relative side-effect imports: check if they resolve
+                            if (resolveModuleSpecifier(moduleName) == null) {
+                                emitTS2882(specifier, moduleName, source, fileName)
+                            }
+                        } else {
+                            // Bare (non-relative) side-effect imports: TypeScript always
+                            // considers these unresolvable without node_modules/paths config.
+                            // Skip for AMD/System/UMD where bare specifiers are provided externally.
+                            val mod = options.module
+                            if (mod != ModuleKind.AMD && mod != ModuleKind.System && mod != ModuleKind.UMD) {
+                                emitTS2882(specifier, moduleName, source, fileName)
+                            }
                         }
                     }
                     // Skip TS2307/TS2792 in multi-file to avoid FPs
