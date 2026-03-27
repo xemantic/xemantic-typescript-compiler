@@ -119,6 +119,8 @@ class Checker(
         }
         // 10. Check for duplicate identifiers (TS2300)
         checkDuplicateIdentifiers()
+        // 10b. Check catch clause redeclaration (TS2492)
+        checkCatchClauseRedeclarations()
         // 11. Check export assignment conflicts (TS2309)
         checkExportAssignmentConflicts()
         // 12. Check strict mode identifier restrictions (TS1100)
@@ -8905,6 +8907,211 @@ class Checker(
             start = start,
             length = spanLength,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Catch clause redeclaration checking (TS2492)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS2492: "Cannot redeclare identifier 'X' in catch clause."
+     * Fires when a let/const declaration in a catch block shadows the catch variable name.
+     * Also checks catch clause destructuring patterns for duplicate names (TS2451).
+     */
+    private fun checkCatchClauseRedeclarations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkStatementsForCatchRedecl(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkStatementsForCatchRedecl(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is TryStatement -> {
+                    walkStatementsForCatchRedecl(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { catchClause ->
+                        // Collect catch variable names
+                        val catchNames = mutableSetOf<String>()
+                        catchClause.variableDeclaration?.let { collectBindingNames(it.name, catchNames) }
+
+                        // Check for duplicate names within catch destructuring pattern (TS2451)
+                        val seenNames = mutableMapOf<String, Node>()
+                        catchClause.variableDeclaration?.let { checkDuplicateBindingNames(it.name, seenNames, source, fileName) }
+
+                        // Check catch block body for let/const redeclarations of catch names (TS2492)
+                        if (catchNames.isNotEmpty()) {
+                            checkBlockForCatchRedecl(catchClause.block.statements, catchNames, source, fileName)
+                        }
+                        walkStatementsForCatchRedecl(catchClause.block.statements, source, fileName)
+                    }
+                    stmt.finallyBlock?.let { walkStatementsForCatchRedecl(it.statements, source, fileName) }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkStatementsForCatchRedecl(it.statements, source, fileName) }
+                is ClassDeclaration -> {} // class methods don't need this check
+                is Block -> walkStatementsForCatchRedecl(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkStatementForCatchRedecl(stmt.thenStatement, source, fileName)
+                    stmt.elseStatement?.let { walkStatementForCatchRedecl(it, source, fileName) }
+                }
+                is ForStatement -> walkStatementForCatchRedecl(stmt.statement, source, fileName)
+                is ForInStatement -> walkStatementForCatchRedecl(stmt.statement, source, fileName)
+                is ForOfStatement -> walkStatementForCatchRedecl(stmt.statement, source, fileName)
+                is WhileStatement -> walkStatementForCatchRedecl(stmt.statement, source, fileName)
+                is DoStatement -> walkStatementForCatchRedecl(stmt.statement, source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        val stmts2 = when (clause) { is CaseClause -> clause.statements; is DefaultClause -> clause.statements; else -> emptyList() }
+                        walkStatementsForCatchRedecl(stmts2, source, fileName)
+                    }
+                }
+                is LabeledStatement -> walkStatementForCatchRedecl(stmt.statement, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkStatementsForCatchRedecl(body.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkStatementForCatchRedecl(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is Block -> walkStatementsForCatchRedecl(stmt.statements, source, fileName)
+            else -> walkStatementsForCatchRedecl(listOf(stmt), source, fileName)
+        }
+    }
+
+    private fun checkBlockForCatchRedecl(
+        stmts: List<Statement>,
+        catchNames: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    // Only let/const trigger TS2492 (var doesn't — it's function-scoped)
+                    val flags = stmt.declarationList.flags
+                    if (flags == SyntaxKind.LetKeyword || flags == SyntaxKind.ConstKeyword) {
+                        for (decl in stmt.declarationList.declarations) {
+                            checkBindingForCatchRedecl(decl.name, catchNames, source, fileName)
+                        }
+                    }
+                }
+                // Don't descend into function declarations — they create new scope
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkBindingForCatchRedecl(
+        name: Node,
+        catchNames: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (name) {
+            is Identifier -> {
+                if (name.text in catchNames) {
+                    val start = name.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot redeclare identifier '${name.text}' in catch clause.",
+                        category = DiagnosticCategory.Error,
+                        code = 2492,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = name.text.length,
+                    ))
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (elem in name.elements) {
+                    if (elem is BindingElement) checkBindingForCatchRedecl(elem.name, catchNames, source, fileName)
+                }
+            }
+            is ObjectBindingPattern -> {
+                for (elem in name.elements) {
+                    checkBindingForCatchRedecl(elem.name, catchNames, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun collectBindingNames(name: Node, result: MutableSet<String>) {
+        when (name) {
+            is Identifier -> result.add(name.text)
+            is ArrayBindingPattern -> {
+                for (elem in name.elements) {
+                    if (elem is BindingElement) collectBindingNames(elem.name, result)
+                }
+            }
+            is ObjectBindingPattern -> {
+                for (elem in name.elements) {
+                    collectBindingNames(elem.name, result)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkDuplicateBindingNames(
+        name: Node,
+        seen: MutableMap<String, Node>,
+        source: String,
+        fileName: String,
+    ) {
+        when (name) {
+            is Identifier -> {
+                if (name.text in seen) {
+                    // TS2451 for both the first and current occurrence
+                    val first = seen[name.text]!!
+                    val firstStart = first.pos
+                    val (firstLine, firstChar) = getLineAndCharacterOfPosition(source, firstStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot redeclare block-scoped variable '${name.text}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2451,
+                        fileName = fileName,
+                        line = firstLine,
+                        character = firstChar,
+                        start = firstStart,
+                        length = name.text.length,
+                    ))
+                    val start = name.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot redeclare block-scoped variable '${name.text}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2451,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = name.text.length,
+                    ))
+                } else {
+                    seen[name.text] = name
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (elem in name.elements) {
+                    if (elem is BindingElement) checkDuplicateBindingNames(elem.name, seen, source, fileName)
+                }
+            }
+            is ObjectBindingPattern -> {
+                for (elem in name.elements) {
+                    checkDuplicateBindingNames(elem.name, seen, source, fileName)
+                }
+            }
+            else -> {}
+        }
     }
 
     /**
