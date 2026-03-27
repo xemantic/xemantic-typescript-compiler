@@ -2650,13 +2650,20 @@ Analysis of 2,492 remaining failures (75.3% passing):
 - [x] **33b. Suppress checker diagnostics in JS files without checkJs** (0 new tests)
   - Already comprehensive — checkJs gating works correctly
   - Remaining JS file failures need JSDoc parsing or cross-file type checking
-- [ ] **33c. CJS multi-file transform improvements** (~20 tests)
+- [ ] **33c. CJS multi-file transform improvements** (~20 tests) — *deferred*
   - Self-referencing exports qualification
   - Import alias preservation for non-type-only
   - First-statement comment hoisting
-- [ ] **33d. Parser error recovery reduction** (~50 tests)
+  - Multi-file ordering requires module resolution for non-relative imports (baseUrl/paths)
+- [ ] **33d. Parser error recovery reduction** (~50 tests) — *deferred*
   - TS1005 FP in object literal patterns
   - TS1109 FP in complex expressions
+  - Each test requires individual investigation with high regression risk
+- [ ] **33e. Additional FP reductions and diagnostic precision** (~5 tests)
+  - TS2301 vs TS2663 priority in class member initializer lambdas
+  - TS2809 destructuring assignment detection for `{ a, b } = fn()`
+  - TS7030/TS2366 code selection for implicit return in async functions
+  - TS6133 indexed access property usage tracking
 
 ---
 
