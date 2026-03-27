@@ -9711,6 +9711,33 @@ class Checker(
                     }
                 }
             }
+            is InterfaceDeclaration -> {
+                // Check interface method/property parameter names for restricted identifiers
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> {
+                            for (param in member.parameters) {
+                                checkStrictModeBindingName(param.name, source, fileName, restricted)
+                            }
+                        }
+                        is Constructor -> {
+                            for (param in member.parameters) {
+                                checkStrictModeBindingName(param.name, source, fileName, restricted)
+                            }
+                        }
+                        is IndexSignature -> {
+                            for (param in member.parameters) {
+                                checkStrictModeBindingName(param.name, source, fileName, restricted)
+                            }
+                        }
+                        is PropertyDeclaration -> {
+                            val name = member.name
+                            if (name is Identifier) checkStrictModeName(name, source, fileName, restricted)
+                        }
+                        else -> {}
+                    }
+                }
+            }
             is ExpressionStatement -> checkStrictModeInExpr(stmt.expression, source, fileName, restricted)
             is ReturnStatement -> stmt.expression?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
             is Block -> checkStrictModeInStatements(stmt.statements, source, fileName, restricted)
