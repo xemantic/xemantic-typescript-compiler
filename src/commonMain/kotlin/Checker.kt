@@ -9276,8 +9276,18 @@ class Checker(
         // so that side-effect imports like `import "Map"` don't get TS2882 when "Map" is
         // declared as an ambient module in a referenced .d.ts file.
         val ambientModuleNames = mutableSetOf<String>()
+        // Also collect .d.ts filenames (without extension) as module names — e.g., "foo" for foo.d.ts.
+        // A bare specifier import of "foo" is valid if foo.d.ts is in the compilation.
+        val dtsFileBaseNames = mutableSetOf<String>()
         if (isMultiFile) {
             for (result in binderResults) {
+                val fn = result.sourceFile.fileName
+                if (isDtsFile(fn)) {
+                    // Extract base name without .d.ts extension
+                    val base = fn.substringAfterLast("/").substringAfterLast("\\")
+                        .removeSuffix(".d.ts")
+                    dtsFileBaseNames.add(base)
+                }
                 for (stmt in result.sourceFile.statements) {
                     if (stmt is ModuleDeclaration) {
                         val name = stmt.name
@@ -9321,11 +9331,12 @@ class Checker(
                             if (resolveModuleSpecifier(moduleName) == null) {
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
-                        } else if (moduleName !in ambientModuleNames) {
+                        } else if (moduleName !in ambientModuleNames && moduleName !in dtsFileBaseNames) {
                             // Bare (non-relative) side-effect imports: TypeScript always
                             // considers these unresolvable without node_modules/paths config.
                             // Skip for AMD/System/UMD where bare specifiers are provided externally.
-                            // Also skip when the specifier matches a declared ambient module.
+                            // Also skip when the specifier matches a declared ambient module
+                            // or a .d.ts file in the compilation (e.g., "foo" for foo.d.ts).
                             val mod = options.module
                             if (mod != ModuleKind.AMD && mod != ModuleKind.System && mod != ModuleKind.UMD) {
                                 emitTS2882(specifier, moduleName, source, fileName)
@@ -9723,9 +9734,115 @@ class Checker(
             // Module files get TS1215 instead of TS1100 — skip TS1100 for them
             if (globalStrict || hasUseStrict) {
                 checkStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
+            } else {
+                // Even when the file isn't globally strict, function bodies with their own
+                // "use strict" prologue directives are locally strict and must be checked.
+                checkFunctionLocalStrictMode(result.sourceFile.statements, source, fileName, restricted)
             }
         }
     }
+
+    /**
+     * Traverses statements looking for function declarations/expressions whose bodies
+     * start with a "use strict" prologue directive, then checks those bodies for TS1100.
+     * Called when the enclosing scope is NOT globally strict.
+     */
+    private fun checkFunctionLocalStrictMode(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        val body = stmt.body
+                        if (body != null) {
+                            if (hasPrologueUseStrict(body.statements)) {
+                                // This function is locally strict — check its body
+                                checkStrictModeInStatements(body.statements, source, fileName, restricted)
+                            } else {
+                                // Not strict, but recurse to find nested strictly-strict functions
+                                checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
+                            }
+                        }
+                    }
+                }
+                is ExpressionStatement -> {
+                    checkFunctionLocalStrictModeInExpr(stmt.expression, source, fileName, restricted)
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let {
+                            checkFunctionLocalStrictModeInExpr(it, source, fileName, restricted)
+                        }
+                    }
+                }
+                is Block -> checkFunctionLocalStrictMode(stmt.statements, source, fileName, restricted)
+                is IfStatement -> {
+                    checkFunctionLocalStrictModeStmt(stmt.thenStatement, source, fileName, restricted)
+                    stmt.elseStatement?.let {
+                        checkFunctionLocalStrictModeStmt(it, source, fileName, restricted)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkFunctionLocalStrictModeStmt(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (stmt) {
+            is Block -> checkFunctionLocalStrictMode(stmt.statements, source, fileName, restricted)
+            else -> checkFunctionLocalStrictMode(listOf(stmt), source, fileName, restricted)
+        }
+    }
+
+    private fun checkFunctionLocalStrictModeInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        when (expr) {
+            is FunctionExpression -> {
+                val body = expr.body
+                if (hasPrologueUseStrict(body.statements)) {
+                    checkStrictModeInStatements(body.statements, source, fileName, restricted)
+                } else {
+                    checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
+                }
+            }
+            is ArrowFunction -> {
+                val body = expr.body
+                if (body is Block) {
+                    if (hasPrologueUseStrict(body.statements)) {
+                        checkStrictModeInStatements(body.statements, source, fileName, restricted)
+                    } else {
+                        checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun hasPrologueUseStrict(statements: List<Statement>): Boolean =
+        statements.firstOrNull()?.let { stmt ->
+            stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
+                (stmt.expression as StringLiteralNode).text == "use strict"
+        } == true
 
     // -----------------------------------------------------------------------
     // Class body strict mode checking (TS1210)
@@ -13742,6 +13859,46 @@ class Checker(
                         for (member in stmt.members) {
                             if (member is Constructor && member.body != null) {
                                 checkConstructorThisBeforeSuper(member.body!!.statements, source, fileName)
+                                // TS2376: when derived class has initialized properties/param properties,
+                                // super() must be the first statement in the constructor
+                                val hasInitializedProps = stmt.members.any { m ->
+                                    m is PropertyDeclaration && m.initializer != null &&
+                                        ModifierFlag.Static !in m.modifiers
+                                }
+                                val hasParamProps = member.parameters.any { p ->
+                                    p.modifiers.any { it == ModifierFlag.Public || it == ModifierFlag.Private ||
+                                        it == ModifierFlag.Protected || it == ModifierFlag.Readonly }
+                                }
+                                if (hasInitializedProps || hasParamProps) {
+                                    // Check if super() exists somewhere in the constructor
+                                    val hasSuperCall = member.body!!.statements.any { s ->
+                                        s is ExpressionStatement && s.expression is CallExpression &&
+                                            isSuperIdentifier((s.expression as CallExpression).expression)
+                                    }
+                                    // Skip prologue directives ("use strict", etc.)
+                                    val firstNonPrologueStmt = member.body!!.statements.firstOrNull { s ->
+                                        !(s is ExpressionStatement && s.expression is StringLiteralNode)
+                                    }
+                                    val isSuperFirst = firstNonPrologueStmt is ExpressionStatement &&
+                                        firstNonPrologueStmt.expression is CallExpression &&
+                                        isSuperIdentifier((firstNonPrologueStmt.expression as CallExpression).expression)
+                                    // TS2376 only fires when super IS called, just not as first statement
+                                    // (TS2377 handles missing super entirely)
+                                    if (hasSuperCall && !isSuperFirst) {
+                                        val start = member.pos
+                                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                        diagnostics.add(Diagnostic(
+                                            message = "A 'super' call must be the first statement in the constructor to refer to 'super' or 'this' when a derived class contains initialized properties, parameter properties, or private identifiers.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2376,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = start,
+                                            length = "constructor".length,
+                                        ))
+                                    }
+                                }
                             }
                         }
                     }
