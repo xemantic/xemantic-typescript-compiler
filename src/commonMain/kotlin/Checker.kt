@@ -16187,8 +16187,13 @@ class Checker(
             if (param.isCommentPlaceholder) continue
             val name = param.name
             if (name is Identifier && name.text == "arguments") {
-                // Span includes type annotation if present
-                val start = if (param.dotDotDotToken) name.pos - 3 else name.pos
+                // Span includes type annotation and modifier if present
+                // For parameter properties (public/private/protected/readonly arguments),
+                // start from the modifier position
+                val hasParamModifier = param.modifiers.isNotEmpty()
+                val start = if (param.dotDotDotToken) name.pos - 3
+                    else if (hasParamModifier) param.pos
+                    else name.pos
                 val end = if (param.type != null) {
                     // end position is after the type text, minus trailing trivia
                     param.type!!.end - 1
