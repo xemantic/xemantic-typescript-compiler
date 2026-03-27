@@ -615,14 +615,35 @@ class TypeScriptCompiler {
             // All source files including tsconfig.json (for error baselines)
             val allFiles = parsed.files.map { it.fileName to it.content }
 
-            // Multi-file compilation — emitDeclarationOnly: produce source echoes only
+            // Multi-file compilation — emitDeclarationOnly: produce source echoes only,
+            // but still parse/bind/check all files for targeted diagnostics (TS1210 etc.).
             if (options.emitDeclarationOnly) {
                 val declSourceEchoes = mutableListOf<Pair<String, String>>()
+                val parsedFiles = mutableMapOf<String, SourceFile>()
                 for (file in parsed.files) {
                     val baseName = file.fileName.substringAfterLast('/')
                     if (baseName != "tsconfig.json") {
                         declSourceEchoes.add(file.fileName to file.content)
                     }
+                    val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
+                    if (!isDtsFile && file.content.isNotBlank()) {
+                        val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
+                        val forceJsxForJs = isPlainJsFile && (options.jsx != null || options.allowJs)
+                        val topLevelAwait = options.effectiveModule.let { m ->
+                            m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+                                m == ModuleKind.Preserve || m == ModuleKind.System
+                        }
+                        val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait)
+                        val sourceFile = parser.parse()
+                        diagnostics.addAll(parser.getDiagnostics())
+                        parsedFiles[file.fileName] = sourceFile
+                    }
+                }
+                if (parsedFiles.isNotEmpty()) {
+                    val binder = Binder(options)
+                    val binderResults = parsedFiles.values.map { binder.bind(it) }
+                    val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
+                    diagnostics.addAll(checker.getDiagnostics())
                 }
                 return CompilationResult(
                     fileName = fileName,
