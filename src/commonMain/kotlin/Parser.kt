@@ -2259,7 +2259,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
             EnumKeyword -> parseEnumDeclaration(modifiers, comments)
             NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration(modifiers, comments)
-            DeclareKeyword -> parseDeclareDeclaration(modifiers, comments)
+            DeclareKeyword -> {
+                val outerPos = pos  // position of the outer `export` keyword
+                val inner = parseDeclareDeclaration(modifiers, comments)
+                // For `export declare export = x;`, fix the pos to the outer `export`
+                if (inner is ExportAssignment) inner.copy(pos = outerPos) else inner
+            }
             AbstractKeyword -> {
                 nextToken(); parseClassDeclaration(modifiers + ModifierFlag.Abstract, comments)
             }
@@ -2273,8 +2278,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             // export export ... (duplicate export keyword — error recovery)
             ExportKeyword -> {
                 val inner = parseExportDeclaration()
-                // The inner already has Export modifier; just return it
-                inner
+                // Mark the inner ExportAssignment with Export modifier for TS1120 detection
+                if (inner is ExportAssignment) {
+                    inner.copy(modifiers = inner.modifiers + ModifierFlag.Export, pos = pos)
+                } else inner
             }
 
             // export public/private/protected/static import ... (error: modifiers on import)

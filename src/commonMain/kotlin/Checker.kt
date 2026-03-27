@@ -9716,9 +9716,6 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             // Per-file strict mode: options + "use strict" prologue + module file
-            val isModule = result.sourceFile.statements.any {
-                it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment
-            }
             val hasUseStrict = result.sourceFile.statements.firstOrNull()?.let { stmt ->
                 stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                     (stmt.expression as StringLiteralNode).text == "use strict"
