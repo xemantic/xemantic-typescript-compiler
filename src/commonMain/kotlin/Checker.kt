@@ -6933,10 +6933,10 @@ class Checker(
             val exports = symbol!!.exports ?: return // not a namespace
             val next = exports[segments[i]]
             if (next == null) {
-                // Intermediate segment not found — emit TS2694
+                // Intermediate segment not found — emit TS2694 (or TS2724 with spelling)
                 // Use resolved symbol's qualified name, not source-level alias
                 val namespacePath = symbolToQualifiedName(symbol!!, fileName)
-                emitTS2694(namespacePath, segments[i], rightId, source, fileName)
+                emitTS2694(namespacePath, segments[i], rightId, source, fileName, exports = exports)
                 return
             }
             symbol = resolveAlias(next)
@@ -6949,8 +6949,8 @@ class Checker(
         // Use resolved symbol's qualified name, not source-level alias
         val namespacePath = symbolToQualifiedName(symbol!!, fileName)
         if (member == null) {
-            // Member doesn't exist at all
-            emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
+            // Member doesn't exist at all — try spelling suggestion (TS2724)
+            emitTS2694(namespacePath, rightId.text, rightId, source, fileName, exports = exports)
         } else if (!isMemberAccessible(member, symbol!!)) {
             // Member exists but is not exported from a non-declare namespace
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
@@ -7036,10 +7036,28 @@ class Checker(
         memberNode: Identifier,
         source: String,
         fileName: String,
+        exports: Map<String, Symbol>? = null,
     ) {
         val start = memberNode.pos
         val length = memberName.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // Check for spelling suggestion (TS2724)
+        if (exports != null) {
+            val suggestion = getSpellingSuggestionFromNames(memberName, exports.keys)
+            if (suggestion != null) {
+                diagnostics.add(Diagnostic(
+                    message = "'$namespacePath' has no exported member named '$memberName'. Did you mean '$suggestion'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2724,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                return
+            }
+        }
         diagnostics.add(Diagnostic(
             message = "Namespace '$namespacePath' has no exported member '$memberName'.",
             category = DiagnosticCategory.Error,
@@ -7395,6 +7413,28 @@ class Checker(
             val lenDiff = kotlin.math.abs(candidate.length - name.length)
             if (lenDiff > maximumLengthDifference) continue
 
+            val dist10 = weightedLevenshteinDistance10(name, candidate, bestDistance10)
+            if (dist10 < bestDistance10) {
+                bestDistance10 = dist10
+                bestSuggestion = candidate
+            }
+        }
+        return bestSuggestion
+    }
+
+    /**
+     * Simple spelling suggestion among a set of names.
+     * Uses Damerau-Levenshtein distance (same as TS2552) with TypeScript's threshold.
+     */
+    private fun getSpellingSuggestionFromNames(name: String, candidates: Set<String>): String? {
+        var bestDistance10 = (name.length * 0.4).toInt() * 10 + 10
+        var bestSuggestion: String? = null
+        val maximumLengthDifference = maxOf(2, (name.length * 0.34).toInt())
+        for (candidate in candidates) {
+            if (candidate == name) continue
+            if (candidate.isEmpty()) continue
+            val lenDiff = kotlin.math.abs(candidate.length - name.length)
+            if (lenDiff > maximumLengthDifference) continue
             val dist10 = weightedLevenshteinDistance10(name, candidate, bestDistance10)
             if (dist10 < bestDistance10) {
                 bestDistance10 = dist10
