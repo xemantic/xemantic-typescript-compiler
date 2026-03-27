@@ -13,7 +13,7 @@ behavior — baseline formats, comparison algorithm, and parameterized test expa
 
 ## Current State
 
-- **10,077 tests**, 7,596 passing (75.4%), 2,481 failing
+- **10,077 tests**, 7,597 passing (75.4%), 2,480 failing
 - **Session 2026-03-26a**: +8 tests: TS8002 import= full span, TS8016 AsExpression type-node span, TS2434 ambient module FP suppression, TS1254 const non-literal ambient, TS8026 generic extends in JS files, TypePredicate parser node + TS2322 return type fix, TS2663→TS2304 in typeof type positions, TS2724 namespace member spelling suggestions
 - **Session 2026-03-25a**: +26 tests: JS file checker pipeline (parse/bind/check .js with allowJs even without outDir), TS8xxx extensions (ClassExpression type params, optional ?, abstract, public/private, NonNullExpression, AsExpression, TS8017 overloads), TS8010 span fix, suppress TS2390/TS2391/TS7010/TS2355/TS2304 in JS without checkJs, decoratorInJsFile fixes
 - **Session 2026-03-24d**: +27 tests: TS1197 catch clause initializer, Interface+Module binder merge, TS2314 FP for non-generic locals, TS2397 module file suppression, node_modules relative path fix, invalid unicode escape handling, TS2434 namespace-before-class/function, TS2432 merged enum first-element initializer + cross-decl TS2300, TS2428 interface type param mismatch, duplicate properties in var type annotations, TS2364 invalid assignment targets, TS2629/TS2628 class/enum assignment, TS1011 empty element access, TS2629 namespace scope propagation, TS8xxx JS-file syntax checks
@@ -2659,11 +2659,40 @@ Analysis of 2,492 remaining failures (75.3% passing):
   - TS1005 FP in object literal patterns
   - TS1109 FP in complex expressions
   - Each test requires individual investigation with high regression risk
-- [ ] **33e. Additional FP reductions and diagnostic precision** (~5 tests)
+- [ ] **33e. Additional FP reductions and diagnostic precision** (~5 tests) — *deferred*
   - TS2301 vs TS2663 priority in class member initializer lambdas
   - TS2809 destructuring assignment detection for `{ a, b } = fn()`
-  - TS7030/TS2366 code selection for implicit return in async functions
   - TS6133 indexed access property usage tracking
+
+### Session 2026-03-27 — Analysis-driven fixes
+
+- [x] **34a. TS7030 suppression when strictNullChecks is false** (+1 test)
+  - `es5-asyncFunctionTryStatements` (target=es5, strict:false) emits FP TS7030
+  - TypeScript only emits TS7030 when `noImplicitReturns: true`; when `strictNullChecks` is off, implicit `undefined` return is always valid
+  - Fix: gate the TS7030 fallback case (`hasAnyReturn ->`) on `strictNullChecks || options.noImplicitReturns`
+  - File: `Checker.kt` line ~19028
+
+- [ ] **34b. TS2355 suppression when strictNullChecks is false for non-returning functions** (~TBD)
+  - Investigate whether TS2355 also needs gating when `strictNullChecks` is false
+  - TypeScript may still emit TS2355 (never returns) regardless of SNCs — verify
+
+- [ ] **34c. Module format detection for ESM files** (~2 tests)
+  - `nodeNextImportModeImplicitIndexResolution`: emits CJS but should emit ESM
+  - `es6ImportParseErrors`: emits `"use strict"; 10;` instead of `export {}`
+  - Root cause: module detection not recognizing ESM format for specific cases
+
+- [ ] **34d. Investigate TS2304/TS2693 remaining FP patterns** (~33+7 tests)
+  - TS2304 FPs from generic type parameters and module re-exports
+  - TS2693 FPs from type-only names incorrectly flagged in value position
+  - Analyze top patterns and fix where feasible without full type checker
+
+- [ ] **34e. TS7006 contextual typing suppression patterns** (~27 tests) — *deferred*
+  - Requires contextual typing through union types, generic inference, binding patterns
+  - Not fixable without type checker infrastructure
+
+- [ ] **34f. TS1005/TS1109 parser error recovery cascade** (~81 tests) — *deferred*
+  - 66 tests affected by TS1005 FPs, 37 by TS1109 FPs
+  - Highest regression risk — each change affects many tests
 
 ---
 
