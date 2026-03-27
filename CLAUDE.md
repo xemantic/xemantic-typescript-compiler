@@ -186,6 +186,12 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`ImportDeclaration` needs `outerModifiers`**: The parser's `parseImportDeclaration` must forward `outerModifiers` to both side-effect and clause-based `ImportDeclaration` constructors. Without this, `export import "x"` doesn't get TS1191.
 - **Bare specifier TS2882 in multi-file**: TypeScript considers bare (non-relative) specifiers unresolvable without `node_modules`/`paths` config. Our `resolveModuleSpecifier` matches by filename which is too permissive. Always emit TS2882 for bare specifiers except in AMD/System/UMD modules.
 
+### TS1210 class strict mode gotchas
+
+- **TS1210 vs TS1100**: TS1210 fires for `arguments`/`eval` in class bodies (always strict). TS1100 fires in external strict mode contexts (functions, modules). TypeScript NEVER emits both for the same node — TS1210 takes priority in class bodies. Suppress TS1100 inside class bodies for these names.
+- **`emitDeclarationOnly` still needs checker**: Multi-file compilation with `emitDeclarationOnly` must still parse/bind/check files for diagnostics like TS1210. But use `declarationOnly = true` to limit checks — running the full checker produces FPs like TS6131 that TypeScript's declaration-only mode suppresses.
+- **`isAlwaysTruthyExpr` vs `isAlwaysTruthyForOrExpr`**: In `||` contexts, TypeScript only flags object-like expressions (function, arrow, object, array, class, regex). Numeric/string literals and `new` expressions are NOT flagged in `||` but ARE flagged in `if`/`else if` conditions.
+
 ### Kotlin idioms
 
 - **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`). The `feat/kt-changes` branch removed the last BigDecimal usage specifically to enable Native compilation.
