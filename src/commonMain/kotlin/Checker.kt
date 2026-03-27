@@ -19025,8 +19025,10 @@ class Checker(
                         length = spanLen,
                     ))
                 }
-                hasAnyReturn -> {
+                hasAnyReturn && (strictNullChecks || options.noImplicitReturns) -> {
                     // TS7030: some paths return with a value, some don't (for nullable/unknown return types)
+                    // Only fires when strictNullChecks is on (undefined not assignable) or noImplicitReturns is set.
+                    // Without either, implicit return of undefined is always valid.
                     diagnostics.add(Diagnostic(
                         message = "Not all code paths return a value.",
                         category = DiagnosticCategory.Error,
@@ -19038,8 +19040,8 @@ class Checker(
                         length = spanLen,
                     ))
                 }
-                retTypeClass == "non-void" -> {
-                    // TS2355: function has non-void return type but never returns
+                retTypeClass == "non-void" && !hasAnyReturn -> {
+                    // TS2355: function has non-void return type but never returns (no return statements at all)
                     diagnostics.add(Diagnostic(
                         message = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.",
                         category = DiagnosticCategory.Error,
