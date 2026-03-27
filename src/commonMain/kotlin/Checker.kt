@@ -8148,10 +8148,15 @@ class Checker(
         for (stmt in statements) {
             when (stmt) {
                 is VariableStatement -> {
+                    val varKind = when (stmt.declarationList.flags) {
+                        SyntaxKind.LetKeyword -> "let"
+                        SyntaxKind.ConstKeyword -> "const"
+                        else -> "var"
+                    }
                     for (decl in stmt.declarationList.declarations) {
                         val name = decl.name
                         if (name is Identifier) {
-                            decls.add(DeclInfo(name.text, "var", name, stmt))
+                            decls.add(DeclInfo(name.text, varKind, name, stmt))
                         }
                     }
                 }
@@ -8584,6 +8589,43 @@ class Checker(
                         }
                         continue
                     }
+                }
+
+                // TS2451: Cannot redeclare block-scoped variable — fires when ALL
+                // declarations are block-scoped (let or const). When there's a mix of
+                // var and let/const, TS2300 fires instead (handled below).
+                val hasLet = "let" in kinds
+                val hasConst = "const" in kinds
+                val hasBlockScoped = hasLet || hasConst
+                val hasNamespace2 = "namespace" in kinds
+                val allBlockScoped = hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2
+                if (allBlockScoped && group.size >= 2) {
+                    for (decl in group) {
+                        val start = decl.nameNode.pos
+                        val nameLen = if (decl.nameNode is Identifier) (decl.nameNode as Identifier).text.length
+                            else (decl.nameNode.end - decl.nameNode.pos)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot redeclare block-scoped variable '${decl.name}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2451,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = nameLen,
+                        ))
+                    }
+                    continue
+                }
+                // When block-scoped (let/const) mixes with var/class/func (not interface/namespace
+                // which are legal merges), emit TS2300
+                if (hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)) {
+                    for (decl in group) {
+                        if (decl.kind == "interface" || decl.kind == "namespace") continue
+                        emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                    }
+                    continue
                 }
 
                 val isDuplicate = (hasClass && classCount >= 2) ||
