@@ -349,7 +349,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 7. Diagnostic emission — TS2345
 
-- [ ] **7a. `checkCallExpression` argument type checking**
+- [x] **7a. `checkCallExpression` argument type checking** (conservative: primitive parameter types only to avoid FPs from incomplete structural comparison)
 
   For each argument in a call expression:
   1. Resolve the callee to a signature (or set of overload signatures)

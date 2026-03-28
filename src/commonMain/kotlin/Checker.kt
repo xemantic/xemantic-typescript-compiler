@@ -86,6 +86,17 @@ class Checker(
     /** Cache of symbol ID → declared type (for classes/interfaces). */
     private val declaredTypes = HashMap<Int, Type>()
 
+    // -----------------------------------------------------------------------
+    // Type relation instances — MUST be declared before init {} to avoid
+    // Kotlin property initialization order issue (same pattern as strictNullChecks)
+    // -----------------------------------------------------------------------
+    private val subtypeRelation = Relation()
+    private val assignableRelation = Relation()
+    private val comparableRelation = Relation()
+    private val identityRelation = Relation()
+    private var relationDepth = 0
+    private val maxRelationDepth = 100
+
     init {
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
@@ -284,6 +295,8 @@ class Checker(
         checkTypeAssignability()
         // 64b. Check property access on known types (TS2339)
         checkPropertyAccess()
+        // 64c. Check call expression argument types (TS2345)
+        checkCallExpressionTypes()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
@@ -21228,7 +21241,7 @@ class Checker(
                 val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
                 val sig = Signature(
                     declaration = decl,
-                    parameters = emptyList(), // TODO: resolve parameter symbols
+                    parameters = getParameterSymbols(decl.parameters),
                     resolvedReturnType = returnType,
                     minArgumentCount = decl.parameters.count {
                         !it.questionToken && !it.dotDotDotToken && it.initializer == null
@@ -21238,6 +21251,25 @@ class Checker(
                 fnType
             }
             else -> anyType
+        }
+    }
+
+    /**
+     * Create Symbol objects for function/method parameters.
+     * Each Parameter AST node gets a corresponding Symbol with FunctionScopedVariable flag.
+     * This is needed for type checking of call arguments (TS2345).
+     */
+    private fun getParameterSymbols(params: List<Parameter>): List<Symbol> {
+        return params.mapNotNull { param ->
+            // Skip `this` pseudo-parameter
+            val name = when (val n = param.name) {
+                is Identifier -> if (n.text == "this") return@mapNotNull null else n.text
+                else -> return@mapNotNull null // binding patterns not yet supported
+            }
+            val sym = Symbol(SymbolFlags.FunctionScopedVariable, name)
+            sym.declarations.add(param)
+            sym.valueDeclaration = param
+            sym
         }
     }
 
@@ -21326,7 +21358,7 @@ class Checker(
                         val returnType = type as Type
                         val sig = Signature(
                             declaration = member,
-                            parameters = emptyList(), // TODO: resolve parameter symbols
+                            parameters = getParameterSymbols(member.parameters),
                             resolvedReturnType = returnType,
                             minArgumentCount = member.parameters.count {
                                 !it.questionToken && !it.dotDotDotToken && it.initializer == null
@@ -21978,6 +22010,346 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS2345: Argument type checking (Phase 4 item 7a)
+    // -----------------------------------------------------------------------
+
+    private fun checkCallExpressionTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // Skip .js files
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
+            val source = result.sourceFile.text
+            try {
+                checkCallTypesInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {
+                // Safety net for deeply nested ASTs
+            }
+        }
+    }
+
+    private fun checkCallTypesInStatements(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            checkCallTypesInStatement(stmt, source, fileName)
+        }
+    }
+
+    private var callTypeCheckDepth = 0
+
+    private fun checkCallTypesInStatement(stmt: Statement, source: String, fileName: String) {
+        if (++callTypeCheckDepth > maxCheckDepth) { callTypeCheckDepth--; return }
+        try {
+        when (stmt) {
+            is ExpressionStatement -> checkCallTypesInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkCallTypesInExpr(it, source, fileName) }
+            is IfStatement -> {
+                checkCallTypesInExpr(stmt.expression, source, fileName)
+                checkCallTypesInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkCallTypesInStatement(it, source, fileName) }
+            }
+            is Block -> checkCallTypesInStatements(stmt.statements, source, fileName)
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                        }
+                    }
+                    is Expression -> checkCallTypesInExpr(init, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { checkCallTypesInExpr(it, source, fileName) }
+                stmt.incrementor?.let { checkCallTypesInExpr(it, source, fileName) }
+                checkCallTypesInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                checkCallTypesInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkCallTypesInStatement(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                checkCallTypesInExpr(stmt.expression, source, fileName)
+                checkCallTypesInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkCallTypesInStatement(stmt.statement, source, fileName)
+                checkCallTypesInExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkCallTypesInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkCallTypesInStatements(clauseStmts, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is Constructor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is PropertyDeclaration -> member.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkCallTypesInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkCallTypesInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+            }
+            is ThrowStatement -> stmt.expression?.let { checkCallTypesInExpr(it, source, fileName) }
+            is LabeledStatement -> checkCallTypesInStatement(stmt.statement, source, fileName)
+            is WithStatement -> {
+                checkCallTypesInExpr(stmt.expression, source, fileName)
+                checkCallTypesInStatement(stmt.statement, source, fileName)
+            }
+            else -> {}
+        }
+        } finally { callTypeCheckDepth-- }
+    }
+
+    private fun checkCallTypesInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is CallExpression -> {
+                checkSingleCallExpressionTypes(expr, source, fileName)
+                // Recurse into callee and arguments
+                checkCallTypesInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkCallTypesInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkSingleNewExpressionTypes(expr, source, fileName)
+                checkCallTypesInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkCallTypesInExpr(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                checkCallTypesInExpr(expr.left, source, fileName)
+                checkCallTypesInExpr(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkCallTypesInExpr(expr.condition, source, fileName)
+                checkCallTypesInExpr(expr.whenTrue, source, fileName)
+                checkCallTypesInExpr(expr.whenFalse, source, fileName)
+            }
+            is ParenthesizedExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkCallTypesInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkCallTypesInExpr(expr.operand, source, fileName)
+            is PropertyAccessExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkCallTypesInExpr(expr.expression, source, fileName)
+                checkCallTypesInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkCallTypesInExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkCallTypesInExpr(prop.initializer, source, fileName)
+                        is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                        is SpreadAssignment -> checkCallTypesInExpr(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ArrowFunction -> expr.body?.let { body ->
+                when (body) {
+                    is Block -> checkCallTypesInStatements(body.statements, source, fileName)
+                    is Expression -> checkCallTypesInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> expr.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
+            }
+            is TaggedTemplateExpression -> checkCallTypesInExpr(expr.tag, source, fileName)
+            is AsExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is SpreadElement -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkCallTypesInExpr(it, source, fileName) }
+            is DeleteExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is VoidExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { checkCallTypesInExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check argument types for a single CallExpression against the resolved signature.
+     * Emits TS2345 when an argument type is not assignable to the parameter type.
+     */
+    private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
+        // Resolve callee to get its type
+        val calleeType = getCalleeType(expr.expression)
+        if (calleeType === anyType || calleeType === errorType) return
+        // Skip overloaded functions — the symbol will have multiple declarations
+        if (calleeType is Type.Object && isOverloadedFunction(calleeType)) return
+        // Get call signatures
+        val signatures = getCallSignaturesOfType(calleeType)
+        if (signatures.isEmpty()) return
+        // If there are multiple signatures, skip — item 7b handles overloads
+        if (signatures.size > 1) return
+        val sig = signatures[0]
+        checkArgumentsAgainstSignature(expr.arguments, sig, source, fileName)
+    }
+
+    /**
+     * Check argument types for a NewExpression against the construct signature.
+     */
+    private fun checkSingleNewExpressionTypes(expr: NewExpression, source: String, fileName: String) {
+        val args = expr.arguments ?: return
+        val calleeType = getCalleeType(expr.expression)
+        if (calleeType === anyType || calleeType === errorType) return
+        // Get construct signatures
+        val signatures = getConstructSignaturesOfType(calleeType)
+        if (signatures.isEmpty()) return
+        if (signatures.size > 1) return
+        val sig = signatures[0]
+        checkArgumentsAgainstSignature(args, sig, source, fileName)
+    }
+
+    /**
+     * Check if a function type is overloaded (has multiple declarations, some without body).
+     * Overloaded functions should be skipped until item 7b (overload resolution).
+     */
+    private fun isOverloadedFunction(type: Type.Object): Boolean {
+        val sym = type.symbol ?: return false
+        if (sym.declarations.size <= 1) return false
+        // Multiple declarations: check if any is a body-less function declaration (overload signature)
+        return sym.declarations.any { decl ->
+            (decl is FunctionDeclaration && decl.body == null) ||
+            (decl is MethodDeclaration && decl.body == null)
+        }
+    }
+
+    /**
+     * Get the type of a callee expression for call/new checking.
+     */
+    private fun getCalleeType(expr: Expression): Type {
+        return when (expr) {
+            is Identifier -> {
+                val symbol = globals[expr.text] ?: return anyType
+                getTypeOfSymbol(symbol)
+            }
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
+            is ParenthesizedExpression -> getCalleeType(expr.expression)
+            else -> anyType
+        }
+    }
+
+    /**
+     * Get call signatures from a type.
+     */
+    private fun getCallSignaturesOfType(type: Type): List<Signature> {
+        if (type is Type.Object) {
+            resolveStructuredTypeMembers(type)
+            return type.callSignatures ?: emptyList()
+        }
+        if (type is Type.Union) {
+            // For unions, we'd need to check all — skip for now
+            return emptyList()
+        }
+        return emptyList()
+    }
+
+    /**
+     * Get construct signatures from a type.
+     */
+    private fun getConstructSignaturesOfType(type: Type): List<Signature> {
+        if (type is Type.Object) {
+            resolveStructuredTypeMembers(type)
+            return type.constructSignatures ?: emptyList()
+        }
+        return emptyList()
+    }
+
+    /**
+     * Check each argument against the corresponding parameter type.
+     * Emits TS2345 for type mismatches.
+     *
+     * Conservative: only checks when both argument and parameter types are
+     * well-understood (primitives, literals, intrinsics). Skips complex types
+     * (interfaces, objects, unions, intersections) to avoid false positives
+     * from incomplete structural comparison and missing generic instantiation.
+     */
+    private fun checkArgumentsAgainstSignature(
+        args: List<Expression>,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ) {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break // extra args handled by TS2554
+            // Skip spread arguments — complex handling
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            // Conservative: only check when parameter type is a well-known type
+            // (primitive, void, undefined, null, never). Skip object/interface/union/
+            // intersection types which need deeper structural comparison or generics.
+            if (!isSimpleCheckableType(paramType)) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // Emit TS2345
+                val argTypeStr = typeToString(argType)
+                val paramTypeStr = typeToString(paramType)
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * Check if a type is "simple" enough that we can safely check TS2345 against it
+     * without risking false positives from incomplete structural comparison.
+     * Returns true for primitive types (string, number, boolean, void, null, undefined, never,
+     * bigint, symbol) and their literal variants.
+     */
+    private fun isSimpleCheckableType(type: Type): Boolean {
+        val f = type.flags
+        return f.hasAny(
+            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or
+            TypeFlags.Void or TypeFlags.Undefined or TypeFlags.Null or
+            TypeFlags.Never or TypeFlags.BigInt or TypeFlags.ESSymbol or
+            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+            TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+        )
+    }
+
+    // -----------------------------------------------------------------------
     // Structural typing engine (Phase 4 items 4a-4e)
     // -----------------------------------------------------------------------
 
@@ -21999,16 +22371,6 @@ class Checker(
         private fun packKey(a: Int, b: Int): Long =
             (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
     }
-
-    // Five relation instances (same as TS/tsgo)
-    private val subtypeRelation = Relation()
-    private val assignableRelation = Relation()
-    private val comparableRelation = Relation()
-    private val identityRelation = Relation()
-
-    /** Relation check depth for cycle prevention. */
-    private var relationDepth = 0
-    private val maxRelationDepth = 100
 
     /**
      * 4a. Fast flag-based type relatedness check (no recursion).
@@ -22193,7 +22555,16 @@ class Checker(
         val sourceReturn = source.resolvedReturnType ?: anyType
         val targetReturn = target.resolvedReturnType ?: anyType
         if (!checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
-        // TODO: check parameter types (contravariant) when parameter resolution is implemented
+        // Check parameter types (contravariant)
+        val sourceParams = source.parameters
+        val targetParams = target.parameters
+        val len = minOf(sourceParams.size, targetParams.size)
+        for (i in 0 until len) {
+            val sourceParamType = getTypeOfSymbol(sourceParams[i])
+            val targetParamType = getTypeOfSymbol(targetParams[i])
+            // Contravariant: target param must be assignable to source param
+            if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation)) return false
+        }
         return true
     }
 
@@ -22216,11 +22587,10 @@ class Checker(
         return checkTypeRelatedTo(source, target, assignableRelation)
     }
 
-    /** Create an array type. For now returns a simple object type since we don't have global Array<T>. */
+    /** Create an array type. Returns anyType until generic infrastructure is ready. */
     private fun getArrayType(elementType: Type): Type {
         // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
-        val arrayType = Type.Object()
-        return arrayType
+        return anyType
     }
 
     /** Create a tuple type from a TupleType node. */
@@ -22265,7 +22635,7 @@ class Checker(
         val fnType = Type.Object()
         val sig = Signature(
             declaration = node,
-            parameters = emptyList(), // TODO: resolve parameter symbols
+            parameters = getParameterSymbols(node.parameters),
             resolvedReturnType = getTypeFromTypeNode(node.type),
             minArgumentCount = node.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
         )
@@ -22278,7 +22648,7 @@ class Checker(
         val ctorType = Type.Object()
         val sig = Signature(
             declaration = node,
-            parameters = emptyList(), // TODO: resolve parameter symbols
+            parameters = getParameterSymbols(node.parameters),
             resolvedReturnType = getTypeFromTypeNode(node.type),
             minArgumentCount = node.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
         )
