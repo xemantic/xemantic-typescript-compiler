@@ -230,7 +230,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 3. Basic expression type inference
 
-- [ ] **3a. `getTypeOfExpression(expr: Expression): Type`**
+- [x] **3a. `getTypeOfExpression(expr: Expression): Type`**
 
   Replace `inferSimpleExprType` (string-based) with proper Type-based inference:
   - Literals → literal types (widened to base type for mutable bindings)
