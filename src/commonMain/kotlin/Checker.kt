@@ -21060,9 +21060,7 @@ class Checker(
         val flags = symbol.flags
         return when {
             flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface) -> {
-                val interfaceType = Type.Interface()
-                interfaceType.symbol = symbol
-                interfaceType
+                getDeclaredTypeOfClassOrInterface(symbol)
             }
             flags.hasAny(SymbolFlags.TypeAlias) -> {
                 // Find the type alias declaration and resolve its type
@@ -21082,6 +21080,70 @@ class Checker(
             }
             else -> anyType
         }
+    }
+
+    /**
+     * Build an InterfaceType from class/interface declarations.
+     * Collects type parameters and resolves base types (extends/implements).
+     * Members are NOT resolved yet (lazy, done in resolveStructuredTypeMembers).
+     */
+    private fun getDeclaredTypeOfClassOrInterface(symbol: Symbol): Type.Interface {
+        val interfaceType = Type.Interface()
+        interfaceType.symbol = symbol
+        // Collect type parameters from the first class/interface declaration
+        val decl = symbol.declarations.firstOrNull {
+            it is ClassDeclaration || it is InterfaceDeclaration
+        }
+        if (decl != null) {
+            val typeParams = when (decl) {
+                is ClassDeclaration -> decl.typeParameters
+                is InterfaceDeclaration -> decl.typeParameters
+                else -> null
+            }
+            if (typeParams != null && typeParams.isNotEmpty()) {
+                interfaceType.typeParameters = typeParams.map { tp ->
+                    val param = Type.TypeParam()
+                    param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                    tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+                    tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                    param
+                }
+            }
+            // Resolve base types from heritage clauses
+            val heritageClauses = when (decl) {
+                is ClassDeclaration -> decl.heritageClauses
+                is InterfaceDeclaration -> decl.heritageClauses
+                else -> null
+            }
+            if (heritageClauses != null) {
+                val baseTypes = mutableListOf<Type>()
+                for (clause in heritageClauses) {
+                    // ExtendsKeyword = base class/interface; ImplementsKeyword = implemented interface
+                    for (exprWithArgs in clause.types) {
+                        val baseType = getTypeFromBaseTypeExpression(exprWithArgs)
+                        if (baseType !== errorType) {
+                            baseTypes.add(baseType)
+                        }
+                    }
+                }
+                if (baseTypes.isNotEmpty()) {
+                    interfaceType.baseTypes = baseTypes
+                }
+            }
+        }
+        return interfaceType
+    }
+
+    /** Resolve a base type expression (e.g., `extends Foo<T>`) to a Type. */
+    private fun getTypeFromBaseTypeExpression(expr: ExpressionWithTypeArguments): Type {
+        val baseExpr = expr.expression
+        val name = when (baseExpr) {
+            is Identifier -> baseExpr.text
+            is PropertyAccessExpression -> baseExpr.name.text
+            else -> return errorType
+        }
+        val symbol = globals[name] ?: return errorType
+        return getDeclaredTypeOfSymbol(symbol)
     }
 
     // -----------------------------------------------------------------------

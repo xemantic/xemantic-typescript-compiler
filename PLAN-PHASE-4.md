@@ -210,7 +210,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **2b. `getDeclaredTypeOfClassOrInterface(symbol: Symbol): InterfaceType`**
+- [x] **2b. `getDeclaredTypeOfClassOrInterface(symbol: Symbol): InterfaceType`**
 
   Build InterfaceType from class/interface declarations:
   - Collect type parameters → TypeParameter types
