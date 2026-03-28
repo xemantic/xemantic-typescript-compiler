@@ -417,7 +417,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Binder.kt`, `Types.kt`, `Checker.kt`
 
-- [ ] **9c. CheckerPool with coroutine-based parallel checking**
+- [x] **9c. CheckerPool with coroutine-based parallel checking**
 
   ```kotlin
   class CheckerPool(

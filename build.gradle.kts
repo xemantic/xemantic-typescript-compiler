@@ -117,6 +117,12 @@ kotlin {
 
     sourceSets {
 
+        commonMain {
+            dependencies {
+                implementation(libs.kotlinx.coroutines.core)
+            }
+        }
+
         commonTest {
             kotlin.srcDir(layout.buildDirectory.dir("generated/typescript-tests"))
             dependencies {

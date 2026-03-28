@@ -37,6 +37,13 @@ class Checker(
     private val isMultiFileSource: Boolean = false,
     /** When true, only run targeted checks (TS1210 etc.) — used for emitDeclarationOnly. */
     private val declarationOnly: Boolean = false,
+    /**
+     * When non-null, only report diagnostics for files in this set (round-robin
+     * file assignment for parallel checking via [CheckerPool]). The checker still
+     * merges globals and resolves types for ALL files, but diagnostic output is
+     * filtered to the assigned subset.
+     */
+    private val assignedFileNames: Set<String>? = null,
 ) {
     /** Merged symbol tables from all files (global scope). */
     private val globals: SymbolTable = symbolTable()
@@ -360,8 +367,11 @@ class Checker(
     // Public API
     // -----------------------------------------------------------------------
 
-    /** Returns all diagnostics produced by the checker. */
-    fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
+    /** Returns diagnostics produced by the checker, filtered to assigned files if set. */
+    fun getDiagnostics(): List<Diagnostic> {
+        if (assignedFileNames == null) return diagnostics.toList()
+        return diagnostics.filter { it.fileName == null || it.fileName in assignedFileNames }
+    }
 
     // -----------------------------------------------------------------------
     // Public API — called by Transformer
