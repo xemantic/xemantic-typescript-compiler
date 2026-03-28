@@ -21563,9 +21563,9 @@ class Checker(
             is ArrayLiteralExpression -> anyType // TODO: Array type
             is ObjectLiteralExpression -> anyType // TODO: anonymous object type
 
-            // Call expressions
-            is CallExpression -> anyType // TODO: return type of resolved signature
-            is NewExpression -> anyType // TODO: construct signature return type
+            // Call expressions — resolve return type from signature
+            is CallExpression -> getReturnTypeOfCallExpression(expr)
+            is NewExpression -> getReturnTypeOfNewExpression(expr)
 
             // Arrow / function
             is ArrowFunction -> anyType // TODO: function type
@@ -21615,6 +21615,44 @@ class Checker(
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
             }
         }
+    }
+
+    /** Get the return type of a call expression by resolving the callee's call signature. */
+    private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
+        val calleeType = when (val callee = expr.expression) {
+            is Identifier -> {
+                val sym = globals[callee.text] ?: return anyType
+                getTypeOfSymbol(sym)
+            }
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+            else -> return anyType
+        }
+        if (calleeType === anyType || calleeType === errorType) return anyType
+        if (calleeType !is Type.Object) return anyType
+        resolveStructuredTypeMembers(calleeType)
+        val sigs = calleeType.callSignatures
+        if (sigs.isNullOrEmpty()) return anyType
+        // Use the first signature's return type (simple resolution)
+        return sigs[0].resolvedReturnType ?: anyType
+    }
+
+    /** Get the return type of a new expression by resolving the construct signature. */
+    private fun getReturnTypeOfNewExpression(expr: NewExpression): Type {
+        val calleeType = when (val callee = expr.expression) {
+            is Identifier -> {
+                val sym = globals[callee.text] ?: return anyType
+                getTypeOfSymbol(sym)
+            }
+            else -> return anyType
+        }
+        if (calleeType === anyType || calleeType === errorType) return anyType
+        // For new expressions, the return type is the class type itself
+        if (calleeType is Type.Interface) return calleeType
+        if (calleeType !is Type.Object) return anyType
+        resolveStructuredTypeMembers(calleeType)
+        val sigs = calleeType.constructSignatures
+        if (sigs.isNullOrEmpty()) return anyType
+        return sigs[0].resolvedReturnType ?: anyType
     }
 
     /** Get the type of a property access expression (e.g., `obj.prop`). */
