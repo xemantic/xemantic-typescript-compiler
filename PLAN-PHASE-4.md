@@ -302,7 +302,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 5. Diagnostic emission — TS2339
 
-- [ ] **5a. `checkPropertyAccessExpression(node: PropertyAccessExpression)`**
+- [x] **5a. `checkPropertyAccessExpression(node: PropertyAccessExpression)`**
 
   The easiest of the three target diagnostics:
   1. Get type of left-hand expression: `getTypeOfExpression(node.expression)`
