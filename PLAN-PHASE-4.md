@@ -409,7 +409,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt` (refactor)
 
-- [ ] **9b. Immutable binder output**
+- [x] **9b. Immutable binder output**
 
   Ensure all binder output is effectively immutable after binding:
   - Symbol tables are read-only during checking

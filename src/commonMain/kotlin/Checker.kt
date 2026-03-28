@@ -87,6 +87,10 @@ class Checker(
         var relationDepth = 0
         var argCountDepth = 0
         var callTypeCheckDepth = 0
+        // LinkStore: checker-local side map for import alias targets.
+        // In TypeScript/tsgo, symbol.target is set by the checker — storing it
+        // here instead keeps binder output immutable for parallel checking.
+        val symbolTargets = HashMap<Int, Symbol>()
     }
 
     private val state = CheckerState()
@@ -118,6 +122,20 @@ class Checker(
     private var callTypeCheckDepth: Int
         get() = state.callTypeCheckDepth
         set(value) { state.callTypeCheckDepth = value }
+
+    // -----------------------------------------------------------------------
+    // LinkStore helpers — checker-local side map for symbol targets.
+    // Keeps binder output immutable; each parallel checker resolves independently.
+    // -----------------------------------------------------------------------
+
+    /** Get the resolved alias target for a symbol (checker-local, then binder fallback). */
+    private fun getSymbolTarget(symbol: Symbol): Symbol? =
+        state.symbolTargets[symbol.id] ?: symbol.target
+
+    /** Set the resolved alias target for a symbol in the checker-local side map. */
+    private fun setSymbolTarget(symbol: Symbol, target: Symbol) {
+        state.symbolTargets[symbol.id] = target
+    }
 
     /** Maximum recursion depth for AST walking to prevent StackOverflow. */
     private val maxCheckDepth = 200
@@ -1424,7 +1442,7 @@ class Checker(
 
     private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol {
         if (!visited.add(symbol.id)) return symbol // cycle detected
-        if (symbol.target != null) return resolveAlias(symbol.target!!, visited)
+        getSymbolTarget(symbol)?.let { return resolveAlias(it, visited) }
         // For import aliases, try to resolve the target
         if (symbol.flags.hasAny(SymbolFlags.Alias)) {
             for (decl in symbol.declarations) {
@@ -1434,12 +1452,12 @@ class Checker(
                         when (ref) {
                             is QualifiedName -> {
                                 val target = resolveQualifiedName(ref) ?: continue
-                                symbol.target = target
+                                setSymbolTarget(symbol, target)
                                 return resolveAlias(target, visited)
                             }
                             is Identifier -> {
                                 val target = globals[ref.text] ?: continue
-                                symbol.target = target
+                                setSymbolTarget(symbol, target)
                                 return resolveAlias(target, visited)
                             }
                             is ExternalModuleReference -> {
@@ -1450,12 +1468,12 @@ class Checker(
                                 // Look for export = X in the target module
                                 val exportTarget = resolveModuleExportAssignment(targetResult, visited)
                                 if (exportTarget != null) {
-                                    symbol.target = exportTarget
+                                    setSymbolTarget(symbol, exportTarget)
                                     return resolveAlias(exportTarget, visited)
                                 }
                                 // No export = found — create module symbol
                                 val moduleSymbol = createModuleSymbol(symbol.name, targetResult)
-                                symbol.target = moduleSymbol
+                                setSymbolTarget(symbol, moduleSymbol)
                                 return moduleSymbol
                             }
                             else -> {}
@@ -1470,7 +1488,7 @@ class Checker(
                         val namedBindings = decl.importClause?.namedBindings
                         if (namedBindings is NamespaceImport) {
                             val moduleSymbol = createModuleSymbol(symbol.name, targetResult)
-                            symbol.target = moduleSymbol
+                            setSymbolTarget(symbol, moduleSymbol)
                             return moduleSymbol
                         }
 
@@ -1480,7 +1498,7 @@ class Checker(
                             // Look for "default" export in target — first check locals["default"]
                             val defaultSymbol = targetResult.locals["default"]
                             if (defaultSymbol != null) {
-                                symbol.target = defaultSymbol
+                                setSymbolTarget(symbol, defaultSymbol)
                                 return resolveAlias(defaultSymbol, visited)
                             }
                             // Scan for `export default X` (ExportAssignment without isExportEquals)
@@ -1488,7 +1506,7 @@ class Checker(
                                 if (stmt is ExportAssignment && !stmt.isExportEquals) {
                                     val resolved = resolveExpressionToSymbol(stmt.expression, targetResult, visited)
                                     if (resolved != null) {
-                                        symbol.target = resolved
+                                        setSymbolTarget(symbol, resolved)
                                         return resolveAlias(resolved, visited)
                                     }
                                 }
@@ -1510,7 +1528,7 @@ class Checker(
                                                 targetResult.locals[originalName]
                                             }
                                             if (resolvedTarget != null) {
-                                                symbol.target = resolvedTarget
+                                                setSymbolTarget(symbol, resolvedTarget)
                                                 return resolveAlias(resolvedTarget, visited)
                                             }
                                         }
@@ -1522,7 +1540,7 @@ class Checker(
 
                         // Named import: import { X } from "mod"
                         val target = targetResult.locals[symbol.name] ?: continue
-                        symbol.target = target
+                        setSymbolTarget(symbol, target)
                         return resolveAlias(target, visited)
                     }
                     is ImportSpecifier -> {
@@ -1540,7 +1558,7 @@ class Checker(
                                         val targetFile2 = resolveModuleSpecifier(specifier2, stmt) ?: continue
                                         val targetResult2 = fileResults[targetFile2] ?: continue
                                         val target = targetResult2.locals[originalName] ?: continue
-                                        symbol.target = target
+                                        setSymbolTarget(symbol, target)
                                         return resolveAlias(target, visited)
                                     }
                                 }
@@ -21328,14 +21346,14 @@ class Checker(
 
     /** Resolve an import alias to its target symbol, with cycle detection. */
     private fun resolveAliasTarget(symbol: Symbol): Symbol? {
-        // Use the binder-computed target if available
-        symbol.target?.let { return it }
+        // Use the checker-local LinkStore target if available
+        getSymbolTarget(symbol)?.let { return it }
         // Otherwise try resolveAlias logic from the checker's existing infrastructure
         val visited = mutableSetOf<Int>()
         var current = symbol
         while (current.flags.hasAny(SymbolFlags.Alias)) {
             if (!visited.add(current.id)) return null // cycle
-            val target = current.target ?: return null
+            val target = getSymbolTarget(current) ?: return null
             current = target
         }
         return current
