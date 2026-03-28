@@ -22298,6 +22298,40 @@ class Checker(
         val typeName = typeToString(objectType)
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         if (suggestion != null) {
+            // Find the declaration of the suggested property for TS2728 related info
+            val suggestedProp = objectType.properties?.find { it.name == suggestion }
+            val relatedInfo = if (suggestedProp != null) {
+                val decl = suggestedProp.valueDeclaration ?: suggestedProp.declarations.firstOrNull()
+                if (decl != null) {
+                    val declPos = when (decl) {
+                        is PropertyDeclaration -> {
+                            val n = decl.name
+                            if (n is Identifier) n.pos else decl.pos
+                        }
+                        is MethodDeclaration -> {
+                            val n = decl.name
+                            if (n is Identifier) n.pos else decl.pos
+                        }
+                        is Parameter -> {
+                            val n = decl.name
+                            if (n is Identifier) n.pos else decl.pos
+                        }
+                        else -> decl.pos
+                    }
+                    val declLength = suggestion.length
+                    val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+                    listOf(Diagnostic(
+                        message = "'$suggestion' is declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 2728,
+                        fileName = fileName,
+                        line = declLine,
+                        character = declChar,
+                        start = declPos,
+                        length = declLength,
+                    ))
+                } else emptyList()
+            } else emptyList()
             diagnostics.add(Diagnostic(
                 message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
                 category = DiagnosticCategory.Error,
@@ -22307,6 +22341,7 @@ class Checker(
                 character = character,
                 start = start,
                 length = length,
+                relatedInformation = relatedInfo,
             ))
         } else {
             diagnostics.add(Diagnostic(
