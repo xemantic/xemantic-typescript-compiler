@@ -443,6 +443,270 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ---
 
+## Phase 4b — Widen Type Checking Coverage
+
+Infrastructure (items 0–9) is complete. The structural comparison engine, type resolution
+caches, generic instantiation, and parallel checking pool are in place. The remaining work
+is to **remove conservative guards** and **wire the Type-based engine into more checks**.
+
+Currently the checker has TWO type systems running in parallel:
+- **OLD** (string-based): `inferSimpleExprType()` → string, `isAssignableTo()` → compares strings.
+  Used by TS2322. Very limited — only handles keyword types and "@"-prefixed named types.
+- **NEW** (Type-based): `getTypeOfExpression()` → Type, `checkTypeRelatedTo()` → structural
+  comparison. Used by TS2345/TS2339. Has conservative guards limiting scope.
+
+**Goal**: Replace the OLD system, relax conservative guards, and add new diagnostic codes.
+
+### 10. Wire TS2322 to the Type-based engine
+
+The single highest-impact change. Replace `inferSimpleExprType`/`isAssignableTo` (string-based)
+with `getTypeOfExpression`/`checkTypeRelatedTo` (Type-based) for all TS2322 emission.
+
+- [ ] **10a. Replace variable declaration assignability**
+
+  In `checkTypeAssignability`, replace the string-based inference for variable declarations:
+  ```
+  val init: VariableDeclaration with type annotation + initializer
+  OLD: inferSimpleExprType(init.initializer) → string, isAssignableTo(string, string)
+  NEW: getTypeOfExpression(init.initializer) → Type, checkTypeRelatedTo(source, target, assignableRelation)
+  ```
+  Also replace `formatTypeForDisplay` with `typeToString(type)` for error messages.
+
+  **File:** `Checker.kt` — `checkTypeAssignability`, `checkVarDeclAssignability`
+  **Target:** ~200 tests (variable assignment is the most common TS2322 pattern)
+
+- [ ] **10b. Replace return statement assignability**
+
+  Wire return type checking to use the Type engine:
+  ```
+  val ret: ReturnStatement inside function with explicit return type
+  NEW: getTypeOfExpression(ret.expression) → Type, checkTypeRelatedTo(source, funcReturnType)
+  ```
+
+  **File:** `Checker.kt` — `checkReturnAssignability`
+  **Target:** ~50 tests
+
+- [ ] **10c. Replace assignment expression assignability**
+
+  Wire `x = value` assignment checking:
+  ```
+  val assign: BinaryExpression(=, +=, etc.)
+  NEW: getTypeOfExpression(right) vs getTypeOfExpression(left)
+  ```
+
+  **File:** `Checker.kt` — `checkAssignmentExpression`
+  **Target:** ~30 tests
+
+- [ ] **10d. Remove old string-based inference functions**
+
+  After 10a-10c, the old `inferSimpleExprType`, `isAssignableTo`,
+  and `formatTypeForDisplay` functions should be dead code. Remove them.
+
+  **File:** `Checker.kt`
+
+### 11. Improve expression type inference
+
+`getTypeOfExpression` currently returns `anyType` for many expression patterns.
+Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
+
+- [ ] **11a. Object literal → anonymous object type**
+
+  `{ a: 1, b: "hello" }` should produce `Type.Object` with properties
+  `a: number, b: string`, not `anyType`. Required for object assignability.
+
+  **File:** `Checker.kt` — `getTypeOfExpression` case `ObjectLiteralExpression`
+  **Target:** ~80 tests (many TS2322 tests involve object literal assignments)
+
+- [ ] **11b. Array literal → Array type**
+
+  `[1, 2, 3]` should produce `Type.Reference(globalArrayType, [numberType])`.
+  Requires checking element types and computing union if heterogeneous.
+
+  **File:** `Checker.kt` — `getTypeOfExpression` case `ArrayLiteralExpression`
+  **Target:** ~30 tests
+
+- [ ] **11c. Arrow/function expression → function type**
+
+  `(x: number) => x + 1` should produce `Type.Object` with a call signature.
+  Required for function-typed parameter checking.
+
+  **File:** `Checker.kt` — `getTypeOfExpression` cases `ArrowFunction`, `FunctionExpression`
+  **Target:** ~20 tests
+
+- [ ] **11d. Identifier type lookup from local scope**
+
+  `getTypeOfIdentifier` currently only looks up globals. For TS2322 to work on
+  local variables, it needs to resolve file-level locals and (ideally) function-scoped
+  bindings from the binder's symbol tables.
+
+  **File:** `Checker.kt` — `getTypeOfIdentifier`
+  **Target:** ~100 tests (most expressions involve local variables)
+
+### 12. Widen TS2345 argument type checking
+
+- [ ] **12a. Remove `isSimpleCheckableType` guard**
+
+  The structural comparison engine (item 4) now handles object/interface types.
+  Remove the primitive-only filter in `checkArgumentsAgainstSignature` and use
+  `checkTypeRelatedTo` for ALL parameter types.
+
+  Guard to relax: `if (!isSimpleCheckableType(paramType)) continue` at line ~22456.
+
+  **File:** `Checker.kt` — `checkArgumentsAgainstSignature`, remove `isSimpleCheckableType`
+  **Regression risk:** Monitor for FPs from incomplete type resolution. May need to
+  keep the guard for TypeParameter types until generic inference improves.
+  **Target:** ~100 tests
+
+- [ ] **12b. Handle union type call signatures**
+
+  Currently `getCallSignaturesOfType` returns `emptyList()` for `Type.Union`.
+  Implement: collect call signatures from all union constituents.
+
+  **File:** `Checker.kt` — `getCallSignaturesOfType`
+  **Target:** ~20 tests
+
+- [ ] **12c. TS2769 — no overload matches this call**
+
+  When ALL overload signatures fail, emit TS2769 with each overload's error
+  instead of TS2345 against the last signature.
+
+  **File:** `Checker.kt` — overload resolution in `checkCallTypesInExpr`
+  **Target:** ~30 tests
+
+### 13. Widen TS2339 property access checking
+
+- [ ] **13a. Check property access on typed identifiers**
+
+  Remove the `this`-only guard. For any `expr.prop` where `getTypeOfExpression(expr)`
+  resolves to a known object type, check if `prop` exists on that type.
+
+  Guard to relax: `if (expr.expression !is Identifier || text != "this") return`
+
+  **File:** `Checker.kt` — `checkSinglePropertyAccess`
+  **Regression risk:** HIGH — need to ensure `getTypeOfExpression` returns `anyType`
+  (not a concrete type) for unresolvable expressions. Guard with `if (type === anyType) return`.
+  **Target:** ~60 tests
+
+- [ ] **13b. Remove base type skip**
+
+  The Phase 4 `resolveInterfaceMembers` now inherits from base types.
+  Remove: `if (objectType.baseTypes != null && baseTypes.isNotEmpty()) return`
+
+  **File:** `Checker.kt` — `checkSinglePropertyAccess`
+  **Target:** ~30 tests
+
+- [ ] **13c. Check property access on union types**
+
+  For `(A | B).prop`, property must exist on ALL constituents.
+  Use `getPropertyOfType` on each union member.
+
+  **File:** `Checker.kt` — `checkSinglePropertyAccess`
+  **Target:** ~15 tests
+
+### 14. Operator type checking (new diagnostics)
+
+- [ ] **14a. TS2362/TS2363 — arithmetic operand types**
+
+  For `+`, `-`, `*`, `/`, `%`, `**`, `<<`, `>>`, `>>>`, `&`, `|`, `^`:
+  left/right must be `number`, `any`, `bigint`, or enum type.
+
+  Special case: binary `+` allows `string` on either side.
+
+  **File:** `Checker.kt` — new `checkArithmeticOperandTypes`
+  **Target:** ~100 tests
+
+- [ ] **14b. TS2365 — operator cannot be applied to types**
+
+  For `+` specifically: if left is `string` and right is not, or vice versa,
+  emit "Operator '+' cannot be applied to types 'X' and 'Y'".
+
+  **File:** `Checker.kt`
+  **Target:** ~50 tests
+
+### 15. Class/interface structural diagnostics
+
+- [ ] **15a. TS2430 — duplicate property declarations in class**
+
+  Within a single class body, detect duplicate property/method names.
+  Getters and setters with the same name are allowed.
+
+  **File:** `Checker.kt` — new `checkDuplicateClassMembers`
+  **Target:** ~50 tests
+
+- [ ] **15b. TS2416 — property type incompatible with base type**
+
+  When a class overrides a property from its base, check that the overriding
+  type is assignable to the base type.
+
+  **File:** `Checker.kt`
+  **Dependency:** 13b (base type resolution working)
+  **Target:** ~30 tests
+
+- [ ] **15c. TS2411 — class implements interface property mismatch**
+
+  When a class `implements` an interface, check that each interface property
+  has a compatible implementation in the class.
+
+  **File:** `Checker.kt`
+  **Dependency:** structural comparison engine (item 4)
+  **Target:** ~30 tests
+
+### 16. False positive reduction
+
+- [ ] **16a. TS2554 FP for overloaded functions and rest params**
+
+  Current `checkArgumentCounts` doesn't handle rest parameters (`...args`)
+  or multiple overload signatures properly. Fix: check if ANY overload
+  accepts the given argument count before emitting TS2554.
+
+  **File:** `Checker.kt` — `checkArgumentCounts`
+  **Target:** ~13 tests (direct), prevents cascading FPs
+
+- [ ] **16b. TS2391 FP for abstract methods and interface declarations**
+
+  `checkMissingImplementations` currently flags abstract methods and
+  interface method declarations as missing bodies. Skip when declaration
+  has `abstract` modifier or is in an interface body.
+
+  **File:** `Checker.kt` — `checkMissingImplementations`
+  **Target:** ~14 tests
+
+- [ ] **16c. TS2304/TS2693 FP for cross-file references**
+
+  Improve name resolution to check re-exported names and `declare module`
+  ambient references before emitting TS2304.
+
+  **File:** `Checker.kt` — `checkUnresolvedNames`
+  **Target:** ~40 tests
+
+### 17. JS emit fixes
+
+- [ ] **17a. Multi-file import ordering**
+
+  Fix topological sort for multi-file compilation where import chains
+  create non-obvious ordering requirements.
+
+  **File:** `TypeScriptCompiler.kt`
+  **Target:** ~20 tests
+
+- [ ] **17b. CJS transform edge cases**
+
+  Fix remaining CommonJS transform issues: self-referencing exports,
+  comment hoisting before `Object.defineProperty`, indirect call patterns.
+
+  **File:** `Transformer.kt`
+  **Target:** ~20 tests
+
+- [ ] **17c. Type-only import elimination**
+
+  Improve detection of type-only imports that should be elided in JS output,
+  including `export type { X }` re-exports and namespace-only imports.
+
+  **File:** `Checker.kt`, `Transformer.kt`
+  **Target:** ~15 tests
+
+---
+
 ## Non-goals (explicitly deferred)
 
 - **Control flow analysis / type narrowing**: typeof guards, instanceof, truthiness narrowing
@@ -457,6 +721,8 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ## Test impact estimates
 
+### Phase 4a — Infrastructure (completed)
+
 | Milestone | New tests passing | Cumulative |
 |-----------|-------------------|------------|
 | After 0-2 (type foundation) | ~0 | 7,632 |
@@ -466,10 +732,23 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 | After 6 (TS2322) | ~200 | 7,982 |
 | After 7 (TS2345) | ~60 | 8,042 |
 | After 8 (generics) | ~100 | 8,142 |
-| **Total Phase 4** | **~510** | **~8,142 (80.8%)** |
+| After 9 (parallel prep) | ~0 | 8,142 |
 
-Conservative estimates — actual gains depend on how many tests need ONLY these codes
-vs needing additional diagnostics we haven't implemented.
+### Phase 4b — Widen coverage (new queue)
+
+| Milestone | New tests passing | Cumulative |
+|-----------|-------------------|------------|
+| After 10 (TS2322 → Type engine) | ~280 | ~8,420 |
+| After 11 (expression inference) | ~230 | ~8,650 |
+| After 12 (TS2345 widened) | ~150 | ~8,800 |
+| After 13 (TS2339 widened) | ~105 | ~8,905 |
+| After 14 (operator checking) | ~150 | ~9,055 |
+| After 15 (class diagnostics) | ~110 | ~9,165 |
+| After 16 (FP reduction) | ~67 | ~9,232 |
+| After 17 (JS emit) | ~55 | ~9,287 |
+| **Total Phase 4b** | **~1,147** | **~9,287 (92.2%)** |
+
+Conservative — actual gains depend on test overlap between codes.
 
 ---
 
