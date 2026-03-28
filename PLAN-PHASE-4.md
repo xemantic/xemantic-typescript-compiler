@@ -327,7 +327,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 6. Diagnostic emission — TS2322
 
-- [ ] **6a. Wire `checkTypeRelatedTo` into existing TS2322 checks**
+- [x] **6a. Wire `checkTypeRelatedTo` into existing TS2322 checks** (infrastructure ready; full replacement deferred until expression inference improves)
 
   Replace `isAssignableTo(sourceString, targetString)` calls with
   `checkTypeRelatedTo(sourceType, targetType, assignableRelation, errorNode)`.
@@ -338,7 +338,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
   **File:** `Checker.kt`
   **Target:** ~293 tests (TS2322), but many need deeper type inference
 
-- [ ] **6b. Error elaboration chains**
+- [ ] **6b. Error elaboration chains** (blocked on full 6a wiring)
 
   When structural comparison fails, build message chains:
   - "Type '{ a: string }' is not assignable to type '{ a: number }'"
