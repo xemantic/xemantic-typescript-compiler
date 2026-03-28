@@ -16,7 +16,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - `project.exec {}` is not available in Gradle 9 Kotlin DSL task `doLast` blocks — use `ProcessBuilder` directly instead.
 - TypeScript compiler tests are **generated** by `./gradlew generateTypeScriptTests` into `build/generated/typescript-tests/`; this task requires the TypeScript repo to be cloned first (done automatically via `cloneTypeScriptRepo` dependency). Never edit generated files manually.
 - **Deprecated features skipped in JS emit tests**: Parameterized JS emit tests for `target=ES5`/`ES3` and `module=AMD`/`System`/`UMD` are not generated (deprecated in TypeScript 6.0, removed in 7.0/tsgo). Error baseline tests for these combinations ARE still generated since TS5107/TS5108 deprecation diagnostics must still fire. The `effectiveTarget` maps ES3/ES5 → ES2015 so no downlevel transforms are needed.
-- **Disabled test category** (re-enable when type checker is implemented): `.errors.txt` error baseline tests are commented out in `build.gradle.kts` `generateTypeScriptTests` task — search for `TODO: Re-enable when type checker is implemented`. The `.d.ts` guard (`hasDtsSection`) was removed in Phase 2 since `TypeScriptTestSupport.stripDtsSection()` already strips declaration output from baselines during comparison.
+- **Disabled test category**: `.errors.txt` error baseline tests are commented out in `build.gradle.kts` `generateTypeScriptTests` task — search for `TODO: Re-enable when type checker is implemented`. Re-enabling adds ~9,055 tests (see PLAN.md item 4c).
 - Kotlin 2.x disallows `.` in backtick-quoted JVM method names (error: "Name contains illegal characters: .."); sanitize test function names by replacing dots with underscores (e.g. `foo_ts` not `foo.ts`). Some TypeScript test base names contain dots beyond the extension (e.g. `accessors_spec_section-4.5_error-cases`), so the entire `nameWithoutExtension` must have dots replaced, not just the `.ts`/`.js` suffix.
 
 ### Scanner/Parser gotchas
@@ -31,30 +31,17 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Emitter gotchas
 
-- **`if/else` formatting**: `emitEmbeddedStatement` writes a newline after block bodies. For `} else`, the `}` and `else` must be on the same line for non-multiline blocks. The `emitIfStatementCore` method handles this by NOT using `emitEmbeddedStatement` for the then-block when there's an else clause — it calls `emitBlockBody` directly and handles the newline/indentation for `else` itself.
-- **Trailing CRLF in baselines**: The `formatBaseline` function adds trailing `\r\n` after JS output. The `toCRLF` conversion must normalize LF→CRLF.
 - **Tab preservation in error squiggles**: The error baseline formatter must preserve tab characters from source lines in the squiggle indentation — tabs stay as tabs, other characters become spaces. Don't use `" ".repeat(col)`.
 - **Numeric literal property access**: `1.foo` is ambiguous in JS (the `.` is a decimal point). Emit `1..foo` when the numeric literal has no decimal point, exponent, or `0x`/`0b`/`0o` prefix.
-- **Labeled statement chaining**: TypeScript emits `target1: target2: stmt` all on one line. Use a `skipNextIndent` flag to suppress the body statement's `writeIndent()` call after writing all labels inline.
-- **`emitPropertyAssignment` comment tracking**: After emitting `": "`, track `onNewLine` (bool). For each comment: if `hasPrecedingNewLine && !onNewLine` emit newline+indent first; then write comment; if `hasTrailingNewLine` emit newline+indent and set `onNewLine=true`, else write space and `onNewLine=false`. Never double-newline by emitting newline when already at line start.
-- **JSX self-closing `/>` spacing**: TypeScript emits a space before `/>` only when there are NO attributes (`<Foo />`) but NOT when attributes are present (`<Foo bar="x"/>`).
-
-- **Parameter comment comma-after format**: In `emitParameters`, the first parameter's leading JSDoc comment stays on the same line as `(` — only subsequent parameters get a newline before their comments. TypeScript emits `function foo(/** comment */ a,` not `function foo(\n/** comment */ a,`.
 - **Yield expression operand parsing**: Use `isStartOfExpression()` check (not `!canParseSemicolon()`) to determine if yield has an operand. `canParseSemicolon()` returns false for `]` and `)` which would cause yield to try parsing them as expressions. TypeScript checks `!hasPrecedingLineBreak() && (asterisk || isStartOfExpression())`.
 
 ### Transformer gotchas
 
-- **String enum syntactic reverse mapping**: Enum members with syntactically-string initializers (template literals, string concat, references to other string-valued members) skip reverse mapping: `Foo["A"] = value` instead of `Foo[Foo["A"] = value] = "A"`. The `isSyntacticallyStringEnum` function checks the expression form, not just constant evaluation.
-- **Namespace/enum var dedup**: `declaredNames` set only collects non-`declare` class/function names (NOT enum/variable). Enums and namespaces with the same name as each other need their own var declarations.
-- **Orphaned comments (erased declarations)**: Only preserve a leading comment from an erased declaration if there is a blank line (≥2 newlines) between the comment's `end` position and the declaration's `pos`. Adjacent comments (only one newline between them and the keyword) are considered part of the declaration and are dropped. Check: `source.substring(comment.end, stmt.pos).count { it == '\n' } >= 2`.
-- **CommonJS transform**: Applied AFTER all other transforms. The `transformToCommonJS` receives already-transformed statements (so `ImportEqualsDeclaration` is already a `VariableStatement` with `require()` call). The `isModuleFile` check uses the ORIGINAL source file statements to detect module files.
-- **CJS export void0 hoist batching**: TypeScript batches `exports.x = void 0` chains into groups of 50 to avoid deep expression trees. Without batching, files with thousands of exports (e.g., `manyConstExports` with 5000) cause StackOverflow in both Transformer `rewriteId` and Emitter `emitBinaryExpression`.
-- **TypeScript DOES downlevel const/let to var for ES3/ES5**: User code `const`/`let` is emitted as `var` when target < ES2015. The Emitter handles this in `emitVariableDeclarationList`. The Transformer's synthesized code also uses `var` for ES5.
-- **Property-to-constructor trailing comments**: When moving class property initializers to the constructor, copy `trailingComments` from the `PropertyDeclaration` to the generated `ExpressionStatement`.
-- **Constructor prologue ordering**: When inserting parameter-property initializers into an existing constructor body (no `super()` call), find the end of the prologue-directive block first (`"use strict"`, `"ngInject"`, etc.) and insert AFTER it, not at index 0. Prologue directives are `ExpressionStatement` nodes whose expression is a `StringLiteralNode`.
-- **Enum member comments**: Parser must capture `leadingComments()` and `scanner.getTrailingComments()` per enum member in `parseEnumDeclaration`. Transformer must then copy those to each generated `ExpressionStatement` in the IIFE body.
-- **Type assertion parens**: `(<T>expr)` — the `()` are syntax for the assertion, not semantically required. The Transformer (not Emitter) must drop them: when `ParenthesizedExpression` wraps a type-erasure node, drop the parens unless the inner result is an `ObjectLiteralExpression`, `FunctionExpression`, `ClassExpression`, `ArrowFunction`, etc. Fix belongs in Transformer because `TypeAssertionExpression` is already stripped before Emitter sees it.
-- **`new (<T>call())` semantics**: `new (A())` ≠ `new A()` — after stripping the type assertion, if the constructor expr becomes a `CallExpression`, it must be re-wrapped in `ParenthesizedExpression` to preserve the `new (expr)` form.
+- **Orphaned comments (erased declarations)**: Only preserve a leading comment from an erased declaration if there is a blank line (≥2 newlines) between the comment's `end` position and the declaration's `pos`. Adjacent comments are part of the declaration and are dropped.
+- **CommonJS transform ordering**: Applied AFTER all other transforms. `transformToCommonJS` receives already-transformed statements. The `isModuleFile` check uses the ORIGINAL source file statements.
+- **Constructor prologue ordering**: When inserting parameter-property initializers into an existing constructor body (no `super()` call), insert AFTER prologue directives (`"use strict"`, `"ngInject"`), not at index 0.
+- **Type assertion parens**: `(<T>expr)` — the Transformer (not Emitter) must drop them. Fix belongs in Transformer because `TypeAssertionExpression` is already stripped before Emitter sees it.
+- **`new (<T>call())` semantics**: `new (A())` ≠ `new A()` — after stripping the type assertion, if the constructor expr becomes a `CallExpression`, it must be re-wrapped in `ParenthesizedExpression`.
 
 ### Module detection gotchas
 
@@ -71,6 +58,11 @@ Both developers and AI agents are expected to add entries as they encounter surp
 ### Binder gotchas
 
 - **`canMerge` must include Variable+Module**: `declare const b: T; declare namespace b {}` is valid TypeScript. The binder's `canMerge` must allow `Variable + Module` and `Module + Variable` merging, otherwise the second declaration silently overwrites the first symbol. This matters for `isTypeOnlyImportRequire` which then sees only the namespace and incorrectly elides the `require()`.
+
+### Type system gotchas
+
+- **Type subclasses are nested inside `sealed class Type`**: To avoid name conflicts with AST TypeNode subclasses (`UnionType`, `IntersectionType`, `TypeReference`, `TypeParameter` in Ast.kt), the checker's semantic type classes are nested: `Type.Intrinsic`, `Type.Union`, `Type.Intersection`, `Type.Object`, `Type.Interface`, `Type.Reference`, `Type.TypeParam`. Use `when (type) { is Type.Union -> ... }` etc.
+- **`TypeFlags` companion shadows Kotlin type names**: `TypeFlags.String`, `TypeFlags.Number`, `TypeFlags.Boolean`, `TypeFlags.Object` shadow Kotlin types inside the `TypeFlags` companion. Outside the companion, `String` refers to `kotlin.String` as normal. Inside the companion, use `kotlin.String` if you need the Kotlin type.
 
 ### Checker gotchas
 
@@ -123,16 +115,12 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### TS2552 spelling suggestion gotchas
 
-- **Damerau-Levenshtein not standard Levenshtein**: TypeScript's spelling suggestion algorithm counts transpositions (adjacent character swaps like `tupel`→`tuple`) as distance 1. Standard Levenshtein gives distance 2 for transpositions. Use optimal string alignment (restricted Damerau-Levenshtein) with the 2D DP table to match TypeScript's behavior.
-- **Max 10 suggestions per name per file**: TypeScript limits TS2552 to 10 occurrences per unique unresolved name. Additional occurrences fall back to TS2304. Track counts in `spellingSuggestionCounts` map with key `"$fileName:$name"`.
-- **Single-char names get suggestions**: Don't filter candidates by `length >= 2` — TypeScript suggests `A` for `a` (case-only mismatch, distance 0). The threshold `max(1, name.length / 3)` handles short names correctly.
-- **`typeof a` in type constraints is value position**: `checkTypeQueryName` should use `inTypePosition = false` so TS2552 fires. The TS2662/TS2663 class-member suggestions are still safe because type constraints don't occur in class body scope where those trigger.
-- **Type parameter constraints evaluated before function params**: Check type param constraints BEFORE calling `addParamsToScope`. For `function f<T extends typeof a>(a: T)`, `a` is not in scope during the constraint — moving `addParamsToScope` AFTER constraint checking allows TS2552 to fire for `a`.
-- **TS2728 related info for file-level declarations only**: `findDeclarationRelatedInfo` looks up suggested names in binder locals (file-level). For function-scoped names (params, local vars) the position isn't tracked, so TS2728 is silently omitted — which matches TypeScript's behavior for those cases.
-- **Gradle binary cache inconsistency**: When changes to Checker.kt don't seem to take effect during debugging, a full clean (`rm -rf build`) is needed. The binary test cache can keep stale results even after recompilation.
-- **Ambient external modules not in scope**: `declare module "foo"` creates a symbol with string-literal name. The unquoted name `foo` used as an identifier gets TS2304 — TypeScript does NOT consider quoted module names as accessible identifiers. Exclude them from `fileScope` in `checkUnresolvedNames`.
-- **NamespaceModule IS a valid suggestion candidate**: `declare namespace Foo` has `SymbolFlags.NamespaceModule` (not `SymbolFlags.Value`), but namespace names ARE usable at value positions (e.g. `Foo.bar`). Don't put them in `typeOnlyNames` — use `!sym.flags.hasAny(Value or Module)` to exclude only pure type declarations.
-- **KNOWN_GLOBALS iterated first in spelling suggestions**: TypeScript's lib.d.ts globals are in the symbol table before file-local symbols. Iterating KNOWN_GLOBALS before scope chain ensures lib globals win ties over local declarations (e.g., `Lock` wins over `ELoc` for `loc`).
+- **Damerau-Levenshtein not standard Levenshtein**: TypeScript counts transpositions as distance 1. Use optimal string alignment (restricted Damerau-Levenshtein).
+- **Type parameter constraints evaluated before function params**: Check type param constraints BEFORE calling `addParamsToScope` — params are not yet in scope during constraints.
+- **Gradle binary cache inconsistency**: When changes to Checker.kt don't seem to take effect, a full clean (`rm -rf build`) is needed.
+- **Ambient external modules not in scope**: `declare module "foo"` — the unquoted name `foo` is NOT an accessible identifier. Exclude from `fileScope`.
+- **NamespaceModule IS a valid suggestion candidate**: Don't put `declare namespace` in `typeOnlyNames` — use `!sym.flags.hasAny(Value or Module)`.
+- **KNOWN_GLOBALS iterated first**: Ensures lib globals win ties over local declarations.
 
 ### Checker diagnostic gotchas (TS18004/TS1103)
 
@@ -142,11 +130,10 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### TS2528 multiple default exports gotchas
 
-- **Position rules**: `ExportAssignment` with identifier → error at identifier pos; with other expr → error at whole-statement start (full span). Named FunctionDeclaration/ClassDeclaration → error at name pos. Anonymous FD/CD → error at `export` keyword (NOT `function`/`class` — `FunctionDeclaration.pos` = `function` keyword, must search backwards for `export`).
-- **2752/2753/6204 code rules**: All non-last exports point to the LAST export. The LAST export points to ALL previous. For 3+ defaults: first non-last → TS2753, subsequent non-lasts → TS6204 "and here.", last → TS2752 pointing to each previous. **EXCEPTION**: when the LAST export is a `FunctionDeclaration`, codes are swapped: non-lasts use TS2752 "The first export default is here.", and the last uses TS2753 "Another export default is here."
-- **TS2323 vs TS2528 classification**: Use `DefaultDeclKind`: DECL (class/function/interface decls and value-identifier ExportAssignments), REEXPORT (ExportDeclaration `{ X as default }`), REF_TYPE (type-only identifier ExportAssignment), EXPR (non-identifier ExportAssignment). `emitTs2323 = declCount >= 2` (where declCount = DECL + REEXPORT). `emitTs2528 = hasNonDeclInline || !emitTs2323`. Both can fire simultaneously.
-- **ExportDeclaration default specifier position**: `ExportSpecifier.name.pos` includes leading whitespace trivia — skip whitespace to get token start position for diagnostics.
-- **`stmt.end` is lookahead position**: `ExportAssignment.end` points AFTER the next scanned token, not the end of the current statement. Compute span end from `expr.pos + expr.text.length` for Identifier expressions, or scan forward from `expr.pos` for complex expressions.
+- **Anonymous FD/CD position**: Error at `export` keyword, NOT `function`/`class` — `FunctionDeclaration.pos` = `function` keyword, must search backwards for `export`.
+- **2752/2753/6204 code exception**: When the LAST export is a `FunctionDeclaration`, codes swap: non-lasts use TS2752, last uses TS2753.
+- **TS2323 vs TS2528 can fire simultaneously**: `emitTs2323 = declCount >= 2`; `emitTs2528 = hasNonDeclInline || !emitTs2323`.
+- **`ExportSpecifier.name.pos` includes trivia**: Skip whitespace to get token start position for diagnostics.
 
 ### Top-level await gotchas
 
@@ -154,37 +141,30 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Const enum type-only treatment gotchas
 
-- **Erased const enums in pre-scans**: Const enums (without `preserveConstEnums`/`isolatedModules`/`verbatimModuleSyntax`) must be treated as type-only in ALL pre-scan passes: `earlyPureTypeNames` (for `hasExportEquals` detection), `pureTypeNames` (for export specifier elision), and `directExportedVarNames` (for identifier rewriting). Without this, `export = ConstEnum` incorrectly generates `return E` instead of `Object.defineProperty(exports, "__esModule", ...)`.
-- **Imported const enum imports also need type-only treatment**: The `topLevelTypeOnlyNames` and `pureTypeNames` pre-scans must also mark imported const enum names as type-only (not just locally-declared ones). Check `checker?.isConstEnumAlias(name, currentFileName) == true` for each non-type-only import specifier.
-- **Binder `export { X }` must not overwrite value symbols**: For local re-exports without `from` clause, `bindExportDeclaration` should NOT create a new Alias symbol that overwrites an existing value symbol (e.g., `declare var b; export { b }` — the var symbol must survive). Skip creating an Alias if the name is already declared as a value.
-- **`.d.ts` module resolution only for relative specifiers**: `resolveModuleSpecifier` should only try `.d.ts` extension for relative specifiers (`./X` or `../X`). Non-relative specifiers like `"foo"` might find `foo.d.ts` which has ambient module declarations — but those may be augmented in other files (module augmentation), making TS2694 checks unreliable. Limiting `.d.ts` resolution to relative paths avoids FPs.
-- **Ambient module `.d.ts` exports use inner module exports**: When resolving a namespace import to a `.d.ts` file with a single `declare module "X" {}`, the module symbol's exports should come from that ambient module's exports, NOT from the file-level locals. `createModuleSymbol` checks for this pattern.
-- **Default import resolution chain**: For `import Foo from "./mod"`, resolve in order: (1) `targetResult.locals["default"]`, (2) scan `ExportAssignment` (not `isExportEquals`) nodes for `export default X`, (3) scan `export { X as default } from "mod"` specifiers.
+- **Erased const enums must be type-only in ALL pre-scans**: `earlyPureTypeNames`, `pureTypeNames`, `directExportedVarNames`, and `topLevelTypeOnlyNames` — both locally-declared and imported. Without this, `export = ConstEnum` generates wrong output.
+- **Binder `export { X }` must not overwrite value symbols**: For local re-exports without `from` clause, skip creating an Alias if the name is already declared as a value.
+- **`.d.ts` module resolution only for relative specifiers**: Non-relative specifiers might find `.d.ts` files with augmented ambient modules, making TS2694 checks unreliable.
+- **Ambient module `.d.ts` exports use inner module exports**: When resolving to a `.d.ts` with `declare module "X" {}`, use that module's exports, NOT file-level locals.
+- **Default import resolution chain**: Resolve `import Foo from "./mod"` in order: (1) `locals["default"]`, (2) `ExportAssignment` (not `isExportEquals`), (3) `export { X as default } from`.
 
 ### Decorator metadata type serialization gotchas
 
-- **`null`/`undefined`/`never` → `void 0`**: Standalone null/undefined/never type nodes and unions that filter down to all-nullish serialize as `VoidExpression(0)`, not `Object`. `never` is always excluded from unions; `null`/`undefined` only filtered when `!strictNullChecks`.
-- **Numeric enum type serialization**: `E.A` (QualifiedName) and plain `E` where E is a numeric enum → `Number`. Requires `checker.isNumericEnumType(name, fileName)`. String enums → `Object`.
-- **Class-level `__decorate` includes constructor paramtypes**: When `emitDecoratorMetadata` is true and a class has decorators, the class-level `__decorate([...], ClassName)` call must include `__metadata("design:paramtypes", [...])` for constructor parameters. Pass `constructorParams` to `generateClassDecorateStatement`.
-- **Type-only export cross-file detection**: `export type { Foo }` in `a.ts` makes `Foo` type-only when imported in `b.ts` even without `import type { Foo }`. Our checker's `isValueExport` looks at the symbol's flags (Class → Value → true) and doesn't detect type-only export specifiers. Fix requires tracking per-name type-only exports in the binder.
-- **Default import metadata safety wrapper**: When `emitDecoratorMetadata=true` and a constructor param type is a qualified name from a default import (`db_1.default.Foo`), TypeScript wraps it: `typeof (_a = typeof db_1.default !== "undefined" && db_1.default.Foo) === "function" ? _a : Object`. The `var _a;` is hoisted before `Object.defineProperty`. Track `defaultModuleTempVars` during import processing; post-process `__metadata` args AFTER `rewriteIdInStatement`; insert `var _a;` at index 0 directly (not via `sideEffectTempVars` which is already processed).
-- **`makeImportHelperConst` trailing comments**: Add a `trailingComments` parameter and pass `stmt.trailingComments` at the call site — same as `makeRequireConst` already does.
-- **`export type { Foo }` makes imports type-only**: When `a.ts` has `export type { Foo }` (not `export { Foo }`), imports in `b.ts` via `import { Foo } from "./a"` are effectively type-only even without `import type`. Check `checker.isTypeOnlyExportName(name, spec, file)` during the `topLevelTypeOnlyNames` and `pureTypeNames` pre-scans. `isTypeOnlyExportName` scans the target file's `ExportDeclaration`s for the name and checks `stmt.isTypeOnly || spec.isTypeOnly`.
-- **`export { Foo }` of type-alias is type-only**: Even without `export type`, exporting a `type Foo = ...` via `export { Foo }` should cause `import { Foo } from "./a"` to be type-only. Check `checker.isValueExport(exportedName, moduleSpec, file) == false` in the `topLevelTypeOnlyNames` and `pureTypeNames` pre-scans.
-- **`resolveModuleSpecifier` for absolute-path test files**: Multi-file tests using `@Filename: /foo.ts` (absolute paths) need `fileBase == "/$baseName"` check in `resolveModuleSpecifier` to match relative specifiers `"./foo"` to `/foo.ts`. The `endsWith("/$baseName")` pattern is too broad (can match nested paths). Use `fileBase == "/$baseName"` for relative specifiers where `fileBase.startsWith("/")`.
-- **`isValueExport` returns `true` (safe default)**: When the checker can't resolve the module or symbol, `isValueExport` returns `true` (keep the import). Only return `false` when definitively type-only (TypeAlias, Interface, non-instantiated namespace).
+- **`null`/`undefined`/`never` → `void 0`**: Serialize as `VoidExpression(0)`, not `Object`. `never` always excluded from unions; `null`/`undefined` only filtered when `!strictNullChecks`.
+- **Numeric enum type serialization**: `E.A` (QualifiedName) and plain `E` where E is a numeric enum → `Number`. String enums → `Object`.
+- **Default import metadata safety wrapper**: For `db_1.default.Foo`, TypeScript wraps it: `typeof (_a = typeof db_1.default !== "undefined" && db_1.default.Foo) === "function" ? _a : Object`. Post-process `__metadata` args AFTER `rewriteIdInStatement`.
+- **`export type { Foo }` / `export { TypeAlias }` make imports type-only**: Cross-file type-only detection. Check `checker.isTypeOnlyExportName` and `checker.isValueExport` during pre-scans.
+- **`resolveModuleSpecifier` for absolute-path test files**: Use `fileBase == "/$baseName"` (not `endsWith`) for relative specifiers where `fileBase.startsWith("/")`.
+- **`isValueExport` returns `true` (safe default)**: Only return `false` when definitively type-only (TypeAlias, Interface, non-instantiated namespace).
 
 ### TS2454/TS2564 gotchas
 
-- **`any` type skips TS2454/TS2564**: Variables and properties typed as `any` don't need definite assignment checking because `any` includes `undefined`.
-- **`var` declarations and TS2454**: Unlike `let`/`const`, TypeScript DOES check `var` declarations for TS2454 (when strict). Only `any`-typed vars are skipped.
-- **`ExportAssignment` is a use site for TS2454**: `export = Foo` must be checked in `checkUsesOfUninitialized`.
-- **Abstract classes still need TS2564**: The `abstract` class modifier does NOT exempt class properties from definite assignment checking. Only skip `declare` classes.
-- **TS7030 requires `strictNullChecks || noImplicitReturns`**: Without either, implicit `undefined` return is always valid. TS2355 (function never returns) still fires regardless of strictNullChecks. Guard TS7030 with `strictNullChecks || options.noImplicitReturns`.
-- **`NumericLiteralNode` in method names**: All functions that extract method names from `ClassElement` nodes (checkMissingImplInClass, findMethodImplementation, emitTS2389, emitTS2393) must handle `NumericLiteralNode`, not just `Identifier` and `StringLiteralNode`.
-- **`ObjectLiteralExpression`/`ArrayLiteralExpression` are always truthy**: TS2872 `isAlwaysTruthyExpr` must include all object-like expressions. Use `closeBracePos + 1` for `ObjectLiteralExpression` span end instead of `expr.end`.
-- **`ImportDeclaration` needs `outerModifiers`**: The parser's `parseImportDeclaration` must forward `outerModifiers` to both side-effect and clause-based `ImportDeclaration` constructors. Without this, `export import "x"` doesn't get TS1191.
-- **Bare specifier TS2882 in multi-file**: TypeScript considers bare (non-relative) specifiers unresolvable without `node_modules`/`paths` config. Our `resolveModuleSpecifier` matches by filename which is too permissive. Always emit TS2882 for bare specifiers except in AMD/System/UMD modules.
+- **`any` type skips checking**: Variables/properties typed as `any` skip TS2454/TS2564.
+- **`var` declarations**: TypeScript DOES check `var` for TS2454 (when strict) — only `any`-typed vars are skipped.
+- **`ExportAssignment` is a use site**: `export = Foo` must be checked in `checkUsesOfUninitialized`.
+- **Abstract classes still need TS2564**: Only `declare` classes are exempt, NOT `abstract`.
+- **TS7030 guard**: Requires `strictNullChecks || noImplicitReturns`. TS2355 fires regardless.
+- **`NumericLiteralNode` in method names**: All method-name extraction functions must handle it, not just `Identifier` and `StringLiteralNode`.
+- **Bare specifier TS2882**: Always emit for bare (non-relative) specifiers except in AMD/System/UMD modules.
 
 ### TS1210 class strict mode gotchas
 
@@ -194,7 +174,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Kotlin idioms
 
-- **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`). The `feat/kt-changes` branch removed the last BigDecimal usage specifically to enable Native compilation.
+- **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`).
 - **Enum context resolution** (Kotlin 2.1+): When the expected type is an enum, use unqualified entry names — write `Equals`, not `SyntaxKind.Equals`. This applies to `when` branch conditions, named arguments (`operator = Equals`), comparisons (`flags == VarKeyword`), and any other position where the enum type is inferred. Caveat: if a data class has the same name as an enum entry (e.g. `LabeledStatement`), keep the `SyntaxKind.` prefix to avoid ambiguity.
 - **`in 0..<x` range checks**: Prefer `pos in 0..<end` over `pos >= 0 && end > pos` for range validation — uses Kotlin's `rangeUntil` (`..<`) operator for exclusive upper bound.
 - **No JVM-only APIs in `commonMain`**: `Map.putIfAbsent` → use `getOrPut`; `Math.pow` → use `kotlin.math.pow` extension. Always use Kotlin stdlib equivalents for multiplatform compatibility.
@@ -202,16 +182,16 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 3m: False positive reduction and diagnostic precision.** The pipeline is: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. The Checker emits diagnostics: TS6133/TS6196/TS6199 (unused), TS2454/TS2564 (definite assignment), TS7006 (implicit any), TS2304 (cannot find name), TS2552 (spelling suggestions), TS2300/TS2567 (duplicates), TS7026 (JSX), TS2309 (export conflicts), TS1100/TS1105/TS1104/TS1115/TS1116/TS1117 (syntax), TS2314 (type arg count), TS2683 (implicit this), TS2389/TS2391 (overloads), TS17009 (super before this), TS2588 (const assignment), TS2369 (parameter property), TS5101/TS5102/TS5107/TS5108 (deprecation), TS6082/TS5069/TS5070/TS5071/TS5095/TS5053/TS5055/TS5110 (options), TS2695 (comma operator), TS2448/TS2449/TS2450 (use before decl), TS2396 (arguments collision), TS1029/TS1030/TS1036/TS1039/TS1049/TS1052/TS1090/TS1113/TS1183/TS1212/TS1213/TS1218/TS1308 (syntax), TS1015/TS2371 (param restrictions), TS2377 (super call), TS2397/TS2414/TS2427 (reserved names), TS2528 (multi-default export), TS2882 (side-effect imports), TS2694 (namespace export). **7,612 / 10,077 tests passing (75.5%)**, up from 7,148/10,120 (session 2026-03-21b). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345 — structural typing, generic instantiation), parser error recovery (TS1005/TS1109 FPs), CJS multi-file transforms. ES5/ES3/AMD/System/UMD JS emit tests skipped (475 tests removed — deprecated in TypeScript 6.0, removed in 7.0/tsgo). Key remaining work: type inference diagnostics (TS2322, TS2339, TS2345), CJS export qualification, decorator metadata.
+**Phase 4: Structural type checker.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,632 / 10,077 tests passing (~75.7%). Current work: replace string-based type representation with Type sealed class hierarchy, implement structural typing engine (TS2322/TS2339/TS2345), prepare for parallel checking via Kotlin coroutines (inspired by tsgo's N-checker goroutine model).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
-PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-to-bottom:
+PLAN-PHASE-4.md contains the **QUEUE**. Execute top-to-bottom:
 
 1. Find the first unchecked (`- [ ]`) item in the QUEUE
 2. Implement it — the item describes the deliverable
 3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. Verify no regressions from the **7,512 currently passing tests**
+4. Verify no regressions from the currently passing test count
 5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
 6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
 
@@ -220,7 +200,7 @@ PLAN.md contains a **QUEUE** — a numbered list of tasks in order. Execute top-
 - **Do NOT switch items** mid-task — finish the current item before moving on.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the 7,612 currently passing tests must continue to pass after every change.
+- **No regressions** — the currently passing tests must continue to pass after every change.
 
 ### Reference TypeScript sources
 
@@ -250,11 +230,6 @@ Dispatch in **waves** to keep merge conflicts manageable:
 - Merge + resolve conflicts between waves before starting the next
 - Fixes that touch the same file heavily (e.g. two Transformer changes) should be sequential
 
-Example wave grouping for this codebase:
-- **Wave 1 (parallel):** `"use strict"` (TypeScriptCompiler.kt), AMD format (new Transformer fn), `removeComments` (Emitter.kt guards)
-- **Wave 2 (parallel):** `export {}` (Transformer), binary-op comments (Emitter), yield comments (Parser)
-- **Wave 3 (sequential):** CommonJS improvements (deep Transformer rewrite)
-
 ### Merge workflow (between waves)
 
 After all subagents in a wave complete, merge their worktree branches sequentially into `main`:
@@ -268,8 +243,8 @@ git push
 
 ### Context discipline
 
-- Keep this file and `PLAN.md` up to date after each session so the next agent/developer starts with accurate state
-- `PLAN.md` contains the prioritized fix plan with root cause categories, estimated test impact, and recommended fix order
+- Keep this file and `PLAN-PHASE-4.md` up to date after each session so the next agent/developer starts with accurate state
+- `PLAN-PHASE-4.md` contains the type checker implementation queue; `PLAN-PHASE-3.md` has deferred Phase 3 items
 
 ## How to run tests
 
