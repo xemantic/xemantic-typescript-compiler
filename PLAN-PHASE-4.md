@@ -509,7 +509,7 @@ with `getTypeOfExpression`/`checkTypeRelatedTo` (Type-based) for all TS2322 emis
 `getTypeOfExpression` currently returns `anyType` for many expression patterns.
 Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
 
-- [ ] **11a. Object literal → anonymous object type**
+- [x] **11a. Object literal → anonymous object type**
 
   `{ a: 1, b: "hello" }` should produce `Type.Object` with properties
   `a: number, b: string`, not `anyType`. Required for object assignability.

@@ -21011,9 +21011,10 @@ class Checker(
             val sourceIsIntrinsic = sourceType is Type.Intrinsic
             val targetIsIntrinsic = targetType is Type.Intrinsic
             val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            val sourceIsObjectLiteral = init is ObjectLiteralExpression && sourceType is Type.Object
             val useNewEngine = targetType !== anyType && targetType !== errorType &&
                 sourceType !== anyType && sourceType !== errorType &&
-                (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish)
+                (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish || sourceIsObjectLiteral)
             if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
@@ -21672,7 +21673,7 @@ class Checker(
 
             // Literals that create objects
             is ArrayLiteralExpression -> anyType // TODO: Array type
-            is ObjectLiteralExpression -> anyType // TODO: anonymous object type
+            is ObjectLiteralExpression -> getTypeOfObjectLiteral(expr)
 
             // Call expressions — resolve return type from signature
             is CallExpression -> getReturnTypeOfCallExpression(expr)
@@ -21726,6 +21727,75 @@ class Checker(
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
             }
         }
+    }
+
+    /** Get the type of an object literal expression as an anonymous object type. */
+    private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
+        val members = symbolTable()
+        val properties = mutableListOf<Symbol>()
+        for (prop in expr.properties) {
+            when (prop) {
+                is PropertyAssignment -> {
+                    val name = when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> continue
+                    }
+                    val propType = getTypeOfExpression(prop.initializer)
+                    val sym = Symbol(SymbolFlags.Property, name)
+                    sym.declarations.add(prop)
+                    sym.valueDeclaration = prop
+                    members[name] = sym
+                    properties.add(sym)
+                    symbolTypes[sym.id] = propType
+                }
+                is ShorthandPropertyAssignment -> {
+                    val name = prop.name.text
+                    val propType = getTypeOfExpression(prop.name)
+                    val sym = Symbol(SymbolFlags.Property, name)
+                    sym.declarations.add(prop)
+                    sym.valueDeclaration = prop
+                    members[name] = sym
+                    properties.add(sym)
+                    symbolTypes[sym.id] = propType
+                }
+                is MethodDeclaration -> {
+                    val name = when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> continue
+                    }
+                    val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                    sym.declarations.add(prop)
+                    sym.valueDeclaration = prop
+                    members[name] = sym
+                    properties.add(sym)
+                    // Method type — create function type with call signature
+                    val returnType = prop.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                    val params = getParameterSymbols(prop.parameters)
+                    val sig = Signature(
+                        declaration = prop,
+                        parameters = params,
+                        resolvedReturnType = returnType,
+                        minArgumentCount = prop.parameters.count {
+                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                        },
+                    )
+                    val methodType = Type.Object()
+                    methodType.callSignatures = listOf(sig)
+                    methodType.properties = emptyList()
+                    symbolTypes[sym.id] = methodType
+                }
+                is SpreadAssignment -> continue // spread not yet supported
+                is GetAccessor, is SetAccessor -> continue // accessors not yet supported
+                else -> continue
+            }
+        }
+        val objType = Type.Object()
+        objType.members = members
+        objType.properties = properties
+        return objType
     }
 
     /** Get the return type of a call expression by resolving the callee's call signature. */
@@ -21856,7 +21926,18 @@ class Checker(
             is Type.BigIntLiteral -> type.toString()
             is Type.Object -> {
                 val sym = type.symbol
-                if (sym != null) sym.name else "{ ... }"
+                if (sym != null) sym.name
+                else {
+                    // Anonymous object type — format as { prop: type; ... }
+                    val props = type.properties
+                    if (props != null && props.isNotEmpty()) {
+                        val entries = props.joinToString("; ") { p ->
+                            val propType = symbolTypes[p.id]
+                            "${p.name}: ${if (propType != null) typeToString(propType) else "any"}"
+                        }
+                        "{ $entries; }"
+                    } else "{ ... }"
+                }
             }
             is Type.Interface -> type.symbol?.name ?: "Interface"
             is Type.Reference -> {
