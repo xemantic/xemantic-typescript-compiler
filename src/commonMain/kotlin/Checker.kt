@@ -20990,19 +20990,70 @@ class Checker(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
     ) {
-        val typeAnnotation = decl.type
+        val typeAnnotation = decl.type ?: return
         val name = decl.name
-        if (typeAnnotation != null && name is Identifier) {
-            val declaredType = resolveSimpleTypeName(typeAnnotation)
-            if (declaredType != null) {
-                varTypes[name.text] = declaredType
-                val init = decl.initializer
-                if (init != null) {
-                    val exprType = inferSimpleExprType(init, varTypes)
-                    if (exprType != null && !isAssignableTo(exprType, declaredType)) {
-                        emitTS2322(name.pos, name.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(init), typeParams = typeParams)
+        if (name !is Identifier) return
+
+        // Maintain old varTypes tracking for checkAssignmentExpression/checkReturnAssignability
+        val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
+        if (declaredTypeStr != null) varTypes[name.text] = declaredTypeStr
+
+        val init = decl.initializer ?: return
+
+        // Use the Type-based engine (Phase 4) for clear-cut cases
+        try {
+            val targetType = getTypeFromTypeNode(typeAnnotation)
+            val sourceType = getTypeOfExpression(init)
+            // Only use new engine when both types are concrete AND we're confident
+            // in the comparison — intrinsic↔intrinsic or null/undefined→concrete type.
+            // For object/interface/union targets with non-null sources, fall back to
+            // old system to avoid FPs from incomplete structural comparison.
+            val sourceIsIntrinsic = sourceType is Type.Intrinsic
+            val targetIsIntrinsic = targetType is Type.Intrinsic
+            val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            val useNewEngine = targetType !== anyType && targetType !== errorType &&
+                sourceType !== anyType && sourceType !== errorType &&
+                (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish)
+            if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                val displaySource = typeToString(sourceType)
+                // Use annotation text for display (handles generics correctly)
+                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                val chain = mutableListOf<String>()
+                if (!isSimpleLiteral(init)) chain.add("  $message")
+                // Type parameter elaboration
+                if (targetType is Type.TypeParam) {
+                    val targetName = targetType.symbol?.name ?: "T"
+                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                } else if (typeParams.isNotEmpty()) {
+                    val targetBaseName = displayTarget.substringBefore('<')
+                    if (targetBaseName in typeParams) {
+                        chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
                     }
                 }
+                diagnostics.add(Diagnostic(
+                    message = message,
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = name.pos,
+                    length = name.text.length,
+                    messageChain = chain,
+                ))
+                return // Type engine handled it — skip old system
+            }
+        } catch (_: StackOverflowError) {
+            // Circular type resolution — fall through to old system
+        }
+
+        // Fallback to old string-based system for remaining cases
+        if (declaredTypeStr != null) {
+            val exprType = inferSimpleExprType(init, varTypes)
+            if (exprType != null && !isAssignableTo(exprType, declaredTypeStr)) {
+                emitTS2322(name.pos, name.text.length, exprType, declaredTypeStr, source, fileName, hasElaboration = !isSimpleLiteral(init), typeParams = typeParams)
             }
         }
     }
