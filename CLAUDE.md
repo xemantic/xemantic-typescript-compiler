@@ -75,6 +75,8 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Const enum negative values**: TypeScript does NOT wrap negative const enum values in `ParenthesizedExpression`. The Transformer emits `PrefixUnaryExpression(-, literal)` directly. `parenthesizeForAccess` adds parens only when used as property access base (e.g., `(-1).toString()`).
 - **Const enum comment `*/` escaping**: `*/` inside const enum comment labels must be escaped to `*_/` to avoid prematurely closing the `/* ... */` comment.
 - **`isolatedModules` and checker const enums**: When `isolatedModules` is true, do NOT use the checker for const enum inlining — the checker has cross-file info that shouldn't be used. Only use local `collectConstEnumValues`.
+- **Circular type resolution StackOverflow**: `getDeclaredTypeOfClassOrInterface` must store the type in `declaredTypes` cache BEFORE resolving base types, otherwise `class A extends B` + `class B extends A` causes infinite recursion. Similarly, type alias resolution needs a sentinel cache entry (`errorType`) before resolving the aliased type. Always wrap `getTypeFromTypeNode`/`getDeclaredTypeOfSymbol` calls in `try-catch(StackOverflowError)` when called from visitor passes.
+- **TS2339 false positive prevention**: Only check `this.prop` in class bodies (not arbitrary property access) to avoid FPs from incomplete type resolution. Skip classes with base types, .js files, enums, anonymous types, union/intersection types, and RUNTIME_PROPERTIES (prototype, constructor, toString, etc.).
 
 ### Multi-file baseline gotchas
 
