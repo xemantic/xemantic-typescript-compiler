@@ -88,6 +88,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 "The parser expected to find a '$closeToken' to match the '$openToken' token here.",
                 1007, openPos
             )
+        } else if (token == SyntaxKind.Unknown) {
+            // Unknown token = invalid character (e.g. ¬, ©, or other non-ASCII non-identifier char).
+            // Emit TS1127 "Invalid character." rather than TS1005 "'{expected}' expected.".
+            reportError("Invalid character.", code = 1127)
         } else {
             reportError("'${tokenToString(kind)}' expected.", code = 1005)
         }
@@ -3651,6 +3655,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     // Report TS1127 "Invalid character." but do NOT consume the token —
                     // parseStatements' safety mechanism will skip it and discard this "statement".
                     reportError("Invalid character.", code = 1127, overrideLength = 0)
+                    Identifier(text = "", pos = pos, end = getEnd())
+                } else if (token == SyntaxKind.CloseParen) {
+                    // A closing paren at expression start means a semicolon (statement terminator)
+                    // is missing, not that an expression is missing. TypeScript emits TS1005
+                    // "';' expected." rather than TS1109 "Expression expected." here.
+                    reportError("';' expected.", code = 1005)
                     Identifier(text = "", pos = pos, end = getEnd())
                 } else {
                     reportError("Expression expected.", code = 1109)
