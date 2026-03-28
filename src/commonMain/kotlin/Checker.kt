@@ -13218,20 +13218,39 @@ class Checker(
             }
             if (actual < nonThisParams.size) {
                 val missingParam = nonThisParams[actual]
-                if (missingParam.name is ObjectBindingPattern || missingParam.name is ArrayBindingPattern) {
-                    val paramStart = missingParam.name.pos
-                    val paramLen = missingParam.name.end - paramStart
-                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
-                    relatedInfo.add(Diagnostic(
-                        message = "An argument matching this binding pattern was not provided.",
-                        category = DiagnosticCategory.Message,
-                        code = 6211,
-                        fileName = fileName,
-                        line = relLine,
-                        character = relChar,
-                        start = paramStart,
-                        length = paramLen,
-                    ))
+                when (val paramName = missingParam.name) {
+                    is ObjectBindingPattern, is ArrayBindingPattern -> {
+                        val paramStart = paramName.pos
+                        val paramLen = paramName.end - paramStart
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                        relatedInfo.add(Diagnostic(
+                            message = "An argument matching this binding pattern was not provided.",
+                            category = DiagnosticCategory.Message,
+                            code = 6211,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = paramStart,
+                            length = paramLen,
+                        ))
+                    }
+                    is Identifier -> {
+                        // TS6210: "An argument for 'x' was not provided."
+                        val paramStart = paramName.pos
+                        val paramLen = paramName.text.length
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                        relatedInfo.add(Diagnostic(
+                            message = "An argument for '${paramName.text}' was not provided.",
+                            category = DiagnosticCategory.Message,
+                            code = 6210,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = paramStart,
+                            length = paramLen,
+                        ))
+                    }
+                    else -> {}
                 }
             }
         }
