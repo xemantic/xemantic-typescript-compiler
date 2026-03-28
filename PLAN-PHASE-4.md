@@ -475,7 +475,7 @@ with `getTypeOfExpression`/`checkTypeRelatedTo` (Type-based) for all TS2322 emis
   **File:** `Checker.kt` — `checkTypeAssignability`, `checkVarDeclAssignability`
   **Target:** ~200 tests (variable assignment is the most common TS2322 pattern)
 
-- [ ] **10b. Replace return statement assignability**
+- [x] **10b. Replace return statement assignability** (wired with conservative guards; gains blocked on structural comparison for non-intrinsic types)
 
   Wire return type checking to use the Type engine:
   ```
