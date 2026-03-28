@@ -219,7 +219,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **2c. `resolveStructuredTypeMembers(type: ObjectType)`**
+- [x] **2c. `resolveStructuredTypeMembers(type: ObjectType)`**
 
   Lazily resolve an ObjectType's members, properties, and signatures:
   - For InterfaceType: collect from all merged declarations + inherited from base types
