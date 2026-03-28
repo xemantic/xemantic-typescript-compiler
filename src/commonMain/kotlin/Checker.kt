@@ -21678,7 +21678,7 @@ class Checker(
             is ParenthesizedExpression -> getTypeOfExpression(expr.expression)
 
             // Literals that create objects
-            is ArrayLiteralExpression -> anyType // TODO: Array type
+            is ArrayLiteralExpression -> getTypeOfArrayLiteral(expr)
             is ObjectLiteralExpression -> getTypeOfObjectLiteral(expr)
 
             // Call expressions — resolve return type from signature
@@ -21686,8 +21686,8 @@ class Checker(
             is NewExpression -> getReturnTypeOfNewExpression(expr)
 
             // Arrow / function
-            is ArrowFunction -> anyType // TODO: function type
-            is FunctionExpression -> anyType // TODO: function type
+            is ArrowFunction -> getTypeOfArrowFunction(expr)
+            is FunctionExpression -> getTypeOfFunctionExpression(expr)
 
             // Conditional
             is ConditionalExpression -> {
@@ -21802,6 +21802,66 @@ class Checker(
         objType.members = members
         objType.properties = properties
         return objType
+    }
+
+    /** Get the type of an array literal expression. */
+    private fun getTypeOfArrayLiteral(expr: ArrayLiteralExpression): Type {
+        if (expr.elements.isEmpty()) return anyType // empty array — can't infer element type
+        // Infer element type as union of all element types
+        val elementTypes = mutableListOf<Type>()
+        for (el in expr.elements) {
+            if (el is SpreadElement) return anyType // spread not yet supported
+            val t = getTypeOfExpression(el)
+            if (t === anyType || t === errorType) return anyType // can't determine
+            if (t !in elementTypes) elementTypes.add(t)
+        }
+        // For a homogeneous array, element type is the single type
+        // For heterogeneous, it's a union
+        val elementType = when (elementTypes.size) {
+            0 -> anyType
+            1 -> elementTypes[0]
+            else -> getUnionType(elementTypes)
+        }
+        // Return Array<T> — currently we return anyType since we don't have
+        // globalArrayType infrastructure yet. The element type info is still useful
+        // for the structural comparison engine.
+        return anyType // TODO: Type.Reference(globalArrayType, [elementType])
+    }
+
+    /** Get the type of an arrow function expression. */
+    private fun getTypeOfArrowFunction(expr: ArrowFunction): Type {
+        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: anyType
+        val params = getParameterSymbols(expr.parameters)
+        val sig = Signature(
+            declaration = expr,
+            parameters = params,
+            resolvedReturnType = returnType,
+            minArgumentCount = expr.parameters.count {
+                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+            },
+        )
+        val fnType = Type.Object()
+        fnType.callSignatures = listOf(sig)
+        fnType.properties = emptyList()
+        return fnType
+    }
+
+    /** Get the type of a function expression. */
+    private fun getTypeOfFunctionExpression(expr: FunctionExpression): Type {
+        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: anyType
+        val params = getParameterSymbols(expr.parameters)
+        val sig = Signature(
+            declaration = expr,
+            parameters = params,
+            resolvedReturnType = returnType,
+            minArgumentCount = expr.parameters.count {
+                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+            },
+        )
+        val fnType = Type.Object()
+        fnType.callSignatures = listOf(sig)
+        fnType.properties = emptyList()
+        return fnType
     }
 
     /** Get the return type of a call expression by resolving the callee's call signature. */

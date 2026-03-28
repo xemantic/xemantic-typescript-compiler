@@ -517,7 +517,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   **File:** `Checker.kt` — `getTypeOfExpression` case `ObjectLiteralExpression`
   **Target:** ~80 tests (many TS2322 tests involve object literal assignments)
 
-- [ ] **11b. Array literal → Array type**
+- [x] **11b. Array literal → Array type** (element type inference done; Array<T> wrapping deferred until globalArrayType)
 
   `[1, 2, 3]` should produce `Type.Reference(globalArrayType, [numberType])`.
   Requires checking element types and computing union if heterogeneous.
@@ -525,7 +525,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   **File:** `Checker.kt` — `getTypeOfExpression` case `ArrayLiteralExpression`
   **Target:** ~30 tests
 
-- [ ] **11c. Arrow/function expression → function type**
+- [x] **11c. Arrow/function expression → function type**
 
   `(x: number) => x + 1` should produce `Type.Object` with a call signature.
   Required for function-typed parameter checking.
