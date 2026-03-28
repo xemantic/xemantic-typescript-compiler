@@ -401,7 +401,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 9. Parallel checking preparation
 
-- [ ] **9a. Extract mutable checker state into CheckerState class**
+- [x] **9a. Extract mutable checker state into CheckerState class**
 
   Group all mutable state (caches, counters, diagnostics) into a clearly
   separated `CheckerState` that each parallel checker instance owns.

@@ -45,25 +45,83 @@ class Checker(
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
 
-    /** Import symbols that are referenced in value positions. */
-    private val referencedAliases: MutableSet<Int> = mutableSetOf()
+    // -----------------------------------------------------------------------
+    // Per-checker mutable state — grouped for parallel-checking readiness.
+    // When N Checker instances run concurrently (Phase 4 item 9c), each
+    // owns its own CheckerState. Shared immutable data (AST, binder results,
+    // compiler options) stays on Checker.
+    // -----------------------------------------------------------------------
 
-    /** Computed enum member values: enum symbol ID → (member name → value). */
-    private val enumValues: MutableMap<Int, MutableMap<String, ConstantValue>> = mutableMapOf()
+    /**
+     * All mutable state that is per-checker-instance: diagnostics, caches,
+     * relation tables, and recursion-depth counters. In a future parallel
+     * checking model ([CheckerPool]), each checker gets its own instance.
+     */
+    private class CheckerState {
+        /** Checker-produced diagnostics. */
+        val diagnostics: MutableList<Diagnostic> = mutableListOf()
+        /** Import symbols that are referenced in value positions. */
+        val referencedAliases: MutableSet<Int> = mutableSetOf()
+        /** Computed enum member values: enum symbol ID → (member name → value). */
+        val enumValues: MutableMap<Int, MutableMap<String, ConstantValue>> = mutableMapOf()
+        /**
+         * Per-file-per-name count of TS2552 spelling suggestions emitted.
+         * TypeScript limits spelling suggestions to 10 per unique name per file.
+         * Key = "$fileName:$missingName".
+         */
+        val spellingSuggestionCounts: MutableMap<String, Int> = mutableMapOf()
+        // Type resolution caches (checker-local — NOT on AST nodes)
+        /** Cache of TypeNode → resolved Type. */
+        val nodeTypes = HashMap<TypeNode, Type>()
+        /** Cache of symbol ID → resolved type of that symbol. */
+        val symbolTypes = HashMap<Int, Type>()
+        /** Cache of symbol ID → declared type (for classes/interfaces). */
+        val declaredTypes = HashMap<Int, Type>()
+        // Type relation instances
+        val subtypeRelation = Relation()
+        val assignableRelation = Relation()
+        val comparableRelation = Relation()
+        val identityRelation = Relation()
+        // Recursion depth counters
+        var checkDepth = 0
+        var relationDepth = 0
+        var argCountDepth = 0
+        var callTypeCheckDepth = 0
+    }
 
-    /** Checker-produced diagnostics. */
-    private val diagnostics: MutableList<Diagnostic> = mutableListOf()
+    private val state = CheckerState()
+
+    // -----------------------------------------------------------------------
+    // Delegating properties — allow all existing code to work unchanged
+    // while mutable state is clearly grouped in CheckerState.
+    // -----------------------------------------------------------------------
+    @get:JvmName("diagnostics_") private val diagnostics get() = state.diagnostics
+    private val referencedAliases get() = state.referencedAliases
+    private val enumValues get() = state.enumValues
+    private val spellingSuggestionCounts get() = state.spellingSuggestionCounts
+    private val nodeTypes get() = state.nodeTypes
+    private val symbolTypes get() = state.symbolTypes
+    private val declaredTypes get() = state.declaredTypes
+    private val subtypeRelation get() = state.subtypeRelation
+    private val assignableRelation get() = state.assignableRelation
+    private val comparableRelation get() = state.comparableRelation
+    private val identityRelation get() = state.identityRelation
+    private var checkDepth: Int
+        get() = state.checkDepth
+        set(value) { state.checkDepth = value }
+    private var relationDepth: Int
+        get() = state.relationDepth
+        set(value) { state.relationDepth = value }
+    private var argCountDepth: Int
+        get() = state.argCountDepth
+        set(value) { state.argCountDepth = value }
+    private var callTypeCheckDepth: Int
+        get() = state.callTypeCheckDepth
+        set(value) { state.callTypeCheckDepth = value }
 
     /** Maximum recursion depth for AST walking to prevent StackOverflow. */
     private val maxCheckDepth = 200
-    private var checkDepth = 0
-
-    /**
-     * Per-file-per-name count of TS2552 spelling suggestions emitted.
-     * TypeScript limits spelling suggestions to 10 per unique name per file.
-     * Key = "$fileName:$missingName".
-     */
-    private val spellingSuggestionCounts: MutableMap<String, Int> = mutableMapOf()
+    private val maxRelationDepth = 100
 
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
     private fun isDtsFile(fileName: String): Boolean =
@@ -72,30 +130,6 @@ class Checker(
     // Whether strict null checks are enabled (null/undefined not assignable to other types)
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val strictNullChecks: Boolean = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
-
-    // -----------------------------------------------------------------------
-    // Type resolution caches (checker-local — NOT on AST nodes)
-    // -----------------------------------------------------------------------
-
-    /** Cache of TypeNode → resolved Type. Keyed by TypeNode reference identity via IdentityKey. */
-    private val nodeTypes = HashMap<TypeNode, Type>()
-
-    /** Cache of symbol ID → resolved type of that symbol. */
-    private val symbolTypes = HashMap<Int, Type>()
-
-    /** Cache of symbol ID → declared type (for classes/interfaces). */
-    private val declaredTypes = HashMap<Int, Type>()
-
-    // -----------------------------------------------------------------------
-    // Type relation instances — MUST be declared before init {} to avoid
-    // Kotlin property initialization order issue (same pattern as strictNullChecks)
-    // -----------------------------------------------------------------------
-    private val subtypeRelation = Relation()
-    private val assignableRelation = Relation()
-    private val comparableRelation = Relation()
-    private val identityRelation = Relation()
-    private var relationDepth = 0
-    private val maxRelationDepth = 100
 
     init {
         // 1. Merge file-level symbols into globals
@@ -12957,8 +12991,6 @@ class Checker(
         }
     }
 
-    private var argCountDepth = 0
-
     private fun checkArgCountInExpr(
         expr: Expression,
         funcParams: Map<String, FuncParamInfo>,
@@ -22094,8 +22126,6 @@ class Checker(
             checkCallTypesInStatement(stmt, source, fileName)
         }
     }
-
-    private var callTypeCheckDepth = 0
 
     private fun checkCallTypesInStatement(stmt: Statement, source: String, fileName: String) {
         if (++callTypeCheckDepth > maxCheckDepth) { callTypeCheckDepth--; return }
