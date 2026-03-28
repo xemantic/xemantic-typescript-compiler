@@ -387,7 +387,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **8b. Basic type inference for generic calls**
+- [x] **8b. Basic type inference for generic calls** (type parameter resolution in signatures; full inference deferred)
 
   For `function identity<T>(x: T): T`, calling `identity("hello")`:
   1. Create InferenceContext with one entry per type parameter

@@ -21253,8 +21253,17 @@ class Checker(
 
         val signatures = sigDecls.map { decl ->
             val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            // Resolve type parameters
+            val typeParams = decl.typeParameters?.map { tp ->
+                val param = Type.TypeParam()
+                param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+                tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                param
+            }
             Signature(
                 declaration = decl,
+                typeParameters = typeParams,
                 parameters = getParameterSymbols(decl.parameters),
                 resolvedReturnType = returnType,
                 minArgumentCount = decl.parameters.count {
@@ -21596,6 +21605,7 @@ class Checker(
     private fun getTypeOfIdentifier(id: Identifier): Type {
         return when (id.text) {
             "undefined" -> undefinedType
+            "null" -> nullType
             "true" -> trueType
             "false" -> falseType
             "NaN", "Infinity" -> numberType
