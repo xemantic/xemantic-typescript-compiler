@@ -174,6 +174,8 @@ class Checker(
         checkSuperBeforeThis()
         // 25. Check assignment to const variables (TS2540)
         checkConstAssignment()
+        // 25b. Check delete operator (TS1102/TS2703)
+        checkDeleteOperator()
         // 26. Check parameter properties outside constructor (TS2369)
         checkParameterProperties()
         // 27. Check super in non-derived class (TS2335)
@@ -14113,6 +14115,188 @@ class Checker(
 
     // -----------------------------------------------------------------------
     // Const assignment checking (TS2540)
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Delete operator checking (TS1102/TS2703)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS2703: "The operand of a 'delete' operator must be a property reference."
+     * Fires unconditionally when delete operand is not a PropertyAccessExpression
+     * or ElementAccessExpression.
+     *
+     * TS1102: "'delete' cannot be called on an identifier in strict mode."
+     * Additionally fires when the operand is an Identifier and the code is in strict mode.
+     */
+    private fun checkDeleteOperator() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val isModule = result.sourceFile.statements.any {
+                it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment
+            }
+            val isStrict = options.target >= ScriptTarget.ES2015 ||
+                options.strict == true ||
+                options.alwaysStrict == true ||
+                isModule ||
+                result.sourceFile.statements.firstOrNull()?.let { stmt ->
+                    stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
+                        (stmt.expression as StringLiteralNode).text == "use strict"
+                } == true
+            walkForDeleteOperator(result.sourceFile.statements, source, fileName, isStrict)
+        }
+    }
+
+    private fun walkForDeleteOperator(stmts: List<Statement>, source: String, fileName: String, isStrict: Boolean) {
+        for (stmt in stmts) walkStmtForDelete(stmt, source, fileName, isStrict)
+    }
+
+    private fun walkStmtForDelete(stmt: Statement, source: String, fileName: String, isStrict: Boolean) {
+        when (stmt) {
+            is ExpressionStatement -> walkExprForDelete(stmt.expression, source, fileName, isStrict)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkExprForDelete(it, source, fileName, isStrict) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
+            is IfStatement -> {
+                walkExprForDelete(stmt.expression, source, fileName, isStrict)
+                walkStmtForDelete(stmt.thenStatement, source, fileName, isStrict)
+                stmt.elseStatement?.let { walkStmtForDelete(it, source, fileName, isStrict) }
+            }
+            is Block -> walkForDeleteOperator(stmt.statements, source, fileName, isStrict)
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkExprForDelete(it, source, fileName, isStrict) }
+                stmt.condition?.let { walkExprForDelete(it, source, fileName, isStrict) }
+                stmt.incrementor?.let { walkExprForDelete(it, source, fileName, isStrict) }
+                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            }
+            is ForInStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            is ForOfStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            is WhileStatement -> {
+                walkExprForDelete(stmt.expression, source, fileName, isStrict)
+                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            }
+            is DoStatement -> {
+                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+                walkExprForDelete(stmt.expression, source, fileName, isStrict)
+            }
+            is SwitchStatement -> {
+                walkExprForDelete(stmt.expression, source, fileName, isStrict)
+                for (clause in stmt.caseBlock) {
+                    val stmts2 = when (clause) { is CaseClause -> clause.statements; is DefaultClause -> clause.statements; else -> emptyList() }
+                    walkForDeleteOperator(stmts2, source, fileName, isStrict)
+                }
+            }
+            is TryStatement -> {
+                walkForDeleteOperator(stmt.tryBlock.statements, source, fileName, isStrict)
+                stmt.catchClause?.let { walkForDeleteOperator(it.block.statements, source, fileName, isStrict) }
+                stmt.finallyBlock?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is Constructor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is GetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is SetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) walkForDeleteOperator(body.statements, source, fileName, isStrict)
+            }
+            is LabeledStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            else -> {}
+        }
+    }
+
+    private fun walkExprForDelete(expr: Expression, source: String, fileName: String, isStrict: Boolean) {
+        when (expr) {
+            is DeleteExpression -> {
+                val operand = expr.expression
+                // Unwrap parentheses
+                var inner = operand
+                while (inner is ParenthesizedExpression) inner = inner.expression
+                val isPropertyRef = inner is PropertyAccessExpression || inner is ElementAccessExpression
+                if (!isPropertyRef) {
+                    // TS2703: operand must be property reference
+                    val start = inner.pos
+                    val length = inner.end - inner.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    if (isStrict && inner is Identifier) {
+                        // TS1102: delete on identifier in strict mode
+                        diagnostics.add(Diagnostic(
+                            message = "'delete' cannot be called on an identifier in strict mode.",
+                            category = DiagnosticCategory.Error,
+                            code = 1102,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = inner.text.length,
+                        ))
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "The operand of a 'delete' operator must be a property reference.",
+                        category = DiagnosticCategory.Error,
+                        code = 2703,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = if (inner is Identifier) inner.text.length else (inner.end - inner.pos).coerceAtLeast(1),
+                    ))
+                }
+                // Also recurse into the operand for nested deletes
+                walkExprForDelete(operand, source, fileName, isStrict)
+            }
+            is BinaryExpression -> {
+                walkExprForDelete(expr.left, source, fileName, isStrict)
+                walkExprForDelete(expr.right, source, fileName, isStrict)
+            }
+            is CallExpression -> {
+                walkExprForDelete(expr.expression, source, fileName, isStrict)
+                expr.arguments.forEach { walkExprForDelete(it, source, fileName, isStrict) }
+            }
+            is ParenthesizedExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is ConditionalExpression -> {
+                walkExprForDelete(expr.condition, source, fileName, isStrict)
+                walkExprForDelete(expr.whenTrue, source, fileName, isStrict)
+                walkExprForDelete(expr.whenFalse, source, fileName, isStrict)
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkForDeleteOperator(body.statements, source, fileName, isStrict)
+                is Expression -> walkExprForDelete(body, source, fileName, isStrict)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForDelete(it, source, fileName, isStrict) }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> walkExprForDelete(prop.initializer, source, fileName, isStrict)
+                        is SpreadAssignment -> walkExprForDelete(prop.expression, source, fileName, isStrict)
+                        else -> {}
+                    }
+                }
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { walkExprForDelete(it.expression, source, fileName, isStrict) }
+            }
+            is CommaListExpression -> expr.elements.forEach { walkExprForDelete(it, source, fileName, isStrict) }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Const assignment checking (TS2588)
     // -----------------------------------------------------------------------
 
     private fun checkConstAssignment() {
