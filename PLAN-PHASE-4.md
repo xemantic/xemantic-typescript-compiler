@@ -533,7 +533,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   **File:** `Checker.kt` — `getTypeOfExpression` cases `ArrowFunction`, `FunctionExpression`
   **Target:** ~20 tests
 
-- [ ] **11d. Identifier type lookup from local scope**
+- [x] **11d. Identifier type lookup from local scope** (globals already contain merged file locals; also added call/new return type checking via getReturnTypeOfCallExpression)
 
   `getTypeOfIdentifier` currently only looks up globals. For TS2322 to work on
   local variables, it needs to resolve file-level locals and (ideally) function-scoped
