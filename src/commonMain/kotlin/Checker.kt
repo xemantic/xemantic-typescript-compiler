@@ -73,6 +73,19 @@ class Checker(
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val strictNullChecks: Boolean = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
 
+    // -----------------------------------------------------------------------
+    // Type resolution caches (checker-local — NOT on AST nodes)
+    // -----------------------------------------------------------------------
+
+    /** Cache of TypeNode → resolved Type. Keyed by TypeNode reference identity via IdentityKey. */
+    private val nodeTypes = HashMap<TypeNode, Type>()
+
+    /** Cache of symbol ID → resolved type of that symbol. */
+    private val symbolTypes = HashMap<Int, Type>()
+
+    /** Cache of symbol ID → declared type (for classes/interfaces). */
+    private val declaredTypes = HashMap<Int, Type>()
+
     init {
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
@@ -211,6 +224,8 @@ class Checker(
         // 41. Check implementation in ambient context (TS1183)
         checkAmbientImplementation()
         // 42. Check arguments collision with rest params (TS2396)
+        // TS2396 only fires at target < ES2015 (no arguments object concern with arrow functions)
+        // But TS1215 fires for module files regardless of target
         if (options.target < ScriptTarget.ES2015) {
             checkArgumentsCollision()
         }
@@ -20941,6 +20956,278 @@ class Checker(
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Type resolution from TypeNodes (Phase 4 — semantic Type objects)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Convert an AST TypeNode into a semantic [Type] object.
+     * Results are cached in [nodeTypes].
+     */
+    private fun getTypeFromTypeNode(node: TypeNode): Type {
+        nodeTypes[node]?.let { return it }
+        val type = getTypeFromTypeNodeWorker(node)
+        nodeTypes[node] = type
+        return type
+    }
+
+    private fun getTypeFromTypeNodeWorker(node: TypeNode): Type {
+        return when (node) {
+            is KeywordTypeNode -> getTypeFromKeyword(node.kind)
+            is TypeReference -> getTypeFromTypeReference(node)
+            is UnionType -> getUnionType(node.types.map { getTypeFromTypeNode(it) })
+            is IntersectionType -> getIntersectionType(node.types.map { getTypeFromTypeNode(it) })
+            is ArrayType -> getArrayType(getTypeFromTypeNode(node.elementType))
+            is TupleType -> getTupleType(node)
+            is LiteralType -> getTypeFromLiteralTypeNode(node)
+            is FunctionType -> getFunctionTypeFromNode(node)
+            is ConstructorType -> getFunctionTypeFromConstructorNode(node)
+            is TypeQuery -> anyType // TODO: getTypeOfSymbol for typeof expressions
+            is ParenthesizedType -> getTypeFromTypeNode(node.type)
+            is ThisType -> anyType // TODO: proper this-type resolution
+            is TypePredicate -> booleanType
+            is TypeLiteral -> getTypeFromTypeLiteral(node)
+            is TypeOperator -> getTypeFromTypeOperator(node)
+            is IndexedAccessType -> anyType // TODO: indexed access types
+            is ConditionalType -> anyType // TODO: conditional types
+            is MappedType -> anyType // TODO: mapped types
+            is TemplateLiteralType -> stringType // template literal types are string-like
+            is InferType -> anyType // only valid inside conditional types
+            is RestType -> getTypeFromTypeNode(node.type) // unwrap rest
+            is NamedTupleMember -> getTypeFromTypeNode(node.type) // unwrap named tuple member
+            is OptionalType -> getTypeFromTypeNode(node.type) // unwrap optional (adds undefined)
+            is ImportType -> anyType // TODO: import types
+            is TemplateLiteralTypeSpan -> anyType // shouldn't be visited directly
+        }
+    }
+
+    /** Map keyword SyntaxKind to intrinsic type singleton. */
+    private fun getTypeFromKeyword(kind: SyntaxKind): Type {
+        return when (kind) {
+            SyntaxKind.NumberKeyword -> numberType
+            SyntaxKind.StringKeyword -> stringType
+            SyntaxKind.BooleanKeyword -> booleanType
+            SyntaxKind.VoidKeyword -> voidType
+            SyntaxKind.AnyKeyword -> anyType
+            SyntaxKind.UnknownKeyword -> unknownType
+            SyntaxKind.NeverKeyword -> neverType
+            SyntaxKind.ObjectKeyword -> nonPrimitiveType
+            SyntaxKind.SymbolKeyword -> esSymbolType
+            SyntaxKind.BigIntKeyword -> bigintType
+            SyntaxKind.UndefinedKeyword -> undefinedType
+            SyntaxKind.NullKeyword -> nullType
+            SyntaxKind.TrueKeyword -> trueType
+            SyntaxKind.FalseKeyword -> falseType
+            else -> errorType
+        }
+    }
+
+    /** Resolve a TypeReference node (e.g., `Foo`, `Array<string>`, `A.B`) to a Type. */
+    private fun getTypeFromTypeReference(node: TypeReference): Type {
+        val name = getTypeReferenceLastName(node.typeName) ?: return errorType
+        // Check for built-in generic types
+        when (name) {
+            "Array", "ReadonlyArray" -> {
+                val typeArgs = node.typeArguments
+                if (typeArgs != null && typeArgs.size == 1) {
+                    return getArrayType(getTypeFromTypeNode(typeArgs[0]))
+                }
+            }
+            "Promise" -> {
+                // Promise<T> is an object type — for now just return anyType for generics
+                // TODO: proper generic type resolution
+            }
+        }
+        // Look up the symbol in globals
+        val symbol = globals[name]
+        if (symbol != null) {
+            return getDeclaredTypeOfSymbol(symbol)
+        }
+        // Not found — return errorType (TS2304 handles the diagnostic separately)
+        return errorType
+    }
+
+    /** Get the declared type of a symbol (class, interface, enum, type alias, etc.). */
+    private fun getDeclaredTypeOfSymbol(symbol: Symbol): Type {
+        declaredTypes[symbol.id]?.let { return it }
+        val type = getDeclaredTypeOfSymbolWorker(symbol)
+        declaredTypes[symbol.id] = type
+        return type
+    }
+
+    private fun getDeclaredTypeOfSymbolWorker(symbol: Symbol): Type {
+        val flags = symbol.flags
+        return when {
+            flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface) -> {
+                val interfaceType = Type.Interface()
+                interfaceType.symbol = symbol
+                interfaceType
+            }
+            flags.hasAny(SymbolFlags.TypeAlias) -> {
+                // Find the type alias declaration and resolve its type
+                val decl = symbol.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                if (decl?.type != null) getTypeFromTypeNode(decl.type) else errorType
+            }
+            flags.hasAny(SymbolFlags.Enum) -> {
+                // Enums are both a type and a value — return an object type
+                val enumType = Type.Object()
+                enumType.symbol = symbol
+                enumType
+            }
+            flags.hasAny(SymbolFlags.TypeParameter) -> {
+                val typeParam = Type.TypeParam()
+                typeParam.symbol = symbol
+                typeParam
+            }
+            else -> anyType
+        }
+    }
+
+    /** Create an array type. For now returns a simple object type since we don't have global Array<T>. */
+    private fun getArrayType(elementType: Type): Type {
+        // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
+        val arrayType = Type.Object()
+        return arrayType
+    }
+
+    /** Create a tuple type from a TupleType node. */
+    private fun getTupleType(node: TupleType): Type {
+        // TODO: proper tuple type
+        return Type.Object()
+    }
+
+    /** Create a Type from a literal type node (e.g., `type X = "hello"` or `type Y = 42`). */
+    private fun getTypeFromLiteralTypeNode(node: LiteralType): Type {
+        return when (val literal = node.literal) {
+            is StringLiteralNode -> Type.StringLiteral(literal.text)
+            is NumericLiteralNode -> {
+                val value = literal.text.toDoubleOrNull() ?: 0.0
+                Type.NumberLiteral(value)
+            }
+            is BigIntLiteralNode -> Type.BigIntLiteral(literal.text.removeSuffix("n"))
+            is Identifier -> when (literal.text) {
+                "true" -> trueType
+                "false" -> falseType
+                else -> errorType
+            }
+            is PrefixUnaryExpression -> {
+                // -42, -1n, etc.
+                if (literal.operator == SyntaxKind.Minus) {
+                    when (val operand = literal.operand) {
+                        is NumericLiteralNode -> {
+                            val value = -(operand.text.toDoubleOrNull() ?: 0.0)
+                            Type.NumberLiteral(value)
+                        }
+                        is BigIntLiteralNode -> Type.BigIntLiteral("-${operand.text.removeSuffix("n")}")
+                        else -> errorType
+                    }
+                } else errorType
+            }
+            else -> errorType
+        }
+    }
+
+    /** Create a function type from a FunctionType node. */
+    private fun getFunctionTypeFromNode(node: FunctionType): Type {
+        val fnType = Type.Object()
+        val sig = Signature(
+            declaration = node,
+            parameters = emptyList(), // TODO: resolve parameter symbols
+            resolvedReturnType = getTypeFromTypeNode(node.type),
+            minArgumentCount = node.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+        )
+        fnType.callSignatures = listOf(sig)
+        return fnType
+    }
+
+    /** Create a constructor type from a ConstructorType node. */
+    private fun getFunctionTypeFromConstructorNode(node: ConstructorType): Type {
+        val ctorType = Type.Object()
+        val sig = Signature(
+            declaration = node,
+            parameters = emptyList(), // TODO: resolve parameter symbols
+            resolvedReturnType = getTypeFromTypeNode(node.type),
+            minArgumentCount = node.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+        )
+        ctorType.constructSignatures = listOf(sig)
+        return ctorType
+    }
+
+    /** Create an object type from a TypeLiteral node (e.g., `{ x: number; y: string }`). */
+    private fun getTypeFromTypeLiteral(node: TypeLiteral): Type {
+        val objType = Type.Object()
+        // TODO: resolve members from node.members
+        return objType
+    }
+
+    /** Handle TypeOperator nodes (keyof, unique, readonly). */
+    private fun getTypeFromTypeOperator(node: TypeOperator): Type {
+        return when (node.operator) {
+            SyntaxKind.KeyOfKeyword -> anyType // TODO: keyof type
+            SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
+            SyntaxKind.ReadonlyKeyword -> getTypeFromTypeNode(node.type) // readonly just adds modifier
+            else -> anyType
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Union and Intersection type construction (basic — Phase 4 items 1b/1c)
+    // -----------------------------------------------------------------------
+
+    /** Construct a union type from a list of constituent types, with basic normalization. */
+    private fun getUnionType(types: List<Type>): Type {
+        if (types.isEmpty()) return neverType
+        // Flatten nested unions
+        val flattened = mutableListOf<Type>()
+        for (type in types) {
+            if (type is Type.Union) {
+                flattened.addAll(type.types)
+            } else {
+                flattened.add(type)
+            }
+        }
+        // Remove never types
+        val filtered = flattened.filter { !it.flags.hasAny(TypeFlags.Never) }
+        if (filtered.isEmpty()) return neverType
+        // If any constituent is any, the union is any
+        filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }
+        // Single type — no union needed
+        if (filtered.size == 1) return filtered[0]
+        // Deduplicate by type identity (by id)
+        val seen = mutableSetOf<Int>()
+        val deduped = filtered.filter { seen.add(it.id) }
+        if (deduped.size == 1) return deduped[0]
+        return Type.Union(deduped)
+    }
+
+    /** Construct an intersection type from a list of constituent types, with basic normalization. */
+    private fun getIntersectionType(types: List<Type>): Type {
+        if (types.isEmpty()) return unknownType
+        // Flatten nested intersections
+        val flattened = mutableListOf<Type>()
+        for (type in types) {
+            if (type is Type.Intersection) {
+                flattened.addAll(type.types)
+            } else {
+                flattened.add(type)
+            }
+        }
+        // If any constituent is never, the intersection is never
+        if (flattened.any { it.flags.hasAny(TypeFlags.Never) }) return neverType
+        // Remove unknown types (unknown & X = X)
+        val filtered = flattened.filter { !it.flags.hasAny(TypeFlags.Unknown) }
+        if (filtered.isEmpty()) return unknownType
+        // If any constituent is any, the intersection is any
+        filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }
+        // Single type — no intersection needed
+        if (filtered.size == 1) return filtered[0]
+        return Type.Intersection(filtered)
+    }
+
+    // -----------------------------------------------------------------------
+    // String-based type resolution (legacy — to be replaced by Type-based)
+    // -----------------------------------------------------------------------
 
     /** Resolve a type annotation to a type name string. Returns null for complex types we can't handle.
      *  Named types (from TypeReference) are prefixed with "@" to distinguish from keyword types. */
