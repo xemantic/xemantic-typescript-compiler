@@ -20869,7 +20869,8 @@ class Checker(
     private fun checkTypeAssignabilityInStatements(
         statements: List<Statement>, source: String, fileName: String,
         varTypes: MutableMap<String, String>, returnType: String?,
-        typeParams: Set<String>
+        typeParams: Set<String>,
+        returnTypeNode: TypeNode? = null,
     ) {
         for (stmt in statements) {
             when (stmt) {
@@ -20883,22 +20884,22 @@ class Checker(
                 }
                 is ReturnStatement -> {
                     if (returnType != null) {
-                        checkReturnAssignability(stmt, returnType, source, fileName, varTypes, typeParams)
+                        checkReturnAssignability(stmt, returnType, source, fileName, varTypes, typeParams, returnTypeNode)
                     }
                 }
                 is FunctionDeclaration -> {
                     checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes)
                 }
-                is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
+                is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                 is IfStatement -> {
-                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
-                    stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams) }
+                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                    stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
                 }
-                is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-                is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-                is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-                is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-                is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
+                is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 is ClassDeclaration -> {
                     val classTypeParams = collectTypeParamNames(stmt.typeParameters)
                     for (member in stmt.members) {
@@ -20934,7 +20935,7 @@ class Checker(
                         }
                     }
                 }
-                is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
+                is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 else -> {}
             }
         }
@@ -20963,20 +20964,21 @@ class Checker(
             }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
-            checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams)
+            checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
         }
     }
 
     private fun checkTypeAssignabilityInStmt(
         stmt: Statement, source: String, fileName: String,
         varTypes: MutableMap<String, String>, returnType: String?,
-        typeParams: Set<String>
+        typeParams: Set<String>,
+        returnTypeNode: TypeNode? = null,
     ) {
         when (stmt) {
-            is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
+            is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
             is ExpressionStatement -> checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
             is ReturnStatement -> {
-                if (returnType != null) checkReturnAssignability(stmt, returnType, source, fileName, varTypes, typeParams)
+                if (returnType != null) checkReturnAssignability(stmt, returnType, source, fileName, varTypes, typeParams, returnTypeNode)
             }
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
@@ -20987,11 +20989,11 @@ class Checker(
                 checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
                 stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams) }
             }
-            is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-            is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-            is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-            is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
-            is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
+            is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+            is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+            is ForOfStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+            is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+            is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is SwitchStatement -> {
                 for (clause in stmt.caseBlock) {
                     when (clause) {
@@ -21006,7 +21008,7 @@ class Checker(
                 stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
                 stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
             }
-            is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams)
+            is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             else -> {}
         }
     }
@@ -21092,18 +21094,53 @@ class Checker(
 
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
-        varTypes: Map<String, String>, typeParams: Set<String>
+        varTypes: Map<String, String>, typeParams: Set<String>,
+        returnTypeNode: TypeNode? = null,
     ) {
         val expr = stmt.expression
+
+        // Try new Type-based engine when returnTypeNode is available
+        if (returnTypeNode != null) {
+            try {
+                val targetType = getTypeFromTypeNode(returnTypeNode)
+                val sourceType = if (expr != null) getTypeOfExpression(expr) else undefinedType
+                val sourceIsIntrinsic = sourceType is Type.Intrinsic
+                val targetIsIntrinsic = targetType is Type.Intrinsic
+                val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                val useNewEngine = targetType !== anyType && targetType !== errorType &&
+                    sourceType !== anyType && sourceType !== errorType &&
+                    (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish)
+                if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                    val displaySource = typeToString(sourceType)
+                    val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                    val returnKeywordLength = 6
+                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                    diagnostics.add(Diagnostic(
+                        message = message,
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = stmt.pos,
+                        length = returnKeywordLength,
+                    ))
+                    return
+                }
+            } catch (_: StackOverflowError) {
+                // Fall through to old system
+            }
+        }
+
+        // Fallback to old string-based system
         val exprType = if (expr != null) {
             inferSimpleExprType(expr, varTypes) ?: return
         } else {
-            // Bare return; → treated as returning undefined
             "undefined"
         }
         if (!isAssignableTo(exprType, returnType)) {
-            // Squiggle goes under "return" keyword
-            val returnKeywordLength = 6 // "return"
+            val returnKeywordLength = 6
             val isLiteral = expr == null || isSimpleLiteral(expr)
             emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isLiteral, typeParams = typeParams)
         }
