@@ -194,7 +194,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 2. Symbol type resolution
 
-- [ ] **2a. `getTypeOfSymbol(symbol: Symbol): Type`**
+- [x] **2a. `getTypeOfSymbol(symbol: Symbol): Type`**
 
   Compute the type of a symbol from its declarations:
   - Variable/parameter with type annotation → `getTypeFromTypeNode(annotation)`

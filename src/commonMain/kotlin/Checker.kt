@@ -21084,6 +21084,100 @@ class Checker(
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Symbol type resolution (Phase 4 item 2a)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Get the type of a symbol (variable, parameter, function, class, etc.).
+     * Cached in [symbolTypes].
+     */
+    private fun getTypeOfSymbol(symbol: Symbol): Type {
+        symbolTypes[symbol.id]?.let { return it }
+        val type = getTypeOfSymbolWorker(symbol)
+        symbolTypes[symbol.id] = type
+        return type
+    }
+
+    private fun getTypeOfSymbolWorker(symbol: Symbol): Type {
+        val flags = symbol.flags
+        return when {
+            flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property) -> getTypeOfVariableOrProperty(symbol)
+            flags.hasAny(SymbolFlags.Function) -> getTypeOfFunction(symbol)
+            flags.hasAny(SymbolFlags.Class) -> getDeclaredTypeOfSymbol(symbol)
+            flags.hasAny(SymbolFlags.Interface) -> getDeclaredTypeOfSymbol(symbol)
+            flags.hasAny(SymbolFlags.Enum) -> getDeclaredTypeOfSymbol(symbol)
+            flags.hasAny(SymbolFlags.TypeAlias) -> getDeclaredTypeOfSymbol(symbol)
+            flags.hasAny(SymbolFlags.Alias) -> {
+                // Import alias — resolve to target symbol's type
+                val target = resolveAliasTarget(symbol)
+                if (target != null && target !== symbol) getTypeOfSymbol(target) else anyType
+            }
+            flags.hasAny(SymbolFlags.TypeParameter) -> getDeclaredTypeOfSymbol(symbol)
+            else -> anyType
+        }
+    }
+
+    /** Get the type of a variable or property from its declaration. */
+    private fun getTypeOfVariableOrProperty(symbol: Symbol): Type {
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return anyType
+        return when (decl) {
+            is VariableDeclaration -> {
+                // Type annotation takes priority
+                decl.type?.let { return getTypeFromTypeNode(it) }
+                // No annotation — return anyType for now (expression type inference is item 3a)
+                anyType
+            }
+            is Parameter -> {
+                decl.type?.let { return getTypeFromTypeNode(it) }
+                anyType
+            }
+            is PropertyDeclaration -> {
+                decl.type?.let { return getTypeFromTypeNode(it) }
+                anyType
+            }
+            else -> anyType
+        }
+    }
+
+    /** Get the type of a function symbol — creates an ObjectType with call signature. */
+    private fun getTypeOfFunction(symbol: Symbol): Type {
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return anyType
+        return when (decl) {
+            is FunctionDeclaration -> {
+                val fnType = Type.Object()
+                fnType.symbol = symbol
+                val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                val sig = Signature(
+                    declaration = decl,
+                    parameters = emptyList(), // TODO: resolve parameter symbols
+                    resolvedReturnType = returnType,
+                    minArgumentCount = decl.parameters.count {
+                        !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                    },
+                )
+                fnType.callSignatures = listOf(sig)
+                fnType
+            }
+            else -> anyType
+        }
+    }
+
+    /** Resolve an import alias to its target symbol, with cycle detection. */
+    private fun resolveAliasTarget(symbol: Symbol): Symbol? {
+        // Use the binder-computed target if available
+        symbol.target?.let { return it }
+        // Otherwise try resolveAlias logic from the checker's existing infrastructure
+        val visited = mutableSetOf<Int>()
+        var current = symbol
+        while (current.flags.hasAny(SymbolFlags.Alias)) {
+            if (!visited.add(current.id)) return null // cycle
+            val target = current.target ?: return null
+            current = target
+        }
+        return current
+    }
+
     /** Create an array type. For now returns a simple object type since we don't have global Array<T>. */
     private fun getArrayType(elementType: Type): Type {
         // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
