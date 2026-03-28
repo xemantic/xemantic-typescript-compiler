@@ -21022,8 +21022,14 @@ class Checker(
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
-                if (!isSimpleLiteral(init)) chain.add("  $message")
-                // Type parameter elaboration
+                // Add elaboration chain for non-trivial expressions (not literals, not calls)
+                // TypeScript adds elaboration chain only for certain non-trivial patterns
+                // (e.g. typeof), but NOT for calls, delete, or other simple expressions
+                val needsElaboration = !isSimpleLiteral(init) &&
+                    init !is CallExpression && init !is NewExpression &&
+                    init !is DeleteExpression && init !is AwaitExpression &&
+                    init !is BinaryExpression && init !is ParenthesizedExpression
+                if (needsElaboration) chain.add("  $message")
                 if (targetType is Type.TypeParam) {
                     val targetName = targetType.symbol?.name ?: "T"
                     chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
