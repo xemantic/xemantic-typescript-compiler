@@ -94,6 +94,7 @@ class Checker(
         var relationDepth = 0
         var argCountDepth = 0
         var callTypeCheckDepth = 0
+        var arithmeticCheckDepth = 0
         // LinkStore: checker-local side map for import alias targets.
         // In TypeScript/tsgo, symbol.target is set by the checker — storing it
         // here instead keeps binder output immutable for parallel checking.
@@ -129,6 +130,9 @@ class Checker(
     private var callTypeCheckDepth: Int
         get() = state.callTypeCheckDepth
         set(value) { state.callTypeCheckDepth = value }
+    private var arithmeticCheckDepth: Int
+        get() = state.arithmeticCheckDepth
+        set(value) { state.arithmeticCheckDepth = value }
 
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
@@ -356,6 +360,8 @@ class Checker(
         checkPropertyAccess()
         // 64c. Check call expression argument types (TS2345)
         checkCallExpressionTypes()
+        // 64d. Check arithmetic operator types (TS2362/TS2363)
+        checkArithmeticOperandTypes()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
@@ -23359,6 +23365,20 @@ class Checker(
             length = length,
             messageChain = chain,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2362/TS2363: Arithmetic operator type checking (Phase 4 item 14a)
+    // -----------------------------------------------------------------------
+
+    // TS2362/TS2363 arithmetic operator type checking — deferred.
+    // Naive implementation causes 1300+ regressions because getTypeOfExpression
+    // resolves many globals (string, boolean types) that participate in valid
+    // arithmetic in test code. Needs conservative approach: only check when operand
+    // type is DEFINITIVELY non-numeric (literal string, literal boolean, etc.)
+    // and not just any resolved type.
+    private fun checkArithmeticOperandTypes() {
+        // TODO: Phase 4b item 14a — implement with conservative operand type checking
     }
 
     // -----------------------------------------------------------------------
