@@ -250,7 +250,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 4. Structural typing engine
 
-- [ ] **4a. `isSimpleTypeRelatedTo(source: Type, target: Type, relation: Relation): Boolean`**
+- [x] **4a. `isSimpleTypeRelatedTo(source: Type, target: Type, relation: Relation): Boolean`**
 
   Fast flag-based checks (no recursion):
   - `target.flags has Any` → true
@@ -262,7 +262,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **4b. `checkTypeRelatedTo(source, target, relation, errorNode): Boolean`**
+- [x] **4b. `checkTypeRelatedTo(source, target, relation, errorNode): Boolean`**
 
   Main entry point with error reporting. Maintains:
   - Relation cache lookup/store
@@ -271,7 +271,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **4c. `structuredTypeRelatedTo(source, target, relation): Ternary`**
+- [x] **4c. `structuredTypeRelatedTo(source, target, relation): Ternary`**
 
   Core structural comparison:
   - Union source: each constituent must relate to target (for assignable)
@@ -281,7 +281,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **4d. `propertiesRelatedTo(source, target): Ternary`**
+- [x] **4d. `propertiesRelatedTo(source, target): Ternary`**
 
   Property-by-property structural comparison:
   - For each required property in target, find matching property in source
@@ -291,7 +291,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **4e. `signaturesRelatedTo(source, target, kind): Ternary`**
+- [x] **4e. `signaturesRelatedTo(source, target, kind): Ternary`**
 
   Compare call/construct signatures:
   - Parameter types compared contravariantly

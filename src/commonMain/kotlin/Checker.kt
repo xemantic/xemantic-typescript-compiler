@@ -21653,6 +21653,245 @@ class Checker(
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Structural typing engine (Phase 4 items 4a-4e)
+    // -----------------------------------------------------------------------
+
+    /** Ternary logic for type relations: True, False, or Maybe (for recursive checks). */
+    private enum class Ternary { True, False, Maybe }
+
+    /** Relation cache — maps (sourceId, targetId) packed into Long → result. */
+    private class Relation {
+        private val cache = HashMap<Long, Ternary>()
+
+        fun get(sourceId: Int, targetId: Int): Ternary? {
+            return cache[packKey(sourceId, targetId)]
+        }
+
+        fun set(sourceId: Int, targetId: Int, result: Ternary) {
+            cache[packKey(sourceId, targetId)] = result
+        }
+
+        private fun packKey(a: Int, b: Int): Long =
+            (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
+    }
+
+    // Five relation instances (same as TS/tsgo)
+    private val subtypeRelation = Relation()
+    private val assignableRelation = Relation()
+    private val comparableRelation = Relation()
+    private val identityRelation = Relation()
+
+    /** Relation check depth for cycle prevention. */
+    private var relationDepth = 0
+    private val maxRelationDepth = 100
+
+    /**
+     * 4a. Fast flag-based type relatedness check (no recursion).
+     * Returns true if the relation holds purely from type flags.
+     */
+    private fun isSimpleTypeRelatedTo(source: Type, target: Type): Boolean {
+        val sf = source.flags
+        val tf = target.flags
+        // Any target accepts everything
+        if (tf.hasAny(TypeFlags.Any)) return true
+        // Unknown target accepts everything (for assignability)
+        if (tf.hasAny(TypeFlags.Unknown)) return true
+        // Never source is assignable to everything
+        if (sf.hasAny(TypeFlags.Never)) return true
+        // Same type by identity
+        if (source === target) return true
+        // Primitive widening: string literal → string, number literal → number, etc.
+        if (sf.hasAny(TypeFlags.StringLiteral) && tf.hasAny(TypeFlags.String)) return true
+        if (sf.hasAny(TypeFlags.NumberLiteral) && tf.hasAny(TypeFlags.Number)) return true
+        if (sf.hasAny(TypeFlags.BigIntLiteral) && tf.hasAny(TypeFlags.BigInt)) return true
+        if (sf.hasAny(TypeFlags.BooleanLiteral) && tf.hasAny(TypeFlags.Boolean)) return true
+        if (sf.hasAny(TypeFlags.EnumLiteral) && tf.hasAny(TypeFlags.Enum)) return true
+        if (sf.hasAny(TypeFlags.UniqueESSymbol) && tf.hasAny(TypeFlags.ESSymbol)) return true
+        // String-like types to string
+        if (sf.hasAny(TypeFlags.StringLike) && tf.hasAny(TypeFlags.String)) return true
+        if (sf.hasAny(TypeFlags.NumberLike) && tf.hasAny(TypeFlags.Number)) return true
+        if (sf.hasAny(TypeFlags.BigIntLike) && tf.hasAny(TypeFlags.BigInt)) return true
+        // undefined → void
+        if (sf.hasAny(TypeFlags.Undefined) && tf.hasAny(TypeFlags.Void)) return true
+        // When strict null checks are off, null/undefined assignable to everything
+        if (!strictNullChecks && sf.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return true
+        // object type (non-primitive) — primitives are NOT assignable to object
+        if (tf.hasAny(TypeFlags.NonPrimitive)) {
+            return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+        }
+        return false
+    }
+
+    /**
+     * 4b. Main entry point for type relation checking with error reporting.
+     * Returns true if source is related to target in the given relation.
+     */
+    private fun checkTypeRelatedTo(
+        source: Type,
+        target: Type,
+        relation: Relation,
+    ): Boolean {
+        if (source === target) return true
+        // Fast check
+        if (isSimpleTypeRelatedTo(source, target)) return true
+        // Check cache
+        val cached = relation.get(source.id, target.id)
+        if (cached == Ternary.True) return true
+        if (cached == Ternary.False) return false
+        // Depth limit
+        if (relationDepth >= maxRelationDepth) return false
+        relationDepth++
+        val result = structuredTypeRelatedTo(source, target, relation)
+        relationDepth--
+        val ternary = if (result) Ternary.True else Ternary.False
+        relation.set(source.id, target.id, ternary)
+        return result
+    }
+
+    /**
+     * 4c. Core structural comparison — handles unions, intersections, and objects.
+     */
+    private fun structuredTypeRelatedTo(
+        source: Type,
+        target: Type,
+        relation: Relation,
+    ): Boolean {
+        // Union source: each constituent must be related to the target
+        if (source is Type.Union) {
+            return source.types.all { checkTypeRelatedTo(it, target, relation) }
+        }
+        // Union target: source must be related to some constituent
+        if (target is Type.Union) {
+            return target.types.any { checkTypeRelatedTo(source, it, relation) }
+        }
+        // Intersection target: source must be related to each constituent
+        if (target is Type.Intersection) {
+            return target.types.all { checkTypeRelatedTo(source, it, relation) }
+        }
+        // Intersection source: some constituent must be related to target
+        if (source is Type.Intersection) {
+            return source.types.any { checkTypeRelatedTo(it, target, relation) }
+        }
+        // Object types: structural comparison
+        if (source is Type.Object && target is Type.Object) {
+            return objectTypeRelatedTo(source, target, relation)
+        }
+        return false
+    }
+
+    /**
+     * Structural comparison of two object types.
+     * Checks properties, call signatures, and construct signatures.
+     */
+    private fun objectTypeRelatedTo(
+        source: Type.Object,
+        target: Type.Object,
+        relation: Relation,
+    ): Boolean {
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        // Check properties
+        if (!propertiesRelatedTo(source, target, relation)) return false
+        // Check call signatures
+        if (!signaturesRelatedTo(source, target, relation, isConstruct = false)) return false
+        // Check construct signatures
+        if (!signaturesRelatedTo(source, target, relation, isConstruct = true)) return false
+        return true
+    }
+
+    /**
+     * 4d. Property-by-property structural comparison.
+     * For each required property in target, source must have a compatible property.
+     */
+    private fun propertiesRelatedTo(
+        source: Type.Object,
+        target: Type.Object,
+        relation: Relation,
+    ): Boolean {
+        val targetProps = target.properties ?: return true
+        val sourceMembers = source.members ?: return targetProps.isEmpty()
+        for (targetProp in targetProps) {
+            val targetName = targetProp.name
+            // Check if property is optional (question mark in declaration)
+            val isOptional = isOptionalProperty(targetProp)
+            val sourceProp = sourceMembers[targetName]
+            if (sourceProp == null) {
+                // Check index signature
+                val indexInfo = source.stringIndexInfo
+                if (indexInfo != null) {
+                    val targetPropType = getTypeOfSymbol(targetProp)
+                    if (!checkTypeRelatedTo(indexInfo.type, targetPropType, relation)) return false
+                    continue
+                }
+                if (!isOptional) return false // missing required property
+                continue
+            }
+            // Compare property types
+            val sourcePropType = getTypeOfSymbol(sourceProp)
+            val targetPropType = getTypeOfSymbol(targetProp)
+            if (!checkTypeRelatedTo(sourcePropType, targetPropType, relation)) return false
+        }
+        return true
+    }
+
+    /**
+     * 4e. Compare call or construct signatures.
+     * Parameter types compared contravariantly, return types covariantly.
+     */
+    private fun signaturesRelatedTo(
+        source: Type.Object,
+        target: Type.Object,
+        relation: Relation,
+        isConstruct: Boolean,
+    ): Boolean {
+        val targetSigs = if (isConstruct) target.constructSignatures else target.callSignatures
+        if (targetSigs.isNullOrEmpty()) return true // no signatures to match
+        val sourceSigs = if (isConstruct) source.constructSignatures else source.callSignatures
+        if (sourceSigs.isNullOrEmpty()) return false // target has signatures, source doesn't
+        // Each target signature must be matched by some source signature
+        for (targetSig in targetSigs) {
+            val matched = sourceSigs.any { sourceSig ->
+                signatureRelatedTo(sourceSig, targetSig, relation)
+            }
+            if (!matched) return false
+        }
+        return true
+    }
+
+    /** Compare two individual signatures. */
+    private fun signatureRelatedTo(
+        source: Signature,
+        target: Signature,
+        relation: Relation,
+    ): Boolean {
+        // Check return types (covariant)
+        val sourceReturn = source.resolvedReturnType ?: anyType
+        val targetReturn = target.resolvedReturnType ?: anyType
+        if (!checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
+        // TODO: check parameter types (contravariant) when parameter resolution is implemented
+        return true
+    }
+
+    /** Check if a property symbol is optional (has questionToken in its declaration). */
+    private fun isOptionalProperty(symbol: Symbol): Boolean {
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return false
+        return when (decl) {
+            is PropertyDeclaration -> decl.questionToken
+            is Parameter -> decl.questionToken
+            is MethodDeclaration -> decl.questionToken
+            else -> false
+        }
+    }
+
+    /**
+     * Check if source type is assignable to target type using the new Type-based engine.
+     * This is the replacement for the string-based isAssignableTo.
+     */
+    private fun isTypeAssignableTo(source: Type, target: Type): Boolean {
+        return checkTypeRelatedTo(source, target, assignableRelation)
+    }
+
     /** Create an array type. For now returns a simple object type since we don't have global Array<T>. */
     private fun getArrayType(elementType: Type): Type {
         // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
