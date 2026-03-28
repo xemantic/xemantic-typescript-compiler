@@ -115,6 +115,13 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`var` hoisting for TS2304**: `var` declarations inside nested blocks/loops are function-scoped. `collectHoistedVarNames` recursively finds them and adds to the enclosing scope.
 - **`isIdentifier()` vs `isIdentifierToken()`**: Inside `scanner.lookAhead {}`, use `isIdentifierToken(scanner.getToken())` not `isIdentifier()` — the latter checks the Parser's cached `token` field which isn't updated inside lookAhead.
 
+### TS2345 argument type checking gotchas
+
+- **Kotlin property initialization order applies to relation instances**: `assignableRelation`, `subtypeRelation` etc. must be declared BEFORE `init {}` — otherwise they are null when `checkCallExpressionTypes()` runs, causing NPE. Same pattern as `strictNullChecks`.
+- **Overloaded functions must be skipped**: Functions with multiple declarations (some body-less) need overload resolution (item 7b). Detect via `symbol.declarations` having body-less `FunctionDeclaration`/`MethodDeclaration`.
+- **Conservative parameter type checking**: Only check TS2345 when the parameter type is a simple/primitive type (string, number, boolean, void, null, undefined, never, bigint, symbol, and their literal variants). Checking against object/interface/union/intersection parameter types causes FPs due to incomplete structural comparison and missing generic instantiation.
+- **`getArrayType` returns `anyType`**: Until generic infrastructure (item 8a) is ready, array types resolve to `anyType` to prevent FPs from empty `Type.Object()` comparison.
+
 ### TS2552 spelling suggestion gotchas
 
 - **Damerau-Levenshtein not standard Levenshtein**: TypeScript counts transpositions as distance 1. Use optimal string alignment (restricted Damerau-Levenshtein).
