@@ -544,7 +544,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
 
 ### 12. Widen TS2345 argument type checking
 
-- [ ] **12a. Remove `isSimpleCheckableType` guard**
+- [x] **12a. Relax `isSimpleCheckableType` guard** (added union type support; interface check deferred — recursive interface FPs)
 
   The structural comparison engine (item 4) now handles object/interface types.
   Remove the primitive-only filter in `checkArgumentsAgainstSignature` and use

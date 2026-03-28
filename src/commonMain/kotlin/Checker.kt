@@ -22682,14 +22682,17 @@ class Checker(
      */
     private fun isSimpleCheckableType(type: Type): Boolean {
         val f = type.flags
-        return f.hasAny(
+        if (f.hasAny(
             TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or
             TypeFlags.Void or TypeFlags.Undefined or TypeFlags.Null or
             TypeFlags.Never or TypeFlags.BigInt or TypeFlags.ESSymbol or
             TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
             TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
             TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-        )
+        )) return true
+        // Allow union types where all members are checkable (e.g., string | number)
+        if (type is Type.Union) return type.types.all { isSimpleCheckableType(it) }
+        return false
     }
 
     // -----------------------------------------------------------------------
