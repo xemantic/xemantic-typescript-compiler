@@ -21441,6 +21441,218 @@ class Checker(
         return null
     }
 
+    // -----------------------------------------------------------------------
+    // Expression type inference (Phase 4 item 3a)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Get the type of an expression. This is the main entry point for
+     * expression type inference, replacing the string-based inferSimpleExprType.
+     */
+    private fun getTypeOfExpression(expr: Expression): Type {
+        return when (expr) {
+            // Literals
+            is NumericLiteralNode -> numberType
+            is StringLiteralNode -> stringType
+            is NoSubstitutionTemplateLiteralNode -> stringType
+            is TemplateExpression -> stringType
+            is RegularExpressionLiteralNode -> anyType // TODO: RegExp type
+            is BigIntLiteralNode -> bigintType
+
+            // Identifiers
+            is Identifier -> getTypeOfIdentifier(expr)
+
+            // Property access
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
+            is ElementAccessExpression -> anyType // TODO: indexed access
+
+            // Unary expressions
+            is PrefixUnaryExpression -> when (expr.operator) {
+                SyntaxKind.Exclamation -> booleanType
+                SyntaxKind.Minus, SyntaxKind.Plus, SyntaxKind.Tilde -> numberType
+                SyntaxKind.PlusPlus, SyntaxKind.MinusMinus -> numberType
+                else -> anyType
+            }
+            is PostfixUnaryExpression -> numberType // x++, x--
+            is TypeOfExpression -> stringType
+            is VoidExpression -> undefinedType
+            is DeleteExpression -> booleanType
+
+            // Binary expressions
+            is BinaryExpression -> getTypeOfBinaryExpression(expr)
+
+            // Type assertions / casts
+            is AsExpression -> getTypeFromTypeNode(expr.type)
+            is TypeAssertionExpression -> getTypeFromTypeNode(expr.type)
+            is SatisfiesExpression -> getTypeOfExpression(expr.expression)
+            is NonNullExpression -> getTypeOfExpression(expr.expression) // strips null/undefined
+
+            // Parenthesized
+            is ParenthesizedExpression -> getTypeOfExpression(expr.expression)
+
+            // Literals that create objects
+            is ArrayLiteralExpression -> anyType // TODO: Array type
+            is ObjectLiteralExpression -> anyType // TODO: anonymous object type
+
+            // Call expressions
+            is CallExpression -> anyType // TODO: return type of resolved signature
+            is NewExpression -> anyType // TODO: construct signature return type
+
+            // Arrow / function
+            is ArrowFunction -> anyType // TODO: function type
+            is FunctionExpression -> anyType // TODO: function type
+
+            // Conditional
+            is ConditionalExpression -> {
+                // Result is union of true/false branches
+                val trueT = getTypeOfExpression(expr.whenTrue)
+                val falseT = getTypeOfExpression(expr.whenFalse)
+                if (trueT === falseT) trueT else getUnionType(listOf(trueT, falseT))
+            }
+
+            // Comma list expression — type of last element
+            is CommaListExpression -> if (expr.elements.isNotEmpty()) getTypeOfExpression(expr.elements.last()) else anyType
+
+            // Class expression
+            is ClassExpression -> anyType // TODO: class type
+
+            // Spread
+            is SpreadElement -> getTypeOfExpression(expr.expression)
+
+            // Await
+            is AwaitExpression -> anyType // TODO: unwrap Promise
+
+            // Yield
+            is YieldExpression -> anyType // TODO: generator return type
+
+            // Tagged template
+            is TaggedTemplateExpression -> anyType // TODO: call signature return type
+
+            else -> anyType
+        }
+    }
+
+    /** Get the type of an identifier expression. */
+    private fun getTypeOfIdentifier(id: Identifier): Type {
+        return when (id.text) {
+            "undefined" -> undefinedType
+            "true" -> trueType
+            "false" -> falseType
+            "NaN", "Infinity" -> numberType
+            else -> {
+                // Look up symbol in globals
+                val symbol = globals[id.text]
+                if (symbol != null) getTypeOfSymbol(symbol) else anyType
+            }
+        }
+    }
+
+    /** Get the type of a property access expression (e.g., `obj.prop`). */
+    private fun getTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
+        val objectType = getTypeOfExpression(expr.expression)
+        val propName = expr.name.text
+        val apparentType = getApparentType(objectType)
+        val prop = getPropertyOfType(apparentType, propName)
+        return if (prop != null) getTypeOfSymbol(prop) else anyType
+    }
+
+    /** Get the type of a binary expression. */
+    private fun getTypeOfBinaryExpression(expr: BinaryExpression): Type {
+        return when (expr.operator) {
+            // Arithmetic → number
+            SyntaxKind.Plus -> {
+                // Plus is special: string + any = string, any + string = string
+                val leftType = getTypeOfExpression(expr.left)
+                val rightType = getTypeOfExpression(expr.right)
+                if (leftType.flags.hasAny(TypeFlags.StringLike) || rightType.flags.hasAny(TypeFlags.StringLike)) {
+                    stringType
+                } else if (leftType.flags.hasAny(TypeFlags.NumberLike) && rightType.flags.hasAny(TypeFlags.NumberLike)) {
+                    numberType
+                } else if (leftType.flags.hasAny(TypeFlags.BigIntLike) && rightType.flags.hasAny(TypeFlags.BigIntLike)) {
+                    bigintType
+                } else {
+                    anyType // could be string or number
+                }
+            }
+            SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
+            SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
+            SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
+            SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
+            SyntaxKind.GreaterThanGreaterThanGreaterThan -> numberType
+
+            // Comparison → boolean
+            SyntaxKind.LessThan, SyntaxKind.GreaterThan,
+            SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+            SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
+            SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+            SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
+
+            // Assignment → type of left
+            SyntaxKind.Equals -> getTypeOfExpression(expr.right)
+            SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
+            SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals -> getTypeOfExpression(expr.left)
+
+            // Logical → union of operands
+            SyntaxKind.AmpersandAmpersand -> getTypeOfExpression(expr.right)
+            SyntaxKind.BarBar -> {
+                val leftT = getTypeOfExpression(expr.left)
+                val rightT = getTypeOfExpression(expr.right)
+                if (leftT === rightT) leftT else getUnionType(listOf(leftT, rightT))
+            }
+            SyntaxKind.QuestionQuestion -> {
+                val leftT = getTypeOfExpression(expr.left)
+                val rightT = getTypeOfExpression(expr.right)
+                if (leftT === rightT) leftT else getUnionType(listOf(leftT, rightT))
+            }
+
+            // Comma → type of right
+            SyntaxKind.Comma -> getTypeOfExpression(expr.right)
+
+            else -> anyType
+        }
+    }
+
+    /**
+     * Get the apparent type of a type — for type parameters, this is the constraint;
+     * for primitives, this is the corresponding wrapper type.
+     */
+    private fun getApparentType(type: Type): Type {
+        return when {
+            type is Type.TypeParam -> type.constraint?.let { getApparentType(it) } ?: anyType
+            type.flags.hasAny(TypeFlags.StringLike) -> anyType // TODO: String wrapper type
+            type.flags.hasAny(TypeFlags.NumberLike) -> anyType // TODO: Number wrapper type
+            type.flags.hasAny(TypeFlags.BooleanLike) -> anyType // TODO: Boolean wrapper type
+            else -> type
+        }
+    }
+
+    /**
+     * Get a display-friendly string for a Type (used in diagnostic messages).
+     */
+    private fun typeToString(type: Type): String {
+        return when (type) {
+            is Type.Intrinsic -> type.intrinsicName
+            is Type.StringLiteral -> "\"${type.value}\""
+            is Type.NumberLiteral -> type.toString()
+            is Type.BigIntLiteral -> type.toString()
+            is Type.Object -> {
+                val sym = type.symbol
+                if (sym != null) sym.name else "{ ... }"
+            }
+            is Type.Interface -> type.symbol?.name ?: "Interface"
+            is Type.Reference -> {
+                val target = type.target.symbol?.name ?: "Object"
+                val args = type.resolvedTypeArguments
+                if (args != null && args.isNotEmpty()) {
+                    "$target<${args.joinToString(", ") { typeToString(it) }}>"
+                } else target
+            }
+            is Type.Union -> type.types.joinToString(" | ") { typeToString(it) }
+            is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
+            is Type.TypeParam -> type.symbol?.name ?: "T"
+        }
+    }
+
     /** Create an array type. For now returns a simple object type since we don't have global Array<T>. */
     private fun getArrayType(elementType: Type): Type {
         // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
