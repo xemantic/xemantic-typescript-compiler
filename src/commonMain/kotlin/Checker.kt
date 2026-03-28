@@ -282,6 +282,8 @@ class Checker(
         checkConstructorParamInInitializers()
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
         checkTypeAssignability()
+        // 64b. Check property access on known types (TS2339)
+        checkPropertyAccess()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
@@ -10439,6 +10441,15 @@ class Checker(
 
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
+
+        /** Runtime properties that exist on all objects/functions but aren't declared in types.
+         *  Skip these in TS2339 checks to avoid false positives. */
+        private val RUNTIME_PROPERTIES = setOf(
+            "prototype", "constructor", "__proto__", "toString", "valueOf",
+            "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+            "toLocaleString", "length", "name", "caller", "arguments", "apply",
+            "bind", "call",
+        )
 
         /** Words that are reserved as identifiers in strict mode (TS1212). */
         private val STRICT_MODE_RESERVED_WORDS = setOf(
@@ -21063,9 +21074,12 @@ class Checker(
                 getDeclaredTypeOfClassOrInterface(symbol)
             }
             flags.hasAny(SymbolFlags.TypeAlias) -> {
-                // Find the type alias declaration and resolve its type
-                val decl = symbol.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-                if (decl?.type != null) getTypeFromTypeNode(decl.type) else errorType
+                // Store sentinel in cache first to prevent circular type alias StackOverflow
+                declaredTypes[symbol.id] = errorType
+                val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                val resolved = if (decl != null) getTypeFromTypeNode(decl.type) else errorType
+                declaredTypes[symbol.id] = resolved
+                resolved
             }
             flags.hasAny(SymbolFlags.Enum) -> {
                 // Enums are both a type and a value — return an object type
@@ -21090,6 +21104,8 @@ class Checker(
     private fun getDeclaredTypeOfClassOrInterface(symbol: Symbol): Type.Interface {
         val interfaceType = Type.Interface()
         interfaceType.symbol = symbol
+        // Store in cache BEFORE resolving base types to prevent circular reference StackOverflow
+        declaredTypes[symbol.id] = interfaceType
         // Collect type parameters from the first class/interface declaration
         val decl = symbol.declarations.firstOrNull {
             it is ClassDeclaration || it is InterfaceDeclaration
@@ -21651,6 +21667,298 @@ class Checker(
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2339: Property does not exist on type (Phase 4 item 5a)
+    // -----------------------------------------------------------------------
+
+    private fun checkPropertyAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // Skip .js files — property access patterns differ
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            try {
+                checkPropertyAccessInStatements(
+                    result.sourceFile.statements, source, fileName,
+                    enclosingClassType = null
+                )
+            } catch (_: StackOverflowError) {
+                // Circular type resolution in complex files — skip gracefully
+            }
+        }
+    }
+
+    private fun checkPropertyAccessInStatements(
+        stmts: List<Statement>, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        for (stmt in stmts) checkPropertyAccessInStatement(stmt, source, fileName, enclosingClassType)
+    }
+
+    private fun checkPropertyAccessInStatement(
+        stmt: Statement, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                // Resolve the class type for "this" inside class body
+                val classType = if (stmt.name != null) {
+                    val symbol = globals[stmt.name.text]
+                    if (symbol != null) getDeclaredTypeOfSymbol(symbol) else null
+                } else null
+                for (member in stmt.members) {
+                    checkPropertyAccessInClassMember(member, source, fileName, classType)
+                }
+            }
+            is InterfaceDeclaration -> { /* No runtime property access in interfaces */ }
+            is FunctionDeclaration -> {
+                stmt.body?.let {
+                    checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null)
+                }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let {
+                        checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                    }
+                }
+            }
+            is ExpressionStatement -> checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+            is ReturnStatement -> stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            is IfStatement -> {
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                checkPropertyAccessInStatement(stmt.thenStatement, source, fileName, enclosingClassType)
+                stmt.elseStatement?.let { checkPropertyAccessInStatement(it, source, fileName, enclosingClassType) }
+            }
+            is Block -> checkPropertyAccessInStatements(stmt.statements, source, fileName, enclosingClassType)
+            is ForStatement -> {
+                stmt.condition?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                stmt.incrementor?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            }
+            is ForInStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            is ForOfStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            is WhileStatement -> {
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            }
+            is DoStatement -> {
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            }
+            is SwitchStatement -> {
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            checkPropertyAccessInExpr(clause.expression, source, fileName, enclosingClassType)
+                            checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
+                        }
+                        is DefaultClause -> {
+                            checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkPropertyAccessInStatements(stmt.tryBlock.statements, source, fileName, enclosingClassType)
+                stmt.catchClause?.block?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
+                stmt.finallyBlock?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
+            }
+            is ThrowStatement -> stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            is WithStatement -> {
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            }
+            is LabeledStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            is ModuleDeclaration -> {
+                (stmt.body as? Block)?.let {
+                    checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType)
+                }
+            }
+            is ExportAssignment -> {
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+            }
+            else -> { /* no property access in other statement types */ }
+        }
+    }
+
+    private fun checkPropertyAccessInClassMember(
+        member: ClassElement, source: String, fileName: String,
+        classType: Type?,
+    ) {
+        when (member) {
+            is MethodDeclaration -> {
+                member.body?.let {
+                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                }
+            }
+            is Constructor -> {
+                member.body?.let {
+                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                }
+            }
+            is GetAccessor -> {
+                member.body?.let {
+                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                }
+            }
+            is SetAccessor -> {
+                member.body?.let {
+                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                }
+            }
+            is PropertyDeclaration -> {
+                member.initializer?.let {
+                    checkPropertyAccessInExpr(it, source, fileName, classType)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkPropertyAccessInExpr(
+        expr: Expression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                // First recurse into subexpressions
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+                // Now check this property access
+                checkSinglePropertyAccess(expr, source, fileName, enclosingClassType)
+            }
+            is CallExpression -> {
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+                expr.arguments?.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            }
+            is BinaryExpression -> {
+                checkPropertyAccessInExpr(expr.left, source, fileName, enclosingClassType)
+                checkPropertyAccessInExpr(expr.right, source, fileName, enclosingClassType)
+            }
+            is ConditionalExpression -> {
+                checkPropertyAccessInExpr(expr.condition, source, fileName, enclosingClassType)
+                checkPropertyAccessInExpr(expr.whenTrue, source, fileName, enclosingClassType)
+                checkPropertyAccessInExpr(expr.whenFalse, source, fileName, enclosingClassType)
+            }
+            is ParenthesizedExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is ArrowFunction -> {
+                expr.body.let { body ->
+                    when (body) {
+                        is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
+                        is Expression -> checkPropertyAccessInExpr(body, source, fileName, enclosingClassType)
+                        else -> {}
+                    }
+                }
+            }
+            is NewExpression -> {
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+                expr.arguments?.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            }
+            is ElementAccessExpression -> {
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+                checkPropertyAccessInExpr(expr.argumentExpression, source, fileName, enclosingClassType)
+            }
+            is AsExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is NonNullExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is PrefixUnaryExpression -> checkPropertyAccessInExpr(expr.operand, source, fileName, enclosingClassType)
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { span ->
+                    checkPropertyAccessInExpr(span.expression, source, fileName, enclosingClassType)
+                }
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkPropertyAccessInExpr(prop.initializer, source, fileName, enclosingClassType)
+                        is ShorthandPropertyAssignment -> {}
+                        is SpreadAssignment -> checkPropertyAccessInExpr(prop.expression, source, fileName, enclosingClassType)
+                        else -> {}
+                    }
+                }
+            }
+            is TaggedTemplateExpression -> {
+                checkPropertyAccessInExpr(expr.tag, source, fileName, enclosingClassType)
+            }
+            is TypeAssertionExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is SpreadElement -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is AwaitExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is DeleteExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is VoidExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is TypeOfExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is PostfixUnaryExpression -> checkPropertyAccessInExpr(expr.operand, source, fileName, enclosingClassType)
+            is SatisfiesExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is YieldExpression -> expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            is FunctionExpression -> {
+                expr.body?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null) }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check a single property access expression for TS2339.
+     * Conservative: only check this.X access in class bodies for now.
+     */
+    private fun checkSinglePropertyAccess(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        // Phase 4 conservative approach: only check this.prop inside class bodies
+        if (enclosingClassType == null) return
+        if (expr.expression !is Identifier || (expr.expression as Identifier).text != "this") return
+        val objectType = enclosingClassType
+        // Only check Interface types
+        if (objectType !is Type.Interface) return
+        if (objectType.symbol == null) return
+        // Skip enum types
+        if (objectType.symbol!!.flags.hasAny(SymbolFlags.Enum)) return
+        // Resolve members
+        resolveStructuredTypeMembers(objectType)
+        if (objectType.properties.isNullOrEmpty()) return
+        // Skip if class has base types — incomplete inheritance resolution causes FPs
+        if (objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) return
+        val propName = expr.name.text
+        // Skip well-known runtime properties
+        if (propName in RUNTIME_PROPERTIES) return
+        // Check if property exists
+        val prop = getPropertyOfType(objectType, propName)
+        if (prop != null) return
+        // Check index signatures
+        if (objectType.stringIndexInfo != null || objectType.numberIndexInfo != null) return
+        // Emit TS2339
+        val start = expr.name.pos
+        val length = expr.name.text.length
+        val typeName = typeToString(objectType)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$typeName'.",
+            category = DiagnosticCategory.Error,
+            code = 2339,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * Resolve the type of a property access's object expression.
+     * Enhanced version that handles 'this' with class context.
+     */
+    private fun resolvePropertyAccessObjectType(expr: Expression, enclosingClassType: Type?): Type {
+        if (expr is Identifier && expr.text == "this" && enclosingClassType != null) {
+            return enclosingClassType
+        }
+        return getTypeOfExpression(expr)
     }
 
     // -----------------------------------------------------------------------
