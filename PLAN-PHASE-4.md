@@ -153,7 +153,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 1. Type resolution from TypeNodes
 
-- [ ] **1a. `getTypeFromTypeNode(node: TypeNode): Type`**
+- [x] **1a. `getTypeFromTypeNode(node: TypeNode): Type`**
 
   Convert AST TypeNode to Type object. Start with the common cases:
   - `KeywordTypeNode` → intrinsic type singleton
@@ -172,7 +172,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
   **File:** `Checker.kt` (new section)
   **No test impact yet** — foundation for later checks
 
-- [ ] **1b. `getUnionType(types: List<Type>): Type`**
+- [x] **1b. `getUnionType(types: List<Type>): Type`**
 
   Normalize and deduplicate union constituents:
   - Flatten nested unions
@@ -184,7 +184,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
   **File:** `Checker.kt`
 
-- [ ] **1c. `getIntersectionType(types: List<Type>): Type`**
+- [x] **1c. `getIntersectionType(types: List<Type>): Type`**
 
   Similar to union but with intersection semantics:
   - `unknown & X = X`, `never & X = never`, `any & X = any`
