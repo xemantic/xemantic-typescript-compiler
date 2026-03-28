@@ -21933,21 +21933,37 @@ class Checker(
         if (prop != null) return
         // Check index signatures
         if (objectType.stringIndexInfo != null || objectType.numberIndexInfo != null) return
-        // Emit TS2339
+        // Try spelling suggestion from known properties
+        val memberNames = (objectType.properties ?: emptyList()).map { it.name }.toSet()
+        val suggestion = getSpellingSuggestionFromNames(propName, memberNames)
+        // Emit TS2339 (or TS2551 with spelling suggestion)
         val start = expr.name.pos
         val length = expr.name.text.length
         val typeName = typeToString(objectType)
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "Property '$propName' does not exist on type '$typeName'.",
-            category = DiagnosticCategory.Error,
-            code = 2339,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-        ))
+        if (suggestion != null) {
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
+                category = DiagnosticCategory.Error,
+                code = 2551,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } else {
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$typeName'.",
+                category = DiagnosticCategory.Error,
+                code = 2339,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
     }
 
     /**

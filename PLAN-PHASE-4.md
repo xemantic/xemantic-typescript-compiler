@@ -318,7 +318,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
   **File:** `Checker.kt`
   **Target:** ~100 tests (TS2339)
 
-- [ ] **5b. Spelling suggestions for non-existent properties**
+- [x] **5b. Spelling suggestions for non-existent properties**
 
   When TS2339 fires, suggest similar property names using the existing
   Damerau-Levenshtein infrastructure from TS2552.
