@@ -360,7 +360,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
   **File:** `Checker.kt`
   **Target:** ~79 tests (TS2345)
 
-- [ ] **7b. Basic overload resolution**
+- [x] **7b. Basic overload resolution**
 
   Try each overload signature in order. Pick the first that succeeds.
   If none succeed, report error against the last signature (TypeScript convention).

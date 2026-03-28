@@ -21231,27 +21231,39 @@ class Checker(
         }
     }
 
-    /** Get the type of a function symbol — creates an ObjectType with call signature. */
+    /** Get the type of a function symbol — creates an ObjectType with call signatures.
+     *  For overloaded functions, collects all visible overload signatures (body-less declarations).
+     *  If no overloads, uses the single implementation declaration.
+     */
     private fun getTypeOfFunction(symbol: Symbol): Type {
-        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return anyType
-        return when (decl) {
-            is FunctionDeclaration -> {
-                val fnType = Type.Object()
-                fnType.symbol = symbol
-                val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                val sig = Signature(
-                    declaration = decl,
-                    parameters = getParameterSymbols(decl.parameters),
-                    resolvedReturnType = returnType,
-                    minArgumentCount = decl.parameters.count {
-                        !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                    },
-                )
-                fnType.callSignatures = listOf(sig)
-                fnType
-            }
-            else -> anyType
+        val fnType = Type.Object()
+        fnType.symbol = symbol
+        // Collect all function declarations for this symbol
+        val funcDecls = symbol.declarations.filterIsInstance<FunctionDeclaration>()
+        if (funcDecls.isEmpty()) return anyType
+
+        // Separate overload signatures (no body) from implementation (has body)
+        val overloadDecls = funcDecls.filter { it.body == null }
+        val implDecl = funcDecls.find { it.body != null }
+
+        // Use overload signatures if present (they are the visible API),
+        // otherwise use the implementation declaration
+        val sigDecls = if (overloadDecls.isNotEmpty()) overloadDecls else listOfNotNull(implDecl)
+        if (sigDecls.isEmpty()) return anyType
+
+        val signatures = sigDecls.map { decl ->
+            val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            Signature(
+                declaration = decl,
+                parameters = getParameterSymbols(decl.parameters),
+                resolvedReturnType = returnType,
+                minArgumentCount = decl.parameters.count {
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                },
+            )
         }
+        fnType.callSignatures = signatures
+        return fnType
     }
 
     /**
@@ -22193,22 +22205,24 @@ class Checker(
     }
 
     /**
-     * Check argument types for a single CallExpression against the resolved signature.
-     * Emits TS2345 when an argument type is not assignable to the parameter type.
+     * Check argument types for a single CallExpression against resolved signature(s).
+     * For non-overloaded functions: check against the single signature.
+     * For overloaded functions: try each overload in order, skip if any matches,
+     * report TS2345 against the last overload if none match (TypeScript convention).
      */
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // Resolve callee to get its type
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
-        // Skip overloaded functions — the symbol will have multiple declarations
-        if (calleeType is Type.Object && isOverloadedFunction(calleeType)) return
         // Get call signatures
         val signatures = getCallSignaturesOfType(calleeType)
         if (signatures.isEmpty()) return
-        // If there are multiple signatures, skip — item 7b handles overloads
-        if (signatures.size > 1) return
-        val sig = signatures[0]
-        checkArgumentsAgainstSignature(expr.arguments, sig, source, fileName)
+        if (signatures.size == 1) {
+            checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName)
+        } else {
+            // Overload resolution: try each signature in order
+            checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName)
+        }
     }
 
     /**
@@ -22221,23 +22235,48 @@ class Checker(
         // Get construct signatures
         val signatures = getConstructSignaturesOfType(calleeType)
         if (signatures.isEmpty()) return
-        if (signatures.size > 1) return
-        val sig = signatures[0]
-        checkArgumentsAgainstSignature(args, sig, source, fileName)
+        if (signatures.size == 1) {
+            checkArgumentsAgainstSignature(args, signatures[0], source, fileName)
+        } else {
+            checkArgumentsAgainstOverloads(args, signatures, source, fileName)
+        }
     }
 
     /**
-     * Check if a function type is overloaded (has multiple declarations, some without body).
-     * Overloaded functions should be skipped until item 7b (overload resolution).
+     * Try each overload signature in order. If any overload accepts all arguments, no error.
+     * If none succeed, report TS2345 against the last overload (TypeScript convention).
      */
-    private fun isOverloadedFunction(type: Type.Object): Boolean {
-        val sym = type.symbol ?: return false
-        if (sym.declarations.size <= 1) return false
-        // Multiple declarations: check if any is a body-less function declaration (overload signature)
-        return sym.declarations.any { decl ->
-            (decl is FunctionDeclaration && decl.body == null) ||
-            (decl is MethodDeclaration && decl.body == null)
+    private fun checkArgumentsAgainstOverloads(
+        args: List<Expression>,
+        signatures: List<Signature>,
+        source: String,
+        fileName: String,
+    ) {
+        for (sig in signatures) {
+            if (allArgumentsMatch(args, sig)) return // found a matching overload
         }
+        // None matched — report against the last signature
+        val lastSig = signatures.last()
+        checkArgumentsAgainstSignature(args, lastSig, source, fileName)
+    }
+
+    /**
+     * Check if all arguments match a signature (no TS2345 errors would fire).
+     * Returns true if all args are assignable to their corresponding param types.
+     */
+    private fun allArgumentsMatch(args: List<Expression>, sig: Signature): Boolean {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!isSimpleCheckableType(paramType)) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
+        }
+        return true
     }
 
     /**
