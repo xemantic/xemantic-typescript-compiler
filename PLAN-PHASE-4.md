@@ -462,7 +462,7 @@ Currently the checker has TWO type systems running in parallel:
 The single highest-impact change. Replace `inferSimpleExprType`/`isAssignableTo` (string-based)
 with `getTypeOfExpression`/`checkTypeRelatedTo` (Type-based) for all TS2322 emission.
 
-- [ ] **10a. Replace variable declaration assignability**
+- [x] **10a. Replace variable declaration assignability**
 
   In `checkTypeAssignability`, replace the string-based inference for variable declarations:
   ```
