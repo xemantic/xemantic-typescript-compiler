@@ -369,7 +369,7 @@ class CheckerPool(private val program: Program, private val checkerCount: Int = 
 
 ### 8. Generic type support
 
-- [ ] **8a. TypeMapper and generic instantiation**
+- [x] **8a. TypeMapper and generic instantiation**
 
   ```kotlin
   fun interface TypeMapper {

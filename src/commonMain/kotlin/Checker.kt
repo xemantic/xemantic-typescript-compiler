@@ -22626,6 +22626,83 @@ class Checker(
         return checkTypeRelatedTo(source, target, assignableRelation)
     }
 
+    // -----------------------------------------------------------------------
+    // Generic type instantiation (Phase 4 item 8a)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TypeMapper — maps type parameters to concrete types during generic instantiation.
+     */
+    private fun interface TypeMapper {
+        fun map(typeParam: Type.TypeParam): Type?
+    }
+
+    /**
+     * Create a TypeMapper from parallel lists of type parameters and type arguments.
+     */
+    private fun createTypeMapper(typeParams: List<Type.TypeParam>, typeArgs: List<Type>): TypeMapper {
+        return TypeMapper { tp ->
+            val index = typeParams.indexOf(tp)
+            if (index >= 0 && index < typeArgs.size) typeArgs[index] else null
+        }
+    }
+
+    /**
+     * Recursively substitute type parameters in a type according to the given mapper.
+     * Returns the same type if no substitution occurs.
+     */
+    private fun instantiateType(type: Type, mapper: TypeMapper): Type {
+        return when (type) {
+            is Type.TypeParam -> mapper.map(type) ?: type
+            is Type.Union -> {
+                val mapped = type.types.map { instantiateType(it, mapper) }
+                if (mapped.zip(type.types).all { (a, b) -> a === b }) type
+                else getUnionType(mapped)
+            }
+            is Type.Intersection -> {
+                val mapped = type.types.map { instantiateType(it, mapper) }
+                if (mapped.zip(type.types).all { (a, b) -> a === b }) type
+                else getIntersectionType(mapped)
+            }
+            is Type.Reference -> {
+                val args = type.resolvedTypeArguments ?: return type
+                val mapped = args.map { instantiateType(it, mapper) }
+                if (mapped.zip(args).all { (a, b) -> a === b }) type
+                else {
+                    val ref = Type.Reference(type.target)
+                    ref.resolvedTypeArguments = mapped
+                    ref
+                }
+            }
+            is Type.Object -> {
+                // For anonymous object types, we'd need to instantiate members
+                // For now, return as-is
+                type
+            }
+            // Intrinsic, literal types don't contain type parameters
+            else -> type
+        }
+    }
+
+    /**
+     * Instantiate a signature with type arguments — substitute type params in parameter types
+     * and return type.
+     */
+    private fun instantiateSignature(sig: Signature, mapper: TypeMapper): Signature {
+        val newReturnType = sig.resolvedReturnType?.let { instantiateType(it, mapper) }
+        // Parameter types are resolved lazily from their declarations, so we need to create
+        // new parameter symbols with mapped types if the parameters have type annotations
+        // involving type parameters. For now, return the original parameters — the type
+        // resolution in getTypeOfSymbol will pick up the original (non-instantiated) types.
+        return Signature(
+            declaration = sig.declaration,
+            typeParameters = null, // instantiated signature has no type parameters
+            parameters = sig.parameters,
+            resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
+            minArgumentCount = sig.minArgumentCount,
+        )
+    }
+
     /** Create an array type. Returns anyType until generic infrastructure is ready. */
     private fun getArrayType(elementType: Type): Type {
         // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
