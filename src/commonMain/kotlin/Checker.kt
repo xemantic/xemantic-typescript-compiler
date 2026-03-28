@@ -21240,6 +21240,207 @@ class Checker(
         return current
     }
 
+    // -----------------------------------------------------------------------
+    // Lazy member resolution (Phase 4 item 2c)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Lazily resolve an ObjectType's members, properties, and signatures.
+     * After this call, type.members/properties/callSignatures are populated.
+     */
+    private fun resolveStructuredTypeMembers(type: Type.Object) {
+        if (type.properties != null) return // already resolved
+        when (type) {
+            is Type.Interface -> resolveInterfaceMembers(type)
+            is Type.Reference -> resolveReferenceMembers(type)
+            else -> resolveAnonymousTypeMembers(type)
+        }
+    }
+
+    /** Resolve members of an interface/class type from its declarations + base types. */
+    private fun resolveInterfaceMembers(type: Type.Interface) {
+        val symbol = type.symbol ?: run {
+            type.properties = emptyList()
+            return
+        }
+        val members = symbolTable()
+        val callSignatures = mutableListOf<Signature>()
+        val constructSignatures = mutableListOf<Signature>()
+        var stringIndexInfo: IndexInfo? = null
+        var numberIndexInfo: IndexInfo? = null
+
+        // Inherit from base types
+        type.baseTypes?.forEach { baseType ->
+            if (baseType is Type.Object) {
+                resolveStructuredTypeMembers(baseType)
+                baseType.members?.forEach { (name, sym) ->
+                    if (name !in members) members[name] = sym
+                }
+                baseType.callSignatures?.let { callSignatures.addAll(it) }
+                baseType.constructSignatures?.let { constructSignatures.addAll(it) }
+                if (stringIndexInfo == null) stringIndexInfo = baseType.stringIndexInfo
+                if (numberIndexInfo == null) numberIndexInfo = baseType.numberIndexInfo
+            }
+        }
+
+        // Collect members from all declarations of this symbol
+        for (decl in symbol.declarations) {
+            val classMembers = when (decl) {
+                is ClassDeclaration -> decl.members
+                is InterfaceDeclaration -> decl.members
+                else -> continue
+            }
+            for (member in classMembers) {
+                when (member) {
+                    is PropertyDeclaration -> {
+                        val name = getMemberName(member.name) ?: continue
+                        val propSymbol = Symbol(SymbolFlags.Property, name)
+                        propSymbol.declarations.add(member)
+                        propSymbol.valueDeclaration = member
+                        members[name] = propSymbol
+                    }
+                    is MethodDeclaration -> {
+                        val name = getMemberName(member.name) ?: continue
+                        val methodSymbol = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                        methodSymbol.declarations.add(member)
+                        methodSymbol.valueDeclaration = member
+                        members[name] = methodSymbol
+                    }
+                    is Constructor -> {
+                        val returnType = type as Type
+                        val sig = Signature(
+                            declaration = member,
+                            parameters = emptyList(), // TODO: resolve parameter symbols
+                            resolvedReturnType = returnType,
+                            minArgumentCount = member.parameters.count {
+                                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                            },
+                        )
+                        constructSignatures.add(sig)
+                        // Also add parameter properties as members
+                        for (param in member.parameters) {
+                            if (param.modifiers.isNotEmpty() && param.name is Identifier) {
+                                val paramName = (param.name as Identifier).text
+                                val propSymbol = Symbol(SymbolFlags.Property, paramName)
+                                propSymbol.declarations.add(param)
+                                propSymbol.valueDeclaration = param
+                                members[paramName] = propSymbol
+                            }
+                        }
+                    }
+                    is GetAccessor -> {
+                        val name = getMemberName(member.name) ?: continue
+                        members.getOrPut(name) {
+                            Symbol(SymbolFlags.Property, name).also {
+                                it.declarations.add(member)
+                                it.valueDeclaration = member
+                            }
+                        }
+                    }
+                    is SetAccessor -> {
+                        val name = getMemberName(member.name) ?: continue
+                        members.getOrPut(name) {
+                            Symbol(SymbolFlags.Property, name).also {
+                                it.declarations.add(member)
+                                it.valueDeclaration = member
+                            }
+                        }
+                    }
+                    is IndexSignature -> {
+                        val keyParam = member.parameters.firstOrNull()
+                        val keyType = keyParam?.type?.let { getTypeFromTypeNode(it) } ?: stringType
+                        val valueType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        val info = IndexInfo(keyType, valueType, member.modifiers.contains(ModifierFlag.Readonly), member)
+                        if (keyType === numberType) {
+                            numberIndexInfo = info
+                        } else {
+                            stringIndexInfo = info
+                        }
+                    }
+                    is SemicolonClassElement, is ClassStaticBlockDeclaration -> { /* skip */ }
+                }
+            }
+        }
+
+        // Also include exports from the symbol (for namespace merges, etc.)
+        symbol.members?.forEach { (name, sym) ->
+            if (name !in members) members[name] = sym
+        }
+
+        type.members = members
+        type.properties = members.values.toList()
+        type.callSignatures = callSignatures.ifEmpty { null }
+        type.constructSignatures = constructSignatures.ifEmpty { null }
+        type.stringIndexInfo = stringIndexInfo
+        type.numberIndexInfo = numberIndexInfo
+    }
+
+    /** Resolve members of a generic type reference by instantiating target members. */
+    private fun resolveReferenceMembers(type: Type.Reference) {
+        // For now, just resolve the target's members directly
+        // TODO: instantiate with type argument mapper when generic infra is ready
+        resolveStructuredTypeMembers(type.target)
+        type.members = type.target.members
+        type.properties = type.target.properties
+        type.callSignatures = type.target.callSignatures
+        type.constructSignatures = type.target.constructSignatures
+        type.stringIndexInfo = type.target.stringIndexInfo
+        type.numberIndexInfo = type.target.numberIndexInfo
+    }
+
+    /** Resolve members of an anonymous object type (object literal type, function type, etc.). */
+    private fun resolveAnonymousTypeMembers(type: Type.Object) {
+        // For anonymous types created by getFunctionTypeFromNode etc., signatures are already set
+        if (type.properties == null) {
+            type.properties = type.members?.values?.toList() ?: emptyList()
+        }
+    }
+
+    /** Extract the name string from a member name node (Identifier, StringLiteral, NumericLiteral). */
+    private fun getMemberName(name: NameNode): String? {
+        return when (name) {
+            is Identifier -> name.text
+            is StringLiteralNode -> name.text
+            is NumericLiteralNode -> name.text
+            is ComputedPropertyName -> null // dynamic — can't resolve statically
+            else -> null
+        }
+    }
+
+    /**
+     * Get the properties of a type, triggering lazy resolution if needed.
+     */
+    private fun getPropertiesOfType(type: Type): List<Symbol> {
+        if (type is Type.Object) {
+            resolveStructuredTypeMembers(type)
+            return type.properties ?: emptyList()
+        }
+        if (type is Type.Union) {
+            // TODO: intersection of constituent properties
+            return emptyList()
+        }
+        return emptyList()
+    }
+
+    /**
+     * Look up a property by name on a type.
+     */
+    private fun getPropertyOfType(type: Type, name: String): Symbol? {
+        if (type is Type.Object) {
+            resolveStructuredTypeMembers(type)
+            return type.members?.get(name)
+        }
+        if (type is Type.Union) {
+            // Property exists on a union if it exists on every constituent
+            for (constituent in type.types) {
+                val prop = getPropertyOfType(constituent, name) ?: return null
+            }
+            // TODO: return merged property symbol
+            return type.types.firstNotNullOfOrNull { getPropertyOfType(it, name) }
+        }
+        return null
+    }
+
     /** Create an array type. For now returns a simple object type since we don't have global Array<T>. */
     private fun getArrayType(elementType: Type): Type {
         // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
