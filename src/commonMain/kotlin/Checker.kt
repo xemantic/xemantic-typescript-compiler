@@ -364,6 +364,8 @@ class Checker(
         checkCallExpressionTypes()
         // 64d. Check arithmetic operator types (TS2362/TS2363)
         checkArithmeticOperandTypes()
+        // 64e. Check class implements interface (TS2420)
+        checkClassImplementsInterface()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
@@ -22503,6 +22505,197 @@ class Checker(
             is Type.Union -> type.types.joinToString(" | ") { typeToString(it) }
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2420: Class incorrectly implements interface
+    // -----------------------------------------------------------------------
+
+    private fun checkClassImplementsInterface() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkImplementsClausesInStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {
+                // Circular type resolution — skip
+            }
+        }
+    }
+
+    private fun checkImplementsClausesInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                checkImplementsClauses(stmt, source, fileName)
+                // Check nested classes in members (class expressions inside methods are unlikely, but be safe)
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    for (s in body.statements) checkImplementsClausesInStatement(s, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkImplementsClauses(classDecl: ClassDeclaration, source: String, fileName: String) {
+        val implementsClauses = classDecl.heritageClauses?.filter {
+            it.token == SyntaxKind.ImplementsKeyword
+        } ?: return
+        if (implementsClauses.isEmpty()) return
+
+        val className = classDecl.name?.text ?: return
+
+        // Collect class's OWN declared member names (not inherited from interfaces)
+        val classMemberNames = mutableSetOf<String>()
+        for (member in classDecl.members) {
+            val memberName = when (member) {
+                is PropertyDeclaration -> (member.name as? Identifier)?.text
+                is MethodDeclaration -> (member.name as? Identifier)?.text
+                is GetAccessor -> (member.name as? Identifier)?.text
+                is SetAccessor -> (member.name as? Identifier)?.text
+                is Constructor -> {
+                    // Parameter properties count as class members
+                    for (param in member.parameters) {
+                        if (param.modifiers.isNotEmpty() && param.name is Identifier) {
+                            classMemberNames.add((param.name as Identifier).text)
+                        }
+                    }
+                    null
+                }
+                is IndexSignature -> null // handled separately
+                else -> null
+            }
+            if (memberName != null) classMemberNames.add(memberName)
+        }
+
+        // Check if class has index signatures
+        val hasStringIndex = classDecl.members.any {
+            it is IndexSignature && it.parameters.firstOrNull()?.type?.let { t ->
+                t is KeywordTypeNode && t.kind == SyntaxKind.StringKeyword
+            } == true
+        }
+        val hasNumberIndex = classDecl.members.any {
+            it is IndexSignature && it.parameters.firstOrNull()?.type?.let { t ->
+                t is KeywordTypeNode && t.kind == SyntaxKind.NumberKeyword
+            } == true
+        }
+
+        for (clause in implementsClauses) {
+            for (typeExpr in clause.types) {
+                val ifaceName = when (val tn = typeExpr.expression) {
+                    is Identifier -> tn.text
+                    is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+                val ifaceSymbol = globals[ifaceName] ?: continue
+                // Only check actual interfaces, not classes (TS2720 handles class-implementing-class)
+                if (!ifaceSymbol.flags.hasAny(SymbolFlags.Interface)) continue
+                val ifaceType = getDeclaredTypeOfSymbol(ifaceSymbol)
+                if (ifaceType !is Type.Object) continue
+                resolveStructuredTypeMembers(ifaceType)
+
+                // Check each required interface property exists in class
+                val ifaceProps = ifaceType.properties ?: continue
+                for (ifaceProp in ifaceProps) {
+                    val propName = ifaceProp.name
+
+                    if (propName !in classMemberNames) {
+                        // Property missing — emit TS2420
+                        val isOptional = isOptionalProperty(ifaceProp)
+                        if (isOptional) continue
+
+                        val classNameNode = classDecl.name ?: continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                        val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                        val chain = mutableListOf<String>()
+                        chain.add("  Property '$propName' is missing in type '$className' but required in type '$ifaceName'.")
+                        // TS2728 related info: point to interface property declaration
+                        val relatedInfo = ifaceProp.valueDeclaration?.let { decl ->
+                            val declPos = when (decl) {
+                                is PropertyDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                                is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                                else -> decl.pos
+                            }
+                            val declLength = when (decl) {
+                                is PropertyDeclaration -> (decl.name as? Identifier)?.text?.length ?: propName.length
+                                is MethodDeclaration -> (decl.name as? Identifier)?.text?.length ?: propName.length
+                                else -> propName.length
+                            }
+                            val (rl, rc) = getLineAndCharacterOfPosition(source, declPos)
+                            listOf(Diagnostic(
+                                message = "'$propName' is declared here.",
+                                category = DiagnosticCategory.Message,
+                                code = 2728,
+                                fileName = fileName,
+                                line = rl,
+                                character = rc,
+                                start = declPos,
+                                length = declLength,
+                            ))
+                        } ?: emptyList()
+
+                        diagnostics.add(Diagnostic(
+                            message = message,
+                            category = DiagnosticCategory.Error,
+                            code = 2420,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = classNameNode.pos,
+                            length = className.length,
+                            messageChain = chain,
+                            relatedInformation = relatedInfo,
+                        ))
+                        return // One TS2420 per class is enough (TypeScript only reports first mismatch)
+                    }
+                }
+
+                // Check index signatures
+                val ifaceStringIdx = ifaceType.stringIndexInfo
+                val ifaceNumberIdx = ifaceType.numberIndexInfo
+                if (ifaceNumberIdx != null && !hasNumberIndex && !hasStringIndex) {
+                    val classNameNode = classDecl.name ?: continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                    val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                    val chain = mutableListOf("  Index signature for type 'number' is missing in type '$className'.")
+                    diagnostics.add(Diagnostic(
+                        message = message,
+                        category = DiagnosticCategory.Error,
+                        code = 2420,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = classNameNode.pos,
+                        length = className.length,
+                        messageChain = chain,
+                    ))
+                    return
+                }
+                if (ifaceStringIdx != null && !hasStringIndex) {
+                    val classNameNode = classDecl.name ?: continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                    val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                    val chain = mutableListOf("  Index signature for type 'string' is missing in type '$className'.")
+                    diagnostics.add(Diagnostic(
+                        message = message,
+                        category = DiagnosticCategory.Error,
+                        code = 2420,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = classNameNode.pos,
+                        length = className.length,
+                        messageChain = chain,
+                    ))
+                    return
+                }
+            }
         }
     }
 

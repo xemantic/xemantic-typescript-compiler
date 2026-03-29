@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-29):** 7,667 / 10,077 tests passing (76.1%).
+**Status (2026-03-29):** 7,672 / 10,077 tests passing (76.1%).
 
 ## Goal
 
@@ -226,14 +226,13 @@ The single highest-ROI change. 42 diff tests + 171 none-produced = 213 pure TS23
 
 Independent of type checker work. 257 tests failing, 74 within 4 diff lines.
 
-- [ ] **B1. CJS export ordering**
+- [x] **B1. CJS export ordering** — SKIPPED
 
-  Several tests differ only in `exports.X = ...` ordering or
-  `Object.defineProperty(exports, ...)` vs direct assignment.
-  Fix export statement ordering in CommonJS transform.
+  Analysis shows only ~2 tests have pure CJS ordering diffs. Most JS emit
+  failures are parser error recovery, module path resolution, or other
+  issues. ROI too low to pursue.
 
-  **File:** `Transformer.kt` — `transformToCommonJS`
-  **Target:** ~10 tests
+  **Target:** ~2 tests (revised from ~10 estimate)
 
 - [ ] **B2. Type-only import elimination**
 
@@ -263,13 +262,18 @@ Independent of type checker work. 257 tests failing, 74 within 4 diff lines.
 
 Well-defined checks using existing infrastructure.
 
-- [ ] **C1. TS2420 — class incorrectly implements interface**
+- [x] **C1. TS2420 — class incorrectly implements interface**
 
   For each `implements` clause, check that the class has all required
-  interface members with compatible types. Uses structural comparison (item 4).
+  interface members with compatible types. Collects class's own declared
+  members from AST (not inherited from interfaces via resolveStructuredTypeMembers).
+  Only checks actual interfaces (SymbolFlags.Interface), not classes.
+  Includes index signature checks and TS2728 related info.
 
-  **File:** `Checker.kt` — new `checkClassImplementsInterface`
-  **Target:** 8 pure tests, 10 total
+  **+5 tests** (declareClassInterfaceImplementation, interfaceImplementation2/3/4,
+  optionalPropertiesInClasses). 7,672 passing.
+
+  **File:** `Checker.kt` — `checkClassImplementsInterface`
 
 - [ ] **C2. TS2416 — property type incompatible with base type**
 
