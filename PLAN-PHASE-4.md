@@ -565,7 +565,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   **File:** `Checker.kt` — `getCallSignaturesOfType`
   **Target:** ~20 tests
 
-- [ ] **12c. TS2769 — no overload matches this call**
+- [x] **12c. TS2769 — no overload matches this call** (infrastructure in place; gains blocked on isSimpleCheckableType guards and callee resolution)
 
   When ALL overload signatures fail, emit TS2769 with each overload's error
   instead of TS2345 against the last signature.
