@@ -497,7 +497,7 @@ with `getTypeOfExpression`/`checkTypeRelatedTo` (Type-based) for all TS2322 emis
   **File:** `Checker.kt` — `checkAssignmentExpression`
   **Target:** ~30 tests
 
-- [ ] **10d. Remove old string-based inference functions**
+- [ ] **10d. Remove old string-based inference functions** (blocked: still used by conservative fallback paths in 10a/10b/10c)
 
   After 10a-10c, the old `inferSimpleExprType`, `isAssignableTo`,
   and `formatTypeForDisplay` functions should be dead code. Remove them.
@@ -557,7 +557,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   keep the guard for TypeParameter types until generic inference improves.
   **Target:** ~100 tests
 
-- [ ] **12b. Handle union type call signatures**
+- [x] **12b. Handle union type call signatures** (infrastructure in place; gains depend on relaxing isSimpleCheckableType)
 
   Currently `getCallSignaturesOfType` returns `emptyList()` for `Type.Union`.
   Implement: collect call signatures from all union constituents.

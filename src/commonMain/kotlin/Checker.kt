@@ -22761,8 +22761,12 @@ class Checker(
             return type.callSignatures ?: emptyList()
         }
         if (type is Type.Union) {
-            // For unions, we'd need to check all — skip for now
-            return emptyList()
+            // Collect call signatures from all union constituents
+            val allSigs = mutableListOf<Signature>()
+            for (constituent in type.types) {
+                allSigs.addAll(getCallSignaturesOfType(constituent))
+            }
+            return allSigs
         }
         return emptyList()
     }
