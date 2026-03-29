@@ -187,19 +187,21 @@ The single highest-ROI change. 42 diff tests + 171 none-produced = 213 pure TS23
   **File:** `Checker.kt`
   **Result:** 7,662 / 10,077 (76.0%)
 
-- [ ] **A2. Add class member initializer checking**
+- [x] **A2. Class member init + this.prop assignment + return identifier lookup**
 
-  `PropertyDeclaration` with initializer + type annotation not currently traversed.
-  Add to class member loop in `checkTypeAssignabilityInStatements`.
+  Added PropertyDeclaration initializer checking in class member traversal.
+  Added `this.prop = value` handling in `checkAssignmentExpression` with
+  pre-populated class property types in constructor scope.
+  Added varTypes lookup for identifiers in return statement context.
+  **+4 tests** (classMemberInitializerScoping, memberVariableDeclarations1,
+  numberToString, chainedAssignment2). 7,665 passing.
 
-  **File:** `Checker.kt` — class member traversal
-  **Target:** ~5-10 tests
+- [ ] **A3. Further TS2322 improvements**
 
-- [ ] **A3. Relax TS2322 for assignment expressions**
+  Remaining pure TS2322 tests need: function signature comparison,
+  generic type argument comparison, wider expression type resolution.
 
-  `x = value` where `x` has a known type from annotation or prior declaration.
-
-  **File:** `Checker.kt` — `checkAssignmentExpression`
+  **File:** `Checker.kt`
 
 - [ ] **A4. Function signature comparison for TS2322**
 
