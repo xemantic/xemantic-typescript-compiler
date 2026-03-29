@@ -1334,8 +1334,13 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseHeritageClauses(): List<HeritageClause>? {
         val clauses = mutableListOf<HeritageClause>()
+        var hasImplements = false
         while (token == SyntaxKind.ExtendsKeyword || token == SyntaxKind.ImplementsKeyword) {
             val clauseToken = token
+            if (clauseToken == SyntaxKind.ImplementsKeyword) hasImplements = true
+            if (clauseToken == SyntaxKind.ExtendsKeyword && hasImplements) {
+                reportError("'extends' clause must precede 'implements' clause.", code = 1173)
+            }
             val pos = getPos()
             nextToken()
             val types = mutableListOf<ExpressionWithTypeArguments>()
