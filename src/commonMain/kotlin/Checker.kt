@@ -21385,7 +21385,11 @@ class Checker(
 
         // Fallback to old string-based system
         val exprType = if (expr != null) {
-            inferSimpleExprType(expr, varTypes) ?: return
+            inferSimpleExprType(expr, varTypes)
+                // For return statements: also check varTypes for identifier expressions
+                // (safe here because return type is always a declared type, not a complex union)
+                ?: (expr as? Identifier)?.let { varTypes[it.text] }
+                ?: return
         } else {
             "undefined"
         }
@@ -23754,7 +23758,7 @@ class Checker(
                 "null" -> "null"
                 "true", "false" -> "boolean"
                 "NaN", "Infinity" -> "number"
-                else -> null // Don't look up variable types to avoid FPs
+                else -> null // Don't look up variable types — causes FPs with enum/union targets
             }
             is TypeOfExpression -> "string" // typeof always returns string
             is PrefixUnaryExpression -> when (expr.operator) {
@@ -23784,7 +23788,7 @@ class Checker(
             is NumericLiteralNode -> true
             is StringLiteralNode -> true
             is NoSubstitutionTemplateLiteralNode -> true
-            is Identifier -> expr.text in setOf("null", "undefined", "true", "false", "NaN", "Infinity")
+            is Identifier -> true // All identifiers are "simple" (no elaboration chain)
             is ParenthesizedExpression -> isSimpleLiteral(expr.expression)
             is PrefixUnaryExpression -> expr.operand is NumericLiteralNode
             is BinaryExpression -> expr.operator == SyntaxKind.Equals && isSimpleLiteral(expr.right)
