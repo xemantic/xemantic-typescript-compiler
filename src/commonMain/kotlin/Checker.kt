@@ -5735,7 +5735,8 @@ class Checker(
                 element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
             }
             is SetAccessor -> {
-                checkParamsForImplicitAny(element.parameters, source, fileName)
+                // Setter value parameters are contextually typed from the getter return type.
+                // Skip TS7006 for them — TypeScript never emits implicit-any for setter params.
                 element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
             }
             is PropertyDeclaration -> {
@@ -12911,9 +12912,9 @@ class Checker(
     }
 
     private fun paramInfo(parameters: List<Parameter>, isJsFile: Boolean = false): FuncParamInfo {
-        var required = 0
         var total = 0
         var hasRest = false
+        var lastRequiredPos = -1  // 0-based index of last non-optional param
         for (p in parameters) {
             // Skip `this` pseudo-parameter
             if (p.name is Identifier && (p.name as Identifier).text == "this") continue
@@ -12921,12 +12922,16 @@ class Checker(
                 hasRest = true
                 continue
             }
-            total++
             // In JS files (checkJs), all parameters are implicitly optional (min=0, max=N)
             if (!isJsFile && !p.questionToken && p.initializer == null) {
-                required++
+                lastRequiredPos = total
             }
+            total++
         }
+        // Required = position of last required param + 1.
+        // E.g., f(a, b = 0, c) → lastRequiredPos = 2 → required = 3.
+        // This ensures optional params before a required one are effectively required.
+        val required = lastRequiredPos + 1
         return FuncParamInfo(required, total, hasRest, isOverloaded = false, parameters = parameters)
     }
 
@@ -13066,12 +13071,16 @@ class Checker(
                 }
                 if (calleeName != null) {
                     val info = funcParams[calleeName]
-                    if (info != null && !info.isOverloaded && !info.hasRest) {
+                    if (info != null && !info.isOverloaded) {
                         val argCount = expr.arguments.size
-                        if (argCount > info.maxParams) {
+                        if (!info.hasRest && argCount > info.maxParams) {
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
                         } else if (argCount < info.minParams) {
-                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
+                            if (info.hasRest) {
+                                emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
+                            } else {
+                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
+                            }
                         }
                     }
                 }
@@ -13088,13 +13097,17 @@ class Checker(
                 }
                 if (className != null) {
                     val info = classCtorParams[className]
-                    if (info != null && !info.isOverloaded && !info.hasRest) {
+                    if (info != null && !info.isOverloaded) {
                         val argCount = expr.arguments?.size ?: 0
-                        if (argCount > info.maxParams) {
+                        if (!info.hasRest && argCount > info.maxParams) {
                             val args = expr.arguments ?: emptyList()
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
                         } else if (argCount < info.minParams) {
-                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName)
+                            if (info.hasRest) {
+                                emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName)
+                            } else {
+                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName)
+                            }
                         }
                     }
                 }
@@ -13271,6 +13284,76 @@ class Checker(
             message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $actual.",
             category = DiagnosticCategory.Error,
             code = 2554,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = relatedInfo.ifEmpty { emptyList() },
+        ))
+    }
+
+    /**
+     * Emit TS2555 for too few arguments when function has rest parameters.
+     * "Expected at least N arguments, but got M."
+     */
+    private fun emitTS2555TooFew(
+        minParams: Int,
+        actual: Int,
+        calleeExpr: Expression,
+        source: String,
+        fileName: String,
+        parameters: List<Parameter> = emptyList(),
+    ) {
+        val start = calleeExpr.pos
+        val length = expressionTrueEnd(calleeExpr) - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val relatedInfo = mutableListOf<Diagnostic>()
+        if (parameters.isNotEmpty()) {
+            val nonThisParams = parameters.filter {
+                !(it.name is Identifier && (it.name as Identifier).text == "this")
+            }
+            if (actual < nonThisParams.size) {
+                val missingParam = nonThisParams[actual]
+                when (val paramName = missingParam.name) {
+                    is Identifier -> {
+                        val paramStart = paramName.pos
+                        val paramLen = paramName.text.length
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                        relatedInfo.add(Diagnostic(
+                            message = "An argument for '${paramName.text}' was not provided.",
+                            category = DiagnosticCategory.Message,
+                            code = 6210,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = paramStart,
+                            length = paramLen,
+                        ))
+                    }
+                    is ObjectBindingPattern, is ArrayBindingPattern -> {
+                        val paramStart = paramName.pos
+                        val paramLen = paramName.end - paramStart
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                        relatedInfo.add(Diagnostic(
+                            message = "An argument matching this binding pattern was not provided.",
+                            category = DiagnosticCategory.Message,
+                            code = 6211,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = paramStart,
+                            length = paramLen,
+                        ))
+                    }
+                    else -> {}
+                }
+            }
+        }
+        diagnostics.add(Diagnostic(
+            message = "Expected at least $minParams arguments, but got $actual.",
+            category = DiagnosticCategory.Error,
+            code = 2555,
             fileName = fileName,
             line = line,
             character = character,
@@ -22991,6 +23074,7 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+                break // TypeScript reports only the first failing argument per call
             }
         }
     }
