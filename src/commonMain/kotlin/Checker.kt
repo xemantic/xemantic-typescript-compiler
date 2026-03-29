@@ -4500,9 +4500,15 @@ class Checker(
                     // Assignment — right side may use uninitialized, left side is a write
                     findUninitializedRefs(expr.right, uninitialized, source, fileName)
                     // Mark the left side as assigned (so subsequent uses are not flagged)
+                    // But for property/element access (d.x = v, d[i] = v), the base object is READ
                     val left = expr.left
                     when (left) {
                         is Identifier -> uninitialized.remove(left.text)
+                        is PropertyAccessExpression -> findUninitializedRefs(left.expression, uninitialized, source, fileName)
+                        is ElementAccessExpression -> {
+                            findUninitializedRefs(left.expression, uninitialized, source, fileName)
+                            findUninitializedRefs(left.argumentExpression, uninitialized, source, fileName)
+                        }
                         is ObjectLiteralExpression -> collectDestructuringTargets(left, uninitialized)
                         is ArrayLiteralExpression -> collectDestructuringTargets(left, uninitialized)
                         else -> {}
@@ -4549,6 +4555,11 @@ class Checker(
                 for (prop in expr.properties) {
                     when (prop) {
                         is PropertyAssignment -> {
+                            // Check computed property names: { [t]: 0 } reads t
+                            val name = prop.name
+                            if (name is ComputedPropertyName) {
+                                findUninitializedRefs(name.expression, uninitialized, source, fileName)
+                            }
                             findUninitializedRefs(prop.initializer, uninitialized, source, fileName)
                         }
                         is ShorthandPropertyAssignment -> {
