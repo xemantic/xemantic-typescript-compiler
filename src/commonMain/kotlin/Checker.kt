@@ -21022,6 +21022,8 @@ class Checker(
         if (sourceIsIntrinsic && targetIsIntrinsic) return true
         // Object literal → intrinsic target (object literal is never assignable to primitive)
         if (sourceType is Type.Object && sourceType.symbol == null && targetIsIntrinsic) return true
+        // Skip function→function comparison — signature arity/rest parameter handling
+        // causes FPs (e.g., rest-param function assignable to no-param function)
         return false
     }
 
@@ -22239,7 +22241,15 @@ class Checker(
 
     /** Get the type of an arrow function expression. */
     private fun getTypeOfArrowFunction(expr: ArrowFunction): Type {
-        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: anyType
+        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: run {
+            val body = expr.body
+            when {
+                body is Block && !hasReturnWithExpression(body) -> voidType
+                body is Block -> anyType // has return with expression, can't infer without analysis
+                body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
+                else -> anyType
+            }
+        }
         val params = getParameterSymbols(expr.parameters)
         val sig = Signature(
             declaration = expr,
@@ -22257,7 +22267,8 @@ class Checker(
 
     /** Get the type of a function expression. */
     private fun getTypeOfFunctionExpression(expr: FunctionExpression): Type {
-        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: anyType
+        val returnType = expr.type?.let { getTypeFromTypeNode(it) }
+            ?: if (expr.body != null && !hasReturnWithExpression(expr.body!!)) voidType else anyType
         val params = getParameterSymbols(expr.parameters)
         val sig = Signature(
             declaration = expr,
@@ -22271,6 +22282,15 @@ class Checker(
         fnType.callSignatures = listOf(sig)
         fnType.properties = emptyList()
         return fnType
+    }
+
+    /** Check if a block contains any return statement with an expression. */
+    private fun hasReturnWithExpression(block: Block): Boolean {
+        for (stmt in block.statements) {
+            if (stmt is ReturnStatement && stmt.expression != null) return true
+            // Don't recurse into nested functions — they have their own return scope
+        }
+        return false
     }
 
     /** Get the return type of a call expression by resolving the callee's call signature. */
@@ -22393,6 +22413,17 @@ class Checker(
     /**
      * Get a display-friendly string for a Type (used in diagnostic messages).
      */
+    /** Format a signature as a string like `(x: number) => string` or `new (x: number) => Foo`. */
+    private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
+        val prefix = if (isConstruct) "new " else ""
+        val params = sig.parameters.joinToString(", ") { p ->
+            val pType = symbolTypes[p.id]?.let { typeToString(it) } ?: "any"
+            "${p.name}: $pType"
+        }
+        val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
+        return "$prefix($params) => $retType"
+    }
+
     private fun typeToString(type: Type): String {
         return when (type) {
             is Type.Intrinsic -> type.intrinsicName
@@ -22403,15 +22434,24 @@ class Checker(
                 val sym = type.symbol
                 if (sym != null) sym.name
                 else {
-                    // Anonymous object type — format as { prop: type; ... }
-                    val props = type.properties
-                    if (props != null && props.isNotEmpty()) {
-                        val entries = props.joinToString("; ") { p ->
-                            val propType = symbolTypes[p.id]
-                            "${p.name}: ${if (propType != null) typeToString(propType) else "any"}"
-                        }
-                        "{ $entries; }"
-                    } else "{ ... }"
+                    // Check for function type (Object with call signatures, no properties)
+                    val callSigs = type.callSignatures
+                    val ctorSigs = type.constructSignatures
+                    if (!callSigs.isNullOrEmpty() && (type.properties.isNullOrEmpty())) {
+                        signatureToString(callSigs.first(), isConstruct = false)
+                    } else if (!ctorSigs.isNullOrEmpty() && (type.properties.isNullOrEmpty())) {
+                        signatureToString(ctorSigs.first(), isConstruct = true)
+                    } else {
+                        // Anonymous object type — format as { prop: type; ... }
+                        val props = type.properties
+                        if (props != null && props.isNotEmpty()) {
+                            val entries = props.joinToString("; ") { p ->
+                                val propType = symbolTypes[p.id]
+                                "${p.name}: ${if (propType != null) typeToString(propType) else "any"}"
+                            }
+                            "{ $entries; }"
+                        } else "{ ... }"
+                    }
                 }
             }
             is Type.Interface -> type.symbol?.name ?: "Interface"
