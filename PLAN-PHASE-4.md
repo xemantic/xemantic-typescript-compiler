@@ -234,28 +234,16 @@ Independent of type checker work. 257 tests failing, 74 within 4 diff lines.
 
   **Target:** ~2 tests (revised from ~10 estimate)
 
-- [ ] **B2. Type-only import elimination**
+- [ ] **B2. Type-only import elimination** — DEFERRED (complex, multi-file)
 
-  Imports that resolve to type-only symbols should be elided from JS output.
-  Currently some type imports leak through as `require()` calls.
-
-  **File:** `Checker.kt` (isTypeOnly), `Transformer.kt` (elision)
   **Target:** ~10 tests
 
-- [ ] **B3. Multi-file emit ordering**
+- [ ] **B3. Multi-file emit ordering** — DEFERRED (complex)
 
-  File ordering in multi-file output doesn't always match TypeScript's
-  topological sort. Fix dependency resolution.
-
-  **File:** `TypeScriptCompiler.kt`
   **Target:** ~10 tests
 
-- [ ] **B4. Source map improvements**
+- [ ] **B4. Source map improvements** — DEFERRED (new infrastructure needed)
 
-  Inline source map generation (base64) and URL path calculation.
-  ~10 tests need only sourcemap fixes.
-
-  **File:** `Emitter.kt` / new `SourceMapGenerator.kt`
   **Target:** ~10 tests
 
 ### Track C — New Diagnostic Categories (target: +30-40 tests)
@@ -329,12 +317,13 @@ Fix the blockers that prevent widening TS2339 and TS2345.
   **File:** `Checker.kt` — `checkSinglePropertyAccess`
   **Target:** 15 pure tests, 44 total
 
-- [ ] **D4. Relax TS2345 isSimpleCheckableType guard**
+- [x] **D4. Relax TS2345 isSimpleCheckableType guard** — BLOCKED
 
-  With structural comparison working, allow checking against
-  object/interface parameter types (not just primitives).
+  Attempted adding Interface and function types: caused 2 regressions
+  (inferentialTypingWithFunctionTypeSyntacticScenarios, mutrec) from
+  incomplete generic/recursive type resolution. Reverted. Needs proper
+  generic instantiation before this can be safely relaxed.
 
-  **File:** `Checker.kt` — `checkArgumentsAgainstSignature`
   **Target:** 12 pure tests, 47 total
 
 ### Track E — Cross-File Resolution (target: +15-20 tests)
