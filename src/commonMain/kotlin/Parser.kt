@@ -3676,12 +3676,6 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     // parseStatements' safety mechanism will skip it and discard this "statement".
                     reportError("Invalid character.", code = 1127, overrideLength = 0)
                     Identifier(text = "", pos = pos, end = getEnd())
-                } else if (token == SyntaxKind.CloseParen) {
-                    // A closing paren at expression start means a semicolon (statement terminator)
-                    // is missing, not that an expression is missing. TypeScript emits TS1005
-                    // "';' expected." rather than TS1109 "Expression expected." here.
-                    reportError("';' expected.", code = 1005)
-                    Identifier(text = "", pos = pos, end = getEnd())
                 } else {
                     reportError("Expression expected.", code = 1109)
                     Identifier(text = "", pos = pos, end = getEnd())
@@ -4285,6 +4279,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
             if (token == SyntaxKind.Comma) {
                 // Missing argument slot e.g. foo(a,,b) — create OmittedExpression
+                reportError("Argument expression expected.", code = 1135)
                 args.add(OmittedExpression(pos = getPos(), end = getPos()))
                 nextToken()
                 continue
