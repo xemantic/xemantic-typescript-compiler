@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-29):** 7,648 / 10,077 tests passing (75.9%). Phase 4b queue items mostly blocked by incomplete type system (module augmentation, control flow narrowing, structural comparison FPs). Current strategy: targeted near-passing test fixes (262 tests are 1 error from passing).
+**Status (2026-03-29):** 7,661 / 10,077 tests passing (76.0%). Phase 4b queue items mostly blocked by incomplete type system (module augmentation, control flow narrowing, structural comparison FPs). Current strategy: targeted near-passing test fixes. Recent batch: +13 tests from parser/checker micro-fixes (TS1109, TS1135, TS2345, TS2555, TS2873, paramInfo, setter TS7006).
 
 ## Goal
 
@@ -628,12 +628,12 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
 
 ### 15. Class/interface structural diagnostics
 
-- [ ] **15a. TS2430 — duplicate property declarations in class**
+- [x] **15a. TS2430 — duplicate property declarations in class** (TS2300 — implemented in prior session)
 
   Within a single class body, detect duplicate property/method names.
   Getters and setters with the same name are allowed.
 
-  **File:** `Checker.kt` — new `checkDuplicateClassMembers`
+  **File:** `Checker.kt` — `checkDuplicateClassMembers`
   **Target:** ~50 tests
 
 - [ ] **15b. TS2416 — property type incompatible with base type**
