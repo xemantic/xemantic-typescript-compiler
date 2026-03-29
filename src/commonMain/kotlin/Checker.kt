@@ -16337,6 +16337,23 @@ class Checker(
                     if (m is SetAccessor) {
                         checkSetterParams(m.name, m.parameters, source, fileName)
                     }
+                    if (m is GetAccessor && m.parameters.isNotEmpty()) {
+                        // TS1054: get accessor cannot have parameters
+                        val nameNode = m.name
+                        val start = if (nameNode is Identifier) nameNode.pos else m.pos
+                        val length = if (nameNode is Identifier) nameNode.text.length else 3
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "A 'get' accessor cannot have parameters.",
+                            category = DiagnosticCategory.Error,
+                            code = 1054,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
                     // Recurse into methods/constructors
                     when (m) {
                         is MethodDeclaration -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
@@ -16386,6 +16403,22 @@ class Checker(
             is ObjectLiteralExpression -> for (prop in expr.properties) {
                 if (prop is SetAccessor) {
                     checkSetterParams(prop.name, prop.parameters, source, fileName)
+                }
+                if (prop is GetAccessor && prop.parameters.isNotEmpty()) {
+                    val nameNode = prop.name
+                    val start = if (nameNode is Identifier) nameNode.pos else prop.pos
+                    val length = if (nameNode is Identifier) nameNode.text.length else 3
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "A 'get' accessor cannot have parameters.",
+                        category = DiagnosticCategory.Error,
+                        code = 1054,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
                 }
             }
             is ArrowFunction -> when (val body = expr.body) {
