@@ -575,7 +575,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
 
 ### 13. Widen TS2339 property access checking
 
-- [ ] **13a. Check property access on typed identifiers**
+- [ ] **13a. Check property access on typed identifiers** (DEFERRED: -7 regressions from module augmentation FPs, control flow narrowing FPs)
 
   Remove the `this`-only guard. For any `expr.prop` where `getTypeOfExpression(expr)`
   resolves to a known object type, check if `prop` exists on that type.
@@ -583,11 +583,12 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   Guard to relax: `if (expr.expression !is Identifier || text != "this") return`
 
   **File:** `Checker.kt` — `checkSinglePropertyAccess`
-  **Regression risk:** HIGH — need to ensure `getTypeOfExpression` returns `anyType`
-  (not a concrete type) for unresolvable expressions. Guard with `if (type === anyType) return`.
+  **Blocked by:** Module augmentation resolution (5 FPs from augmented interface members),
+  control flow narrowing (1 FP from instanceof narrowing), cross-file type resolution (1 FP).
+  Only 1 test gained vs 7 regressed. Needs module augmentation + narrowing support.
   **Target:** ~60 tests
 
-- [ ] **13b. Remove base type skip**
+- [ ] **13b. Remove base type skip** (DEFERRED: depends on 13a)
 
   The Phase 4 `resolveInterfaceMembers` now inherits from base types.
   Remove: `if (objectType.baseTypes != null && baseTypes.isNotEmpty()) return`
@@ -595,7 +596,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   **File:** `Checker.kt` — `checkSinglePropertyAccess`
   **Target:** ~30 tests
 
-- [ ] **13c. Check property access on union types**
+- [ ] **13c. Check property access on union types** (DEFERRED: depends on 13a)
 
   For `(A | B).prop`, property must exist on ALL constituents.
   Use `getPropertyOfType` on each union member.
@@ -605,7 +606,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
 
 ### 14. Operator type checking (new diagnostics)
 
-- [ ] **14a. TS2362/TS2363 — arithmetic operand types**
+- [ ] **14a. TS2362/TS2363 — arithmetic operand types** (DEFERRED: 1300+ regressions from getTypeOfExpression resolving globals to concrete types)
 
   For `+`, `-`, `*`, `/`, `%`, `**`, `<<`, `>>`, `>>>`, `&`, `|`, `^`:
   left/right must be `number`, `any`, `bigint`, or enum type.
@@ -615,7 +616,7 @@ Each TODO resolved here directly improves TS2322/TS2345/TS2339 accuracy.
   **File:** `Checker.kt` — new `checkArithmeticOperandTypes`
   **Target:** ~100 tests
 
-- [ ] **14b. TS2365 — operator cannot be applied to types**
+- [ ] **14b. TS2365 — operator cannot be applied to types** (DEFERRED: depends on 14a)
 
   For `+` specifically: if left is `string` and right is not, or vice versa,
   emit "Operator '+' cannot be applied to types 'X' and 'Y'".
