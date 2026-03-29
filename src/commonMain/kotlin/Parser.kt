@@ -38,7 +38,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     fun parse(): SourceFile {
         nextToken()
-        val statements = parseStatements()
+        val statements = parseStatements(topLevel = true)
         // Capture any trailing comments at the end of the file (between last statement and EOF)
         val eofComments = leadingComments()
         val finalStatements = if (eofComments != null) {
@@ -282,9 +282,19 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     // ── Statement list ──────────────────────────────────────────────────────
 
-    private fun parseStatements(): List<Statement> {
+    private fun parseStatements(topLevel: Boolean = false): List<Statement> {
         val stmts = mutableListOf<Statement>()
-        while (token != SyntaxKind.EndOfFile && token != SyntaxKind.CloseBrace) {
+        while (token != SyntaxKind.EndOfFile) {
+            if (token == SyntaxKind.CloseBrace) {
+                if (topLevel) {
+                    // Stray '}' at file top level — emit TS1128 and skip
+                    reportError("Declaration or statement expected.", code = 1128)
+                    nextToken()
+                    continue
+                } else {
+                    break // Normal block termination
+                }
+            }
             // Error recovery: when inside a class body and we encounter `static` followed
             // by an identifier, terminate the block — the enclosing class body parser will
             // parse it as a class member (matches TypeScript's error recovery behavior).
