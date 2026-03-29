@@ -21022,8 +21022,10 @@ class Checker(
         if (sourceIsIntrinsic && targetIsIntrinsic) return true
         // Object literal → intrinsic target (object literal is never assignable to primitive)
         if (sourceType is Type.Object && sourceType.symbol == null && targetIsIntrinsic) return true
-        // Function→function comparison deferred — causes FPs from incomplete expression
-        // type resolution (arrow body types resolve to anyType, causing false mismatches)
+        // Function→function: both sides have call signatures — safe because anyType in
+        // unresolved return/param types is handled by isSimpleTypeRelatedTo (any→anything)
+        if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+            targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) return true
         return false
     }
 
@@ -21294,21 +21296,25 @@ class Checker(
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
-                // Add elaboration chain for non-trivial expressions (not literals, not calls)
-                // TypeScript adds elaboration chain only for certain non-trivial patterns
-                // (e.g. typeof), but NOT for calls, delete, or other simple expressions
-                val needsElaboration = !isSimpleLiteral(init) &&
-                    init !is CallExpression && init !is NewExpression &&
-                    init !is DeleteExpression && init !is AwaitExpression &&
-                    init !is BinaryExpression && init !is ParenthesizedExpression
-                if (needsElaboration) chain.add("  $message")
-                if (targetType is Type.TypeParam) {
-                    val targetName = targetType.symbol?.name ?: "T"
-                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
-                } else if (typeParams.isNotEmpty()) {
-                    val targetBaseName = displayTarget.substringBefore('<')
-                    if (targetBaseName in typeParams) {
-                        chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                // Function→function: add specific elaboration (return/param mismatch)
+                if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                    targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
+                    chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                } else {
+                    // Add elaboration chain for non-trivial expressions (not literals, not calls)
+                    val needsElaboration = !isSimpleLiteral(init) &&
+                        init !is CallExpression && init !is NewExpression &&
+                        init !is DeleteExpression && init !is AwaitExpression &&
+                        init !is BinaryExpression && init !is ParenthesizedExpression
+                    if (needsElaboration) chain.add("  $message")
+                    if (targetType is Type.TypeParam) {
+                        val targetName = targetType.symbol?.name ?: "T"
+                        chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                    } else if (typeParams.isNotEmpty()) {
+                        val targetBaseName = displayTarget.substringBefore('<')
+                        if (targetBaseName in typeParams) {
+                            chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                        }
                     }
                 }
                 diagnostics.add(Diagnostic(
@@ -21351,11 +21357,16 @@ class Checker(
                 val (line, character) = getLineAndCharacterOfPosition(source, propName.pos)
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
-                val needsElaboration = !isSimpleLiteral(init) &&
-                    init !is CallExpression && init !is NewExpression &&
-                    init !is DeleteExpression && init !is AwaitExpression &&
-                    init !is BinaryExpression && init !is ParenthesizedExpression
-                if (needsElaboration) chain.add("  $message")
+                if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                    targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
+                    chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                } else {
+                    val needsElaboration = !isSimpleLiteral(init) &&
+                        init !is CallExpression && init !is NewExpression &&
+                        init !is DeleteExpression && init !is AwaitExpression &&
+                        init !is BinaryExpression && init !is ParenthesizedExpression
+                    if (needsElaboration) chain.add("  $message")
+                }
                 diagnostics.add(Diagnostic(
                     message = message,
                     category = DiagnosticCategory.Error,
@@ -21452,18 +21463,24 @@ class Checker(
                                 val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
                                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                                 val chain = mutableListOf<String>()
-                                val needsElaboration = !isSimpleLiteral(expr.right) &&
-                                    expr.right !is CallExpression && expr.right !is NewExpression &&
-                                    expr.right !is DeleteExpression && expr.right !is AwaitExpression &&
-                                    expr.right !is BinaryExpression && expr.right !is ParenthesizedExpression
-                                if (needsElaboration) chain.add("  $message")
-                                if (targetType is Type.TypeParam) {
-                                    val targetName = targetType.symbol?.name ?: "T"
-                                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
-                                } else if (typeParams.isNotEmpty()) {
-                                    val targetBaseName = displayTarget.substringBefore('<')
-                                    if (targetBaseName in typeParams) {
-                                        chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                // Function→function: add specific elaboration
+                                if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                                    targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
+                                    chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                                } else {
+                                    val needsElaboration = !isSimpleLiteral(expr.right) &&
+                                        expr.right !is CallExpression && expr.right !is NewExpression &&
+                                        expr.right !is DeleteExpression && expr.right !is AwaitExpression &&
+                                        expr.right !is BinaryExpression && expr.right !is ParenthesizedExpression
+                                    if (needsElaboration) chain.add("  $message")
+                                    if (targetType is Type.TypeParam) {
+                                        val targetName = targetType.symbol?.name ?: "T"
+                                        chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                    } else if (typeParams.isNotEmpty()) {
+                                        val targetBaseName = displayTarget.substringBefore('<')
+                                        if (targetBaseName in typeParams) {
+                                            chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                        }
                                     }
                                 }
                                 diagnostics.add(Diagnostic(
@@ -22417,11 +22434,22 @@ class Checker(
     private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) "new " else ""
         val params = sig.parameters.joinToString(", ") { p ->
-            val pType = symbolTypes[p.id]?.let { typeToString(it) } ?: "any"
+            val pType = getTypeOfSymbol(p).let { if (it === anyType) "any" else typeToString(it) }
             "${p.name}: $pType"
         }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
         return "$prefix($params) => $retType"
+    }
+
+    /** Format a signature using colon notation like `(x: number): string` for use in `{ }` blocks. */
+    private fun signatureToStringColon(sig: Signature, isConstruct: Boolean): String {
+        val prefix = if (isConstruct) "new " else ""
+        val params = sig.parameters.joinToString(", ") { p ->
+            val pType = getTypeOfSymbol(p).let { if (it === anyType) "any" else typeToString(it) }
+            "${p.name}: $pType"
+        }
+        val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
+        return "$prefix($params): $retType"
     }
 
     private fun typeToString(type: Type): String {
@@ -22430,18 +22458,36 @@ class Checker(
             is Type.StringLiteral -> "\"${type.value}\""
             is Type.NumberLiteral -> type.toString()
             is Type.BigIntLiteral -> type.toString()
+            // Interface and Reference must be checked BEFORE Object (they extend Object)
+            is Type.Interface -> type.symbol?.name ?: "Interface"
+            is Type.Reference -> {
+                val target = type.target.symbol?.name ?: "Object"
+                val args = type.resolvedTypeArguments
+                if (args != null && args.isNotEmpty()) {
+                    "$target<${args.joinToString(", ") { typeToString(it) }}>"
+                } else target
+            }
             is Type.Object -> {
-                val sym = type.symbol
-                if (sym != null) sym.name
-                else {
-                    // Check for function type (Object with call signatures, no properties)
-                    val callSigs = type.callSignatures
-                    val ctorSigs = type.constructSignatures
-                    if (!callSigs.isNullOrEmpty() && (type.properties.isNullOrEmpty())) {
-                        signatureToString(callSigs.first(), isConstruct = false)
-                    } else if (!ctorSigs.isNullOrEmpty() && (type.properties.isNullOrEmpty())) {
-                        signatureToString(ctorSigs.first(), isConstruct = true)
+                val callSigs = type.callSignatures
+                val ctorSigs = type.constructSignatures
+                // Function type: show signatures
+                if (!callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()) {
+                    val totalSigs = (callSigs?.size ?: 0) + (ctorSigs?.size ?: 0)
+                    if (totalSigs == 1) {
+                        // Single signature: arrow format
+                        if (!callSigs.isNullOrEmpty()) signatureToString(callSigs.first(), isConstruct = false)
+                        else signatureToString(ctorSigs!!.first(), isConstruct = true)
                     } else {
+                        // Multiple signatures: object format { (sig): ret; ... }
+                        val parts = mutableListOf<String>()
+                        callSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = false)) }
+                        ctorSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = true)) }
+                        "{ ${parts.joinToString("; ")}; }"
+                    }
+                } else {
+                    val sym = type.symbol
+                    if (sym != null) sym.name
+                    else {
                         // Anonymous object type — format as { prop: type; ... }
                         val props = type.properties
                         if (props != null && props.isNotEmpty()) {
@@ -22453,14 +22499,6 @@ class Checker(
                         } else "{ ... }"
                     }
                 }
-            }
-            is Type.Interface -> type.symbol?.name ?: "Interface"
-            is Type.Reference -> {
-                val target = type.target.symbol?.name ?: "Object"
-                val args = type.resolvedTypeArguments
-                if (args != null && args.isNotEmpty()) {
-                    "$target<${args.joinToString(", ") { typeToString(it) }}>"
-                } else target
             }
             is Type.Union -> type.types.joinToString(" | ") { typeToString(it) }
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
@@ -23302,6 +23340,8 @@ class Checker(
         val tf = target.flags
         // Any target accepts everything
         if (tf.hasAny(TypeFlags.Any)) return true
+        // Any source is assignable to everything (any is both top and bottom type)
+        if (sf.hasAny(TypeFlags.Any)) return true
         // Unknown target accepts everything (for assignability)
         if (tf.hasAny(TypeFlags.Unknown)) return true
         // Never source is assignable to everything
@@ -23321,6 +23361,8 @@ class Checker(
         if (sf.hasAny(TypeFlags.BigIntLike) && tf.hasAny(TypeFlags.BigInt)) return true
         // undefined → void
         if (sf.hasAny(TypeFlags.Undefined) && tf.hasAny(TypeFlags.Void)) return true
+        // void → undefined (void is treated as undefined for assignability)
+        if (sf.hasAny(TypeFlags.Void) && tf.hasAny(TypeFlags.Undefined)) return true
         // When strict null checks are off, null/undefined assignable to everything
         if (!strictNullChecks && sf.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return true
         // object type (non-primitive) — primitives are NOT assignable to object
@@ -23473,9 +23515,11 @@ class Checker(
         relation: Relation,
     ): Boolean {
         // Check return types (covariant)
+        // Void target return accepts any source return type (void means "don't care about return")
         val sourceReturn = source.resolvedReturnType ?: anyType
         val targetReturn = target.resolvedReturnType ?: anyType
-        if (!checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
+        if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
+            !checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
         // Check parameter types (contravariant)
         val sourceParams = source.parameters
         val targetParams = target.parameters
@@ -23487,6 +23531,46 @@ class Checker(
             if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation)) return false
         }
         return true
+    }
+
+    /**
+     * Generate elaboration chain for a function→function type mismatch.
+     * Returns lines like:
+     *   "  Type 'void' is not assignable to type 'boolean'."
+     * or:
+     *   "  Types of parameters 'x' and 's1' are incompatible."
+     *   "    Type 'string' is not assignable to type 'number'."
+     */
+    private fun getFunctionMismatchElaboration(
+        source: Type.Object, target: Type.Object
+    ): List<String> {
+        val sourceSigs = source.callSignatures
+        val targetSigs = target.callSignatures
+        if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
+        val sourceSig = sourceSigs.first()
+        val targetSig = targetSigs.first()
+        // Check return type mismatch
+        val sourceReturn = sourceSig.resolvedReturnType ?: anyType
+        val targetReturn = targetSig.resolvedReturnType ?: anyType
+        if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
+            !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
+            return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
+        }
+        // Check parameter type mismatch (contravariant)
+        val sourceParams = sourceSig.parameters
+        val targetParams = targetSig.parameters
+        val len = minOf(sourceParams.size, targetParams.size)
+        for (i in 0 until len) {
+            val sourceParamType = getTypeOfSymbol(sourceParams[i])
+            val targetParamType = getTypeOfSymbol(targetParams[i])
+            if (!checkTypeRelatedTo(targetParamType, sourceParamType, assignableRelation)) {
+                return listOf(
+                    "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                    "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(sourceParamType)}'.",
+                )
+            }
+        }
+        return emptyList()
     }
 
     /** Check if a property symbol is optional (has questionToken in its declaration). */
