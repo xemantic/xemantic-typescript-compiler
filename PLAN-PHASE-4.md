@@ -196,12 +196,14 @@ The single highest-ROI change. 42 diff tests + 171 none-produced = 213 pure TS23
   **+4 tests** (classMemberInitializerScoping, memberVariableDeclarations1,
   numberToString, chainedAssignment2). 7,665 passing.
 
-- [ ] **A3. Further TS2322 improvements**
+- [x] **A3. null→function/union guard + formatTypeForDisplay**
 
-  Remaining pure TS2322 tests need: function signature comparison,
-  generic type argument comparison, wider expression type resolution.
-
-  **File:** `Checker.kt`
+  Extended canUseTypeEngine for null/undefined → Object types with
+  call/construct signatures, properties, and union types.
+  Added FunctionType, ConstructorType, IntersectionType, ParenthesizedType,
+  TupleType to formatTypeForDisplay. Enabled checkReturnAssignability
+  when only returnTypeNode (not string) is available.
+  **+1 test** (typeParameterEquality). 7,666 passing.
 
 - [ ] **A4. Function signature comparison for TS2322**
 
