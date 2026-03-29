@@ -281,6 +281,8 @@ class Checker(
         checkExportAssignmentInSystem()
         // 34. Check reserved name collisions in modules (TS2441)
         checkReservedModuleNames()
+        // 34b. Check __esModule reserved export (TS1216)
+        checkEsModuleReservedExport()
         // 35. Check block-scoped function declarations in ES5 strict mode (TS1250)
         if (options.target < ScriptTarget.ES2015) {
             checkBlockScopedFunctionDeclarations()
@@ -15626,6 +15628,37 @@ class Checker(
                             start = name.pos,
                             length = name.text.length,
                         ))
+                    }
+                }
+            }
+        }
+    }
+
+    // TS1216: __esModule is reserved as an exported marker when transforming ECMAScript modules
+    private fun checkEsModuleReservedExport() {
+        if (options.noEmit) return
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            if (!isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = decl.name
+                        if (name is Identifier && name.text == "__esModule") {
+                            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Identifier expected. '__esModule' is reserved as an exported marker when transforming ECMAScript modules.",
+                                category = DiagnosticCategory.Error,
+                                code = 1216,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = name.pos,
+                                length = name.text.length,
+                            ))
+                        }
                     }
                 }
             }
