@@ -1973,7 +1973,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
         val isGlobal = token == SyntaxKind.GlobalKeyword
+        val usedModuleKeyword = token == SyntaxKind.ModuleKeyword
         nextToken() // skip namespace/module/global
+        // TS1540: using 'module' keyword for namespace (identifier name, not string literal)
+        if (usedModuleKeyword && token != SyntaxKind.StringLiteral) {
+            reportError("A 'namespace' declaration should not be declared using the 'module' keyword. Please use the 'namespace' keyword instead.", code = 1540)
+        }
         val name: Expression = if (isGlobal) {
             // `declare global { ... }` — no module name, just the body
             Identifier(text = "global", pos = pos, end = pos + 6)
