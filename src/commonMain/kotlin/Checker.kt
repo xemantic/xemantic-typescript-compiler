@@ -11052,6 +11052,10 @@ class Checker(
                 d.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
             }
             is IfStatement -> {
+                // Check for always-falsy conditions (e.g. `void x`) → TS2873
+                if (isAlwaysFalsyExpr(stmt.expression)) {
+                    emitTS2873(stmt.expression, source, fileName)
+                }
                 // Walk the if-else chain: only flag always-truthy conditions that are
                 // UNREACHABLE because a preceding branch was always-truthy
                 var prevTruthy = isAlwaysTruthyExpr(stmt.expression)
@@ -11181,6 +11185,38 @@ class Checker(
             is RegularExpressionLiteralNode -> true
             else -> false
         }
+    }
+
+    /**
+     * Check if an expression is always falsy (e.g. `void x`).
+     * TypeScript emits TS2873 for such expressions in `if` conditions.
+     */
+    private fun isAlwaysFalsyExpr(expr: Expression): Boolean {
+        return when (expr) {
+            is VoidExpression -> true
+            is ParenthesizedExpression -> isAlwaysFalsyExpr(expr.expression)
+            else -> false
+        }
+    }
+
+    private fun emitTS2873(expr: Expression, source: String, fileName: String) {
+        val start = expr.pos
+        // For VoidExpression, compute length from operand's true end to get correct span
+        val length = when (expr) {
+            is VoidExpression -> expressionTrueEnd(expr.expression) - start
+            else -> expressionTrueEnd(expr) - start
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This kind of expression is always falsy.",
+            category = DiagnosticCategory.Error,
+            code = 2873,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     private fun emitTS2872(expr: Expression, source: String, fileName: String) {
