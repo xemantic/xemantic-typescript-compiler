@@ -486,7 +486,7 @@ with `getTypeOfExpression`/`checkTypeRelatedTo` (Type-based) for all TS2322 emis
   **File:** `Checker.kt` — `checkReturnAssignability`
   **Target:** ~50 tests
 
-- [ ] **10c. Replace assignment expression assignability**
+- [x] **10c. Replace assignment expression assignability** (wired with conservative guards; gains blocked on structural comparison for non-intrinsic types)
 
   Wire `x = value` assignment checking:
   ```
