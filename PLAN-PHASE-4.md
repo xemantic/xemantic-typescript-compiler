@@ -1,5 +1,7 @@
 # Phase 4 — Structural Type Checker
 
+**Status (2026-03-29):** 7,648 / 10,077 tests passing (75.9%). Phase 4b queue items mostly blocked by incomplete type system (module augmentation, control flow narrowing, structural comparison FPs). Current strategy: targeted near-passing test fixes (262 tests are 1 error from passing).
+
 ## Goal
 
 Implement structural type checking to unlock ~1,500 tests blocked on TS2322/TS2339/TS2345.
