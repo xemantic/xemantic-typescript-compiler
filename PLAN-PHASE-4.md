@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-29):** 7,661 / 10,077 tests passing (76.0%).
+**Status (2026-03-29):** 7,667 / 10,077 tests passing (76.1%).
 
 ## Goal
 
@@ -205,13 +205,22 @@ The single highest-ROI change. 42 diff tests + 171 none-produced = 213 pure TS23
   when only returnTypeNode (not string) is available.
   **+1 test** (typeParameterEquality). 7,666 passing.
 
-- [ ] **A4. Function signature comparison for TS2322**
+- [x] **A4. Function signature comparison for TS2322**
 
-  Compare function types structurally: parameter compatibility + return type.
-  `() => void` not assignable to `() => boolean`, etc.
+  Enabled function→function structural comparison in the type engine:
+  - `isSimpleTypeRelatedTo`: added `any` source assignable to everything, `void→undefined`
+  - `signatureRelatedTo`: void target return accepts any source return type
+  - `canUseTypeEngine`: enabled function→function (both sides have call signatures)
+  - `typeToString`: reordered Interface/Reference before Object in `when` block;
+    added multi-signature display `{ (sig): ret; (sig): ret; }` and colon notation
+  - Added `getFunctionMismatchElaboration` for return type and parameter mismatch chains
+  - Integrated elaboration into all TS2322 emission sites
 
-  **File:** `Checker.kt` — `checkTypeRelatedTo` / signature comparison
-  **Target:** ~31 tests (function→function category)
+  **+1 test** (errorOnContextuallyTypedReturnType). 7,667 passing.
+  Infrastructure ready for more gains when local scope resolution, generics,
+  and constructor signature comparison are added.
+
+  **File:** `Checker.kt`
 
 ### Track B — JS Emit Fixes (target: +30-40 tests)
 
