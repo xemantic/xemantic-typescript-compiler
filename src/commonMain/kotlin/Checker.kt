@@ -21022,8 +21022,8 @@ class Checker(
         if (sourceIsIntrinsic && targetIsIntrinsic) return true
         // Object literal → intrinsic target (object literal is never assignable to primitive)
         if (sourceType is Type.Object && sourceType.symbol == null && targetIsIntrinsic) return true
-        // Skip function→function comparison — signature arity/rest parameter handling
-        // causes FPs (e.g., rest-param function assignable to no-param function)
+        // Function→function comparison deferred — causes FPs from incomplete expression
+        // type resolution (arrow body types resolve to anyType, causing false mismatches)
         return false
     }
 
