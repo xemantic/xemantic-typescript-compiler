@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-29):** 7,672 / 10,077 tests passing (76.1%).
+**Status (2026-03-29):** 7,677 / 10,077 tests passing (76.2%).
 
 ## Goal
 
@@ -280,13 +280,18 @@ Well-defined checks using existing infrastructure.
   **File:** `Checker.kt`
   **Target:** 6 pure tests
 
-- [ ] **C4. TS2343/TS2344 — type does not satisfy constraint**
+- [x] **C4. TS2344 — type does not satisfy constraint**
 
-  When a type argument doesn't satisfy the constraint on a type parameter,
-  emit "Type 'X' does not satisfy the constraint 'Y'".
+  Check type arguments against type parameter constraints in TypeReference
+  nodes. Scans declarations for TypeReference nodes with type arguments,
+  resolves constraints, and compares using structural comparison. Added
+  literal value comparison (StringLiteral/NumberLiteral/BigIntLiteral) in
+  `isSimpleTypeRelatedTo` for same-value different-instance literals.
+  Added missing property elaboration and TS2728 related info.
 
-  **File:** `Checker.kt` — generic constraint checking
-  **Target:** 10 pure tests combined
+  **+5 tests** (constraints0, generics1/2/5, genericTypeConstraints). 7,677 passing.
+
+  **File:** `Checker.kt` — `checkTypeArgumentConstraints`
 
 ### Track D — Unblock Deferred Items (target: +25-35 tests)
 

@@ -366,6 +366,8 @@ class Checker(
         checkArithmeticOperandTypes()
         // 64e. Check class implements interface (TS2420)
         checkClassImplementsInterface()
+        // 64f. Check type argument constraints (TS2344)
+        checkTypeArgumentConstraints()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
@@ -22700,6 +22702,221 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS2344: Type does not satisfy the constraint
+    // -----------------------------------------------------------------------
+
+    private fun checkTypeArgumentConstraints() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                checkConstraintsInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {
+                // Circular type resolution — skip
+            }
+        }
+    }
+
+    private fun checkConstraintsInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            // Visit type nodes in declarations
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    stmt.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                    stmt.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+                    stmt.body?.let { checkConstraintsInStatements(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    stmt.heritageClauses?.forEach { clause ->
+                        clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName) }
+                    }
+                    for (member in stmt.members) {
+                        when (member) {
+                            is PropertyDeclaration -> member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                            is MethodDeclaration -> {
+                                member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                                member.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    stmt.heritageClauses?.forEach { clause ->
+                        clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName) }
+                    }
+                    for (member in stmt.members) {
+                        when (member) {
+                            is PropertyDeclaration -> member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                            is MethodDeclaration -> {
+                                member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                                member.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is TypeAliasDeclaration -> checkConstraintsInTypeNode(stmt.type, source, fileName)
+                is ModuleDeclaration -> {
+                    (stmt.body as? ModuleBlock)?.let { checkConstraintsInStatements(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkConstraintsInExprWithTypeArgs(node: ExpressionWithTypeArguments, source: String, fileName: String) {
+        val typeArgs = node.typeArguments ?: return
+        val name = when (val expr = node.expression) {
+            is Identifier -> expr.text
+            else -> return
+        }
+        checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
+    }
+
+    private fun checkConstraintsInTypeNode(node: TypeNode, source: String, fileName: String) {
+        when (node) {
+            is TypeReference -> {
+                val typeArgs = node.typeArguments
+                if (typeArgs != null && typeArgs.isNotEmpty()) {
+                    val name = getTypeReferenceLastName(node.typeName)
+                    if (name != null) {
+                        checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
+                    }
+                    // Recurse into type arguments
+                    typeArgs.forEach { checkConstraintsInTypeNode(it, source, fileName) }
+                }
+            }
+            is UnionType -> node.types.forEach { checkConstraintsInTypeNode(it, source, fileName) }
+            is IntersectionType -> node.types.forEach { checkConstraintsInTypeNode(it, source, fileName) }
+            is ArrayType -> checkConstraintsInTypeNode(node.elementType, source, fileName)
+            is FunctionType -> {
+                checkConstraintsInTypeNode(node.type, source, fileName)
+                node.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+            }
+            is ParenthesizedType -> checkConstraintsInTypeNode(node.type, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkConstraintsForTypeArgs(
+        typeName: String, typeArgs: List<TypeNode>,
+        source: String, fileName: String
+    ) {
+        // Skip built-in generics (Array, Promise, etc.)
+        if (typeName in setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
+                "WeakMap", "WeakSet", "Record", "Partial", "Required", "Readonly",
+                "Pick", "Omit", "Exclude", "Extract", "NonNullable", "ReturnType",
+                "InstanceType", "ConstructorParameters", "Parameters", "ThisParameterType",
+                "OmitThisParameter", "ThisType", "Awaited")) return
+
+        val symbol = globals[typeName] ?: return
+        // Find type parameters from the declaration
+        val typeParams = getTypeParametersOfSymbol(symbol) ?: return
+        if (typeParams.isEmpty()) return
+
+        val len = minOf(typeArgs.size, typeParams.size)
+        for (i in 0 until len) {
+            val typeParam = typeParams[i]
+            val constraint = typeParam.constraint ?: continue
+            val argType = getTypeFromTypeNode(typeArgs[i])
+            if (argType === anyType || argType === errorType) continue
+            val constraintType = constraint
+            if (constraintType === anyType || constraintType === errorType) continue
+
+            if (!checkTypeRelatedTo(argType, constraintType, assignableRelation)) {
+                val argNode = typeArgs[i]
+                val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
+                val constraintDisplay = typeToString(constraintType)
+                val (line, character) = getLineAndCharacterOfPosition(source, argNode.pos)
+                val message = "Type '$argDisplay' does not satisfy the constraint '$constraintDisplay'."
+                val chain = mutableListOf<String>()
+                val relatedInfo = mutableListOf<Diagnostic>()
+
+                // Add elaboration for missing properties
+                if (argType is Type.Object && constraintType is Type.Object) {
+                    resolveStructuredTypeMembers(argType)
+                    resolveStructuredTypeMembers(constraintType)
+                    val constraintProps = constraintType.properties ?: emptyList()
+                    val argMembers = argType.members
+                    for (cp in constraintProps) {
+                        if (isOptionalProperty(cp)) continue
+                        if (argMembers == null || cp.name !in argMembers) {
+                            chain.add("  Property '${cp.name}' is missing in type '$argDisplay' but required in type '$constraintDisplay'.")
+                            // TS2728 related info: point to constraint property declaration
+                            cp.valueDeclaration?.let { decl ->
+                                val declPos = when (decl) {
+                                    is PropertyDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                                    is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                                    else -> decl.pos
+                                }
+                                val declLength = when (decl) {
+                                    is PropertyDeclaration -> (decl.name as? Identifier)?.text?.length ?: cp.name.length
+                                    is MethodDeclaration -> (decl.name as? Identifier)?.text?.length ?: cp.name.length
+                                    else -> cp.name.length
+                                }
+                                val (rl, rc) = getLineAndCharacterOfPosition(source, declPos)
+                                relatedInfo.add(Diagnostic(
+                                    message = "'${cp.name}' is declared here.",
+                                    category = DiagnosticCategory.Message,
+                                    code = 2728,
+                                    fileName = fileName,
+                                    line = rl,
+                                    character = rc,
+                                    start = declPos,
+                                    length = declLength,
+                                ))
+                            }
+                            break
+                        }
+                    }
+                }
+
+                diagnostics.add(Diagnostic(
+                    message = message,
+                    category = DiagnosticCategory.Error,
+                    code = 2344,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = argNode.pos,
+                    length = argDisplay.length,
+                    messageChain = chain,
+                    relatedInformation = relatedInfo,
+                ))
+            }
+        }
+    }
+
+    /** Get type parameters from a symbol's declarations (class, interface, or type alias). */
+    private fun getTypeParametersOfSymbol(symbol: Symbol): List<Type.TypeParam>? {
+        for (decl in symbol.declarations) {
+            val typeParamNodes = when (decl) {
+                is ClassDeclaration -> decl.typeParameters
+                is InterfaceDeclaration -> decl.typeParameters
+                is TypeAliasDeclaration -> decl.typeParameters
+                is FunctionDeclaration -> decl.typeParameters
+                else -> null
+            } ?: continue
+            if (typeParamNodes.isEmpty()) continue
+            return typeParamNodes.map { tp ->
+                val param = Type.TypeParam()
+                param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+                tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                param
+            }
+        }
+        return null
+    }
+
+    // -----------------------------------------------------------------------
     // TS2339: Property does not exist on type (Phase 4 item 5a)
     // -----------------------------------------------------------------------
 
@@ -23541,6 +23758,10 @@ class Checker(
         if (sf.hasAny(TypeFlags.Never)) return true
         // Same type by identity
         if (source === target) return true
+        // Literal value comparison (different instances with same value)
+        if (source is Type.StringLiteral && target is Type.StringLiteral && source.value == target.value) return true
+        if (source is Type.NumberLiteral && target is Type.NumberLiteral && source.value == target.value) return true
+        if (source is Type.BigIntLiteral && target is Type.BigIntLiteral && source.value == target.value) return true
         // Primitive widening: string literal → string, number literal → number, etc.
         if (sf.hasAny(TypeFlags.StringLiteral) && tf.hasAny(TypeFlags.String)) return true
         if (sf.hasAny(TypeFlags.NumberLiteral) && tf.hasAny(TypeFlags.Number)) return true
