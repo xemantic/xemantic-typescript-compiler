@@ -21150,6 +21150,63 @@ class Checker(
         if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
             val target = expr.left
             if (target is Identifier) {
+                // Try new Type-based engine for file-level variables
+                val symbol = globals[target.text]
+                if (symbol != null) {
+                    val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+                    val typeAnnotation = (decl as? VariableDeclaration)?.type
+                        ?: (decl as? Parameter)?.type
+                        ?: (decl as? PropertyDeclaration)?.type
+                    if (typeAnnotation != null) {
+                        try {
+                            val targetType = getTypeFromTypeNode(typeAnnotation)
+                            val sourceType = getTypeOfExpression(expr.right)
+                            val sourceIsIntrinsic = sourceType is Type.Intrinsic
+                            val targetIsIntrinsic = targetType is Type.Intrinsic
+                            val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                            val useNewEngine = targetType !== anyType && targetType !== errorType &&
+                                sourceType !== anyType && sourceType !== errorType &&
+                                (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish)
+                            if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                                val displaySource = typeToString(sourceType)
+                                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                                val chain = mutableListOf<String>()
+                                val needsElaboration = !isSimpleLiteral(expr.right) &&
+                                    expr.right !is CallExpression && expr.right !is NewExpression &&
+                                    expr.right !is DeleteExpression && expr.right !is AwaitExpression &&
+                                    expr.right !is BinaryExpression && expr.right !is ParenthesizedExpression
+                                if (needsElaboration) chain.add("  $message")
+                                if (targetType is Type.TypeParam) {
+                                    val targetName = targetType.symbol?.name ?: "T"
+                                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                } else if (typeParams.isNotEmpty()) {
+                                    val targetBaseName = displayTarget.substringBefore('<')
+                                    if (targetBaseName in typeParams) {
+                                        chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                    }
+                                }
+                                diagnostics.add(Diagnostic(
+                                    message = message,
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = target.pos,
+                                    length = target.text.length,
+                                    messageChain = chain,
+                                ))
+                                return // Type engine handled it — skip old system
+                            }
+                        } catch (_: StackOverflowError) {
+                            // Circular type resolution — fall through to old system
+                        }
+                    }
+                }
+
+                // Fallback to old string-based system
                 val declaredType = varTypes[target.text]
                 if (declaredType != null) {
                     val exprType = inferSimpleExprType(expr.right, varTypes)
