@@ -21008,10 +21008,16 @@ class Checker(
         // null/undefined → intrinsic target (strictNullChecks handles assignability)
         val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
         if (sourceIsNullish && targetIsIntrinsic) return true
-        // null/undefined → named type: only when target is a named class/interface
-        // (not an anonymous object type or union, which could cause FPs)
+        // null/undefined → named type or function type
         if (sourceIsNullish && targetType is Type.Interface) return true
         if (sourceIsNullish && targetType is Type.Reference) return true
+        // null/undefined → function/constructor type (Type.Object with signatures)
+        if (sourceIsNullish && targetType is Type.Object &&
+            (!targetType.callSignatures.isNullOrEmpty() || !targetType.constructSignatures.isNullOrEmpty())) return true
+        // null/undefined → type literal / anonymous object with properties
+        if (sourceIsNullish && targetType is Type.Object && !targetType.properties.isNullOrEmpty()) return true
+        // null/undefined → union type (relation engine checks each constituent)
+        if (sourceIsNullish && targetType is Type.Union) return true
         // intrinsic↔intrinsic (number→string, etc.)
         if (sourceIsIntrinsic && targetIsIntrinsic) return true
         // Object literal → intrinsic target (object literal is never assignable to primitive)
@@ -21104,8 +21110,8 @@ class Checker(
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
                 }
                 is ReturnStatement -> {
-                    if (returnType != null) {
-                        checkReturnAssignability(stmt, returnType, source, fileName, varTypes, typeParams, returnTypeNode)
+                    if (returnType != null || returnTypeNode != null) {
+                        checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }
                 }
                 is FunctionDeclaration -> {
@@ -21226,7 +21232,7 @@ class Checker(
             is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
             is ExpressionStatement -> checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
             is ReturnStatement -> {
-                if (returnType != null) checkReturnAssignability(stmt, returnType, source, fileName, varTypes, typeParams, returnTypeNode)
+                if (returnType != null || returnTypeNode != null) checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
             }
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
@@ -21400,7 +21406,8 @@ class Checker(
             }
         }
 
-        // Fallback to old string-based system
+        // Fallback to old string-based system (skip when returnType is empty — means only returnTypeNode was available)
+        if (returnType.isEmpty()) return
         val exprType = if (expr != null) {
             inferSimpleExprType(expr, varTypes)
                 // For return statements: also check varTypes for identifier expressions
@@ -23735,7 +23742,10 @@ class Checker(
         }
     }
 
-    /** Format a TypeNode for display in TS2322 messages (no "@" prefix). Returns null for unsupported types. */
+    /**
+     * Format a TypeNode for display in TS2322 messages (no "@" prefix).
+     * Returns null for unsupported types (caller falls back to typeToString).
+     */
     private fun formatTypeForDisplay(typeNode: TypeNode): String? {
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
@@ -23770,6 +23780,42 @@ class Checker(
                 val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
                 if (memberTypes.any { it == null }) return null
                 memberTypes.joinToString(" | ")
+            }
+            is IntersectionType -> {
+                val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
+                if (memberTypes.any { it == null }) return null
+                memberTypes.joinToString(" & ")
+            }
+            is FunctionType -> {
+                val typeParams = typeNode.typeParameters ?: emptyList()
+                val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { it.name.text }}>" else ""
+                val params = typeNode.parameters.joinToString(", ") { p ->
+                    val pName = (p.name as? Identifier)?.text ?: "_"
+                    val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+                    "$pName: $pType"
+                }
+                val retType = formatTypeForDisplay(typeNode.type) ?: return null
+                "$tpStr($params) => $retType"
+            }
+            is ConstructorType -> {
+                val typeParams = typeNode.typeParameters ?: emptyList()
+                val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { it.name.text }}>" else ""
+                val params = typeNode.parameters.joinToString(", ") { p ->
+                    val pName = (p.name as? Identifier)?.text ?: "_"
+                    val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+                    "$pName: $pType"
+                }
+                val retType = formatTypeForDisplay(typeNode.type) ?: return null
+                "new $tpStr($params) => $retType"
+            }
+            is ParenthesizedType -> {
+                val inner = formatTypeForDisplay(typeNode.type) ?: return null
+                "($inner)"
+            }
+            is TupleType -> {
+                val elements = typeNode.elements.map { formatTypeForDisplay(it) }
+                if (elements.any { it == null }) return null
+                "[${elements.joinToString(", ")}]"
             }
             else -> null
         }
