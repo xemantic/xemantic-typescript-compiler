@@ -20994,6 +20994,31 @@ class Checker(
     // Type assignability checking (TS2322)
     // -----------------------------------------------------------------------
 
+    /**
+     * Determine if the Type engine can safely compare source and target types.
+     * Returns true when both types are concrete (non-any, non-error) and the
+     * comparison won't produce false positives from incomplete resolution.
+     */
+    private fun canUseTypeEngine(sourceType: Type, targetType: Type): Boolean {
+        // Never compare when either side is unresolved
+        if (sourceType === anyType || sourceType === errorType) return false
+        if (targetType === anyType || targetType === errorType) return false
+        val sourceIsIntrinsic = sourceType is Type.Intrinsic
+        val targetIsIntrinsic = targetType is Type.Intrinsic
+        // null/undefined → intrinsic target (strictNullChecks handles assignability)
+        val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+        if (sourceIsNullish && targetIsIntrinsic) return true
+        // null/undefined → named type: only when target is a named class/interface
+        // (not an anonymous object type or union, which could cause FPs)
+        if (sourceIsNullish && targetType is Type.Interface) return true
+        if (sourceIsNullish && targetType is Type.Reference) return true
+        // intrinsic↔intrinsic (number→string, etc.)
+        if (sourceIsIntrinsic && targetIsIntrinsic) return true
+        // Object literal → intrinsic target (object literal is never assignable to primitive)
+        if (sourceType is Type.Object && sourceType.symbol == null && targetIsIntrinsic) return true
+        return false
+    }
+
     private fun checkTypeAssignability() {
         val diagnosticsBefore = diagnostics.size
         for (result in binderResults) {
@@ -21108,6 +21133,16 @@ class Checker(
                             }
                             is GetAccessor -> {
                                 checkFunctionBody(member.body, member.type, emptyList(), null, source, fileName, varTypes, classTypeParams)
+                            }
+                            is PropertyDeclaration -> {
+                                val init = member.initializer
+                                val typeAnnotation = member.type
+                                if (init != null && typeAnnotation != null) {
+                                    val propName = member.name
+                                    if (propName is Identifier) {
+                                        checkPropertyInitAssignability(propName, typeAnnotation, init, source, fileName, classTypeParams)
+                                    }
+                                }
                             }
                             else -> {}
                         }
@@ -21227,18 +21262,7 @@ class Checker(
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
             val sourceType = getTypeOfExpression(init)
-            // Only use new engine when both types are concrete AND we're confident
-            // in the comparison — intrinsic↔intrinsic or null/undefined→concrete type.
-            // For object/interface/union targets with non-null sources, fall back to
-            // old system to avoid FPs from incomplete structural comparison.
-            val sourceIsIntrinsic = sourceType is Type.Intrinsic
-            val targetIsIntrinsic = targetType is Type.Intrinsic
-            val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-            val sourceIsObjectLiteral = init is ObjectLiteralExpression && sourceType is Type.Object
-            val useNewEngine = targetType !== anyType && targetType !== errorType &&
-                sourceType !== anyType && sourceType !== errorType &&
-                (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish || sourceIsObjectLiteral)
-            if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -21288,6 +21312,42 @@ class Checker(
         }
     }
 
+    /** Check property initializer assignability (class member: `x: Type = value`). */
+    private fun checkPropertyInitAssignability(
+        propName: Identifier, typeAnnotation: TypeNode, init: Expression,
+        source: String, fileName: String, typeParams: Set<String>
+    ) {
+        try {
+            val targetType = getTypeFromTypeNode(typeAnnotation)
+            val sourceType = getTypeOfExpression(init)
+            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                val displaySource = typeToString(sourceType)
+                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val (line, character) = getLineAndCharacterOfPosition(source, propName.pos)
+                val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                val chain = mutableListOf<String>()
+                val needsElaboration = !isSimpleLiteral(init) &&
+                    init !is CallExpression && init !is NewExpression &&
+                    init !is DeleteExpression && init !is AwaitExpression &&
+                    init !is BinaryExpression && init !is ParenthesizedExpression
+                if (needsElaboration) chain.add("  $message")
+                diagnostics.add(Diagnostic(
+                    message = message,
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = propName.pos,
+                    length = propName.text.length,
+                    messageChain = chain,
+                ))
+            }
+        } catch (_: StackOverflowError) {
+            // Circular type resolution — skip
+        }
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -21300,13 +21360,7 @@ class Checker(
             try {
                 val targetType = getTypeFromTypeNode(returnTypeNode)
                 val sourceType = if (expr != null) getTypeOfExpression(expr) else undefinedType
-                val sourceIsIntrinsic = sourceType is Type.Intrinsic
-                val targetIsIntrinsic = targetType is Type.Intrinsic
-                val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-                val useNewEngine = targetType !== anyType && targetType !== errorType &&
-                    sourceType !== anyType && sourceType !== errorType &&
-                    (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish)
-                if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                     val displaySource = typeToString(sourceType)
                     val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                     val returnKeywordLength = 6
@@ -21344,6 +21398,11 @@ class Checker(
 
     private fun checkAssignmentExpression(expr: Expression, source: String, fileName: String, varTypes: MutableMap<String, String>, typeParams: Set<String>) {
         if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
+            // Recurse into chained assignments first: a = b = c = null
+            // Each assignment in the chain gets checked independently
+            if (expr.right is BinaryExpression) {
+                checkAssignmentExpression(expr.right, source, fileName, varTypes, typeParams)
+            }
             val target = expr.left
             if (target is Identifier) {
                 // Try new Type-based engine for file-level variables
@@ -21357,13 +21416,7 @@ class Checker(
                         try {
                             val targetType = getTypeFromTypeNode(typeAnnotation)
                             val sourceType = getTypeOfExpression(expr.right)
-                            val sourceIsIntrinsic = sourceType is Type.Intrinsic
-                            val targetIsIntrinsic = targetType is Type.Intrinsic
-                            val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-                            val useNewEngine = targetType !== anyType && targetType !== errorType &&
-                                sourceType !== anyType && sourceType !== errorType &&
-                                (sourceIsIntrinsic && targetIsIntrinsic || sourceIsNullish)
-                            if (useNewEngine && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                                 val displaySource = typeToString(sourceType)
                                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                                 val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
@@ -23717,6 +23770,10 @@ class Checker(
                 else inferSimpleExprType(expr.expression, varTypes)
             }
             is ArrayLiteralExpression -> "array" // Used internally for assignability
+            is BinaryExpression -> when (expr.operator) {
+                SyntaxKind.Equals -> inferSimpleExprType(expr.right, varTypes)
+                else -> null
+            }
             else -> null
         }
     }
@@ -23730,6 +23787,7 @@ class Checker(
             is Identifier -> expr.text in setOf("null", "undefined", "true", "false", "NaN", "Infinity")
             is ParenthesizedExpression -> isSimpleLiteral(expr.expression)
             is PrefixUnaryExpression -> expr.operand is NumericLiteralNode
+            is BinaryExpression -> expr.operator == SyntaxKind.Equals && isSimpleLiteral(expr.right)
             else -> false
         }
     }

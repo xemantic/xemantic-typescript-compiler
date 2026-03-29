@@ -161,31 +161,39 @@ JS emit (257 failures): **74 within 4 diff lines, 148 within 10**.
 
 ### Track A — Deepen TS2322 (target: +30-40 tests)
 
-The single highest-ROI change. 41 tests need ONLY TS2322 improvements.
+The single highest-ROI change. 42 diff tests + 171 none-produced = 213 pure TS2322 tests.
 
-- [ ] **A0. Analyze the 41 pure-TS2322 tests**
+- [x] **A0. Analyze the 41 pure-TS2322 tests**
 
-  Categorize what type comparisons are missing: object→intrinsic mismatches,
-  function return types, generic instantiation results, union assignability, etc.
-  Output: prioritized list of guard relaxations to implement.
+  **Result:** 42 diff tests + 171 none-produced = 213 total pure TS2322 tests.
+  Full analysis in `ANALYSIS-A0-TS2322.md`. Key findings:
+  - The bottleneck is the `useNewEngine` guard: only fires for intrinsic↔intrinsic,
+    nullish→anything, objectLiteral→anything. Everything else falls to old string system.
+  - Top categories: intrinsic↔intrinsic in new contexts (64), named↔intrinsic (52),
+    function→function (31), union→type (27), generic→generic (26), null/undef→named (26).
+  - 5 FP tests (wrong TS2322 on wrong line/wrong direction).
 
-  **Deliverable:** Written analysis (not code)
+  **Deliverable:** `ANALYSIS-A0-TS2322.md`
 
-- [ ] **A1. Relax TS2322 for function return type → declared type**
+- [x] **A1. Relax `useNewEngine` guard + chained assignments + class property init**
 
-  Many TS2322 tests involve `function f(): number { return "string"; }`.
-  The checker has conservative guards that skip non-intrinsic types.
-  Relax to check when BOTH source and target resolve to well-known types.
+  Extracted `canUseTypeEngine()` helper used by all three check functions.
+  Extended guard: null/undefined→Interface/Reference, object literal→intrinsic.
+  Wider relaxation caused 42 FPs (object literal→named, intrinsic→union) — reverted to
+  conservative expansion. Added chained assignment recursion (`a = b = c = null`),
+  PropertyDeclaration initializer checking, `inferSimpleExprType` for BinaryExpression(=),
+  `isSimpleLiteral` for assignment chains. **+1 test** (chainedAssignment2).
 
-  **File:** `Checker.kt` — `checkReturnAssignability`
-  **Regression guard:** full suite before/after
+  **File:** `Checker.kt`
+  **Result:** 7,662 / 10,077 (76.0%)
 
-- [ ] **A2. Relax TS2322 for variable init → annotation**
+- [ ] **A2. Add class member initializer checking**
 
-  `let x: number = "hello"` — relax guards for variable declarations where
-  both the annotation and initializer resolve to concrete types.
+  `PropertyDeclaration` with initializer + type annotation not currently traversed.
+  Add to class member loop in `checkTypeAssignabilityInStatements`.
 
-  **File:** `Checker.kt` — `checkVarDeclAssignability`
+  **File:** `Checker.kt` — class member traversal
+  **Target:** ~5-10 tests
 
 - [ ] **A3. Relax TS2322 for assignment expressions**
 
@@ -193,12 +201,13 @@ The single highest-ROI change. 41 tests need ONLY TS2322 improvements.
 
   **File:** `Checker.kt` — `checkAssignmentExpression`
 
-- [ ] **A4. Object literal → interface/type alias assignability**
+- [ ] **A4. Function signature comparison for TS2322**
 
-  `let x: { a: number } = { a: "string" }` — check structural compatibility
-  when source is an object literal type and target is an interface/type alias.
+  Compare function types structurally: parameter compatibility + return type.
+  `() => void` not assignable to `() => boolean`, etc.
 
-  **File:** `Checker.kt` — structural comparison integration
+  **File:** `Checker.kt` — `checkTypeRelatedTo` / signature comparison
+  **Target:** ~31 tests (function→function category)
 
 ### Track B — JS Emit Fixes (target: +30-40 tests)
 
