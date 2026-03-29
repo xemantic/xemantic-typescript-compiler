@@ -21128,8 +21128,25 @@ class Checker(
                             is MethodDeclaration -> {
                                 checkFunctionBody(member.body, member.type, member.parameters, member.typeParameters, source, fileName, varTypes, classTypeParams)
                             }
-                            is Constructor -> member.body?.let {
-                                checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType = null, classTypeParams)
+                            is Constructor -> member.body?.let { body ->
+                                val ctorTypes = varTypes.toMutableMap()
+                                // Populate this.prop types from class property declarations
+                                for (m in stmt.members) {
+                                    if (m is PropertyDeclaration) {
+                                        val propType = m.type?.let { resolveSimpleTypeName(it) }
+                                        val propName = (m.name as? Identifier)?.text
+                                        if (propType != null && propName != null) {
+                                            ctorTypes["this.$propName"] = propType
+                                        }
+                                    }
+                                }
+                                // Also add constructor parameter types
+                                for (p in member.parameters) {
+                                    val pName = (p.name as? Identifier)?.text
+                                    val pType = p.type?.let { resolveSimpleTypeName(it) }
+                                    if (pName != null && pType != null) ctorTypes[pName] = pType
+                                }
+                                checkTypeAssignabilityInStatements(body.statements, source, fileName, ctorTypes, returnType = null, classTypeParams)
                             }
                             is GetAccessor -> {
                                 checkFunctionBody(member.body, member.type, emptyList(), null, source, fileName, varTypes, classTypeParams)
@@ -21465,6 +21482,19 @@ class Checker(
                     val exprType = inferSimpleExprType(expr.right, varTypes)
                     if (exprType != null && !isAssignableTo(exprType, declaredType)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
+                    }
+                }
+            } else if (target is PropertyAccessExpression && (target.expression as? Identifier)?.text == "this") {
+                // this.prop = value — look up class property type from varTypes
+                val propName = target.name.text
+                val declaredType = varTypes["this.$propName"]
+                if (declaredType != null) {
+                    val exprType = inferSimpleExprType(expr.right, varTypes)
+                    if (exprType != null && !isAssignableTo(exprType, declaredType)) {
+                        // Squiggle spans "this.prop" (the entire PropertyAccessExpression)
+                        val squiggleStart = target.expression.pos
+                        val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
+                        emitTS2322(squiggleStart, squiggleLength, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
                 }
             }
