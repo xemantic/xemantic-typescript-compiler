@@ -22713,9 +22713,95 @@ class Checker(
         for (sig in signatures) {
             if (allArgumentsMatch(args, sig)) return // found a matching overload
         }
-        // None matched — report against the last signature
+        // None matched — emit TS2769 with errors from each overload
+        // Collect the first argument mismatch per overload for the error chain
+        val overloadErrors = mutableListOf<Triple<Int, Signature, String>>() // (overloadIndex, sig, errorMsg)
+        for ((idx, sig) in signatures.withIndex()) {
+            val errorMsg = getFirstArgumentError(args, sig)
+            if (errorMsg != null) {
+                overloadErrors.add(Triple(idx + 1, sig, errorMsg))
+            }
+        }
+        if (overloadErrors.isNotEmpty()) {
+            // Find the error position — use the first failing argument position from any overload
+            val firstArgError = getFirstFailingArgPosition(args, signatures.last())
+            if (firstArgError != null) {
+                val (argStart, argLength) = firstArgError
+                val (line, character) = getLineAndCharacterOfPosition(source, argStart)
+                val chain = mutableListOf<String>()
+                val totalOverloads = signatures.size
+                for ((overloadIdx, sig, errorMsg) in overloadErrors) {
+                    val sigStr = signatureToString(sig)
+                    chain.add("  Overload $overloadIdx of $totalOverloads, '$sigStr', gave the following error.")
+                    chain.add("    $errorMsg")
+                }
+                diagnostics.add(Diagnostic(
+                    message = "No overload matches this call.",
+                    category = DiagnosticCategory.Error,
+                    code = 2769,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = argStart,
+                    length = argLength,
+                    messageChain = chain,
+                ))
+                return
+            }
+        }
+        // Fallback: report TS2345 against the last signature
         val lastSig = signatures.last()
         checkArgumentsAgainstSignature(args, lastSig, source, fileName)
+    }
+
+    /** Get the first argument type error message for a signature, or null if all match. */
+    private fun getFirstArgumentError(args: List<Expression>, sig: Signature): String? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!isSimpleCheckableType(paramType)) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                return "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
+            }
+        }
+        return null
+    }
+
+    /** Get the position and length of the first failing argument for a signature. */
+    private fun getFirstFailingArgPosition(args: List<Expression>, sig: Signature): Pair<Int, Int>? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!isSimpleCheckableType(paramType)) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) return Pair(start, length)
+            }
+        }
+        return null
+    }
+
+    /** Format a signature for display in TS2769 messages: (param: type, ...): returnType */
+    private fun signatureToString(sig: Signature): String {
+        val params = sig.parameters.joinToString(", ") { param ->
+            val paramType = getTypeOfSymbol(param)
+            val typeStr = if (paramType === anyType) "any" else typeToString(paramType)
+            "${param.name}: $typeStr"
+        }
+        val returnType = sig.resolvedReturnType
+        val returnStr = if (returnType != null && returnType !== anyType) typeToString(returnType) else "any"
+        return "($params): $returnStr"
     }
 
     /**
