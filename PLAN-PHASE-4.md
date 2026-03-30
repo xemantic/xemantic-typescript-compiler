@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-30):** 7,679 / 10,077 tests passing (76.2%).
+**Status (2026-03-30):** 7,681 / 10,077 tests passing (76.3%).
 
 ## Goal
 
@@ -160,20 +160,31 @@ array→primitive, named→named) fall through to the old string system which do
 - TS2554 (146): wrong number of arguments — call expression checking
 - TS2451 (142): block-scoped variable redeclare — scope checking
 
+**Already implemented (discovered during investigation):**
+- TS7006 (implicit any parameter) — fully implemented, 260 baseline occurrences
+- TS2554 (wrong argument count) — implemented for simple calls, 146 occurrences
+- TS2451 (block-scoped variable redeclare) — fully implemented
+- TS2693 (type used as value) — fully implemented
+
+**Completed this session:**
+- TS2540 (readonly property assignment) — namespace const exports + readonly modifier
+  check. +2 tests (constDeclarations-access3/4). 7,681 passing.
+- `canUseTypeEngine` guard relaxed for Object→Intrinsic (safe, no FPs)
+- `currentLocalTypes` infrastructure for local variable type resolution (no gains yet,
+  enables future TS2322 improvements)
+
 **Recommended priority for next session:**
 
-1. **Relax `canUseTypeEngine` guard** — The single highest-ROI change.
-   Currently blocks 188+ pure TS2322 tests. Careful incremental relaxation:
-   - Array type → primitive (TS2322 "number[] not assignable to number")
-   - Named type (Interface/Reference) → intrinsic
-   - Named type → named type (different interfaces)
-   Must be done carefully to avoid FPs from incomplete structural comparison.
+1. **Relax `canUseTypeEngine` guard further** — The single highest-ROI change.
+   Object→Intrinsic relaxation is safe but shows no gains because local variable
+   identifiers can't yet resolve through `getTypeOfExpression`. Need deeper
+   scope chain integration between the Type engine and `checkTypeAssignability`.
 
-2. **TS7006 implicit any parameter** — 260 occurrences, simple `noImplicitAny` flag check.
+2. **TS2540 expansion** — Extend to interface/class readonly properties resolved
+   through the type system (needs `declare let` variable types to resolve).
 
-3. **TS2540 readonly property** — 178 occurrences, check `readonly` modifier on assignment.
-
-4. **TS2554 wrong argument count** — 146 occurrences, count args vs params in call expressions.
+3. **Improve `typeToString` for object types** — Many diff tests need expanded member
+   display instead of `{ ... }` placeholder. Fixes TS2322/TS2345 text accuracy.
 
 ---
 
