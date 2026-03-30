@@ -278,12 +278,15 @@ Well-defined checks using existing infrastructure.
 
   **File:** `Checker.kt` — `checkPropertyOverride`, `buildMethodType`, `getTypeOfMemberDecl`
 
-- [ ] **C3. TS2792 — cannot use require() in ES module**
+- [ ] **C3. TS2792 — cannot find module (classic resolution)** — DEFERRED
 
-  Emit when `require()` is used in a file detected as ES module format.
-  Simple check: module format + `require` call detection.
+  TS2792 is actually "Cannot find module '{0}'. Did you mean to set the
+  'moduleResolution' option to 'nodenext'?" — fires when classic module
+  resolution can't find an import target. Requires module resolution
+  infrastructure (same as E1/TS2307). Original plan description was incorrect.
 
   **File:** `Checker.kt`
+  **Dependency:** Module resolution (Track E)
   **Target:** 6 pure tests
 
 - [x] **C4. TS2344 — type does not satisfy constraint**
