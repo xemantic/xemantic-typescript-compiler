@@ -23774,8 +23774,18 @@ class Checker(
             is ClassDeclaration -> {
                 for (member in stmt.members) {
                     when (member) {
-                        is MethodDeclaration -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
-                        is Constructor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is MethodDeclaration -> {
+                            for (param in member.parameters) {
+                                param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                            }
+                            member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        }
+                        is Constructor -> {
+                            for (param in member.parameters) {
+                                param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                            }
+                            member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        }
                         is GetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
                         is SetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
                         is PropertyDeclaration -> member.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
@@ -23840,14 +23850,24 @@ class Checker(
                     }
                 }
             }
-            is ArrowFunction -> expr.body?.let { body ->
-                when (body) {
-                    is Block -> checkCallTypesInStatements(body.statements, source, fileName)
-                    is Expression -> checkCallTypesInExpr(body, source, fileName)
-                    else -> {}
+            is ArrowFunction -> {
+                for (param in expr.parameters) {
+                    param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                }
+                expr.body?.let { body ->
+                    when (body) {
+                        is Block -> checkCallTypesInStatements(body.statements, source, fileName)
+                        is Expression -> checkCallTypesInExpr(body, source, fileName)
+                        else -> {}
+                    }
                 }
             }
-            is FunctionExpression -> expr.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+            is FunctionExpression -> {
+                for (param in expr.parameters) {
+                    param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                }
+                expr.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+            }
             is TemplateExpression -> {
                 for (span in expr.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
             }
