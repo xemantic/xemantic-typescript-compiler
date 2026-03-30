@@ -148,6 +148,10 @@ class Checker(
         state.symbolTargets[symbol.id] = target
     }
 
+    /** Local variable types populated during TS2322 checking — enables getTypeOfIdentifier
+     *  to resolve function-scoped variable types from their type annotations. */
+    private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
+
     /** Maximum recursion depth for AST walking to prevent StackOverflow. */
     private val maxCheckDepth = 200
     private val maxRelationDepth = 100
@@ -14718,6 +14722,8 @@ class Checker(
                         if (left is Identifier && left.text in constNames) {
                             emitTS2588(left, source, fileName)
                         }
+                        // Check assignment to readonly property (TS2540)
+                        checkReadonlyAssignmentTarget(left, source, fileName)
                     }
                     checkConstAssignmentInExpr(current.right, source, fileName, constNames)
                     current = current.left
@@ -14730,6 +14736,8 @@ class Checker(
                     if (operand is Identifier && operand.text in constNames) {
                         emitTS2588(operand, source, fileName)
                     }
+                    // Check readonly property (TS2540)
+                    checkReadonlyAssignmentTarget(operand, source, fileName)
                 }
                 checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
             }
@@ -14739,6 +14747,8 @@ class Checker(
                     if (operand is Identifier && operand.text in constNames) {
                         emitTS2588(operand, source, fileName)
                     }
+                    // Check readonly property (TS2540)
+                    checkReadonlyAssignmentTarget(operand, source, fileName)
                 }
                 checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
             }
@@ -14775,6 +14785,105 @@ class Checker(
         var e = expr
         while (e is ParenthesizedExpression) e = e.expression
         return e
+    }
+
+    /** Check if a property access targets a readonly property. */
+    private fun isReadonlyPropertyAccess(expr: PropertyAccessExpression): Boolean {
+        val objExpr = expr.expression
+        val propName = expr.name.text
+        // Check namespace/module exports for const variables
+        if (objExpr is Identifier) {
+            val objSymbol = globals[objExpr.text]
+            if (objSymbol != null && objSymbol.flags.hasAny(SymbolFlags.Module)) {
+                val exportSymbol = objSymbol.exports?.get(propName)
+                if (exportSymbol != null && isConstExport(objSymbol, propName)) {
+                    return true
+                }
+            }
+        }
+        // Check interface/class readonly property members via type system
+        try {
+            val objectType = getTypeOfExpression(objExpr)
+            if (objectType === anyType || objectType === errorType) return false
+            val prop = getPropertyOfType(objectType, propName) ?: return false
+            return isReadonlySymbol(prop)
+        } catch (_: StackOverflowError) {
+            return false
+        }
+    }
+
+    /** Check if a symbol is declared readonly. */
+    private fun isReadonlySymbol(symbol: Symbol): Boolean {
+        return symbol.declarations.any { decl ->
+            when (decl) {
+                is PropertyDeclaration -> ModifierFlag.Readonly in decl.modifiers
+                else -> false
+            }
+        }
+    }
+
+    /** Check if a namespace/module exports a name as a const variable. */
+    private fun isConstExport(namespaceSymbol: Symbol, exportName: String): Boolean {
+        // Walk the namespace body to find if the export is a const declaration
+        for (decl in namespaceSymbol.declarations) {
+            val body = when (decl) {
+                is ModuleDeclaration -> decl.body
+                else -> continue
+            }
+            val stmts = when (body) {
+                is ModuleBlock -> body.statements
+                else -> continue
+            }
+            for (stmt in stmts) {
+                if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                    for (varDecl in stmt.declarationList.declarations) {
+                        val name = varDecl.name
+                        if (name is Identifier && name.text == exportName) return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /** Emit TS2540 for assignment to a readonly property. */
+    private fun emitTS2540(propName: String, pos: Int, length: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot assign to '$propName' because it is a read-only property.",
+            category = DiagnosticCategory.Error,
+            code = 2540,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = pos,
+            length = length,
+        ))
+    }
+
+    /** Check if an assignment target is a readonly property and emit TS2540. */
+    private fun checkReadonlyAssignmentTarget(target: Expression, source: String, fileName: String) {
+        val unwrapped = unwrapParens(target)
+        when (unwrapped) {
+            is PropertyAccessExpression -> {
+                if (isReadonlyPropertyAccess(unwrapped)) {
+                    emitTS2540(unwrapped.name.text, unwrapped.name.pos, unwrapped.name.text.length, source, fileName)
+                }
+            }
+            is ElementAccessExpression -> {
+                // m["x"] = value — check if it's a readonly property too
+                val arg = unwrapped.argumentExpression
+                if (arg is StringLiteralNode && unwrapped.expression is Identifier) {
+                    val objName = (unwrapped.expression as Identifier).text
+                    val objSymbol = globals[objName]
+                    if (objSymbol != null && objSymbol.flags.hasAny(SymbolFlags.Module) &&
+                        isConstExport(objSymbol, arg.text)) {
+                        emitTS2540(arg.text, arg.pos, (arg.rawText ?: arg.text).length + 2, source, fileName)
+                    }
+                }
+            }
+            else -> {}
+        }
     }
 
     private fun emitTS2588(id: Identifier, source: String, fileName: String) {
@@ -21026,8 +21135,8 @@ class Checker(
         if (sourceIsNullish && targetType is Type.Union) return true
         // intrinsic↔intrinsic (number→string, etc.)
         if (sourceIsIntrinsic && targetIsIntrinsic) return true
-        // Object literal → intrinsic target (object literal is never assignable to primitive)
-        if (sourceType is Type.Object && sourceType.symbol == null && targetIsIntrinsic) return true
+        // Object type → intrinsic target (object/interface/class/array is never assignable to primitive)
+        if (sourceType is Type.Object && targetIsIntrinsic) return true
         // Function→function: both sides have call signatures — safe because anyType in
         // unresolved return/param types is handled by isSimpleTypeRelatedTo (any→anything)
         if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
@@ -21042,6 +21151,7 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             val varTypes = mutableMapOf<String, String>()
+            currentLocalTypes = mutableMapOf()
             checkTypeAssignabilityInStatements(result.sourceFile.statements, source, fileName, varTypes, returnType = null, typeParams = emptySet())
         }
         // Post-filter: suppress TS2322 for null/undefined→NamedType when the named type
@@ -21146,6 +21256,8 @@ class Checker(
                             }
                             is Constructor -> member.body?.let { body ->
                                 val ctorTypes = varTypes.toMutableMap()
+                                val savedLocalTypes = currentLocalTypes
+                                currentLocalTypes = currentLocalTypes.toMutableMap()
                                 // Populate this.prop types from class property declarations
                                 for (m in stmt.members) {
                                     if (m is PropertyDeclaration) {
@@ -21154,6 +21266,15 @@ class Checker(
                                         if (propType != null && propName != null) {
                                             ctorTypes["this.$propName"] = propType
                                         }
+                                        // Also populate Type engine local type map for this.prop
+                                        if (propName != null && m.type != null) {
+                                            try {
+                                                val resolvedType = getTypeFromTypeNode(m.type!!)
+                                                if (resolvedType !== anyType && resolvedType !== errorType) {
+                                                    currentLocalTypes["this.$propName"] = resolvedType
+                                                }
+                                            } catch (_: StackOverflowError) {}
+                                        }
                                     }
                                 }
                                 // Also add constructor parameter types
@@ -21161,8 +21282,18 @@ class Checker(
                                     val pName = (p.name as? Identifier)?.text
                                     val pType = p.type?.let { resolveSimpleTypeName(it) }
                                     if (pName != null && pType != null) ctorTypes[pName] = pType
+                                    // Also populate Type engine local type map
+                                    if (pName != null && p.type != null) {
+                                        try {
+                                            val resolvedType = getTypeFromTypeNode(p.type!!)
+                                            if (resolvedType !== anyType && resolvedType !== errorType) {
+                                                currentLocalTypes[pName] = resolvedType
+                                            }
+                                        } catch (_: StackOverflowError) {}
+                                    }
                                 }
                                 checkTypeAssignabilityInStatements(body.statements, source, fileName, ctorTypes, returnType = null, classTypeParams)
+                                currentLocalTypes = savedLocalTypes
                             }
                             is GetAccessor -> {
                                 checkFunctionBody(member.body, member.type, emptyList(), null, source, fileName, varTypes, classTypeParams)
@@ -21218,17 +21349,29 @@ class Checker(
     ) {
         body?.let {
             val innerTypes = varTypes.toMutableMap()
+            // Save outer local types and create inner scope copy
+            val savedLocalTypes = currentLocalTypes
+            currentLocalTypes = currentLocalTypes.toMutableMap()
             for (param in parameters) {
                 val paramType = param.type
                 val paramName = param.name
                 if (paramType != null && paramName is Identifier) {
                     val t = resolveSimpleTypeName(paramType)
                     if (t != null) innerTypes[paramName.text] = t
+                    // Also populate Type engine local type map
+                    try {
+                        val resolvedType = getTypeFromTypeNode(paramType)
+                        if (resolvedType !== anyType && resolvedType !== errorType) {
+                            currentLocalTypes[paramName.text] = resolvedType
+                        }
+                    } catch (_: StackOverflowError) { /* circular type */ }
                 }
             }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
             checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
+            // Restore outer local types
+            currentLocalTypes = savedLocalTypes
         }
     }
 
@@ -21288,6 +21431,14 @@ class Checker(
         // Maintain old varTypes tracking for checkAssignmentExpression/checkReturnAssignability
         val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
         if (declaredTypeStr != null) varTypes[name.text] = declaredTypeStr
+
+        // Populate local type map for Type engine identifier resolution
+        try {
+            val resolvedVarType = getTypeFromTypeNode(typeAnnotation)
+            if (resolvedVarType !== anyType && resolvedVarType !== errorType) {
+                currentLocalTypes[name.text] = resolvedVarType
+            }
+        } catch (_: StackOverflowError) { /* circular type */ }
 
         val init = decl.initializer ?: return
 
@@ -21452,60 +21603,73 @@ class Checker(
             }
             val target = expr.left
             if (target is Identifier) {
-                // Try new Type-based engine for file-level variables
-                val symbol = globals[target.text]
-                if (symbol != null) {
-                    val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-                    val typeAnnotation = (decl as? VariableDeclaration)?.type
-                        ?: (decl as? Parameter)?.type
-                        ?: (decl as? PropertyDeclaration)?.type
-                    if (typeAnnotation != null) {
-                        try {
-                            val targetType = getTypeFromTypeNode(typeAnnotation)
-                            val sourceType = getTypeOfExpression(expr.right)
-                            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
-                                val displaySource = typeToString(sourceType)
-                                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
-                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                                val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
-                                val chain = mutableListOf<String>()
-                                // Function→function: add specific elaboration
-                                if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
-                                    targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
-                                    chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
-                                } else {
-                                    val needsElaboration = !isSimpleLiteral(expr.right) &&
-                                        expr.right !is CallExpression && expr.right !is NewExpression &&
-                                        expr.right !is DeleteExpression && expr.right !is AwaitExpression &&
-                                        expr.right !is BinaryExpression && expr.right !is ParenthesizedExpression
-                                    if (needsElaboration) chain.add("  $message")
-                                    if (targetType is Type.TypeParam) {
-                                        val targetName = targetType.symbol?.name ?: "T"
-                                        chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
-                                    } else if (typeParams.isNotEmpty()) {
-                                        val targetBaseName = displayTarget.substringBefore('<')
-                                        if (targetBaseName in typeParams) {
-                                            chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
-                                        }
-                                    }
-                                }
-                                diagnostics.add(Diagnostic(
-                                    message = message,
-                                    category = DiagnosticCategory.Error,
-                                    code = 2322,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = target.pos,
-                                    length = target.text.length,
-                                    messageChain = chain,
-                                ))
-                                return // Type engine handled it — skip old system
-                            }
-                        } catch (_: StackOverflowError) {
-                            // Circular type resolution — fall through to old system
+                // Try new Type-based engine for file-level and local variables
+                try {
+                    var targetType: Type? = null
+                    var typeAnnotation: TypeNode? = null
+                    val symbol = globals[target.text]
+                    if (symbol != null) {
+                        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+                        typeAnnotation = (decl as? VariableDeclaration)?.type
+                            ?: (decl as? Parameter)?.type
+                            ?: (decl as? PropertyDeclaration)?.type
+                        if (typeAnnotation != null) {
+                            targetType = getTypeFromTypeNode(typeAnnotation)
                         }
                     }
+                    // Also check local type scope for function-local variables
+                    if (targetType == null || targetType === anyType || targetType === errorType) {
+                        currentLocalTypes[target.text]?.let { localType ->
+                            if (localType !== anyType && localType !== errorType) {
+                                targetType = localType
+                            }
+                        }
+                    }
+                    if (targetType != null && targetType !== anyType && targetType !== errorType) {
+                        val tt = targetType!!
+                        val sourceType = getTypeOfExpression(expr.right)
+                        if (canUseTypeEngine(sourceType, tt) && !checkTypeRelatedTo(sourceType, tt, assignableRelation)) {
+                            val displaySource = typeToString(sourceType)
+                            val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                            val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                            val chain = mutableListOf<String>()
+                            // Function→function: add specific elaboration
+                            if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                                tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
+                                chain.addAll(getFunctionMismatchElaboration(sourceType, tt))
+                            } else {
+                                val needsElaboration = !isSimpleLiteral(expr.right) &&
+                                    expr.right !is CallExpression && expr.right !is NewExpression &&
+                                    expr.right !is DeleteExpression && expr.right !is AwaitExpression &&
+                                    expr.right !is BinaryExpression && expr.right !is ParenthesizedExpression
+                                if (needsElaboration) chain.add("  $message")
+                                if (tt is Type.TypeParam) {
+                                    val targetName = tt.symbol?.name ?: "T"
+                                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                } else if (typeParams.isNotEmpty()) {
+                                    val targetBaseName = displayTarget.substringBefore('<')
+                                    if (targetBaseName in typeParams) {
+                                        chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                    }
+                                }
+                            }
+                            diagnostics.add(Diagnostic(
+                                message = message,
+                                category = DiagnosticCategory.Error,
+                                code = 2322,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = target.pos,
+                                length = target.text.length,
+                                messageChain = chain,
+                            ))
+                            return // Type engine handled it — skip old system
+                        }
+                    }
+                } catch (_: StackOverflowError) {
+                    // Circular type resolution — fall through to old system
                 }
 
                 // Fallback to old string-based system
@@ -22162,7 +22326,9 @@ class Checker(
             "false" -> falseType
             "NaN", "Infinity" -> numberType
             else -> {
-                // Look up symbol in globals
+                // Check local scope first (populated during TS2322 checking)
+                currentLocalTypes[id.text]?.let { return it }
+                // Then look up symbol in globals
                 val symbol = globals[id.text]
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
             }
