@@ -366,6 +366,8 @@ class Checker(
         checkArithmeticOperandTypes()
         // 64e. Check class implements interface (TS2420)
         checkClassImplementsInterface()
+        // 64e2. Check property type incompatible with base type (TS2416)
+        checkPropertyOverride()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // 65. Check invalid assignment targets (TS2364)
@@ -22463,7 +22465,13 @@ class Checker(
             is Type.NumberLiteral -> type.toString()
             is Type.BigIntLiteral -> type.toString()
             // Interface and Reference must be checked BEFORE Object (they extend Object)
-            is Type.Interface -> type.symbol?.name ?: "Interface"
+            is Type.Interface -> {
+                val name = type.symbol?.name ?: "Interface"
+                val tps = type.typeParameters
+                if (tps != null && tps.isNotEmpty()) {
+                    "$name<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+                } else name
+            }
             is Type.Reference -> {
                 val target = type.target.symbol?.name ?: "Object"
                 val args = type.resolvedTypeArguments
@@ -22698,6 +22706,247 @@ class Checker(
                     return
                 }
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2416: Property type incompatible with base type
+    // -----------------------------------------------------------------------
+
+    private fun checkPropertyOverride() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkPropertyOverrideInStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {
+                // Circular type resolution — skip
+            }
+        }
+    }
+
+    private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ClassDeclaration -> checkClassPropertyOverrides(stmt, source, fileName)
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkClassPropertyOverrides(classDecl: ClassDeclaration, source: String, fileName: String) {
+        val heritageClauses = classDecl.heritageClauses ?: return
+        val rawClassName = classDecl.name?.text ?: return
+        val classTypeParams = classDecl.typeParameters
+        val className = if (classTypeParams != null && classTypeParams.isNotEmpty()) {
+            "$rawClassName<${classTypeParams.joinToString(", ") { it.name.text }}>"
+        } else rawClassName
+
+        for (clause in heritageClauses) {
+            for (typeExpr in clause.types) {
+                val baseName = when (val tn = typeExpr.expression) {
+                    is Identifier -> tn.text
+                    is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+
+                val baseSymbol = globals[baseName] ?: continue
+                val baseType = getDeclaredTypeOfSymbol(baseSymbol)
+                if (baseType !is Type.Object) continue
+                resolveStructuredTypeMembers(baseType)
+                val baseMembers = baseType.members ?: continue
+
+                val baseTypeName = typeToString(baseType)
+
+                // Collect method names that appear multiple times (overloads) — skip these
+                val overloadedMethods = mutableMapOf<String, Int>()
+                for (member in classDecl.members) {
+                    if (member is MethodDeclaration) {
+                        val name = (member.name as? Identifier)?.text ?: continue
+                        overloadedMethods[name] = (overloadedMethods[name] ?: 0) + 1
+                    }
+                }
+
+                for (member in classDecl.members) {
+                    // Skip static members
+                    val isStatic = when (member) {
+                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                        is GetAccessor -> ModifierFlag.Static in member.modifiers
+                        is SetAccessor -> ModifierFlag.Static in member.modifiers
+                        else -> true
+                    }
+                    if (isStatic) continue
+
+                    val memberName = when (member) {
+                        is PropertyDeclaration -> (member.name as? Identifier)?.text
+                        is MethodDeclaration -> (member.name as? Identifier)?.text
+                        is GetAccessor -> (member.name as? Identifier)?.text
+                        is SetAccessor -> (member.name as? Identifier)?.text
+                        else -> null
+                    } ?: continue
+
+                    // Skip overloaded methods (need full overload resolution)
+                    if (member is MethodDeclaration && (overloadedMethods[memberName] ?: 0) > 1) continue
+
+                    val basePropSymbol = baseMembers[memberName] ?: continue
+
+                    // Skip if base member has multiple declarations (overloads)
+                    if (basePropSymbol.declarations.size > 1) continue
+
+                    val derivedType = getTypeOfMemberDecl(member) ?: continue
+                    val basePropType = getTypeOfMemberDecl(
+                        basePropSymbol.valueDeclaration ?: basePropSymbol.declarations.firstOrNull() ?: continue
+                    ) ?: continue
+
+                    if (derivedType === anyType || basePropType === anyType) continue
+
+                    if (!checkTypeRelatedTo(derivedType, basePropType, assignableRelation)) {
+                        val nameNode = when (member) {
+                            is PropertyDeclaration -> member.name
+                            is MethodDeclaration -> member.name
+                            is GetAccessor -> member.name
+                            is SetAccessor -> member.name
+                            else -> null
+                        } ?: continue
+
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        val message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'."
+                        val chain = mutableListOf<String>()
+                        chain.add("  Type '${typeToString(derivedType)}' is not assignable to type '${typeToString(basePropType)}'.")
+
+                        // Add signature elaboration for function types
+                        addSignatureElaboration(derivedType, basePropType, chain)
+
+                        diagnostics.add(Diagnostic(
+                            message = message,
+                            category = DiagnosticCategory.Error,
+                            code = 2416,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = memberName.length,
+                            messageChain = chain,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Get the type of a class member from its AST declaration. */
+    private fun getTypeOfMemberDecl(decl: Node): Type? {
+        return when (decl) {
+            is PropertyDeclaration -> {
+                decl.type?.let { return getTypeFromTypeNode(it) }
+                // Infer type from initializer if no annotation
+                decl.initializer?.let { init ->
+                    val t = getTypeOfExpression(init)
+                    if (t !== anyType) t else null
+                }
+            }
+            is MethodDeclaration -> {
+                // Use void return for methods with body that don't return a value
+                val hasBodyNoReturn = decl.body != null && !bodyHasReturnValue(decl.body!!)
+                buildMethodType(decl.parameters, decl.type, decl.typeParameters, hasBody = hasBodyNoReturn)
+            }
+            is GetAccessor -> decl.type?.let { getTypeFromTypeNode(it) }
+            is SetAccessor -> decl.parameters.firstOrNull()?.type?.let { getTypeFromTypeNode(it) }
+            is Parameter -> decl.type?.let { getTypeFromTypeNode(it) }
+            else -> null
+        }
+    }
+
+    /** Build a function type (Object with call signature) from method parameters and return type. */
+    private fun buildMethodType(
+        params: List<Parameter>,
+        returnTypeNode: TypeNode?,
+        typeParams: List<TypeParameter>? = null,
+        hasBody: Boolean = false,
+    ): Type {
+        val fnType = Type.Object()
+        val defaultReturn = if (hasBody) voidType else anyType
+        val returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: defaultReturn
+        val typeParameters = typeParams?.map { tp ->
+            val param = Type.TypeParam()
+            param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+            tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+            tp.default?.let { param.default = getTypeFromTypeNode(it) }
+            param
+        }
+        // Build parameter symbols with initializer type inference
+        val paramSymbols = params.mapNotNull { param ->
+            val name = when (val n = param.name) {
+                is Identifier -> if (n.text == "this") return@mapNotNull null else n.text
+                else -> return@mapNotNull null
+            }
+            val sym = Symbol(SymbolFlags.FunctionScopedVariable, name)
+            sym.declarations.add(param)
+            sym.valueDeclaration = param
+            // If no type annotation, infer from initializer
+            if (param.type == null && param.initializer != null) {
+                val initType = getTypeOfExpression(param.initializer!!)
+                if (initType !== anyType) {
+                    symbolTypes[sym.id] = initType
+                }
+            }
+            sym
+        }
+        val sig = Signature(
+            typeParameters = typeParameters,
+            parameters = paramSymbols,
+            resolvedReturnType = returnType,
+            minArgumentCount = params.count {
+                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+            },
+        )
+        fnType.callSignatures = listOf(sig)
+        return fnType
+    }
+
+    /** Check if a function body contains any `return expr` (return with a value). */
+    private fun bodyHasReturnValue(body: Node): Boolean {
+        return when (body) {
+            is ReturnStatement -> body.expression != null
+            is Block -> body.statements.any { bodyHasReturnValue(it) }
+            is IfStatement -> bodyHasReturnValue(body.thenStatement) ||
+                (body.elseStatement?.let { bodyHasReturnValue(it) } ?: false)
+            is SwitchStatement -> body.caseBlock.any { node ->
+                if (node is CaseClause) node.statements.any { bodyHasReturnValue(it) }
+                else if (node is DefaultClause) node.statements.any { bodyHasReturnValue(it) }
+                else false
+            }
+            else -> false
+        }
+    }
+
+    /** Add signature-level elaboration for function type mismatches in TS2416 chains. */
+    private fun addSignatureElaboration(derivedType: Type, basePropType: Type, chain: MutableList<String>) {
+        if (derivedType !is Type.Object || basePropType !is Type.Object) return
+        val derivedSigs = derivedType.callSignatures
+        val baseSigs = basePropType.callSignatures
+        if (derivedSigs.isNullOrEmpty() || baseSigs.isNullOrEmpty()) return
+        val derivedSig = derivedSigs.first()
+        val baseSig = baseSigs.first()
+        // Check parameter count mismatch
+        if (derivedSig.minArgumentCount > baseSig.parameters.size) {
+            chain.add("    Target signature provides too few arguments. Expected ${derivedSig.parameters.size} or more, but got ${baseSig.parameters.size}.")
+            return
+        }
+        // Check return type mismatch
+        val sourceReturn = derivedSig.resolvedReturnType ?: anyType
+        val targetReturn = baseSig.resolvedReturnType ?: anyType
+        if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
+            !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
+            chain.add("    Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
         }
     }
 
@@ -23928,6 +24177,10 @@ class Checker(
         target: Signature,
         relation: Relation,
     ): Boolean {
+        // Source requires more args than target provides → incompatible
+        val sourceParams = source.parameters
+        val targetParams = target.parameters
+        if (source.minArgumentCount > targetParams.size) return false
         // Check return types (covariant)
         // Void target return accepts any source return type (void means "don't care about return")
         val sourceReturn = source.resolvedReturnType ?: anyType
@@ -23935,8 +24188,6 @@ class Checker(
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
         // Check parameter types (contravariant)
-        val sourceParams = source.parameters
-        val targetParams = target.parameters
         val len = minOf(sourceParams.size, targetParams.size)
         for (i in 0 until len) {
             val sourceParamType = getTypeOfSymbol(sourceParams[i])

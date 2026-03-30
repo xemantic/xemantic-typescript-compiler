@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-29):** 7,677 / 10,077 tests passing (76.2%).
+**Status (2026-03-30):** 7,679 / 10,077 tests passing (76.2%).
 
 ## Goal
 
@@ -263,14 +263,20 @@ Well-defined checks using existing infrastructure.
 
   **File:** `Checker.kt` — `checkClassImplementsInterface`
 
-- [ ] **C2. TS2416 — property type incompatible with base type**
+- [x] **C2. TS2416 — property type incompatible with base type**
 
-  When a class property overrides a base class property, verify the types
-  are compatible.
+  For each class with extends/implements clause, check that overriding
+  members have types compatible with the base type's members. Compares
+  property types and method signatures using structural type comparison.
+  Skips overloaded methods (need full overload resolution), static members,
+  and members with multiple base declarations. Includes method parameter
+  type inference from initializers, void return type for body-only methods,
+  and signature parameter count elaboration. Also improved `signatureRelatedTo`
+  with `minArgumentCount` check and `typeToString` for generic Interface types.
 
-  **File:** `Checker.kt` — new `checkPropertyOverride`
-  **Dependency:** base type resolution (already implemented)
-  **Target:** 7 pure tests, 13 total
+  **+2 tests** (instanceSubtypeCheck2, requiredInitializedParameter2). 7,679 passing.
+
+  **File:** `Checker.kt` — `checkPropertyOverride`, `buildMethodType`, `getTypeOfMemberDecl`
 
 - [ ] **C3. TS2792 — cannot use require() in ES module**
 
