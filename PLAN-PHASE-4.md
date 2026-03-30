@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-30):** 7,681 / 10,077 tests passing (76.3%).
+**Status (2026-03-30):** 7,685 / 10,077 tests passing (76.3%).
 
 ## Goal
 
@@ -169,6 +169,10 @@ array→primitive, named→named) fall through to the old string system which do
 **Completed this session:**
 - TS2540 (readonly property assignment) — namespace const exports + readonly modifier
   check. +2 tests (constDeclarations-access3/4). 7,681 passing.
+- TS2454 (heritage clause) — check extends/implements expressions for uninitialized vars.
+  +2 tests (declarationEmitExpressionInExtends, extendConstructSignatureInInterface). 7,683.
+- TS2345 (param defaults) — check call types in function parameter default initializers.
+  +2 tests (objectCreationExpressionInFunctionParameter, invocationExpressionInFunctionParameter). 7,685.
 - `canUseTypeEngine` guard relaxed for Object→Intrinsic (safe, no FPs)
 - `currentLocalTypes` infrastructure for local variable type resolution (no gains yet,
   enables future TS2322 improvements)
