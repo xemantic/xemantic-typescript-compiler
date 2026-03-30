@@ -118,44 +118,62 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 5 — Data-Driven Test Gains
 
-### Failure landscape (2026-03-29 analysis)
+### Failure landscape (2026-03-30 reassessment)
 
 ```
-Total failing: 2,416
-  Error baseline: 680  (28% of all tests)
-  JS emit:        257  (10%)
-  Both:         1,479  (overlap — tests with errors AND JS variants)
+Total failing: 2,398
+  Error baseline: 2,140  (89% of failing tests)
+  JS emit:          260  (11%)
 
-Error baseline breakdown:
-  426 tests have 0 FPs (only need MORE diagnostics)
-   22 tests have 0 FNs (only need FEWER diagnostics)
-  243 tests have both FPs and FNs
-
-Eliminating ALL FPs would fix only 22 tests.
-The bottleneck is MISSING diagnostic coverage, not incorrect diagnostics.
+Error baseline breakdown (sampled):
+  ~71% are "none produced" (need MORE diagnostics — ~1,520 tests)
+  ~29% have diffs (emit some but not all — ~620 tests)
 ```
 
-### Impact-ranked code targets
+### Impact-ranked code targets (updated 2026-03-30)
 
-Tests that need ONLY this code (0 other issues):
+**Pure tests** = tests that need ONLY this code (+ already-emitted codes):
 
-| Code | Description | Pure | Total | Complexity |
-|------|-------------|------|-------|------------|
-| TS2322 | Type not assignable | 41 | 102 | Relax existing guards |
-| TS2339 | Property doesn't exist | 15 | 44 | Unblock module augmentation |
-| TS2345 | Arg type mismatch | 12 | 47 | Relax `isSimpleCheckableType` |
-| TS2420 | Class incorrectly implements | 8 | 10 | New check, infra exists |
-| TS2454 | Used before assigned | 8 | 18 | Control flow or heuristics |
-| TS2416 | Property incompatible w/ base | 7 | 13 | New check, needs base types |
-| TS2343 | Type constraint violation | 6 | 6 | Generic constraints |
-| TS2792 | Cannot use require in ESM | 6 | 6 | Module format check |
-| TS2307 | Cannot find module | 5 | 8 | Module resolution |
-| TS2802 | Iterator type checking | 4 | 4 | Type protocol check |
+| Code | Description | Pure | Complexity | Status |
+|------|-------------|------|------------|--------|
+| TS2322 | Type not assignable | **188** | Relax `canUseTypeEngine` guard | **TOP PRIORITY** |
+| TS2345 | Arg type mismatch | **66** | Relax `isSimpleCheckableType` | **HIGH PRIORITY** |
+| TS2339 | Property doesn't exist | 15 | Needs D1+D2 (module augment + narrowing) | Blocked |
+| TS2420 | Class incorrectly implements | — | DONE (+5) | Complete |
+| TS2416 | Property incompatible w/ base | — | DONE (+2) | Complete |
+| TS2344 | Type constraint violation | — | DONE (+5) | Complete |
+| TS2792 | Cannot find module (classic) | 6 | Needs module resolution | Deferred |
 
-If TS2322+TS2339+TS2345 were perfect: **97 tests pass**.
-If ALL checker diagnostics perfect: **231 tests pass**.
-If ALL parser diagnostics perfect: **37 tests pass**.
-JS emit (257 failures): **74 within 4 diff lines, 148 within 10**.
+**The bottleneck is the `canUseTypeEngine` guard.** 188 pure TS2322 tests produce
+zero diagnostics because `canUseTypeEngine` returns false for most type pairs.
+The guard currently only allows: intrinsic↔intrinsic, nullish→anything,
+object-literal→intrinsic, function→function. All other comparisons (interface→primitive,
+array→primitive, named→named) fall through to the old string system which does nothing.
+
+**Top missing diagnostic codes we don't emit at all:**
+- TS2769 (910 occurrences): overload resolution — complex
+- TS7006 (260): implicit any parameter — simple flag check
+- TS2353 (236): object literal type — needs excess property checking
+- TS2741 (182): property missing in type — structural comparison
+- TS2540 (178): readonly property — simple flag check
+- TS1487 (172): `export =` compatibility — module system
+- TS2554 (146): wrong number of arguments — call expression checking
+- TS2451 (142): block-scoped variable redeclare — scope checking
+
+**Recommended priority for next session:**
+
+1. **Relax `canUseTypeEngine` guard** — The single highest-ROI change.
+   Currently blocks 188+ pure TS2322 tests. Careful incremental relaxation:
+   - Array type → primitive (TS2322 "number[] not assignable to number")
+   - Named type (Interface/Reference) → intrinsic
+   - Named type → named type (different interfaces)
+   Must be done carefully to avoid FPs from incomplete structural comparison.
+
+2. **TS7006 implicit any parameter** — 260 occurrences, simple `noImplicitAny` flag check.
+
+3. **TS2540 readonly property** — 178 occurrences, check `readonly` modifier on assignment.
+
+4. **TS2554 wrong argument count** — 146 occurrences, count args vs params in call expressions.
 
 ---
 
