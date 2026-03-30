@@ -4438,6 +4438,14 @@ class Checker(
             is SwitchStatement -> {
                 findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
             }
+            is ClassDeclaration -> {
+                // Check heritage clause expressions (extends/implements) for TS2454
+                stmt.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) {
+                        findUninitializedRefs(type.expression, uninitialized, source, fileName)
+                    }
+                }
+            }
             is Block -> {
                 for (s in stmt.statements) {
                     checkUsesOfUninitialized(s, uninitialized, source, fileName)
