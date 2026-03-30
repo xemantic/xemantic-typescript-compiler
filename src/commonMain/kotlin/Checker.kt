@@ -23765,6 +23765,10 @@ class Checker(
                 }
             }
             is FunctionDeclaration -> {
+                // Check parameter default initializers for call expression type errors
+                for (param in stmt.parameters) {
+                    param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                }
                 stmt.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
             }
             is ClassDeclaration -> {
