@@ -385,20 +385,26 @@ Fix the blockers that prevent widening TS2339 and TS2345.
 
 Improve multi-file name resolution and diagnostics.
 
-- [ ] **E1. TS2307 — Cannot find module**
+- [ ] **E1. TS2307 — Cannot find module** — BLOCKED
 
-  Emit when an import specifier doesn't resolve to any file in the compilation.
-  Check `import ... from "X"` against available files.
+  Attempted: relative-specifier-only TS2307 in multi-file mode caused 29
+  regressions (+6 new passes). FPs from `resolveModuleSpecifier` not handling
+  paths config, symlinks, JSON imports, index resolution, custom suffixes.
+  Needs proper module resolution infrastructure before this can be enabled.
 
   **File:** `Checker.kt` — module resolution checking
-  **Target:** 5 pure tests, 8 total
+  **Target:** 5 pure tests, 8 total (15 pure found in analysis, but most
+  need resolution features we don't have)
 
-- [ ] **E2. Cross-file TS2300/TS2393 duplicate detection**
+- [ ] **E2. Cross-file TS2300/TS2393 duplicate detection** — NEEDS ANALYSIS
 
-  Detect duplicate function/variable declarations across files.
+  Analysis found 10 pure TS2300 failing tests, but most are merge validation
+  (class static vs namespace export, var+namespace, global interface merge)
+  rather than simple cross-file duplicates. Requires different checking logic
+  per pattern.
 
   **File:** `Checker.kt` — `checkDuplicateDeclarations`
-  **Target:** 4 pure tests
+  **Target:** 10 pure tests (revised from 4), but complex merge validation
 
 - [ ] **E3. Cross-file TS2448 — block-scoped variable used before declaration**
 
