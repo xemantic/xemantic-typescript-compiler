@@ -9526,29 +9526,22 @@ class Checker(
                     else -> continue
                 }
                 if (isMultiFile) {
-                    // In multi-file mode, check side-effect imports that can't resolve to
-                    // any compilation file. For AMD modules, bare specifiers may be provided
-                    // externally, so skip TS2882 for AMD/System.
+                    val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
                     if (isSideEffectImport) {
-                        val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+                        // Side-effect imports: TS2882
                         if (isRelative) {
-                            // Relative side-effect imports: check if they resolve
                             if (resolveModuleSpecifier(moduleName) == null) {
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         } else if (moduleName !in ambientModuleNames && moduleName !in dtsFileBaseNames) {
-                            // Bare (non-relative) side-effect imports: TypeScript always
-                            // considers these unresolvable without node_modules/paths config.
-                            // Skip for AMD/System/UMD where bare specifiers are provided externally.
-                            // Also skip when the specifier matches a declared ambient module
-                            // or a .d.ts file in the compilation (e.g., "foo" for foo.d.ts).
                             val mod = options.module
                             if (mod != ModuleKind.AMD && mod != ModuleKind.System && mod != ModuleKind.UMD) {
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         }
                     }
-                    // Skip TS2307/TS2792 in multi-file to avoid FPs
+                    // Skip TS2307/TS2792 in multi-file — resolveModuleSpecifier is too
+                    // simplified for paths, symlinks, json, index resolution; causes FPs.
                 } else {
                     if (isSideEffectImport) {
                         emitTS2882(specifier, moduleName, source, fileName)
@@ -23702,7 +23695,13 @@ class Checker(
         // Emit TS2339 (or TS2551 with spelling suggestion)
         val start = expr.name.pos
         val length = expr.name.text.length
-        val typeName = typeToString(objectType)
+        // For static access on class/namespace identifiers, use "typeof X" format
+        val rawTypeName = typeToString(objectType)
+        val typeName = if (!isThisAccess && objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true) {
+            "typeof $rawTypeName"
+        } else {
+            rawTypeName
+        }
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         if (suggestion != null) {
             // Find the declaration of the suggested property for TS2728 related info
