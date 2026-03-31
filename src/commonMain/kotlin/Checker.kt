@@ -378,6 +378,8 @@ class Checker(
         checkTypeArgumentConstraints()
         // 64g. Check abstract class instantiation (TS2511)
         checkAbstractClassInstantiation()
+        // 64h. Check overload signature compatibility (TS2394)
+        checkOverloadSignatureCompatibility()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 65b. Check subsequent var declaration type mismatch (TS2403)
@@ -23114,6 +23116,244 @@ class Checker(
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2394: Overload signature not compatible with implementation
+    // -----------------------------------------------------------------------
+
+    private fun checkOverloadSignatureCompatibility() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                checkOverloadsInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkOverloadsInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        // Group function declarations by name
+        val funcGroups = mutableMapOf<String, MutableList<FunctionDeclaration>>()
+        for (stmt in stmts) {
+            if (stmt is FunctionDeclaration && stmt.name != null) {
+                funcGroups.getOrPut(stmt.name!!.text) { mutableListOf() }.add(stmt)
+            }
+        }
+
+        for ((name, decls) in funcGroups) {
+            val impl = decls.firstOrNull { it.body != null } ?: continue
+            val overloads = decls.filter { it.body == null }
+            if (overloads.isEmpty()) continue
+
+            // Track reported overloads to skip duplicates
+            val reported = mutableSetOf<Int>()
+            for ((idx, overload) in overloads.withIndex()) {
+                // Skip duplicate overloads (same param types as a previously-reported one)
+                if (idx > 0 && isDuplicateOverload(overload, overloads[idx - 1])) continue
+                if (!isOverloadCompatibleWithImpl(overload, impl)) {
+                    val nameNode = overload.name ?: continue
+                    val start = nameNode.pos
+                    val length = nameNode.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    val implNameNode = impl.name ?: continue
+                    val implStart = implNameNode.pos
+                    val (implLine, implChar) = getLineAndCharacterOfPosition(source, implStart)
+                    diagnostics.add(Diagnostic(
+                        message = "This overload signature is not compatible with its implementation signature.",
+                        category = DiagnosticCategory.Error,
+                        code = 2394,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "The implementation signature is declared here.",
+                            category = DiagnosticCategory.Message,
+                            code = 2750,
+                            fileName = fileName,
+                            line = implLine,
+                            character = implChar,
+                            start = implStart,
+                            length = implNameNode.text.length,
+                        )),
+                    ))
+                }
+            }
+        }
+
+        // Recurse into nested blocks
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    // Check method overloads in classes
+                    checkMethodOverloadsInClass(stmt.members, source, fileName)
+                }
+                is Block -> checkOverloadsInStatements(stmt.statements, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    checkOverloadsInStatements(it.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkMethodOverloadsInClass(members: List<ClassElement>, source: String, fileName: String) {
+        // Group methods by name
+        val methodGroups = mutableMapOf<String, MutableList<MethodDeclaration>>()
+        for (member in members) {
+            if (member is MethodDeclaration) {
+                val name = when (val n = member.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> continue
+                }
+                methodGroups.getOrPut(name) { mutableListOf() }.add(member)
+            }
+        }
+
+        for ((name, decls) in methodGroups) {
+            val impl = decls.firstOrNull { it.body != null } ?: continue
+            val overloads = decls.filter { it.body == null }
+            if (overloads.isEmpty()) continue
+
+            for (overload in overloads) {
+                if (!isMethodOverloadCompatibleWithImpl(overload, impl)) {
+                    val nameNode = overload.name
+                    val nameText = when (nameNode) {
+                        is Identifier -> nameNode.text
+                        is StringLiteralNode -> nameNode.text
+                        else -> continue
+                    }
+                    val start = nameNode.pos
+                    val length = nameText.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    val implNameNode = impl.name
+                    val implStart = implNameNode.pos
+                    val implText = when (implNameNode) {
+                        is Identifier -> implNameNode.text
+                        is StringLiteralNode -> implNameNode.text
+                        else -> continue
+                    }
+                    val (implLine, implChar) = getLineAndCharacterOfPosition(source, implStart)
+                    diagnostics.add(Diagnostic(
+                        message = "This overload signature is not compatible with its implementation signature.",
+                        category = DiagnosticCategory.Error,
+                        code = 2394,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "The implementation signature is declared here.",
+                            category = DiagnosticCategory.Message,
+                            code = 2750,
+                            fileName = fileName,
+                            line = implLine,
+                            character = implChar,
+                            start = implStart,
+                            length = implText.length,
+                        )),
+                    ))
+                }
+            }
+        }
+    }
+
+    /** Check if two consecutive overloads have identical parameter structure */
+    private fun isDuplicateOverload(a: FunctionDeclaration, b: FunctionDeclaration): Boolean {
+        if (a.parameters.size != b.parameters.size) return false
+        for (i in a.parameters.indices) {
+            val aType = a.parameters[i].type
+            val bType = b.parameters[i].type
+            if (aType == null && bType == null) continue
+            if (aType == null || bType == null) return false
+            // Compare keyword types
+            if (aType is KeywordTypeNode && bType is KeywordTypeNode) {
+                if (aType.kind != bType.kind) return false
+            } else if (aType::class != bType::class) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun isOverloadCompatibleWithImpl(overload: FunctionDeclaration, impl: FunctionDeclaration): Boolean {
+        return isSignatureCompatible(overload.parameters, overload.type, impl.parameters, impl.type)
+    }
+
+    private fun isMethodOverloadCompatibleWithImpl(overload: MethodDeclaration, impl: MethodDeclaration): Boolean {
+        return isSignatureCompatible(overload.parameters, overload.type, impl.parameters, impl.type)
+    }
+
+    /**
+     * Conservative compatibility check between an overload signature and its implementation.
+     * Returns true if compatible (or unknown), false only when clearly incompatible.
+     */
+    private fun isSignatureCompatible(
+        overloadParams: List<Parameter>,
+        overloadReturnType: TypeNode?,
+        implParams: List<Parameter>,
+        implReturnType: TypeNode?,
+    ): Boolean {
+        // Parameter count check: implementation must accept the number of args the overload promises
+        val overloadTotalParams = overloadParams.size
+        val implMinParams = implParams.count { !it.questionToken && it.initializer == null && !it.dotDotDotToken }
+        if (implMinParams > overloadTotalParams) {
+            return false
+        }
+
+        // Return type check: compare keyword types
+        if (overloadReturnType != null && implReturnType != null) {
+            if (!isTypeNodeCompatible(overloadReturnType, implReturnType)) {
+                return false
+            }
+        }
+
+        // Parameter type check: compare matching parameters by keyword type
+        val commonCount = minOf(overloadParams.size, implParams.size)
+        for (i in 0 until commonCount) {
+            val overloadType = overloadParams[i].type ?: continue
+            val implType = implParams[i].type ?: continue
+            if (!isParamTypeCompatible(overloadType, implType)) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * Check if overload return type is compatible with implementation return type.
+     * Conservative: only flag clearly incompatible intrinsic types.
+     */
+    private fun isTypeNodeCompatible(overloadType: TypeNode, implType: TypeNode): Boolean {
+        // Only compare keyword types (number, string, boolean, void, etc.)
+        if (overloadType !is KeywordTypeNode || implType !is KeywordTypeNode) return true
+        val overloadKind = overloadType.kind
+        val implKind = implType.kind
+        if (overloadKind == implKind) return true
+        // 'any' implementation is compatible with everything
+        if (implKind == SyntaxKind.AnyKeyword) return true
+        // 'any' overload is compatible with any implementation
+        if (overloadKind == SyntaxKind.AnyKeyword) return true
+        // 'void' and 'undefined' are interchangeable
+        if ((overloadKind == SyntaxKind.VoidKeyword && implKind == SyntaxKind.UndefinedKeyword) ||
+            (overloadKind == SyntaxKind.UndefinedKeyword && implKind == SyntaxKind.VoidKeyword)) return true
+        // Different intrinsic types are incompatible
+        return false
+    }
+
+    /**
+     * Check if overload parameter type is compatible with implementation parameter type.
+     * Conservative: only flag clearly incompatible intrinsic types.
+     */
+    private fun isParamTypeCompatible(overloadType: TypeNode, implType: TypeNode): Boolean {
+        // Same logic as return type compatibility for keyword types
+        return isTypeNodeCompatible(overloadType, implType)
     }
 
     // -----------------------------------------------------------------------
