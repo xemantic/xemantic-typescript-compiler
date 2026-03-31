@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-31):** 7,695 / 10,077 tests passing (76.4%).
+**Status (2026-03-31):** 7,703 / 10,077 tests passing (76.5%).
 
 ## Goal
 
@@ -185,6 +185,29 @@ array→primitive, named→named) fall through to the old string system which do
   capturedLetConstInLoop14 x2, augmentedTypesVar).
 - E1 investigated → BLOCKED (resolveModuleSpecifier too simplified).
 - E2 investigated → needs analysis (merge validation, not simple duplicates).
+
+**Completed session 2026-03-31b (+9 tests, 7,694 → 7,703):**
+- E3: Cross-file TS2448 block-scoped variable used before declaration.
+  +2 tests (constDeclarations-useBeforeDefinition2, letDeclarations-useBeforeDefinition2).
+- TS2511: Abstract class instantiation check — walks nested scopes tracking abstract names.
+  +1 test (abstractClassInLocalScopeIsAbstract). Other TS2511 tests need union types or
+  cross-file import resolution.
+- TS2394: Overload signature compatibility — conservative check for return type mismatch,
+  param count mismatch, param type mismatch (intrinsic types). Includes TS2750 related info.
+  +6 tests (anyIdenticalToItself, functionOverloads4/11/20, voidAsNonAmbiguousReturnType,
+  overloadAssignmentCompat).
+- TS2430: Interface incorrectly extends interface — property type comparison using type system.
+  +1 test (interfaceDeclaration6). Other TS2430 tests need method signature comparison or
+  index signature checks.
+
+**Analysis of remaining test landscape:**
+- All formal Track items (A-E) complete, blocked, or deferred
+- No "pure" tests remain (tests needing exactly 1 unimplemented code)
+- 1,435 "none produced" tests need multiple new diagnostic codes
+- 945 "diff" tests have wrong codes/messages/formatting
+- Top FP codes: TS1005 (57 tests), TS1109 (36), TS2304 (32), TS2322 (25), TS7006 (24)
+- Most FPs are parser error recovery issues or missing contextual type suppression
+- JS emit tests with 1-2 line diffs are all individual edge cases
 
 **Recommended priority for next session:**
 
