@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-30):** 7,685 / 10,077 tests passing (76.3%).
+**Status (2026-03-31):** 7,686 / 10,077 tests passing (76.3%).
 
 ## Goal
 
@@ -339,30 +339,38 @@ Well-defined checks using existing infrastructure.
 
 Fix the blockers that prevent widening TS2339 and TS2345.
 
-- [ ] **D1. Basic module augmentation resolution**
+- [x] **D1. Basic module augmentation resolution**
 
-  Merge `declare module "X" { ... }` exports from all files into the module's
-  symbol table. This unblocks TS2339 widening (item 13a) which had 5 FP
-  regressions from unresolved augmented interface members.
+  Added `mergeModuleAugmentations()` step in checker init after file-level
+  symbol merging. For each `declare module "X" { ... }` across all files,
+  resolves X to the target file and merges augmented exports (namespaces,
+  interfaces) into the corresponding global symbols. Also added namespace
+  export checking in `checkSinglePropertyAccess` for merged class+namespace
+  symbols. Experimental validation: fixes 5/7 FPs when TS2339 guard is
+  relaxed (all 5 module augmentation FPs + 1 cross-file reference).
+  Remaining FPs: 1 narrowing (D2), 1 cross-file not in globals.
+  No test gains (infrastructure only). 7,685 passing.
 
-  **File:** `Checker.kt` — `checkUnresolvedNames` setup
-  **Unblocks:** 13a (TS2339 widening)
+  **File:** `Checker.kt` — `mergeModuleAugmentations`
+  **Unblocks:** 13a (TS2339 widening, partially — D2 still needed)
 
-- [ ] **D2. Typeof narrowing for property access**
+- [x] **D2+D3. Relax TS2339 guard with narrowing-safe heuristic**
 
-  Basic `typeof x === "string"` → narrow x to string in the if body.
-  This unblocks the 1 control flow FP in TS2339 widening.
+  Combined D2 and D3 using a pragmatic approach: instead of implementing
+  full control flow narrowing, relaxed the TS2339 guard to check non-this
+  property access with these safety constraints:
+  - For class/namespace/module identifiers: always check (static shapes)
+  - For variable identifiers: only check when the type is an interface (not a class)
+  - Class-typed variables are skipped because `instanceof` narrowing might
+    apply (e.g., `let x: Base; if (x instanceof Derived) { x.prop }`)
+  - Also checks symbol's namespace exports for merged class+namespace (D1 infrastructure)
 
-  **File:** `Checker.kt` — new narrowing infrastructure
-  **Unblocks:** 13a (TS2339 widening)
-
-- [ ] **D3. Relax TS2339 this-only guard (item 13a)**
-
-  After D1+D2, remove the `this`-only guard for property access checking.
-  Check `expr.prop` for any expression with a resolved object type.
+  **+1 test** (deleteExpressionMustBeOptional__strict_false). 7,686 passing.
 
   **File:** `Checker.kt` — `checkSinglePropertyAccess`
-  **Target:** 15 pure tests, 44 total
+  **Note:** The original "15 pure tests" estimate assumed full type resolution
+  for local variables, which `getTypeOfIdentifier` can't do (returns anyType
+  for most locals). Actual gain is limited by type resolution capabilities.
 
 - [x] **D4. Relax TS2345 isSimpleCheckableType guard** — BLOCKED
 

@@ -169,6 +169,8 @@ class Checker(
         for (result in binderResults) {
             mergeSymbolTable(globals, result.locals)
         }
+        // 1b. Merge module augmentation exports into target module symbols
+        mergeModuleAugmentations()
         // 2. Compute all enum member values
         computeAllEnumValues()
         // 3. Track import references across all files
@@ -791,6 +793,76 @@ class Checker(
                 }
             } else {
                 target[name] = symbol
+            }
+        }
+    }
+
+    /**
+     * Merge module augmentation exports into target module symbols.
+     *
+     * When `declare module "./foo" { namespace Bar { ... } }` augments a file-based module,
+     * the binder creates a module symbol keyed by the specifier string (e.g., "./foo") in
+     * globals. The actual target symbols (e.g., class Bar) are in globals under their own
+     * names. This method resolves the augmentation specifiers and merges augmented exports
+     * (namespaces, interfaces, etc.) into the corresponding global symbols.
+     */
+    private fun mergeModuleAugmentations() {
+        val processedSpecifiers = mutableSetOf<String>()
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val name = stmt.name as? StringLiteralNode ?: continue
+                val specifier = name.text
+                if (!processedSpecifiers.add(specifier)) continue
+
+                // Find the augmentation module symbol in globals
+                val augModule = globals[specifier] ?: continue
+                val augExports = augModule.exports ?: continue
+
+                // Resolve the specifier to a target file
+                val targetFile = resolveModuleSpecifier(specifier, stmt)
+
+                // Merge each augmented export into the corresponding global symbol.
+                // For file-based modules (relative specifiers), augmented exports should
+                // merge with the target file's exported symbols which are already in globals.
+                // For ambient modules (non-relative), the augmented exports are already
+                // merged by mergeSymbolTable — but inner interfaces/namespaces that match
+                // global names still need explicit merging.
+                for ((exportName, augSymbol) in augExports) {
+                    val globalSymbol = globals[exportName] ?: continue
+                    // Only merge if the augmented symbol adds new capabilities (namespace exports,
+                    // interface declarations) to the existing global symbol.
+                    if (augSymbol.exports != null) {
+                        if (globalSymbol.exports == null) globalSymbol.exports = symbolTable()
+                        mergeSymbolTable(globalSymbol.exports!!, augSymbol.exports!!)
+                        // Add Module flag so property access resolution knows to check exports
+                        globalSymbol.flags = globalSymbol.flags or (augSymbol.flags and SymbolFlags.Module)
+                    }
+                    if (augSymbol.declarations.isNotEmpty()) {
+                        // Add interface/namespace declarations from augmentations
+                        for (decl in augSymbol.declarations) {
+                            if (decl !in globalSymbol.declarations) {
+                                globalSymbol.declarations.add(decl)
+                            }
+                        }
+                    }
+                }
+
+                // Also merge augmented exports into the target file's binder result locals,
+                // so that import resolution (which uses fileResults[targetFile].locals) sees them.
+                if (targetFile != null) {
+                    val targetResult = fileResults[targetFile]
+                    if (targetResult != null) {
+                        for ((exportName, augSymbol) in augExports) {
+                            val localSymbol = targetResult.locals[exportName]
+                            if (localSymbol != null && augSymbol.exports != null) {
+                                if (localSymbol.exports == null) localSymbol.exports = symbolTable()
+                                mergeSymbolTable(localSymbol.exports!!, augSymbol.exports!!)
+                                localSymbol.flags = localSymbol.flags or (augSymbol.flags and SymbolFlags.Module)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -23581,10 +23653,28 @@ class Checker(
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
-        // Phase 4 conservative approach: only check this.prop inside class bodies
-        if (enclosingClassType == null) return
-        if (expr.expression !is Identifier || (expr.expression as Identifier).text != "this") return
-        val objectType = enclosingClassType
+        // Resolve object type: "this" uses enclosing class type;
+        // non-this identifiers use global type resolution.
+        val isThisAccess = expr.expression is Identifier && (expr.expression as Identifier).text == "this"
+        val objectType = if (isThisAccess) {
+            if (enclosingClassType == null) return
+            enclosingClassType
+        } else {
+            if (expr.expression !is Identifier) return
+            val identName = (expr.expression as Identifier).text
+            val identSymbol = globals[identName] ?: return
+            val exprType = getTypeOfSymbol(identSymbol)
+            if (exprType === anyType || exprType === errorType || exprType === unknownType) return
+            if (exprType !is Type.Object) return
+            // For variables, only check property access when the type is an interface
+            // (not a class) — class-typed variables may be narrowed via instanceof,
+            // causing FPs without control flow analysis.
+            if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
+                val typeSym = exprType.symbol
+                if (typeSym == null || typeSym.flags.hasAny(SymbolFlags.Class)) return
+            }
+            exprType
+        }
         // Only check Interface types
         if (objectType !is Type.Interface) return
         if (objectType.symbol == null) return
@@ -23598,9 +23688,12 @@ class Checker(
         val propName = expr.name.text
         // Skip well-known runtime properties
         if (propName in RUNTIME_PROPERTIES) return
-        // Check if property exists
+        // Check if property exists in type members
         val prop = getPropertyOfType(objectType, propName)
         if (prop != null) return
+        // Check namespace exports (for merged class+namespace symbols like `Observable.someValue`)
+        val sym = objectType.symbol
+        if (sym != null && sym.flags.hasAny(SymbolFlags.Module) && sym.exports?.containsKey(propName) == true) return
         // Check index signatures
         if (objectType.stringIndexInfo != null || objectType.numberIndexInfo != null) return
         // Try spelling suggestion from known properties
