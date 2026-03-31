@@ -376,6 +376,8 @@ class Checker(
         checkPropertyOverride()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
+        // 64f2. Check interface extends interface (TS2430)
+        checkInterfaceExtendsInterface()
         // 64g. Check abstract class instantiation (TS2511)
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
@@ -23741,6 +23743,179 @@ class Checker(
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2430: Interface incorrectly extends interface
+    // -----------------------------------------------------------------------
+
+    private fun checkInterfaceExtendsInterface() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkInterfaceExtendsInStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkInterfaceExtendsInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is InterfaceDeclaration -> checkInterfaceExtendsClauses(stmt, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkInterfaceExtendsClauses(ifaceDecl: InterfaceDeclaration, source: String, fileName: String) {
+        val extendsClauses = ifaceDecl.heritageClauses?.filter {
+            it.token == SyntaxKind.ExtendsKeyword
+        } ?: return
+        if (extendsClauses.isEmpty()) return
+
+        val derivedName = ifaceDecl.name.text
+
+        // Collect derived interface's property types from AST
+        val derivedProps = mutableMapOf<String, TypeNode>()
+        for (member in ifaceDecl.members) {
+            val (name, type) = getMemberNameAndType(member) ?: continue
+            if (type != null) derivedProps[name] = type
+        }
+        if (derivedProps.isEmpty()) return
+
+        for (clause in extendsClauses) {
+            for (typeExpr in clause.types) {
+                val baseName = when (val tn = typeExpr.expression) {
+                    is Identifier -> tn.text
+                    is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+
+                val baseSymbol = globals[baseName] ?: continue
+                if (!baseSymbol.flags.hasAny(SymbolFlags.Interface)) continue
+
+                // Get base interface type and resolve members
+                val baseType = getDeclaredTypeOfSymbol(baseSymbol)
+                if (baseType !is Type.Object) continue
+                resolveStructuredTypeMembers(baseType)
+                val baseProps = baseType.properties ?: continue
+
+                // Compare each derived property against matching base property
+                for (baseProp in baseProps) {
+                    val propName = baseProp.name
+                    val derivedType = derivedProps[propName] ?: continue
+
+                    // Get base property's type
+                    val basePropType = getTypeOfSymbol(baseProp)
+                    if (basePropType === anyType || basePropType === errorType) continue
+
+                    // Get the base type name for error message
+                    val baseTypeName = typeToString(basePropType)
+
+                    // Get derived type name from AST type node
+                    val derivedTypeName = typeNodeToSimpleName(derivedType) ?: continue
+
+                    // Skip if same type name
+                    if (derivedTypeName == baseTypeName) continue
+
+                    // Check if clearly incompatible using keyword types
+                    if (derivedType is KeywordTypeNode) {
+                        val derivedSemanticType = getTypeFromKeyword(derivedType.kind)
+                        if (derivedSemanticType !== anyType && derivedSemanticType !== errorType) {
+                            // Use structural comparison
+                            if (!isTypeAssignableTo(derivedSemanticType, basePropType)) {
+                                emitTS2430(ifaceDecl.name, derivedName, baseName, propName,
+                                    derivedTypeName, baseTypeName, source, fileName)
+                                return // One TS2430 per interface per base
+                            }
+                        }
+                    } else {
+                        // For non-keyword types, use string comparison as fallback
+                        // Only flag if both are simple known type names that differ
+                        val derivedResolvedType = getTypeFromTypeNodeSafe(derivedType)
+                        if (derivedResolvedType != null && derivedResolvedType !== anyType && derivedResolvedType !== errorType) {
+                            if (!isTypeAssignableTo(derivedResolvedType, basePropType)) {
+                                emitTS2430(ifaceDecl.name, derivedName, baseName, propName,
+                                    derivedTypeName, baseTypeName, source, fileName)
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun getMemberNameAndType(member: ClassElement): Pair<String, TypeNode?>? {
+        return when (member) {
+            is PropertyDeclaration -> {
+                val name = (member.name as? Identifier)?.text ?: return null
+                name to member.type
+            }
+            is MethodDeclaration -> {
+                val name = (member.name as? Identifier)?.text ?: return null
+                name to member.type // return type
+            }
+            else -> null
+        }
+    }
+
+    private fun typeNodeToSimpleName(typeNode: TypeNode): String? {
+        return when (typeNode) {
+            is KeywordTypeNode -> when (typeNode.kind) {
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                SyntaxKind.VoidKeyword -> "void"
+                SyntaxKind.AnyKeyword -> "any"
+                SyntaxKind.NeverKeyword -> "never"
+                SyntaxKind.UndefinedKeyword -> "undefined"
+                SyntaxKind.NullKeyword -> "null"
+                SyntaxKind.UnknownKeyword -> "unknown"
+                SyntaxKind.SymbolKeyword -> "symbol"
+                SyntaxKind.BigIntKeyword -> "bigint"
+                SyntaxKind.ObjectKeyword -> "object"
+                else -> null
+            }
+            is TypeReference -> (typeNode.typeName as? Identifier)?.text
+            else -> null
+        }
+    }
+
+    private fun getTypeFromTypeNodeSafe(typeNode: TypeNode): Type? {
+        return try {
+            getTypeFromTypeNode(typeNode)
+        } catch (_: StackOverflowError) {
+            null
+        }
+    }
+
+    private fun emitTS2430(
+        nameNode: Identifier, derivedName: String, baseName: String, propName: String,
+        derivedTypeName: String, baseTypeName: String, source: String, fileName: String,
+    ) {
+        val start = nameNode.pos
+        val length = derivedName.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Interface '$derivedName' incorrectly extends interface '$baseName'.",
+            category = DiagnosticCategory.Error,
+            code = 2430,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            messageChain = listOf(
+                "  Types of property '$propName' are incompatible.",
+                "    Type '$derivedTypeName' is not assignable to type '$baseTypeName'.",
+            ),
+        ))
     }
 
     // -----------------------------------------------------------------------
