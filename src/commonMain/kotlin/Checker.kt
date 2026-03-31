@@ -16396,6 +16396,83 @@ class Checker(
             val source = result.sourceFile.text
             checkUBDInStatements(result.sourceFile.statements, source, fileName)
         }
+        // Cross-file: check if top-level identifiers reference block-scoped decls in later files
+        if (binderResults.size > 1) {
+            checkCrossFileUseBeforeDeclaration()
+        }
+    }
+
+    /**
+     * Cross-file TS2448: when file1 uses identifier `x` at top level,
+     * and `x` is declared with let/const in a later file2, emit TS2448.
+     */
+    private fun checkCrossFileUseBeforeDeclaration() {
+        for ((fileIdx, result) in binderResults.withIndex()) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val localNames = result.locals.keys
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ExpressionStatement && stmt.expression is Identifier) {
+                    val ident = stmt.expression as Identifier
+                    val name = ident.text
+                    // Skip if locally declared in this file (same-file checks handle it)
+                    if (name in localNames) continue
+                    // Check if declared as block-scoped in a later file
+                    for (i in fileIdx + 1 until binderResults.size) {
+                        val laterResult = binderResults[i]
+                        val laterFileName = laterResult.sourceFile.fileName
+                        if (isDtsFile(laterFileName)) continue
+                        val laterSource = laterResult.sourceFile.text
+                        for (laterStmt in laterResult.sourceFile.statements) {
+                            if (laterStmt is VariableStatement &&
+                                ModifierFlag.Declare !in laterStmt.modifiers) {
+                                val kind = laterStmt.declarationList.flags
+                                if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                                    for (d in laterStmt.declarationList.declarations) {
+                                        val nameNode = d.name
+                                        if (nameNode is Identifier && nameNode.text == name) {
+                                            emitCrossFileTS2448(ident, name, source, fileName,
+                                                nameNode.pos, nameNode.text, laterSource, laterFileName)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun emitCrossFileTS2448(
+        useNode: Identifier, name: String, useSource: String, useFileName: String,
+        declPos: Int, declName: String, declSource: String, declFileName: String,
+    ) {
+        val start = useNode.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(useSource, start)
+        val (declLine, declChar) = getLineAndCharacterOfPosition(declSource, declPos)
+        diagnostics.add(Diagnostic(
+            message = "Block-scoped variable '$name' used before its declaration.",
+            category = DiagnosticCategory.Error,
+            code = 2448,
+            fileName = useFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$declName' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = declFileName,
+                line = declLine,
+                character = declChar,
+                start = declPos,
+                length = declName.length,
+            )),
+        ))
     }
 
     private fun checkUBDInStatements(stmts: List<Statement>, source: String, fileName: String) {
