@@ -8305,7 +8305,14 @@ class Checker(
 
     /** Check if a type is simple enough for reliable TS2403 string-based comparison. */
     private fun isSimpleTypeForTs2403(type: Type): Boolean {
-        return type is Type.Intrinsic  // number, string, boolean, void, null, undefined, any, etc.
+        return when (type) {
+            is Type.Intrinsic -> true  // number, string, boolean, void, null, undefined, any, etc.
+            is Type.Object -> {
+                // Function types (with call/construct signatures) are reliably comparable
+                !type.callSignatures.isNullOrEmpty() || !type.constructSignatures.isNullOrEmpty()
+            }
+            else -> false
+        }
     }
 
     /** Check if a var declaration is inside an export statement. */
