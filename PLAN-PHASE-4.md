@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-31):** 7,693 / 10,077 tests passing (76.4%).
+**Status (2026-03-31):** 7,695 / 10,077 tests passing (76.4%).
 
 ## Goal
 
@@ -415,13 +415,18 @@ Improve multi-file name resolution and diagnostics.
   **File:** `Checker.kt` — `checkDuplicateDeclarations`
   **Target:** 10 pure tests (revised from 4), but complex merge validation
 
-- [ ] **E3. Cross-file TS2448 — block-scoped variable used before declaration**
+- [x] **E3. Cross-file TS2448 — block-scoped variable used before declaration**
 
-  Check when a variable declared in one file is used in another file
-  that appears earlier in compilation order.
+  Added `checkCrossFileUseBeforeDeclaration()` pass after per-file TS2448 checks.
+  For each file, checks top-level expression statements for identifiers that
+  reference block-scoped (let/const) declarations in later files. Emits TS2448
+  with TS2728 related info pointing to the declaration in the later file.
+  Skips locally-declared names (handled by same-file checks).
 
-  **File:** `Checker.kt` — cross-file ordering checks
-  **Target:** 3 tests
+  **+2 tests** (constDeclarations-useBeforeDefinition2, letDeclarations-useBeforeDefinition2).
+  7,695 passing.
+
+  **File:** `Checker.kt` — `checkCrossFileUseBeforeDeclaration`, `emitCrossFileTS2448`
 
 ---
 
