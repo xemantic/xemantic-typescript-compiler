@@ -378,6 +378,8 @@ class Checker(
         checkTypeArgumentConstraints()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
+        // 65b. Check subsequent var declaration type mismatch (TS2403)
+        checkSubsequentVarTypes()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
         } // end if (!declarationOnly)
@@ -8060,6 +8062,277 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // TS2403: Subsequent variable declarations must have the same type
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check that when `var` is declared multiple times in the same scope,
+     * all declarations have compatible types.
+     */
+    private fun checkSubsequentVarTypes() {
+        // Check file-level vars (in globals, which merges across files)
+        checkSubsequentVarTypesInGlobals()
+        // Check file-level and function-level vars per file
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Check top-level vars in this file
+            val topLevelVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
+            collectVarDecls(result.sourceFile.statements, topLevelVars)
+            for ((name, decls) in topLevelVars) {
+                if (decls.size >= 2) checkVarDeclTypeConsistency(decls, name, source, fileName)
+            }
+            // Check function-level and namespace-level vars
+            checkSubsequentVarTypesInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkSubsequentVarTypesInGlobals() {
+        // Cross-file duplicate var type checking is deferred — too many FPs from
+        // imports, path mapping, and module resolution creating merged variable symbols.
+        // The function-level check handles single-file vars.
+    }
+
+    private fun checkSubsequentVarTypesInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    stmt.body?.let { body ->
+                        // Collect all var declarations in this function
+                        val localVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
+                        collectVarDecls(body.statements, localVars)
+                        for ((name, decls) in localVars) {
+                            if (decls.size >= 2) checkVarDeclTypeConsistency(decls, name, source, fileName)
+                        }
+                        // Recurse into nested functions
+                        checkSubsequentVarTypesInStatements(body.statements, source, fileName)
+                    }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        val body = when (member) {
+                            is Constructor -> member.body
+                            is MethodDeclaration -> member.body
+                            else -> null
+                        }
+                        if (body != null) {
+                            // Collect var declarations including parameters
+                            val localVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
+                            // Add constructor/method parameters as pseudo-first-declarations
+                            val params = when (member) {
+                                is Constructor -> member.parameters
+                                is MethodDeclaration -> member.parameters
+                                else -> emptyList()
+                            }
+                            collectVarDecls(body.statements, localVars)
+                            // For params that match var names, prepend param as first decl
+                            for (param in params) {
+                                val paramName = (param.name as? Identifier)?.text ?: continue
+                                val varDecls = localVars[paramName] ?: continue
+                                // Create a pseudo VariableDeclaration for the parameter to serve as "first"
+                                // We'll handle this in checkVarDeclTypeConsistency by checking the first decl
+                                // has the param's type annotation
+                            }
+                            for ((name, decls) in localVars) {
+                                if (decls.size >= 2) checkVarDeclTypeConsistency(decls, name, source, fileName)
+                            }
+                            checkSubsequentVarTypesInStatements(body.statements, source, fileName)
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        val localVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
+                        collectVarDecls(body.statements, localVars)
+                        for ((name, decls) in localVars) {
+                            if (decls.size >= 2) checkVarDeclTypeConsistency(decls, name, source, fileName)
+                        }
+                        checkSubsequentVarTypesInStatements(body.statements, source, fileName)
+                    }
+                }
+                is Block -> checkSubsequentVarTypesInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkSubsequentVarTypesInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkSubsequentVarTypesInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkSubsequentVarTypesInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkSubsequentVarTypesInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkSubsequentVarTypesInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkSubsequentVarTypesInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkSubsequentVarTypesInStatements(listOf(stmt.statement), source, fileName)
+                is TryStatement -> {
+                    checkSubsequentVarTypesInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkSubsequentVarTypesInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkSubsequentVarTypesInStatements(it.statements, source, fileName) }
+                }
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkSubsequentVarTypesInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkSubsequentVarTypesInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is LabeledStatement -> checkSubsequentVarTypesInStatements(listOf(stmt.statement), source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    /** Collect all `var` declarations from statements into a map by name. */
+    private fun collectVarDecls(stmts: List<Statement>, result: MutableMap<String, MutableList<VariableDeclaration>>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    // Only check `var` declarations, not let/const
+                    if (stmt.declarationList.flags != SyntaxKind.VarKeyword) continue
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = (decl.name as? Identifier)?.text ?: continue
+                        result.getOrPut(name) { mutableListOf() }.add(decl)
+                    }
+                }
+                // var declarations inside blocks are hoisted
+                is Block -> collectVarDecls(stmt.statements, result)
+                is IfStatement -> {
+                    collectVarDecls(listOf(stmt.thenStatement), result)
+                    stmt.elseStatement?.let { collectVarDecls(listOf(it), result) }
+                }
+                is ForStatement -> collectVarDecls(listOf(stmt.statement), result)
+                is ForInStatement -> collectVarDecls(listOf(stmt.statement), result)
+                is ForOfStatement -> collectVarDecls(listOf(stmt.statement), result)
+                is WhileStatement -> collectVarDecls(listOf(stmt.statement), result)
+                is DoStatement -> collectVarDecls(listOf(stmt.statement), result)
+                is TryStatement -> {
+                    collectVarDecls(stmt.tryBlock.statements, result)
+                    stmt.catchClause?.block?.let { collectVarDecls(it.statements, result) }
+                    stmt.finallyBlock?.let { collectVarDecls(it.statements, result) }
+                }
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> collectVarDecls(clause.statements, result)
+                            is DefaultClause -> collectVarDecls(clause.statements, result)
+                            else -> {}
+                        }
+                    }
+                }
+                is LabeledStatement -> collectVarDecls(listOf(stmt.statement), result)
+                else -> {}
+            }
+        }
+    }
+
+    /** Check that multiple var declarations for the same name have compatible types. */
+    private fun checkVarDeclTypeConsistency(
+        decls: List<VariableDeclaration>, varName: String,
+        source: String, fileName: String,
+    ) {
+        val firstDecl = decls[0]
+        val firstType = getVarDeclType(firstDecl) ?: return
+        // Only check when the first type is simple (intrinsic, literal) — complex types
+        // need structural comparison which we can't do reliably via string comparison
+        if (!isSimpleTypeForTs2403(firstType)) return
+        val firstTypeName = typeToString(firstType)
+        val firstIsExported = isVarDeclExported(firstDecl)
+
+        for (i in 1 until decls.size) {
+            val decl = decls[i]
+            // Skip when export status differs (TS2395 handles that case)
+            if (isVarDeclExported(decl) != firstIsExported) continue
+            val declType = getVarDeclType(decl) ?: continue
+            if (!isSimpleTypeForTs2403(declType)) continue
+            if (firstType === declType) continue
+            val declTypeName = typeToString(declType)
+            if (firstTypeName == declTypeName) continue
+            val nameNode = decl.name as? Identifier ?: continue
+            val start = nameNode.pos
+            val length = nameNode.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            // Build TS6203 related info pointing to first declaration
+            val firstNameNode = firstDecl.name as? Identifier
+            val relatedInfo = if (firstNameNode != null) {
+                val firstStart = firstNameNode.pos
+                val firstLen = firstNameNode.text.length
+                val (firstLine, firstChar) = getLineAndCharacterOfPosition(source, firstStart)
+                listOf(Diagnostic(
+                    message = "'$varName' was also declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 6203,
+                    fileName = fileName,
+                    line = firstLine,
+                    character = firstChar,
+                    start = firstStart,
+                    length = firstLen,
+                ))
+            } else emptyList()
+            diagnostics.add(Diagnostic(
+                message = "Subsequent variable declarations must have the same type.  Variable '$varName' must be of type '$firstTypeName', but here has type '$declTypeName'.",
+                category = DiagnosticCategory.Error,
+                code = 2403,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                relatedInformation = relatedInfo,
+            ))
+        }
+    }
+
+    /** Get the type of a var declaration from its type annotation or initializer, widened. */
+    private fun getVarDeclType(decl: VariableDeclaration): Type? {
+        // Type annotation takes priority
+        decl.type?.let { return getTypeFromTypeNode(it) }
+        // Infer from initializer — widen literal types to base types
+        val init = decl.initializer ?: return anyType
+        return widenType(getTypeOfExpression(init))
+    }
+
+    /** Widen a literal type to its base type (e.g., true → boolean, "hello" → string). */
+    private fun widenType(type: Type): Type {
+        return when (type) {
+            is Type.StringLiteral -> stringType
+            is Type.NumberLiteral -> numberType
+            is Type.BigIntLiteral -> bigintType
+            trueType, falseType -> booleanType
+            else -> type
+        }
+    }
+
+    /** Check if a type is simple enough for reliable TS2403 string-based comparison. */
+    private fun isSimpleTypeForTs2403(type: Type): Boolean {
+        return type is Type.Intrinsic  // number, string, boolean, void, null, undefined, any, etc.
+    }
+
+    /** Check if a var declaration is inside an export statement. */
+    private fun isVarDeclExported(decl: VariableDeclaration): Boolean {
+        // Check if the parent VariableStatement has export modifier
+        // Since we don't have parent pointers, we search the surrounding file
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is VariableStatement && decl in stmt.declarationList.declarations) {
+                    return ModifierFlag.Export in stmt.modifiers
+                }
+                // Also check inside module/namespace blocks
+                if (stmt is ModuleDeclaration) {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        for (innerStmt in body.statements) {
+                            if (innerStmt is VariableStatement && decl in innerStmt.declarationList.declarations) {
+                                return ModifierFlag.Export in innerStmt.modifiers
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     // Duplicate identifier checking (TS2300)
     // -----------------------------------------------------------------------
 
