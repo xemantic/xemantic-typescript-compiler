@@ -376,6 +376,8 @@ class Checker(
         checkPropertyOverride()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
+        // 64g. Check abstract class instantiation (TS2511)
+        checkAbstractClassInstantiation()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 65b. Check subsequent var declaration type mismatch (TS2403)
@@ -23112,6 +23114,202 @@ class Checker(
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2511: Cannot create an instance of an abstract class
+    // -----------------------------------------------------------------------
+
+    private fun checkAbstractClassInstantiation() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                // Collect abstract class names visible at file level
+                val abstractClasses = mutableSetOf<String>()
+                collectAbstractClassNames(result.sourceFile.statements, abstractClasses)
+                // Also check globals for abstract classes from other files
+                for ((name, sym) in globals) {
+                    if (isAbstractClass(sym)) abstractClasses.add(name)
+                }
+                checkAbstractInStmts(result.sourceFile.statements, source, fileName, abstractClasses)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun collectAbstractClassNames(stmts: List<Statement>, names: MutableSet<String>) {
+        for (stmt in stmts) {
+            if (stmt is ClassDeclaration && stmt.name != null && ModifierFlag.Abstract in stmt.modifiers) {
+                names.add(stmt.name!!.text)
+            }
+        }
+    }
+
+    private fun checkAbstractInStmts(stmts: List<Statement>, source: String, fileName: String, abstractClasses: MutableSet<String>) {
+        // Collect abstract class names declared in this block
+        val saved = abstractClasses.toSet()
+        collectAbstractClassNames(stmts, abstractClasses)
+        // Also remove names shadowed by non-abstract classes in this scope
+        for (stmt in stmts) {
+            if (stmt is ClassDeclaration && stmt.name != null && ModifierFlag.Abstract !in stmt.modifiers) {
+                abstractClasses.remove(stmt.name!!.text)
+            }
+        }
+        for (stmt in stmts) {
+            checkAbstractInStmt(stmt, source, fileName, abstractClasses)
+        }
+        // Restore scope
+        abstractClasses.clear()
+        abstractClasses.addAll(saved)
+    }
+
+    private fun checkAbstractInStmt(stmt: Statement, source: String, fileName: String, abstractClasses: MutableSet<String>) {
+        when (stmt) {
+            is ExpressionStatement -> checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+            is VariableStatement -> {
+                for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+            is IfStatement -> {
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+                checkAbstractInStmt(stmt.thenStatement, source, fileName, abstractClasses)
+                stmt.elseStatement?.let { checkAbstractInStmt(it, source, fileName, abstractClasses) }
+            }
+            is Block -> checkAbstractInStmts(stmt.statements, source, fileName, abstractClasses)
+            is FunctionDeclaration -> stmt.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+                    is Constructor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+                    is PropertyDeclaration -> m.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                    is GetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+                    is SetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+                    else -> {}
+                }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                }
+                stmt.condition?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                stmt.incrementor?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+            }
+            is WhileStatement -> {
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+            }
+            is DoStatement -> {
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+            }
+            is SwitchStatement -> {
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+                for (c in stmt.caseBlock) {
+                    val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                    checkAbstractInStmts(clauseStmts, source, fileName, abstractClasses)
+                }
+            }
+            is TryStatement -> {
+                checkAbstractInStmts(stmt.tryBlock.statements, source, fileName, abstractClasses)
+                stmt.catchClause?.let { checkAbstractInStmts(it.block.statements, source, fileName, abstractClasses) }
+                stmt.finallyBlock?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+            }
+            is ThrowStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+            is ForInStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+            is ForOfStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+            is LabeledStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+            else -> {}
+        }
+    }
+
+    private fun checkAbstractInExpr(expr: Expression, source: String, fileName: String, abstractClasses: MutableSet<String>) {
+        when (expr) {
+            is NewExpression -> {
+                val callee = expr.expression
+                if (callee is Identifier && callee.text in abstractClasses) {
+                    val start = expr.pos
+                    val exprEnd = expressionTrueEnd(expr)
+                    val length = exprEnd - start
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot create an instance of an abstract class.",
+                        category = DiagnosticCategory.Error,
+                        code = 2511,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                for (arg in expr.arguments ?: emptyList()) {
+                    checkAbstractInExpr(arg, source, fileName, abstractClasses)
+                }
+            }
+            is BinaryExpression -> {
+                checkAbstractInExpr(expr.left, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.right, source, fileName, abstractClasses)
+            }
+            is CallExpression -> {
+                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+                for (arg in expr.arguments) checkAbstractInExpr(arg, source, fileName, abstractClasses)
+            }
+            is ParenthesizedExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is ConditionalExpression -> {
+                checkAbstractInExpr(expr.condition, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.whenTrue, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.whenFalse, source, fileName, abstractClasses)
+            }
+            is ArrowFunction -> expr.body?.let {
+                when (it) {
+                    is Block -> checkAbstractInStmts(it.statements, source, fileName, abstractClasses)
+                    is Expression -> checkAbstractInExpr(it, source, fileName, abstractClasses)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> expr.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+            is ArrayLiteralExpression -> for (el in expr.elements) checkAbstractInExpr(el, source, fileName, abstractClasses)
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkAbstractInExpr(prop.initializer, source, fileName, abstractClasses)
+                    is SpreadAssignment -> checkAbstractInExpr(prop.expression, source, fileName, abstractClasses)
+                    else -> {}
+                }
+            }
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                checkAbstractInExpr(span.expression, source, fileName, abstractClasses)
+            }
+            is AsExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is TypeAssertionExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is PrefixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses)
+            is PostfixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses)
+            is PropertyAccessExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is ElementAccessExpression -> {
+                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.argumentExpression, source, fileName, abstractClasses)
+            }
+            is SpreadElement -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is AwaitExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is VoidExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is DeleteExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is NonNullExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is TypeOfExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            else -> {}
+        }
+    }
+
+    private fun isAbstractClass(symbol: Symbol): Boolean {
+        for (decl in symbol.declarations) {
+            if (decl is ClassDeclaration && ModifierFlag.Abstract in decl.modifiers) {
+                return true
+            }
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
