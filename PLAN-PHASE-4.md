@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-31):** 7,692 / 10,077 tests passing (76.3%).
+**Status (2026-03-31):** 7,693 / 10,077 tests passing (76.4%).
 
 ## Goal
 
@@ -166,16 +166,25 @@ array→primitive, named→named) fall through to the old string system which do
 - TS2451 (block-scoped variable redeclare) — fully implemented
 - TS2693 (type used as value) — fully implemented
 
-**Completed this session:**
-- TS2540 (readonly property assignment) — namespace const exports + readonly modifier
-  check. +2 tests (constDeclarations-access3/4). 7,681 passing.
-- TS2454 (heritage clause) — check extends/implements expressions for uninitialized vars.
-  +2 tests (declarationEmitExpressionInExtends, extendConstructSignatureInInterface). 7,683.
-- TS2345 (param defaults) — check call types in function parameter default initializers.
-  +2 tests (objectCreationExpressionInFunctionParameter, invocationExpressionInFunctionParameter). 7,685.
+**Completed session 2026-03-30:**
+- TS2540 (readonly property assignment) — +2 tests. 7,681 passing.
+- TS2454 (heritage clause) — +2 tests. 7,683.
+- TS2345 (param defaults) — +2 tests. 7,685.
 - `canUseTypeEngine` guard relaxed for Object→Intrinsic (safe, no FPs)
-- `currentLocalTypes` infrastructure for local variable type resolution (no gains yet,
-  enables future TS2322 improvements)
+- `currentLocalTypes` infrastructure for local variable type resolution
+
+**Completed session 2026-03-31 (+8 tests, 7,685 → 7,693):**
+- D1: `mergeModuleAugmentations()` in checker init — merges `declare module "X"` exports
+  into corresponding global symbols. Infrastructure only (0 direct gains).
+- D2+D3: TS2339 guard relaxation with narrowing-safe heuristic.
+  +1 test (deleteExpressionMustBeOptional__strict_false__).
+- typeof prefix for class names in TS2339 static access.
+  +2 tests (errorSupression1, invalidStaticField).
+- TS2403 subsequent var declaration type mismatch.
+  +5 tests (duplicateLocalVariable3, duplicateVariablesWithAny,
+  capturedLetConstInLoop14 x2, augmentedTypesVar).
+- E1 investigated → BLOCKED (resolveModuleSpecifier too simplified).
+- E2 investigated → needs analysis (merge validation, not simple duplicates).
 
 **Recommended priority for next session:**
 
