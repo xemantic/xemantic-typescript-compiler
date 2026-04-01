@@ -23897,6 +23897,40 @@ class Checker(
                             relatedInformation = relatedInfo,
                         ))
                         return // One TS2420 per class is enough (TypeScript only reports first mismatch)
+                    } else {
+                        // Property exists — check if it's private (interface members are always public)
+                        val classMember = classDecl.members.firstOrNull { m ->
+                            when (m) {
+                                is PropertyDeclaration -> (m.name as? Identifier)?.text == propName
+                                is MethodDeclaration -> (m.name as? Identifier)?.text == propName
+                                else -> false
+                            }
+                        }
+                        val isPrivate = when (classMember) {
+                            is PropertyDeclaration -> ModifierFlag.Private in classMember.modifiers
+                            is MethodDeclaration -> ModifierFlag.Private in classMember.modifiers
+                            else -> false
+                        }
+                        if (isPrivate) {
+                            val classNameNode = classDecl.name ?: continue
+                            val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                            val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                            val chain = mutableListOf(
+                                "  Property '$propName' is private in type '$className' but not in type '$ifaceName'."
+                            )
+                            diagnostics.add(Diagnostic(
+                                message = message,
+                                category = DiagnosticCategory.Error,
+                                code = 2420,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = classNameNode.pos,
+                                length = className.length,
+                                messageChain = chain,
+                            ))
+                            return
+                        }
                     }
                 }
 
