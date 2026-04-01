@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-03-31):** 7,703 / 10,077 tests passing (76.5%).
+**Status (2026-04-01):** 7,717 / 10,077 tests passing (76.6%).
 
 ## Goal
 
@@ -200,9 +200,34 @@ array→primitive, named→named) fall through to the old string system which do
   +1 test (interfaceDeclaration6). Other TS2430 tests need method signature comparison or
   index signature checks.
 
+**Completed session 2026-04-01 (+7 tests, 7,703 → 7,710):**
+- globalArrayType: Synthetic Array interface enabling proper `T[]`/`Array<T>` type resolution.
+  `getArrayType` now returns `Type.Reference(globalArrayType, [elementType])` instead of `anyType`.
+  Enables null/undefined → array type checking via existing `canUseTypeEngine` guard.
+  +2 tests (assignmentCompatability46, genericMemberFunction).
+- formatTypeForDisplay: normalize `Array<T>` → `T[]` in error messages.
+  +1 test (declFileGenericType).
+- TS2506: Circular base class detection — collects class extends relationships in scope,
+  follows chains to detect direct (`class A extends A`) and indirect (`A→B→A`) cycles.
+  +3 tests (classInheritence, indirectSelfReference, indirectSelfReferenceGeneric).
+- TS2315: "Type is not generic" — checks TypeReference and heritage clause type arguments
+  against resolved type's parameters. Guards: only for class/interface/type alias/module
+  symbols (not variables), resolves import aliases, uses resolveTypeNameToSymbol for
+  qualified names.
+  +1 test (moduleAndInterfaceSharingName2).
+- Infrastructure: BUILTIN_GENERICS set (before init), resolveTypeNameToSymbol helper,
+  getTypeParametersOfSymbol follows import aliases.
+- TS2411: Property type vs index signature compatibility check. Handles inherited
+  index signatures from base classes. Skips private fields (#name).
+  +3 tests (classIndexer2, classIndexer3, functionAndInterfaceWithSeparateErrors).
+- TS2420: Extended to detect private class members implementing public interface
+  members. +4 tests (interfaceImplementation6, publicMemberImplementedAsPrivateInDerivedClass,
+  privateInterfaceProperties, implementPublicPropertyAsPrivate).
+
 **Analysis of remaining test landscape:**
 - All formal Track items (A-E) complete, blocked, or deferred
-- No "pure" tests remain (tests needing exactly 1 unimplemented code)
+- 183 tests missing exactly 1 error code with no FPs (small diffs)
+- Top codes in close-to-passing tests: TS2322 (24), TS2339 (13), TS2345 (8)
 - 1,435 "none produced" tests need multiple new diagnostic codes
 - 945 "diff" tests have wrong codes/messages/formatting
 - Top FP codes: TS1005 (57 tests), TS1109 (36), TS2304 (32), TS2322 (25), TS7006 (24)
