@@ -394,6 +394,8 @@ class Checker(
         checkInterfaceExtendsInterface()
         // 64f3. Check circular base class references (TS2506)
         checkCircularBaseClasses()
+        // 64f4. Check index signature property type compatibility (TS2411)
+        checkIndexSignatureProperties()
         // 64g. Check abstract class instantiation (TS2511)
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
@@ -23446,6 +23448,110 @@ class Checker(
                     break
                 }
                 current = classExtends[current]
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2411: Property type not assignable to index type
+    // -----------------------------------------------------------------------
+
+    private fun checkIndexSignatureProperties() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkIndexSigInStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkIndexSigInStatement(stmt: Statement, source: String, fileName: String) {
+        val members: List<ClassElement> = when (stmt) {
+            is ClassDeclaration -> stmt.members
+            is InterfaceDeclaration -> stmt.members.filterIsInstance<ClassElement>()
+            is ModuleDeclaration -> {
+                (stmt.body as? ModuleBlock)?.statements?.forEach { checkIndexSigInStatement(it, source, fileName) }
+                return
+            }
+            else -> return
+        }
+        // Find string index signature: [s: string]: T (also check base class)
+        var stringIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+            sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
+        }
+        // If not found locally, check base class
+        if (stringIndexSig == null && stmt is ClassDeclaration) {
+            val baseName = stmt.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                ?.types?.firstOrNull()?.expression
+                ?.let { (it as? Identifier)?.text }
+            if (baseName != null) {
+                val baseSymbol = globals[baseName]
+                val baseDecl = baseSymbol?.declarations?.filterIsInstance<ClassDeclaration>()?.firstOrNull()
+                stringIndexSig = baseDecl?.members?.filterIsInstance<IndexSignature>()?.firstOrNull { sig ->
+                    sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
+                }
+            }
+        }
+        val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
+        if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
+
+        // Check each named property against the string index type
+        for (member in members) {
+            val propName: String
+            val propTypeNode: TypeNode?
+            val nameNode: Node
+            when (member) {
+                is PropertyDeclaration -> {
+                    // Skip private fields (#name) — they're not accessible via index operator
+                    val propIdent = member.name
+                    if (propIdent is Identifier && propIdent.text.startsWith("#")) continue
+                    nameNode = member.name
+                    propName = when (val n = member.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> continue
+                    }
+                    propTypeNode = member.type
+                }
+                is MethodDeclaration -> {
+                    nameNode = member.name ?: continue
+                    propName = when (val n = member.name) {
+                        is Identifier -> n.text
+                        else -> continue
+                    }
+                    propTypeNode = null // methods have function type
+                }
+                else -> continue
+            }
+            if (propTypeNode == null) continue // skip methods without explicit type
+            val propType = getTypeFromTypeNode(propTypeNode)
+            if (propType === anyType || propType === errorType) continue
+
+            if (!checkTypeRelatedTo(propType, stringIndexType, assignableRelation)) {
+                val propTypeDisplay = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
+                val indexTypeDisplay = typeToString(stringIndexType)
+                val start: Int
+                val length: Int
+                when (nameNode) {
+                    is Identifier -> { start = nameNode.pos; length = nameNode.text.length }
+                    is StringLiteralNode -> { start = nameNode.pos; length = nameNode.text.length + 2 }
+                    else -> continue
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' of type '$propTypeDisplay' is not assignable to 'string' index type '$indexTypeDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2411,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
             }
         }
     }
