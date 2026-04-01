@@ -152,6 +152,12 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** Synthetic global Array interface — used as target for `Type.Reference` in array types.
+     *  Avoids returning `anyType` for `T[]` / `Array<T>` type annotations. */
+    private val globalArrayType = Type.Interface().also {
+        it.symbol = Symbol(SymbolFlags.Interface, "Array")
+    }
+
     /** Maximum recursion depth for AST walking to prevent StackOverflow. */
     private val maxCheckDepth = 200
     private val maxRelationDepth = 100
@@ -163,6 +169,14 @@ class Checker(
     // Whether strict null checks are enabled (null/undefined not assignable to other types)
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val strictNullChecks: Boolean = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
+
+    // Built-in generic type names — skip TS2315/TS2344 checks for these
+    // MUST be declared before init {} to avoid Kotlin property initialization order issue
+    private val BUILTIN_GENERICS = setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
+        "WeakMap", "WeakSet", "Record", "Partial", "Required", "Readonly",
+        "Pick", "Omit", "Exclude", "Extract", "NonNullable", "ReturnType",
+        "InstanceType", "ConstructorParameters", "Parameters", "ThisParameterType",
+        "OmitThisParameter", "ThisType", "Awaited")
 
     init {
         // 1. Merge file-level symbols into globals
@@ -378,6 +392,8 @@ class Checker(
         checkTypeArgumentConstraints()
         // 64f2. Check interface extends interface (TS2430)
         checkInterfaceExtendsInterface()
+        // 64f3. Check circular base class references (TS2506)
+        checkCircularBaseClasses()
         // 64g. Check abstract class instantiation (TS2511)
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
@@ -22858,10 +22874,7 @@ class Checker(
             1 -> elementTypes[0]
             else -> getUnionType(elementTypes)
         }
-        // Return Array<T> — currently we return anyType since we don't have
-        // globalArrayType infrastructure yet. The element type info is still useful
-        // for the structural comparison engine.
-        return anyType // TODO: Type.Reference(globalArrayType, [elementType])
+        return getArrayType(elementType)
     }
 
     /** Get the type of an arrow function expression. */
@@ -23075,11 +23088,16 @@ class Checker(
                 } else name
             }
             is Type.Reference -> {
-                val target = type.target.symbol?.name ?: "Object"
                 val args = type.resolvedTypeArguments
-                if (args != null && args.isNotEmpty()) {
-                    "$target<${args.joinToString(", ") { typeToString(it) }}>"
-                } else target
+                // Array types display as T[] (not Array<T>)
+                if (type.target === globalArrayType && args != null && args.size == 1) {
+                    "${typeToString(args[0])}[]"
+                } else {
+                    val target = type.target.symbol?.name ?: "Object"
+                    if (args != null && args.isNotEmpty()) {
+                        "$target<${args.joinToString(", ") { typeToString(it) }}>"
+                    } else target
+                }
             }
             is Type.Object -> {
                 val callSigs = type.callSignatures
@@ -23356,6 +23374,80 @@ class Checker(
     private fun isParamTypeCompatible(overloadType: TypeNode, implType: TypeNode): Boolean {
         // Same logic as return type compatibility for keyword types
         return isTypeNodeCompatible(overloadType, implType)
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2506: 'X' is referenced directly or indirectly in its own base expression
+    // -----------------------------------------------------------------------
+
+    private fun checkCircularBaseClasses() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                checkCircularBaseInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkCircularBaseInStatements(statements: List<Statement>, source: String, fileName: String) {
+        // Collect all class names and their extends targets in this scope
+        val classExtends = mutableMapOf<String, String>() // className → baseClassName
+        val classDecls = mutableMapOf<String, ClassDeclaration>()
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val name = stmt.name?.text ?: continue
+                    classDecls[name] = stmt
+                    val extendsClause = stmt.heritageClauses?.firstOrNull {
+                        it.token == SyntaxKind.ExtendsKeyword
+                    } ?: continue
+                    val baseExpr = extendsClause.types.firstOrNull()?.expression ?: continue
+                    val baseName = when (baseExpr) {
+                        is Identifier -> baseExpr.text
+                        else -> continue
+                    }
+                    classExtends[name] = baseName
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkCircularBaseInStatements(body.statements, source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+        // For each class, follow the extends chain to detect cycles
+        for ((className, _) in classExtends) {
+            val visited = mutableSetOf<String>()
+            var current: String? = className
+            while (current != null) {
+                if (!visited.add(current)) {
+                    // Cycle detected — emit TS2506 for all classes in the cycle
+                    if (current == className) {
+                        val decl = classDecls[className] ?: break
+                        val nameNode = decl.name ?: break
+                        val start = nameNode.pos
+                        val length = nameNode.text.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "'$className' is referenced directly or indirectly in its own base expression.",
+                            category = DiagnosticCategory.Error,
+                            code = 2506,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                    break
+                }
+                current = classExtends[current]
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -24235,6 +24327,28 @@ class Checker(
             is Identifier -> expr.text
             else -> return
         }
+        // TS2315: check if type is not generic (only for class/interface/type alias/module, not variables)
+        if (name !in BUILTIN_GENERICS) {
+            val symbol = globals[name]
+            if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
+                val typeParams = getTypeParametersOfSymbol(symbol)
+                if (typeParams == null || typeParams.isEmpty()) {
+                    val start = node.pos
+                    val length = node.end - start
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$name' is not generic.",
+                        category = DiagnosticCategory.Error,
+                        code = 2315,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        }
         checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
     }
 
@@ -24245,6 +24359,32 @@ class Checker(
                 if (typeArgs != null && typeArgs.isNotEmpty()) {
                     val name = getTypeReferenceLastName(node.typeName)
                     if (name != null) {
+                        // TS2315: check if type is not generic (only for type declarations, not variables)
+                        if (name !in BUILTIN_GENERICS) {
+                            val symbol = resolveTypeNameToSymbol(node.typeName) ?: globals[name]
+                            if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
+                                val typeParams = getTypeParametersOfSymbol(symbol)
+                                if (typeParams == null || typeParams.isEmpty()) {
+                                    // Type is not generic but type arguments were provided
+                                    val start = node.pos
+                                    // node.end overshoots — compute true end from last type arg
+                                    // lastArg.end already points past the arg; the '>' is at lastArg.end
+                                    val lastArg = typeArgs.last()
+                                    val length = lastArg.end - start
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Type '$name' is not generic.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2315,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                    ))
+                                }
+                            }
+                        }
                         checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
                     }
                     // Recurse into type arguments
@@ -24268,11 +24408,7 @@ class Checker(
         source: String, fileName: String
     ) {
         // Skip built-in generics (Array, Promise, etc.)
-        if (typeName in setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
-                "WeakMap", "WeakSet", "Record", "Partial", "Required", "Readonly",
-                "Pick", "Omit", "Exclude", "Extract", "NonNullable", "ReturnType",
-                "InstanceType", "ConstructorParameters", "Parameters", "ThisParameterType",
-                "OmitThisParameter", "ThisType", "Awaited")) return
+        if (typeName in BUILTIN_GENERICS) return
 
         val symbol = globals[typeName] ?: return
         // Find type parameters from the declaration
@@ -24354,7 +24490,11 @@ class Checker(
 
     /** Get type parameters from a symbol's declarations (class, interface, or type alias). */
     private fun getTypeParametersOfSymbol(symbol: Symbol): List<Type.TypeParam>? {
-        for (decl in symbol.declarations) {
+        // Follow alias if this is an import alias
+        val resolved = if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+            try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
+        } else symbol
+        for (decl in resolved.declarations) {
             val typeParamNodes = when (decl) {
                 is ClassDeclaration -> decl.typeParameters
                 is InterfaceDeclaration -> decl.typeParameters
@@ -25594,10 +25734,9 @@ class Checker(
         )
     }
 
-    /** Create an array type. Returns anyType until generic infrastructure is ready. */
+    /** Create an array type: `Type.Reference(globalArrayType, [elementType])`. */
     private fun getArrayType(elementType: Type): Type {
-        // TODO: return TypeReference(globalArrayType, [elementType]) when generic infra is ready
-        return anyType
+        return Type.Reference(globalArrayType, resolvedTypeArguments = listOf(elementType))
     }
 
     /** Create a tuple type from a TupleType node. */
@@ -25791,6 +25930,15 @@ class Checker(
         }
     }
 
+    /** Resolve a TypeReference typeName (Identifier or QualifiedName) to a Symbol. */
+    private fun resolveTypeNameToSymbol(node: Node): Symbol? {
+        return when (node) {
+            is Identifier -> globals[node.text]
+            is QualifiedName -> resolveQualifiedName(node)
+            else -> null
+        }
+    }
+
     /**
      * Format a TypeNode for display in TS2322 messages (no "@" prefix).
      * Returns null for unsupported types (caller falls back to typeToString).
@@ -25816,6 +25964,11 @@ class Checker(
                 val baseName = getTypeReferenceLastName(typeNode.typeName) ?: return null
                 val typeArgs = typeNode.typeArguments
                 if (typeArgs != null && typeArgs.isNotEmpty()) {
+                    // TypeScript normalizes Array<T> → T[] in error messages
+                    if ((baseName == "Array" || baseName == "ReadonlyArray") && typeArgs.size == 1) {
+                        val elementDisplay = formatTypeForDisplay(typeArgs[0]) ?: return null
+                        return "${elementDisplay}[]"
+                    }
                     val argNames = typeArgs.map { formatTypeForDisplay(it) }
                     if (argNames.any { it == null }) return null
                     "$baseName<${argNames.joinToString(", ")}>"
