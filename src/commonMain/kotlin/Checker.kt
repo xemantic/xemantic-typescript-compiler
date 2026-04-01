@@ -394,6 +394,8 @@ class Checker(
         checkInterfaceExtendsInterface()
         // 64f3. Check circular base class references (TS2506)
         checkCircularBaseClasses()
+        // 64f5. Check interface multi-base property conflicts (TS2320)
+        checkInterfaceMultiBaseConflicts()
         // 64f4. Check index signature property type compatibility (TS2411)
         checkIndexSignatureProperties()
         // 64g. Check abstract class instantiation (TS2511)
@@ -23449,6 +23451,103 @@ class Checker(
                 }
                 current = classExtends[current]
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2320: Interface cannot simultaneously extend types with conflicting members
+    // -----------------------------------------------------------------------
+
+    private fun checkInterfaceMultiBaseConflicts() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkMultiBaseInStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkMultiBaseInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is InterfaceDeclaration -> {
+                val extendsClauses = stmt.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword } ?: return
+                // Collect all base type names from extends clauses
+                val baseTypeExprs = extendsClauses.flatMap { it.types }
+                if (baseTypeExprs.size < 2) return // Need 2+ base types
+                val ifaceName = stmt.name.text
+
+                // Collect properties from each base type
+                data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?)
+                val propSources = mutableMapOf<String, MutableList<BaseProperty>>()
+
+                for (typeExpr in baseTypeExprs) {
+                    val baseName = (typeExpr.expression as? Identifier)?.text ?: continue
+                    val baseSymbol = globals[baseName] ?: continue
+                    // Get members from all declarations (class or interface)
+                    for (decl in baseSymbol.declarations) {
+                        val members: List<Any> = when (decl) {
+                            is ClassDeclaration -> decl.members
+                            is InterfaceDeclaration -> decl.members.toList()
+                            else -> continue
+                        }
+                        for (member in members) {
+                            val propName: String
+                            val isPrivate: Boolean
+                            val propType: TypeNode?
+                            when (member) {
+                                is PropertyDeclaration -> {
+                                    propName = (member.name as? Identifier)?.text ?: continue
+                                    isPrivate = ModifierFlag.Private in member.modifiers
+                                    propType = member.type
+                                }
+                                is MethodDeclaration -> {
+                                    propName = (member.name as? Identifier)?.text ?: continue
+                                    isPrivate = ModifierFlag.Private in member.modifiers
+                                    propType = member.type
+                                }
+                                else -> continue
+                            }
+                            propSources.getOrPut(propName) { mutableListOf() }
+                                .add(BaseProperty(baseName, isPrivate, propType))
+                        }
+                    }
+                }
+
+                // Check for conflicts: same property from different bases where at least one is private
+                for ((propName, sources) in propSources) {
+                    val distinctBases = sources.map { it.baseName }.distinct()
+                    if (distinctBases.size < 2) continue // Same base — no conflict
+                    val hasPrivate = sources.any { it.isPrivate }
+                    if (!hasPrivate) continue // Both public — might still conflict on type, but that's TS2430
+
+                    val base1 = distinctBases[0]
+                    val base2 = distinctBases[1]
+                    val nameNode = stmt.name
+                    val start = nameNode.pos
+                    val length = nameNode.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Interface '$ifaceName' cannot simultaneously extend types '$base1' and '$base2'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2320,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        messageChain = listOf("  Named property '$propName' of types '$base1' and '$base2' are not identical."),
+                    ))
+                    return // One TS2320 per interface
+                }
+            }
+            is ModuleDeclaration -> {
+                (stmt.body as? ModuleBlock)?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+            }
+            else -> {}
         }
     }
 
