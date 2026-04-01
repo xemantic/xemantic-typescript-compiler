@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-01):** 7,717 / 10,077 tests passing (76.6%).
+**Status (2026-04-01):** 7,722 / 10,077 tests passing (76.6%).
 
 ## Goal
 
@@ -223,6 +223,12 @@ array→primitive, named→named) fall through to the old string system which do
 - TS2420: Extended to detect private class members implementing public interface
   members. +4 tests (interfaceImplementation6, publicMemberImplementedAsPrivateInDerivedClass,
   privateInterfaceProperties, implementPublicPropertyAsPrivate).
+- TS2320: Interface cannot extend types with conflicting private/public members.
+  +3 tests (baseTypePrivateMemberClash, inheritSameNamePropertiesWithDifferentVisibility,
+  inheritSameNamePrivatePropertiesFromDifferentOrigins).
+- TS2366: Getter implicit return without annotation — emits TS2366 when getter has value
+  returns on some paths but not all, under strictNullChecks.
+  +2 tests (getterControlFlowStrictNull es5 and es2015 variants).
 
 **Analysis of remaining test landscape:**
 - All formal Track items (A-E) complete, blocked, or deferred
