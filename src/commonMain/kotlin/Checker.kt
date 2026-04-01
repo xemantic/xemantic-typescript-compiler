@@ -20819,6 +20819,26 @@ class Checker(
             else -> null
         }
         checkBodyForImplicitReturn(body, retType, false, nameRef, source, fileName)
+        // Getters without type annotation: if body has value returns but doesn't always return,
+        // emit TS2366 (TypeScript infers non-void return type from the body).
+        if (retType == null && strictNullChecks) {
+            val hasValueReturn = bodyHasReturnWithValue(body.statements, anyExpr = false)
+            val alwaysReturns = bodyAlwaysReturns(body.statements)
+            if (hasValueReturn && !alwaysReturns && nameNode is Identifier) {
+                val start = nameNode.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Function lacks ending return statement and return type does not include 'undefined'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2366,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = nameNode.text.length,
+                ))
+            }
+        }
         walkForImplicitReturns(body.statements, source, fileName)
     }
 
