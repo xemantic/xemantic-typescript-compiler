@@ -9172,11 +9172,30 @@ class Checker(
                     continue
                 }
                 // When block-scoped (let/const) mixes with var/class/func (not interface/namespace
-                // which are legal merges), emit TS2300
+                // which are legal merges), emit TS2451 for const/class conflicts, TS2300 for others
                 if (hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)) {
+                    // TS2451 when block-scoped conflicts with class (TypeScript uses TS2451 for this)
+                    val useTs2451 = hasBlockScoped && hasClass && !hasVar && !hasFunc && !hasEnum
                     for (decl in group) {
                         if (decl.kind == "interface" || decl.kind == "namespace") continue
-                        emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                        if (useTs2451) {
+                            val start = decl.nameNode.pos
+                            val nameLen = if (decl.nameNode is Identifier) (decl.nameNode as Identifier).text.length
+                                else (decl.nameNode.end - decl.nameNode.pos)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot redeclare block-scoped variable '${decl.name}'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2451,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = nameLen,
+                            ))
+                        } else {
+                            emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                        }
                     }
                     continue
                 }
