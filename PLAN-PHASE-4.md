@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-01):** 7,722 / 10,077 tests passing (76.6%).
+**Status (2026-04-03):** 7,742 / 10,077 tests passing (76.8%).
 
 ## Goal
 
@@ -230,28 +230,41 @@ array→primitive, named→named) fall through to the old string system which do
   returns on some paths but not all, under strictNullChecks.
   +2 tests (getterControlFlowStrictNull es5 and es2015 variants).
 
-**Analysis of remaining test landscape:**
+**Completed session 2026-04-03 (+20 tests, 7,722 → 7,742):**
+- TS2415: Class incorrectly extends base class — private member conflict detection.
+  +3 tests (derivedClassOverridesPrivateFunction1, shadowPrivateMembers, 
+  inheritanceGrandParent* series, scopeTests). Extended to constructor parameter 
+  properties. Walks base type chain for grandparent private declarations.
+- TS2661: Cannot export non-local declaration. Checks export specifiers (no `from`)
+  against file locals. +7 tests (exportSpecifierForAGlobal, reExportGlobalDeclaration1-4,
+  exportSpecifierReferencingOuterDeclaration2, reExportUndefined1).
+- TS2451 fix: Use TS2451 instead of TS2300 for const/class declaration conflicts.
+  +2 tests (exportInterfaceClassAndValue + 1 variant).
+- TS2440: Import declaration conflicts with local declaration. Scans file statements
+  for import + value name collisions. +2 tests (importAndVariableDeclarationConflict1/4,
+  duplicateVarAndImport2, functionAndImportNameConflict).
+- TS2709: Cannot use namespace as a type. Checks type reference nodes for names
+  resolving to namespace-only symbols. Skips imported names to avoid FPs.
+  +6 tests (moduleAssignmentCompat1-4, moduleCrashBug1, moduleWithNoValuesAsType,
+  moduleWithValuesAsType).
+
+**Analysis of remaining test landscape (updated 2026-04-03):**
 - All formal Track items (A-E) complete, blocked, or deferred
-- 183 tests missing exactly 1 error code with no FPs (small diffs)
-- Top codes in close-to-passing tests: TS2322 (24), TS2339 (13), TS2345 (8)
-- 1,435 "none produced" tests need multiple new diagnostic codes
-- 945 "diff" tests have wrong codes/messages/formatting
+- Single-code failing tests by diagnostic code:
+  TS2322 (232), TS2339 (77), TS2345 (69), TS2353 (28), TS2304 (16),
+  TS2352 (15), TS2307 (15), TS2403 (15), TS2741 (14), TS2305 (11),
+  TS2769 (11), TS2300 (10), TS2367 (10), TS2554 (10)
 - Top FP codes: TS1005 (57 tests), TS1109 (36), TS2304 (32), TS2322 (25), TS7006 (24)
-- Most FPs are parser error recovery issues or missing contextual type suppression
-- JS emit tests with 1-2 line diffs are all individual edge cases
+- Most test gains now blocked on: (a) wider canUseTypeEngine guard, 
+  (b) module resolution (TS2305/TS2307), (c) parser error recovery (TS1005/TS1109)
 
 **Recommended priority for next session:**
 
-1. **Relax `canUseTypeEngine` guard further** — The single highest-ROI change.
-   Object→Intrinsic relaxation is safe but shows no gains because local variable
-   identifiers can't yet resolve through `getTypeOfExpression`. Need deeper
-   scope chain integration between the Type engine and `checkTypeAssignability`.
-
-2. **TS2540 expansion** — Extend to interface/class readonly properties resolved
-   through the type system (needs `declare let` variable types to resolve).
-
-3. **Improve `typeToString` for object types** — Many diff tests need expanded member
-   display instead of `{ ... }` placeholder. Fixes TS2322/TS2345 text accuracy.
+1. **New diagnostic codes with 5-10 single-code tests**: TS2417 (static side extends, 7),
+   TS2303 (circular import, 7), TS2341 (private access, 6), TS5101 file ordering (6),
+   TS2729 (use before init, 5), TS2872 (deprecated, 6)
+2. **Extend existing checks**: TS2415 → TS2417 (static variant), TS2451 edge cases
+3. **Relax type engine guards**: The single highest-ROI change but highest risk of FPs
 
 ---
 
