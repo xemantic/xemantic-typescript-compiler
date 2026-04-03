@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-03):** 7,742 / 10,077 tests passing (76.8%).
+**Status (2026-04-03):** 7,749 / 10,077 tests passing (76.9%).
 
 ## Goal
 
@@ -258,12 +258,22 @@ array→primitive, named→named) fall through to the old string system which do
 - Most test gains now blocked on: (a) wider canUseTypeEngine guard, 
   (b) module resolution (TS2305/TS2307), (c) parser error recovery (TS1005/TS1109)
 
-**Recommended priority for next session:**
+**Completed session 2026-04-03b (+7 tests, 7,742 → 7,749):**
+- TS2417: Class static side incorrectly extends base class static side. Compares
+  static members and namespace exports between derived and base classes for type
+  incompatibility and private member conflicts. Includes simple return type inference
+  from method bodies (string/number literals). Also handles clodule pattern
+  (class + merged namespace).
+  +7 tests (inheritanceStaticMembersIncompatible, overridingPrivateStaticMembers,
+  inheritanceStaticFuncOverridingProperty, inheritanceStaticAccessorOverridingMethod,
+  inheritanceStaticFuncOverridingAccessor, inheritanceStaticPropertyOverridingMethod,
+  inheritedModuleMembersForClodule).
 
-1. **New diagnostic codes with 5-10 single-code tests**: TS2417 (static side extends, 7),
-   TS2303 (circular import, 7), TS2341 (private access, 6), TS5101 file ordering (6),
-   TS2729 (use before init, 5), TS2872 (deprecated, 6)
-2. **Extend existing checks**: TS2415 → TS2417 (static variant), TS2451 edge cases
+**Recommended priority for next items:**
+
+1. **New diagnostic codes with 5-10 single-code tests**: TS2303 (circular import, 7),
+   TS2341 (private access, 6), TS2729 (use before init, 5), TS2872 (deprecated, 6)
+2. **Extend existing checks**: TS2451 edge cases
 3. **Relax type engine guards**: The single highest-ROI change but highest risk of FPs
 
 ---

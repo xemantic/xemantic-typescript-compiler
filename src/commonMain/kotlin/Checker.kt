@@ -24431,6 +24431,11 @@ class Checker(
                         ))
                     }
                 }
+
+                // TS2417: Check static side extends (only for extends, not implements)
+                if (clause.token == SyntaxKind.ExtendsKeyword) {
+                    checkClassStaticSideExtends(classDecl, rawClassName, baseName, baseSymbol, source, fileName)
+                }
             }
         }
     }
@@ -24532,6 +24537,187 @@ class Checker(
         return false
     }
 
+    /**
+     * TS2417: Check static side of derived class against base class static side.
+     * Compares static members + namespace exports for type incompatibility and private conflicts.
+     */
+    private fun checkClassStaticSideExtends(
+        classDecl: ClassDeclaration,
+        rawClassName: String,
+        baseName: String,
+        baseSymbol: Symbol,
+        source: String,
+        fileName: String,
+    ) {
+        val classNameNode = classDecl.name ?: return
+
+        // Collect derived class static members from AST
+        data class StaticInfo(val isPrivate: Boolean, val isCallable: Boolean, val node: Node)
+        val derivedStatics = mutableMapOf<String, StaticInfo>()
+        for (member in classDecl.members) {
+            val isStatic = when (member) {
+                is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                is GetAccessor -> ModifierFlag.Static in member.modifiers
+                is SetAccessor -> ModifierFlag.Static in member.modifiers
+                else -> false
+            }
+            if (!isStatic) continue
+            val name = when (member) {
+                is PropertyDeclaration -> (member.name as? Identifier)?.text
+                is MethodDeclaration -> (member.name as? Identifier)?.text
+                is GetAccessor -> (member.name as? Identifier)?.text
+                is SetAccessor -> (member.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+            if (name == "prototype") continue
+            val isPrivate = isMemberPrivate(member)
+            val isCallable = member is MethodDeclaration
+            derivedStatics[name] = StaticInfo(isPrivate, isCallable, member)
+        }
+
+        // Check namespace exports for the derived class symbol (clodule pattern)
+        val derivedSymbol = globals[rawClassName]
+        if (derivedSymbol != null && derivedSymbol.exports != null) {
+            for ((exportName, exportSym) in derivedSymbol.exports!!) {
+                if (exportName in derivedStatics) continue // AST member takes priority
+                val decl = exportSym.valueDeclaration ?: exportSym.declarations.firstOrNull() ?: continue
+                val isCallable = decl is FunctionDeclaration
+                derivedStatics[exportName] = StaticInfo(isPrivate = false, isCallable = isCallable, node = decl)
+            }
+        }
+
+        // Collect base class static members from AST declarations
+        val baseStatics = mutableMapOf<String, StaticInfo>()
+        for (decl in baseSymbol.declarations) {
+            if (decl !is ClassDeclaration) continue
+            for (member in decl.members) {
+                val isStatic = when (member) {
+                    is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                    is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                    is GetAccessor -> ModifierFlag.Static in member.modifiers
+                    is SetAccessor -> ModifierFlag.Static in member.modifiers
+                    else -> false
+                }
+                if (!isStatic) continue
+                val name = when (member) {
+                    is PropertyDeclaration -> (member.name as? Identifier)?.text
+                    is MethodDeclaration -> (member.name as? Identifier)?.text
+                    is GetAccessor -> (member.name as? Identifier)?.text
+                    is SetAccessor -> (member.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+                if (name == "prototype") continue
+                val isPrivate = isMemberPrivate(member)
+                val isCallable = member is MethodDeclaration
+                baseStatics[name] = StaticInfo(isPrivate, isCallable, member)
+            }
+        }
+
+        // Check namespace exports for the base class symbol
+        if (baseSymbol.exports != null) {
+            for ((exportName, exportSym) in baseSymbol.exports!!) {
+                if (exportName in baseStatics) continue
+                val decl = exportSym.valueDeclaration ?: exportSym.declarations.firstOrNull() ?: continue
+                val isCallable = decl is FunctionDeclaration
+                baseStatics[exportName] = StaticInfo(isPrivate = false, isCallable = isCallable, node = decl)
+            }
+        }
+
+        // Compare each overlapping static member
+        for ((memberName, derivedInfo) in derivedStatics) {
+            val baseInfo = baseStatics[memberName] ?: continue
+
+            val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+            val chain = mutableListOf<String>()
+
+            // Check private conflicts
+            if (derivedInfo.isPrivate || baseInfo.isPrivate) {
+                if (derivedInfo.isPrivate && baseInfo.isPrivate) {
+                    chain.add("  Types have separate declarations of a private property '$memberName'.")
+                } else {
+                    val privateType = if (baseInfo.isPrivate) baseName else rawClassName
+                    val publicType = if (baseInfo.isPrivate) rawClassName else baseName
+                    chain.add("  Property '$memberName' is private in type '$privateType' but not in type '$publicType'.")
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Class static side 'typeof $rawClassName' incorrectly extends base class static side 'typeof $baseName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2417,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = classNameNode.pos,
+                    length = rawClassName.length,
+                    messageChain = chain,
+                ))
+                return // Only report first conflict
+            }
+
+            // Check type compatibility
+            val derivedType = getStaticMemberType(derivedInfo.node) ?: continue
+            val baseType = getStaticMemberType(baseInfo.node) ?: continue
+            if (derivedType === anyType || baseType === anyType) continue
+
+            if (!checkTypeRelatedTo(derivedType, baseType, assignableRelation)) {
+                // Determine elaboration format
+                if (derivedInfo.isCallable && baseInfo.isCallable) {
+                    // Both are methods/functions — compare return types
+                    val derivedReturn = getReturnTypeOfCallable(derivedInfo.node)
+                    val baseReturn = getReturnTypeOfCallable(baseInfo.node)
+                    if (derivedReturn != null && baseReturn != null) {
+                        chain.add("  The types returned by '$memberName()' are incompatible between these types.")
+                        chain.add("    Type '${typeToString(derivedReturn)}' is not assignable to type '${typeToString(baseReturn)}'.")
+                    } else {
+                        chain.add("  Types of property '$memberName' are incompatible.")
+                        chain.add("    Type '${typeToString(derivedType)}' is not assignable to type '${typeToString(baseType)}'.")
+                    }
+                } else {
+                    chain.add("  Types of property '$memberName' are incompatible.")
+                    chain.add("    Type '${typeToString(derivedType)}' is not assignable to type '${typeToString(baseType)}'.")
+                }
+
+                diagnostics.add(Diagnostic(
+                    message = "Class static side 'typeof $rawClassName' incorrectly extends base class static side 'typeof $baseName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2417,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = classNameNode.pos,
+                    length = rawClassName.length,
+                    messageChain = chain,
+                ))
+                return // Only report first conflict
+            }
+        }
+    }
+
+    /** Get the type of a static member (AST node), handling FunctionDeclaration for namespace exports. */
+    private fun getStaticMemberType(node: Node): Type? = when (node) {
+        is FunctionDeclaration -> {
+            val hasBodyNoReturn = node.body != null && !bodyHasReturnValue(node.body!!)
+            buildMethodType(node.parameters, node.type, node.typeParameters, hasBody = hasBodyNoReturn, bodyNode = node.body)
+        }
+        is VariableDeclaration -> node.type?.let { getTypeFromTypeNode(it) }
+        else -> getTypeOfMemberDecl(node)
+    }
+
+    /** Get the return type of a callable node (method or function declaration). */
+    private fun getReturnTypeOfCallable(node: Node): Type? = when (node) {
+        is MethodDeclaration -> {
+            node.type?.let { getTypeFromTypeNode(it) }
+                ?: node.body?.let { inferReturnTypeFromBody(it) }
+                ?: if (node.body != null && !bodyHasReturnValue(node.body!!)) voidType else null
+        }
+        is FunctionDeclaration -> {
+            node.type?.let { getTypeFromTypeNode(it) }
+                ?: node.body?.let { inferReturnTypeFromBody(it) }
+                ?: if (node.body != null && !bodyHasReturnValue(node.body!!)) voidType else null
+        }
+        else -> null
+    }
+
     /** Check if a class member (AST node) has the `private` modifier. */
     private fun isMemberPrivate(node: Node): Boolean = when (node) {
         is PropertyDeclaration -> ModifierFlag.Private in node.modifiers
@@ -24623,9 +24809,9 @@ class Checker(
             is MethodDeclaration -> {
                 // Use void return for methods with body that don't return a value
                 val hasBodyNoReturn = decl.body != null && !bodyHasReturnValue(decl.body!!)
-                buildMethodType(decl.parameters, decl.type, decl.typeParameters, hasBody = hasBodyNoReturn)
+                buildMethodType(decl.parameters, decl.type, decl.typeParameters, hasBody = hasBodyNoReturn, bodyNode = decl.body)
             }
-            is GetAccessor -> decl.type?.let { getTypeFromTypeNode(it) }
+            is GetAccessor -> decl.type?.let { getTypeFromTypeNode(it) } ?: decl.body?.let { inferReturnTypeFromBody(it) }
             is SetAccessor -> decl.parameters.firstOrNull()?.type?.let { getTypeFromTypeNode(it) }
             is Parameter -> decl.type?.let { getTypeFromTypeNode(it) }
             else -> null
@@ -24638,10 +24824,12 @@ class Checker(
         returnTypeNode: TypeNode?,
         typeParams: List<TypeParameter>? = null,
         hasBody: Boolean = false,
+        bodyNode: Node? = null,
     ): Type {
         val fnType = Type.Object()
         val defaultReturn = if (hasBody) voidType else anyType
-        val returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: defaultReturn
+        val inferredReturn = if (returnTypeNode == null && bodyNode != null) inferReturnTypeFromBody(bodyNode) else null
+        val returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: inferredReturn ?: defaultReturn
         val typeParameters = typeParams?.map { tp ->
             val param = Type.TypeParam()
             param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
@@ -24693,6 +24881,23 @@ class Checker(
             }
             else -> false
         }
+    }
+
+    /** Infer a simple return type from a method/function body (single return with literal). */
+    private fun inferReturnTypeFromBody(body: Node): Type? {
+        val block = body as? Block ?: return null
+        for (stmt in block.statements) {
+            if (stmt is ReturnStatement) {
+                val expr = stmt.expression ?: continue
+                return when (expr) {
+                    is StringLiteralNode -> stringType
+                    is NumericLiteralNode -> numberType
+                    is PrefixUnaryExpression -> if (expr.operand is NumericLiteralNode) numberType else null
+                    else -> null
+                }
+            }
+        }
+        return null
     }
 
     /** Add signature-level elaboration for function type mismatches in TS2416 chains. */
