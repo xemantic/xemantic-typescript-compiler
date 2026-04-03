@@ -284,10 +284,13 @@ array→primitive, named→named) fall through to the old string system which do
 
 **Recommended priority for next items:**
 
-1. **New diagnostic codes with 5-10 single-code tests**: TS2303 (circular import, 7),
-   TS2341 (private access, 6), TS2872 (deprecated, 6)
-2. **Extend existing checks**: TS2451 edge cases
-3. **Relax type engine guards**: The single highest-ROI change but highest risk of FPs
+1. **Deeper type display**: Object literal type properties (currently `{ ... }`),
+   function `this:` parameter, better return type inference — affects ~22 TS2322 diff tests
+2. **Module resolution**: TS2305/TS2307 would unlock 143+ small-diff error tests
+3. **TS2454 alongside TS2448**: Co-emit TS2454 for block-scoped use-before-declaration
+   in function bodies (forwardRefInClassProperties, +1 test)
+4. **New diagnostic codes**: TS2341 (private access, 6), TS2303 (circular import, 7)
+5. **Relax type engine guards**: Highest ROI but highest risk of FPs
 
 ---
 
