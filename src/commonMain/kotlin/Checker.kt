@@ -408,6 +408,8 @@ class Checker(
         checkSubsequentVarTypes()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
+        // 67. Check export specifiers for non-local declarations (TS2661)
+        checkExportSpecifierLocality()
         } // end if (!declarationOnly)
     }
 
@@ -26737,6 +26739,53 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS2661: Cannot export non-local declaration
+    // -----------------------------------------------------------------------
+
+    private fun checkExportSpecifierLocality() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val locals = result.locals
+
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ExportDeclaration) continue
+                // Only check `export { X }` without `from "..."` (re-exports from modules are fine)
+                if (stmt.moduleSpecifier != null) continue
+                if (stmt.isTypeOnly) continue
+                val namedExports = stmt.exportClause as? NamedExports ?: continue
+
+                for (spec in namedExports.elements) {
+                    if (spec.isTypeOnly) continue
+                    val exportedName = (spec.propertyName ?: spec.name).text
+                    // Check if locally declared (not just aliased by the export itself)
+                    val localSymbol = locals[exportedName]
+                    if (localSymbol != null) {
+                        // If the symbol has non-ExportSpecifier declarations, it's a real local
+                        val hasRealDecl = localSymbol.declarations.any { it !is ExportSpecifier }
+                        if (hasRealDecl) continue
+                    }
+                    // The name was not locally declared — check if it's a global or known global
+                    if (exportedName == "undefined" || exportedName in globals || exportedName in KNOWN_GLOBALS) {
+                        val nameNode = spec.propertyName ?: spec.name
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot export '$exportedName'. Only local declarations can be exported from a module.",
+                            category = DiagnosticCategory.Error,
+                            code = 2661,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = exportedName.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
     // TS8xxx: TypeScript syntax in JavaScript files
     // -----------------------------------------------------------------------
 
