@@ -410,6 +410,8 @@ class Checker(
         checkTsSyntaxInJsFiles()
         // 67. Check export specifiers for non-local declarations (TS2661)
         checkExportSpecifierLocality()
+        // 68. Check import declaration conflicts with local (TS2440)
+        checkImportConflictsWithLocal()
         } // end if (!declarationOnly)
     }
 
@@ -26778,6 +26780,90 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS2440: Import declaration conflicts with local declaration
+    // -----------------------------------------------------------------------
+
+    private fun checkImportConflictsWithLocal() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+
+            // Collect all non-import declared names in this file
+            val localNames = mutableSetOf<String>()
+            for (stmt in stmts) {
+                when (stmt) {
+                    is VariableStatement -> {
+                        for (decl in stmt.declarationList.declarations) {
+                            val name = (decl.name as? Identifier)?.text ?: continue
+                            localNames.add(name)
+                        }
+                    }
+                    is FunctionDeclaration -> stmt.name?.let { localNames.add(it.text) }
+                    is ClassDeclaration -> stmt.name?.let { localNames.add(it.text) }
+                    is EnumDeclaration -> localNames.add(stmt.name.text)
+                    else -> {}
+                }
+            }
+
+            // Check imports against local names
+            for (stmt in stmts) {
+                when (stmt) {
+                    is ImportEqualsDeclaration -> {
+                        if (stmt.isTypeOnly) continue
+                        val name = stmt.name.text
+                        if (name in localNames) {
+                            // Error on entire import statement
+                            val stmtStart = stmt.pos
+                            // Find end of statement including semicolon
+                            var stmtEnd = stmt.end
+                            // Approximate length: scan source for semicolon or newline after pos
+                            val endIdx = source.indexOf(';', stmtStart)
+                            val stmtLen = if (endIdx >= 0) endIdx - stmtStart + 1
+                                else (stmtEnd - stmtStart).coerceAtLeast(name.length)
+                            val (line, character) = getLineAndCharacterOfPosition(source, stmtStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Import declaration conflicts with local declaration of '$name'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2440,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = stmtStart,
+                                length = stmtLen,
+                            ))
+                        }
+                    }
+                    is ImportDeclaration -> {
+                        val clause = stmt.importClause ?: continue
+                        val namedBindings = clause.namedBindings
+                        if (namedBindings is NamedImports) {
+                            for (spec in namedBindings.elements) {
+                                if (spec.isTypeOnly) continue
+                                val localName = spec.name.text
+                                if (localName in localNames) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, spec.name.pos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Import declaration conflicts with local declaration of '$localName'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2440,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = spec.name.pos,
+                                        length = localName.length,
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
     // TS2661: Cannot export non-local declaration
     // -----------------------------------------------------------------------
 
