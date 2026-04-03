@@ -23687,9 +23687,11 @@ class Checker(
                     is StringLiteralNode -> { start = nameNode.pos; length = nameNode.text.length + 2 }
                     else -> continue
                 }
+                // String literal property names include quotes in the display
+                val displayName = if (nameNode is StringLiteralNode) "\"$propName\"" else propName
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
-                    message = "Property '$propName' of type '$propTypeDisplay' is not assignable to 'string' index type '$indexTypeDisplay'.",
+                    message = "Property '$displayName' of type '$propTypeDisplay' is not assignable to 'string' index type '$indexTypeDisplay'.",
                     category = DiagnosticCategory.Error,
                     code = 2411,
                     fileName = fileName,
@@ -24061,9 +24063,14 @@ class Checker(
                             val classNameNode = classDecl.name ?: continue
                             val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
                             val message = "Class '$className' incorrectly implements interface '$ifaceName'."
-                            val chain = mutableListOf(
-                                "  Property '$propName' is private in type '$className' but not in type '$ifaceName'."
-                            )
+                            // Check if the interface property is also private (inherited from a class)
+                            val ifacePropDecl = ifaceProp.valueDeclaration ?: ifaceProp.declarations.firstOrNull()
+                            val ifacePropIsPrivate = ifacePropDecl != null && isMemberPrivate(ifacePropDecl)
+                            val chain = if (ifacePropIsPrivate) {
+                                mutableListOf("  Types have separate declarations of a private property '$propName'.")
+                            } else {
+                                mutableListOf("  Property '$propName' is private in type '$className' but not in type '$ifaceName'.")
+                            }
                             diagnostics.add(Diagnostic(
                                 message = message,
                                 category = DiagnosticCategory.Error,
@@ -25271,7 +25278,9 @@ class Checker(
                 val typeParams = getTypeParametersOfSymbol(symbol)
                 if (typeParams == null || typeParams.isEmpty()) {
                     val start = node.pos
-                    val length = node.end - start
+                    // node.end overshoots — compute true end from last type arg
+                    val lastArg = typeArgs.last()
+                    val length = lastArg.end - start
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
                         message = "Type '$name' is not generic.",
