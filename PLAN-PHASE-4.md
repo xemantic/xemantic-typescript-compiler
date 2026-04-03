@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-03):** 7,749 / 10,077 tests passing (76.9%).
+**Status (2026-04-03):** 7,754 / 10,077 tests passing (77.0%).
 
 ## Goal
 
@@ -268,11 +268,18 @@ array→primitive, named→named) fall through to the old string system which do
   inheritanceStaticFuncOverridingProperty, inheritanceStaticAccessorOverridingMethod,
   inheritanceStaticFuncOverridingAccessor, inheritanceStaticPropertyOverridingMethod,
   inheritedModuleMembersForClodule).
+- TS2729: Property used before initialization. Checks class property initializers
+  for `this.X` (instance) or `ClassName.X` (static) references to properties
+  declared below or without initializer/`!`. Skips deferred refs (arrow/function).
+  Handles inherited properties from extends chain (not implements).
+  +5 tests (checkInheritedProperty, initializerWithThisPropertyAccess,
+  useBeforeDeclaration_propertyAssignment, useBeforeDeclaration_superClass,
+  classMergedWithInterfaceMultipleBasesNoError).
 
 **Recommended priority for next items:**
 
 1. **New diagnostic codes with 5-10 single-code tests**: TS2303 (circular import, 7),
-   TS2341 (private access, 6), TS2729 (use before init, 5), TS2872 (deprecated, 6)
+   TS2341 (private access, 6), TS2872 (deprecated, 6)
 2. **Extend existing checks**: TS2451 edge cases
 3. **Relax type engine guards**: The single highest-ROI change but highest risk of FPs
 

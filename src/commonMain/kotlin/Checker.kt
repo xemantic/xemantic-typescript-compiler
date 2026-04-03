@@ -414,6 +414,8 @@ class Checker(
         checkImportConflictsWithLocal()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
+        // 70. Check property used before initialization (TS2729)
+        checkPropertyUseBeforeInit()
         } // end if (!declarationOnly)
     }
 
@@ -24292,6 +24294,270 @@ class Checker(
                 "    Type '$derivedTypeName' is not assignable to type '$baseTypeName'.",
             ),
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2729: Property used before its initialization
+    // -----------------------------------------------------------------------
+
+    private fun checkPropertyUseBeforeInit() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkPropertyUseBeforeInitInStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) { }
+        }
+    }
+
+    private fun checkPropertyUseBeforeInitInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ClassDeclaration -> checkClassPropertyUseBeforeInit(stmt, source, fileName)
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    for (s in body.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.body?.let {
+                    for (s in it.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
+                }
+            }
+            is IfStatement -> {
+                checkPropertyUseBeforeInitInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkPropertyUseBeforeInitInStatement(it, source, fileName) }
+            }
+            is Block -> {
+                for (s in stmt.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkClassPropertyUseBeforeInit(classDecl: ClassDeclaration, source: String, fileName: String) {
+        // Determine which properties are inherited from base classes (extends, not implements)
+        val inheritedNames = mutableSetOf<String>()
+        classDecl.heritageClauses?.forEach { clause ->
+            if (clause.token != SyntaxKind.ExtendsKeyword) return@forEach
+            for (typeExpr in clause.types) {
+                val baseName = when (val tn = typeExpr.expression) {
+                    is Identifier -> tn.text
+                    is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+                val baseSymbol = globals[baseName] ?: continue
+                collectInheritedPropertyNames(baseSymbol, inheritedNames)
+            }
+        }
+
+        // Collect property declarations in order, tracking which are "initialized"
+        data class PropInfo(val name: String, val pos: Int, val hasInit: Boolean, val hasExcl: Boolean, val isStatic: Boolean)
+        val props = mutableListOf<PropInfo>()
+        for (member in classDecl.members) {
+            when (member) {
+                is PropertyDeclaration -> {
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    val isStatic = ModifierFlag.Static in member.modifiers
+                    props.add(PropInfo(
+                        name = name,
+                        pos = (member.name as Identifier).pos,
+                        hasInit = member.initializer != null,
+                        hasExcl = member.exclamationToken,
+                        isStatic = isStatic,
+                    ))
+                }
+                else -> {}
+            }
+        }
+
+        // For each property with an initializer, check for this.X references
+        val className = classDecl.name?.text
+        for ((idx, prop) in props.withIndex()) {
+            if (prop.hasInit) {
+                // Find the initializer node
+                val initExpr = classDecl.members.filterIsInstance<PropertyDeclaration>()
+                    .find { (it.name as? Identifier)?.text == prop.name && (ModifierFlag.Static in it.modifiers) == prop.isStatic }
+                    ?.initializer ?: continue
+
+                // Collect this.X references (not inside arrow/function)
+                val refs = mutableListOf<Pair<String, Int>>() // (propName, pos of propName)
+                collectThisPropertyRefs(initExpr, refs, prop.isStatic, className)
+
+                for ((refName, refPos) in refs) {
+                    // Check if refName is inherited from base class
+                    if (refName in inheritedNames) continue
+
+                    // Find the property declaration for refName
+                    val refProp = props.find { it.name == refName && it.isStatic == prop.isStatic }
+                    if (refProp == null) continue // not a class property (might be inherited or doesn't exist)
+
+                    // Check if refProp is initialized before the current prop
+                    val refIdx = props.indexOf(refProp)
+                    val isBeforeInit = if (refIdx < idx) {
+                        // Declared above — error only if no initializer and no `!`
+                        !refProp.hasInit && !refProp.hasExcl
+                    } else {
+                        // Declared below — always an error (unless has `!`)
+                        !refProp.hasExcl
+                    }
+
+                    if (isBeforeInit) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, refPos)
+                        val length = refName.length
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$refName' is used before its initialization.",
+                            category = DiagnosticCategory.Error,
+                            code = 2729,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = refPos,
+                            length = length,
+                            relatedInformation = listOf(Diagnostic(
+                                message = "'$refName' is declared here.",
+                                category = DiagnosticCategory.Message,
+                                code = 2728,
+                                fileName = fileName,
+                                line = getLineAndCharacterOfPosition(source, refProp.pos).first,
+                                character = getLineAndCharacterOfPosition(source, refProp.pos).second,
+                                start = refProp.pos,
+                                length = refName.length,
+                            )),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Collect inherited property names from base class chain (extends only). */
+    private fun collectInheritedPropertyNames(symbol: Symbol, names: MutableSet<String>) {
+        for (decl in symbol.declarations) {
+            if (decl !is ClassDeclaration) continue
+            for (member in decl.members) {
+                if (member is PropertyDeclaration) {
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    names.add(name)
+                }
+                if (member is MethodDeclaration) {
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    names.add(name)
+                }
+            }
+            // Recurse into base classes
+            decl.heritageClauses?.forEach { clause ->
+                if (clause.token != SyntaxKind.ExtendsKeyword) return@forEach
+                for (typeExpr in clause.types) {
+                    val baseName = when (val tn = typeExpr.expression) {
+                        is Identifier -> tn.text
+                        else -> null
+                    } ?: continue
+                    val baseSymbol = globals[baseName] ?: continue
+                    collectInheritedPropertyNames(baseSymbol, names)
+                }
+            }
+        }
+    }
+
+    /** Collect this.X (or ClassName.X for statics) property references in an expression.
+     *  Skips inside arrow functions and function expressions (deferred evaluation). */
+    private fun collectThisPropertyRefs(
+        expr: Node, refs: MutableList<Pair<String, Int>>,
+        isStatic: Boolean, className: String?,
+    ) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                val obj = expr.expression
+                val isRelevant = if (isStatic) {
+                    // For static props: ClassName.X
+                    obj is Identifier && className != null && obj.text == className
+                } else {
+                    // For instance props: this.X
+                    obj is Identifier && obj.text == "this"
+                }
+                if (isRelevant) {
+                    refs.add(expr.name.text to expr.name.pos)
+                }
+                // Also recurse into the expression and name
+                collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            }
+            // Skip arrow functions and function expressions (deferred evaluation)
+            is ArrowFunction -> return
+            is FunctionExpression -> return
+            // Recurse into subexpressions
+            is CallExpression -> {
+                collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+                expr.arguments?.forEach { collectThisPropertyRefs(it, refs, isStatic, className) }
+            }
+            is BinaryExpression -> {
+                collectThisPropertyRefs(expr.left, refs, isStatic, className)
+                collectThisPropertyRefs(expr.right, refs, isStatic, className)
+            }
+            is ConditionalExpression -> {
+                collectThisPropertyRefs(expr.condition, refs, isStatic, className)
+                collectThisPropertyRefs(expr.whenTrue, refs, isStatic, className)
+                collectThisPropertyRefs(expr.whenFalse, refs, isStatic, className)
+            }
+            is ParenthesizedExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is PrefixUnaryExpression -> collectThisPropertyRefs(expr.operand, refs, isStatic, className)
+            is PostfixUnaryExpression -> collectThisPropertyRefs(expr.operand, refs, isStatic, className)
+            is NewExpression -> {
+                collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+                expr.arguments?.forEach { collectThisPropertyRefs(it, refs, isStatic, className) }
+            }
+            is ElementAccessExpression -> {
+                collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+                collectThisPropertyRefs(expr.argumentExpression, refs, isStatic, className)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> {
+                            prop.name?.let { if (it is ComputedPropertyName) collectThisPropertyRefs(it.expression, refs, isStatic, className) }
+                            collectThisPropertyRefs(prop.initializer, refs, isStatic, className)
+                        }
+                        is SpreadAssignment -> collectThisPropertyRefs(prop.expression, refs, isStatic, className)
+                        is ShorthandPropertyAssignment -> {}
+                        else -> {}
+                    }
+                }
+            }
+            is ArrayLiteralExpression -> {
+                expr.elements.forEach { collectThisPropertyRefs(it, refs, isStatic, className) }
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { span ->
+                    collectThisPropertyRefs(span.expression, refs, isStatic, className)
+                }
+            }
+            is AsExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is NonNullExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is SpreadElement -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is TypeAssertionExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is TaggedTemplateExpression -> {
+                collectThisPropertyRefs(expr.tag, refs, isStatic, className)
+            }
+            is AwaitExpression -> expr.expression?.let { collectThisPropertyRefs(it, refs, isStatic, className) }
+            is VoidExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is TypeOfExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is DeleteExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
+            is YieldExpression -> expr.expression?.let { collectThisPropertyRefs(it, refs, isStatic, className) }
+            is ClassExpression -> {
+                // Check heritage clause for ClassName.X references (static only)
+                if (isStatic) {
+                    expr.heritageClauses?.forEach { clause ->
+                        for (typeExpr in clause.types) {
+                            collectThisPropertyRefs(typeExpr.expression, refs, isStatic, className)
+                        }
+                    }
+                }
+            }
+            else -> {}
+        }
     }
 
     // -----------------------------------------------------------------------
