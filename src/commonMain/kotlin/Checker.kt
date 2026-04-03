@@ -24325,6 +24325,14 @@ class Checker(
 
                 val baseTypeName = typeToString(baseType)
 
+                // TS2415: Check private member conflicts (only for extends, not implements)
+                if (clause.token == SyntaxKind.ExtendsKeyword) {
+                    val ts2415Emitted = checkClassExtendsPrivateConflicts(
+                        classDecl, baseName, baseType, baseMembers, source, fileName
+                    )
+                    if (ts2415Emitted) continue // skip TS2416 checks for this base
+                }
+
                 // Collect method names that appear multiple times (overloads) — skip these
                 val overloadedMethods = mutableMapOf<String, Int>()
                 for (member in classDecl.members) {
@@ -24400,6 +24408,160 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * TS2415: Check private member conflicts between derived class and base class.
+     * Returns true if a TS2415 diagnostic was emitted (so TS2416 should be skipped).
+     */
+    private fun checkClassExtendsPrivateConflicts(
+        classDecl: ClassDeclaration,
+        baseName: String,
+        baseType: Type.Object,
+        baseMembers: SymbolTable,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val rawClassName = classDecl.name?.text ?: return false
+        val classNameNode = classDecl.name ?: return false
+
+        for (member in classDecl.members) {
+            // Skip static members
+            val isStatic = when (member) {
+                is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                is GetAccessor -> ModifierFlag.Static in member.modifiers
+                is SetAccessor -> ModifierFlag.Static in member.modifiers
+                else -> true
+            }
+            if (isStatic) continue
+
+            val memberName = when (member) {
+                is PropertyDeclaration -> (member.name as? Identifier)?.text
+                is MethodDeclaration -> (member.name as? Identifier)?.text
+                is GetAccessor -> (member.name as? Identifier)?.text
+                is SetAccessor -> (member.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+
+            val baseMemberSym = baseMembers[memberName] ?: continue
+            val baseDecl = baseMemberSym.valueDeclaration ?: baseMemberSym.declarations.firstOrNull() ?: continue
+
+            val derivedIsPrivate = isMemberPrivate(member)
+            val baseIsPrivate = isMemberPrivate(baseDecl)
+
+            if (!derivedIsPrivate && !baseIsPrivate) continue
+
+            val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+            val chain = mutableListOf<String>()
+
+            if (derivedIsPrivate && baseIsPrivate) {
+                // Both private from different classes → separate declarations
+                chain.add("  Types have separate declarations of a private property '$memberName'.")
+            } else {
+                // One is private, other isn't
+                // Find the declaring class for the base member (may be grandparent)
+                val baseDeclaringClass = if (baseIsPrivate) {
+                    findPrivateDeclaringClassName(baseType, memberName) ?: baseName
+                } else {
+                    findDeclaringClassName(baseType, memberName) ?: baseName
+                }
+                val privateTypeName = if (baseIsPrivate) baseDeclaringClass else rawClassName
+                val publicTypeName = if (baseIsPrivate) rawClassName else baseDeclaringClass
+                chain.add("  Property '$memberName' is private in type '$privateTypeName' but not in type '$publicTypeName'.")
+            }
+
+            diagnostics.add(Diagnostic(
+                message = "Class '$rawClassName' incorrectly extends base class '$baseName'.",
+                category = DiagnosticCategory.Error,
+                code = 2415,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = classNameNode.pos,
+                length = rawClassName.length,
+                messageChain = chain,
+            ))
+            return true // Only report first conflict per class
+        }
+        return false
+    }
+
+    /** Check if a class member (AST node) has the `private` modifier. */
+    private fun isMemberPrivate(node: Node): Boolean = when (node) {
+        is PropertyDeclaration -> ModifierFlag.Private in node.modifiers
+        is MethodDeclaration -> ModifierFlag.Private in node.modifiers
+        is GetAccessor -> ModifierFlag.Private in node.modifiers
+        is SetAccessor -> ModifierFlag.Private in node.modifiers
+        is Parameter -> ModifierFlag.Private in node.modifiers
+        else -> false
+    }
+
+    /** Walk the base type chain to find the class name where a member is declared as private. */
+    private fun findPrivateDeclaringClassName(type: Type.Object, memberName: String): String? {
+        if (type is Type.Interface) {
+            val symbol = type.symbol
+            if (symbol != null) {
+                for (decl in symbol.declarations) {
+                    val members = when (decl) {
+                        is ClassDeclaration -> decl.members
+                        else -> continue
+                    }
+                    for (member in members) {
+                        val name = when (member) {
+                            is PropertyDeclaration -> (member.name as? Identifier)?.text
+                            is MethodDeclaration -> (member.name as? Identifier)?.text
+                            is GetAccessor -> (member.name as? Identifier)?.text
+                            is SetAccessor -> (member.name as? Identifier)?.text
+                            else -> null
+                        }
+                        if (name == memberName && isMemberPrivate(member)) {
+                            return symbol.name
+                        }
+                    }
+                }
+            }
+            // Walk base types
+            type.baseTypes?.forEach { bt ->
+                if (bt is Type.Object) {
+                    val result = findPrivateDeclaringClassName(bt, memberName)
+                    if (result != null) return result
+                }
+            }
+        }
+        return null
+    }
+
+    /** Walk the base type chain to find the class name where a member is declared (any visibility). */
+    private fun findDeclaringClassName(type: Type.Object, memberName: String): String? {
+        if (type is Type.Interface) {
+            val symbol = type.symbol
+            if (symbol != null) {
+                for (decl in symbol.declarations) {
+                    val members = when (decl) {
+                        is ClassDeclaration -> decl.members
+                        else -> continue
+                    }
+                    for (member in members) {
+                        val name = when (member) {
+                            is PropertyDeclaration -> (member.name as? Identifier)?.text
+                            is MethodDeclaration -> (member.name as? Identifier)?.text
+                            is GetAccessor -> (member.name as? Identifier)?.text
+                            is SetAccessor -> (member.name as? Identifier)?.text
+                            else -> null
+                        }
+                        if (name == memberName) return symbol.name
+                    }
+                }
+            }
+            type.baseTypes?.forEach { bt ->
+                if (bt is Type.Object) {
+                    val result = findDeclaringClassName(bt, memberName)
+                    if (result != null) return result
+                }
+            }
+        }
+        return null
     }
 
     /** Get the type of a class member from its AST declaration. */
