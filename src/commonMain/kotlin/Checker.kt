@@ -412,6 +412,8 @@ class Checker(
         checkExportSpecifierLocality()
         // 68. Check import declaration conflicts with local (TS2440)
         checkImportConflictsWithLocal()
+        // 69. Check namespace used as type (TS2709)
+        checkNamespaceUsedAsType()
         } // end if (!declarationOnly)
     }
 
@@ -26780,6 +26782,84 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS2709: Cannot use namespace as a type
+    // -----------------------------------------------------------------------
+
+    private fun checkNamespaceUsedAsType() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            currentCheckLocals = result.locals
+
+            for (stmt in result.sourceFile.statements) {
+                checkNamespaceAsTypeInStmt(stmt, source, fileName)
+            }
+        }
+        currentCheckLocals = null
+    }
+
+    private fun checkNamespaceAsTypeInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    checkTypeRefForNamespace(decl.type, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                for (param in stmt.parameters) {
+                    checkTypeRefForNamespace(param.type, source, fileName)
+                }
+                checkTypeRefForNamespace(stmt.type, source, fileName)
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    for (s in body.statements) checkNamespaceAsTypeInStmt(s, source, fileName)
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is PropertyDeclaration -> checkTypeRefForNamespace(member.type, source, fileName)
+                        is MethodDeclaration -> {
+                            for (param in member.parameters) checkTypeRefForNamespace(param.type, source, fileName)
+                            checkTypeRefForNamespace(member.type, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private var currentCheckLocals: SymbolTable? = null
+
+    private fun checkTypeRefForNamespace(typeNode: TypeNode?, source: String, fileName: String) {
+        if (typeNode == null) return
+        if (typeNode !is TypeReference) return
+        val name = (typeNode.typeName as? Identifier)?.text ?: return
+        // Skip if name is imported locally (imported types may shadow namespace-only globals)
+        val localSym = currentCheckLocals?.get(name)
+        if (localSym != null && localSym.flags.hasAny(SymbolFlags.Alias)) return
+        val symbol = globals[name] ?: return
+        // Check if symbol is ONLY a namespace (no Class, Interface, TypeAlias, Enum)
+        if (!symbol.flags.hasAny(SymbolFlags.Module)) return
+        if (symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Enum)) return
+        val (line, character) = getLineAndCharacterOfPosition(source, typeNode.typeName.pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot use namespace '$name' as a type.",
+            category = DiagnosticCategory.Error,
+            code = 2709,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = typeNode.typeName.pos,
+            length = name.length,
+        ))
+    }
+
     // TS2440: Import declaration conflicts with local declaration
     // -----------------------------------------------------------------------
 
