@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-03):** 7,754 / 10,077 tests passing (77.0%).
+**Status (2026-04-03):** 7,758 / 10,077 tests passing (77.0%).
 
 ## Goal
 
@@ -275,6 +275,12 @@ array→primitive, named→named) fall through to the old string system which do
   +5 tests (checkInheritedProperty, initializerWithThisPropertyAccess,
   useBeforeDeclaration_propertyAssignment, useBeforeDeclaration_superClass,
   classMergedWithInterfaceMultipleBasesNoError).
+- Small fixes: TS2315 squiggle length for ExpressionWithTypeArguments (use lastArg.end),
+  TS2411 string literal property names include quotes in display,
+  TS2420 separate private declarations when both sides are private.
+  +4 tests (superCallFromClassThatDerivesNonGenericTypeButWithTypeArguments1,
+  stringIndexerAndConstructor, stringIndexerAndConstructor1,
+  classExtendsInterfaceThatExtendsClassWithPrivates1).
 
 **Recommended priority for next items:**
 
