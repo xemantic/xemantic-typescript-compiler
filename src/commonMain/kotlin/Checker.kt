@@ -24446,29 +24446,49 @@ class Checker(
         val rawClassName = classDecl.name?.text ?: return false
         val classNameNode = classDecl.name ?: return false
 
+        // Collect derived class members including constructor parameter properties
+        data class DerivedMember(val name: String, val isPrivate: Boolean, val node: ClassElement)
+        val derivedMembers = mutableListOf<DerivedMember>()
         for (member in classDecl.members) {
-            // Skip static members
-            val isStatic = when (member) {
-                is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
-                is MethodDeclaration -> ModifierFlag.Static in member.modifiers
-                is GetAccessor -> ModifierFlag.Static in member.modifiers
-                is SetAccessor -> ModifierFlag.Static in member.modifiers
-                else -> true
+            when (member) {
+                is PropertyDeclaration -> {
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                }
+                is MethodDeclaration -> {
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                }
+                is GetAccessor -> {
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                }
+                is SetAccessor -> {
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    val name = (member.name as? Identifier)?.text ?: continue
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                }
+                is Constructor -> {
+                    // Constructor parameter properties (public/private/protected p: T)
+                    for (param in member.parameters) {
+                        if (param.modifiers.isEmpty()) continue
+                        val name = (param.name as? Identifier)?.text ?: continue
+                        derivedMembers.add(DerivedMember(name, ModifierFlag.Private in param.modifiers, member))
+                    }
+                }
+                else -> continue
             }
-            if (isStatic) continue
+        }
 
-            val memberName = when (member) {
-                is PropertyDeclaration -> (member.name as? Identifier)?.text
-                is MethodDeclaration -> (member.name as? Identifier)?.text
-                is GetAccessor -> (member.name as? Identifier)?.text
-                is SetAccessor -> (member.name as? Identifier)?.text
-                else -> null
-            } ?: continue
-
+        for (dm in derivedMembers) {
+            val memberName = dm.name
             val baseMemberSym = baseMembers[memberName] ?: continue
             val baseDecl = baseMemberSym.valueDeclaration ?: baseMemberSym.declarations.firstOrNull() ?: continue
 
-            val derivedIsPrivate = isMemberPrivate(member)
+            val derivedIsPrivate = dm.isPrivate
             val baseIsPrivate = isMemberPrivate(baseDecl)
 
             if (!derivedIsPrivate && !baseIsPrivate) continue
