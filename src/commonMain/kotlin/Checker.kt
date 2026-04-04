@@ -23297,7 +23297,7 @@ class Checker(
                                 "${p.name}: ${if (propType != null) typeToString(propType) else "any"}"
                             }
                             "{ $entries; }"
-                        } else "{ ... }"
+                        } else "{}"
                     }
                 }
             }
