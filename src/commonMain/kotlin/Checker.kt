@@ -258,6 +258,8 @@ class Checker(
         checkUnresolvedModules()
         // 14b. Check default imports from modules without default export (TS1192)
         checkDefaultImports()
+        // 14c. Check named imports/re-exports for non-existent module members (TS2305)
+        checkNamedImportExistence()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
         // 16. Check call expression argument counts (TS2554)
@@ -1946,6 +1948,52 @@ class Checker(
             if (isRelative && fileBase == "/$baseName") return fileName
         }
         return null
+    }
+
+    /**
+     * Resolve a module specifier relative to the given context file's directory.
+     * For `folder/bar.ts` importing `./foo`, resolves to `folder/foo.ts`.
+     * Falls back to [resolveModuleSpecifier] if directory-relative resolution fails.
+     */
+    private fun resolveModuleSpecifierRelative(specifier: String, contextFileName: String): String? {
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+            // Non-relative: use normal resolution
+            return resolveModuleSpecifier(specifier)
+        }
+        // Get directory of the context file
+        val dir = contextFileName.substringBeforeLast('/', "")
+        val resolved = if (dir.isEmpty()) specifier else "$dir/${specifier.removePrefix("./")}"
+        // Normalize `..` segments
+        val normalized = normalizePath(resolved)
+        val candidates = listOf(
+            normalized,
+            "$normalized.ts",
+            "$normalized.tsx",
+            "$normalized.d.ts",
+        )
+        for (candidate in candidates) {
+            if (candidate in fileResults) return candidate
+        }
+        // Also strip leading "./" if present for lookup
+        val candidatesNoPrefix = candidates.map { it.removePrefix("./") }
+        for (candidate in candidatesNoPrefix) {
+            if (candidate in fileResults) return candidate
+        }
+        return resolveModuleSpecifier(specifier)
+    }
+
+    /** Normalize a path by resolving `..` and `.` segments. */
+    private fun normalizePath(path: String): String {
+        val parts = path.split('/')
+        val result = mutableListOf<String>()
+        for (part in parts) {
+            when (part) {
+                "." -> {}
+                ".." -> if (result.isNotEmpty() && result.last() != "..") result.removeLast() else result.add(part)
+                else -> result.add(part)
+            }
+        }
+        return result.joinToString("/")
     }
 
     // -----------------------------------------------------------------------
@@ -10586,6 +10634,164 @@ class Checker(
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2305: Module has no exported member 'X'
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check named imports and named re-exports against the target module's actual exports.
+     * Emits TS2305 when importing a name that the module doesn't export.
+     *
+     * Note: TS2614 (similar but with "Did you mean to use default import?") is handled
+     * in checkDefaultImports() for the case where the module HAS a default export.
+     */
+    private fun checkNamedImportExistence() {
+        val isMultiFile = binderResults.size > 1 || isMultiFileSource
+        if (!isMultiFile) return
+
+        // Skip when moduleSuffixes is set — module resolution is suffix-aware and we can't
+        // resolve to the correct suffixed file (e.g. ./foo → ./foo.ios.ts with suffix ".ios")
+        if (!options.moduleSuffixes.isNullOrEmpty()) return
+
+        // For re-exports of 'default': suppress TS2305 only for System module format,
+        // unless allowSyntheticDefaultImports is explicitly set to false.
+        // System format handles default re-exports dynamically.
+        // Note: allowSyntheticDefaultImports=true alone does NOT suppress TS2305 for re-exports.
+        val suppressDefaultReexportError = options.effectiveModule == ModuleKind.System &&
+            !options.allowSyntheticDefaultImportsExplicitlyFalse
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            // Check both .ts and .d.ts files (d.ts files can import from other modules)
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ImportDeclaration -> {
+                        val clause = stmt.importClause ?: continue
+                        if (clause.isTypeOnly) continue
+                        val namedBindings = clause.namedBindings as? NamedImports ?: continue
+
+                        val specifier = stmt.moduleSpecifier
+                        val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
+                        val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
+                        val targetResult = fileResults[resolvedFile] ?: continue
+                        val targetFile = targetResult.sourceFile
+
+                        // If target has export=, it cannot be named-imported
+                        val hasExportEquals = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
+                        // Get all available exports (named + default)
+                        val allExports = getModuleAllExports(targetFile)
+                        val hasDefaultExport = moduleHasDefaultExport(targetFile)
+
+                        for (specEl in namedBindings.elements) {
+                            if (specEl.isTypeOnly) continue
+                            val importedName = (specEl.propertyName ?: specEl.name).text
+                            // 'default' as name: checked by checkDefaultImports (TS1192) or TS2305
+                            // Skip 'default' here only if checked already via hasDefaultExport
+                            if (importedName == "default") {
+                                // 'import { default as X }' — check if module has default
+                                // This is not covered by checkDefaultImports (which only checks importClause.name)
+                                // TS2305 fires if no default export and allowSyntheticDefaultImports is false
+                                if (!hasDefaultExport && !hasExportEquals && !suppressDefaultReexportError) {
+                                    val nameNode = specEl.propertyName ?: specEl.name
+                                    emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                                }
+                                continue
+                            }
+                            // For non-default names: check against module exports
+                            // Skip if we already emit TS2614 for this case (module has default export)
+                            // TS2614 is emitted in checkDefaultImports for this pattern
+                            if (hasDefaultExport) continue  // TS2614 handled in checkDefaultImports
+                            // Skip TS2305 for export= modules — we'd need to check namespace members
+                            // and type members of the exported value, which requires full type resolution
+                            if (hasExportEquals) continue
+                            if (importedName !in allExports) {
+                                val nameNode = specEl.propertyName ?: specEl.name
+                                emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                            }
+                        }
+                    }
+                    is ExportDeclaration -> {
+                        // export { X } from "./module" — check X against module exports
+                        val moduleName = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                        if (stmt.isTypeOnly) continue
+                        val clause = stmt.exportClause as? NamedExports ?: continue
+
+                        val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
+                        val targetResult = fileResults[resolvedFile] ?: continue
+                        val targetFile = targetResult.sourceFile
+
+                        val allExports = getModuleAllExports(targetFile)
+                        val hasDefaultExport = moduleHasDefaultExport(targetFile)
+
+                        for (specEl in clause.elements) {
+                            if (specEl.isTypeOnly) continue
+                            // For re-exports: the "source name" in the source module
+                            // is either propertyName (for `export { X as Y } from ...`) or name
+                            val sourceName = (specEl.propertyName ?: specEl.name).text
+                            if (sourceName == "default") {
+                                if (!hasDefaultExport && !suppressDefaultReexportError) {
+                                    val nameNode = specEl.propertyName ?: specEl.name
+                                    emitTs2305(source, fileName, moduleName, "default", nameNode)
+                                }
+                                continue
+                            }
+                            if (sourceName !in allExports) {
+                                // Only emit if TS2614 wouldn't cover this case
+                                // (TS2614 fires for named imports where module has default)
+                                // For re-exports, TS2305 always fires for missing names
+                                val nameNode = specEl.propertyName ?: specEl.name
+                                emitTs2305(source, fileName, moduleName, sourceName, nameNode)
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun emitTs2305(
+        source: String, fileName: String, moduleName: String,
+        importedName: String, nameNode: Identifier
+    ) {
+        val displayName = when {
+            moduleName.startsWith("./") || moduleName.startsWith("../") -> moduleName
+            else -> {
+                val resolved = resolveModuleSpecifier(moduleName)
+                    ?.removeSuffix(".d.ts")?.removeSuffix(".ts")?.removeSuffix(".tsx")
+                    ?: moduleName
+                resolved
+            }
+        }
+        val nameStart = nameNode.pos
+        val nameLength = nameNode.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+        diagnostics.add(Diagnostic(
+            message = "Module '\"$displayName\"' has no exported member '$importedName'.",
+            category = DiagnosticCategory.Error,
+            code = 2305,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = nameStart,
+            length = nameLength,
+        ))
+    }
+
+    /**
+     * Returns ALL exports from a source file including 'default'.
+     * Used for TS2305 checking.
+     */
+    private fun getModuleAllExports(file: SourceFile): Set<String> {
+        val exports = getModuleNamedExports(file).toMutableSet()
+        if (moduleHasDefaultExport(file)) {
+            exports.add("default")
+        }
+        return exports
     }
 
     /**
