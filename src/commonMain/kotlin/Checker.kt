@@ -386,6 +386,8 @@ class Checker(
         checkEmptyTypeArguments()
         // 60. Check TS2354: importHelpers without tslib
         checkImportHelpersWithoutTslib()
+        // 60b. Check TS2343: syntax requires helper not in tslib
+        checkMissingTslibHelpers()
         // 61. Check bodyless function declarations without return type (TS7010)
         // Fires by default (like TS2454/TS2564), suppressed only when @strict: false explicitly set.
         if (!options.strictExplicitlyFalse || options.noImplicitAny) {
@@ -21170,6 +21172,480 @@ class Checker(
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2343: Missing helper in tslib
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS2343: "This syntax requires an imported helper named '__X' which does
+     * not exist in 'tslib'. Consider upgrading your version of 'tslib'."
+     * Fires when importHelpers=true, tslib IS found, but the required helper is not exported.
+     */
+    private fun checkMissingTslibHelpers() {
+        if (!options.importHelpers) return
+        // Find tslib file in compilation
+        val tslibResult = binderResults.firstOrNull { it.sourceFile.fileName.contains("tslib") } ?: return
+        // Get what tslib exports
+        val tslibExports = getTslibExports(tslibResult.sourceFile)
+
+        val isEs5Target = options.target <= ScriptTarget.ES5
+        val hasDecorators = options.experimentalDecorators || options.emitDecoratorMetadata
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // Only check module files (files with import/export statements)
+            val isModule = isModuleFile(result.sourceFile.statements)
+            if (!isModule) continue
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                checkStmtForMissingHelper(stmt, source, fileName, tslibExports, isEs5Target, hasDecorators)
+            }
+        }
+    }
+
+    private fun checkStmtForMissingHelper(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+        isEs5Target: Boolean,
+        hasDecorators: Boolean,
+    ) {
+        when (stmt) {
+            is ExportDeclaration -> {
+                // export * from "X" → needs __exportStar
+                if (stmt.exportClause == null && stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
+                    if ("__exportStar" !in tslibExports) {
+                        // Span: from stmt.pos to after ';' (inclusive)
+                        val semiPos = source.indexOf(';', stmt.pos)
+                        val spanLen = if (semiPos >= 0) (semiPos + 1) - stmt.pos else 1
+                        emitTS2343("__exportStar", stmt.pos, spanLen, source, fileName)
+                    }
+                }
+            }
+            is ClassDeclaration -> {
+                // class B extends A → needs __extends (ES5 only)
+                if (isEs5Target && stmt.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword && it.types.isNotEmpty() } == true) {
+                    if ("__extends" !in tslibExports) {
+                        // Span: position of "extends X" (the heritage clause text)
+                        val extendsClause = stmt.heritageClauses!!.first { it.token == SyntaxKind.ExtendsKeyword }
+                        val extendsType = extendsClause.types.first()
+                        // Find "extends" keyword position: it's before the expression
+                        val extendsPos = extendsClause.pos
+                        // Span: from "extends" to end of expression name
+                        val ident = extendsType.expression as? Identifier
+                        val exprEnd = if (ident != null) {
+                            ident.pos + ident.text.length
+                        } else {
+                            source.indexOf(')', extendsType.expression.pos) + 1
+                        }
+                        val spanLen = exprEnd - extendsPos
+                        emitTS2343("__extends", extendsPos, spanLen.coerceAtLeast(1), source, fileName)
+                    }
+                }
+                // @dec class C → needs __decorate and __metadata
+                if (hasDecorators && stmt.decorators?.isNotEmpty() == true) {
+                    val decorator = stmt.decorators!!.first()
+                    val decoratorSpan = getDecoratorSpan(decorator, source)
+                    if ("__decorate" !in tslibExports) {
+                        emitTS2343("__decorate", decoratorSpan.first, decoratorSpan.second, source, fileName)
+                    }
+                    if ("__metadata" !in tslibExports && options.emitDecoratorMetadata) {
+                        emitTS2343("__metadata", decoratorSpan.first, decoratorSpan.second, source, fileName)
+                    }
+                    // Check parameters with decorators
+                    checkParameterDecoratorsForHelper(stmt.members, source, fileName, tslibExports, hasDecorators)
+                } else if (hasDecorators) {
+                    checkParameterDecoratorsForHelper(stmt.members, source, fileName, tslibExports, hasDecorators)
+                }
+                // Check for private field access helpers (#field)
+                checkClassMembersForPrivateFields(stmt.members, source, fileName, tslibExports)
+            }
+            is VariableStatement -> {
+                // Walk variable declarations for spread/rest patterns
+                for (decl in stmt.declarationList.declarations) {
+                    checkExprForMissingHelper(decl.initializer, source, fileName, tslibExports, isEs5Target)
+                    checkBindingForMissingHelper(decl.name, source, fileName, tslibExports)
+                }
+            }
+            is FunctionDeclaration -> {
+                // async function * f() → needs __asyncGenerator, __await, and __generator (ES5)
+                if (ModifierFlag.Async in stmt.modifiers && stmt.asteriskToken) {
+                    // TypeScript reports the diagnostic at the function name position (not the '*')
+                    val namePos = stmt.name?.pos
+                    if (namePos != null) {
+                        val nameLen = stmt.name!!.text.length
+                        if ("__asyncGenerator" !in tslibExports) {
+                            emitTS2343("__asyncGenerator", namePos, nameLen, source, fileName)
+                        }
+                        if ("__await" !in tslibExports) {
+                            emitTS2343("__await", namePos, nameLen, source, fileName)
+                        }
+                        if (isEs5Target && "__generator" !in tslibExports) {
+                            emitTS2343("__generator", namePos, nameLen, source, fileName)
+                        }
+                    }
+                    // Walk body for yield* statements
+                    stmt.body?.let {
+                        checkBlockForAsyncDelegator(it, source, fileName, tslibExports)
+                    }
+                }
+            }
+            is ExpressionStatement -> {
+                checkExprForMissingHelper(stmt.expression, source, fileName, tslibExports, isEs5Target)
+            }
+            else -> {}
+        }
+    }
+
+    /** Walk a Block looking for YieldExpression with asteriskToken = true inside an async generator. */
+    private fun checkBlockForAsyncDelegator(
+        block: Block,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        for (stmt in block.statements) {
+            checkStmtForAsyncDelegator(stmt, source, fileName, tslibExports)
+        }
+    }
+
+    private fun checkStmtForAsyncDelegator(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+            is ReturnStatement -> stmt.expression?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkExprForAsyncDelegator(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        when (expr) {
+            is YieldExpression -> {
+                if (expr.asteriskToken) {
+                    // yield* expr → needs __asyncDelegator and __asyncValues
+                    val yieldPos = expr.pos
+                    val yieldLen = "yield".length  // just "yield" keyword span (5 chars)
+                    if ("__asyncDelegator" !in tslibExports) {
+                        emitTS2343("__asyncDelegator", yieldPos, yieldLen, source, fileName)
+                    }
+                    if ("__asyncValues" !in tslibExports) {
+                        emitTS2343("__asyncValues", yieldPos, yieldLen, source, fileName)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Check class members for private field access helpers. */
+    private fun checkClassMembersForPrivateFields(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        for (member in members) {
+            val body = when (member) {
+                is MethodDeclaration -> member.body
+                is GetAccessor -> member.body
+                is SetAccessor -> member.body
+                is Constructor -> member.body
+                else -> null
+            }
+            body?.let { checkBlockForPrivateFieldAccess(it, source, fileName, tslibExports) }
+        }
+    }
+
+    private fun checkBlockForPrivateFieldAccess(
+        block: Block,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        for (stmt in block.statements) {
+            checkStmtForPrivateFieldAccess(stmt, source, fileName, tslibExports)
+        }
+    }
+
+    private fun checkStmtForPrivateFieldAccess(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, isAssignmentLhs = false)
+            is ReturnStatement -> stmt.expression?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+                }
+            }
+            is IfStatement -> {
+                checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
+                checkStmtForPrivateFieldAccess(stmt.thenStatement, source, fileName, tslibExports)
+                stmt.elseStatement?.let { checkStmtForPrivateFieldAccess(it, source, fileName, tslibExports) }
+            }
+            is Block -> checkBlockForPrivateFieldAccess(stmt, source, fileName, tslibExports)
+            else -> {}
+        }
+    }
+
+    private fun checkExprForPrivateFieldAccess(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+        isAssignmentLhs: Boolean,
+    ) {
+        when (expr) {
+            is BinaryExpression -> {
+                val isAssignment = expr.operator == SyntaxKind.Equals ||
+                    expr.operator == SyntaxKind.PlusEquals ||
+                    expr.operator == SyntaxKind.MinusEquals ||
+                    expr.operator == SyntaxKind.AsteriskEquals ||
+                    expr.operator == SyntaxKind.SlashEquals
+                if (expr.operator == SyntaxKind.InKeyword) {
+                    // #field in obj → __classPrivateFieldIn
+                    val lhs = expr.left
+                    if (lhs is Identifier && lhs.text.startsWith('#')) {
+                        if ("__classPrivateFieldIn" !in tslibExports) {
+                            emitTS2343("__classPrivateFieldIn", lhs.pos, lhs.text.length, source, fileName)
+                        }
+                    }
+                    checkExprForPrivateFieldAccess(expr.right, source, fileName, tslibExports, false)
+                } else {
+                    checkExprForPrivateFieldAccess(expr.left, source, fileName, tslibExports, isAssignment)
+                    checkExprForPrivateFieldAccess(expr.right, source, fileName, tslibExports, false)
+                }
+            }
+            is PropertyAccessExpression -> {
+                val name = expr.name
+                if (name.text.startsWith('#')) {
+                    // this.#field — detect Set (assignment LHS) vs Get (read)
+                    val spanStart = expr.pos
+                    // span = "this.#field" = expr.pos to name.pos + name.text.length
+                    val spanEnd = name.pos + name.text.length
+                    val spanLen = spanEnd - spanStart
+                    if (isAssignmentLhs) {
+                        if ("__classPrivateFieldSet" !in tslibExports) {
+                            emitTS2343("__classPrivateFieldSet", spanStart, spanLen.coerceAtLeast(1), source, fileName)
+                        }
+                    } else {
+                        if ("__classPrivateFieldGet" !in tslibExports) {
+                            emitTS2343("__classPrivateFieldGet", spanStart, spanLen.coerceAtLeast(1), source, fileName)
+                        }
+                    }
+                } else {
+                    checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkParameterDecoratorsForHelper(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+        hasDecorators: Boolean,
+    ) {
+        if (!hasDecorators) return
+        for (member in members) {
+            val params = when (member) {
+                is MethodDeclaration -> member.parameters
+                is Constructor -> member.parameters
+                else -> continue
+            }
+            for (param in params) {
+                val decs = param.decorators ?: continue
+                if (decs.isEmpty()) continue
+                val decorator = decs.first()
+                val decoratorSpan = getDecoratorSpan(decorator, source)
+                if ("__param" !in tslibExports) {
+                    emitTS2343("__param", decoratorSpan.first, decoratorSpan.second, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun checkExprForMissingHelper(
+        expr: Expression?,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+        isEs5Target: Boolean,
+    ) {
+        if (expr == null) return
+        when (expr) {
+            is TaggedTemplateExpression -> {
+                // id`template` → needs __makeTemplateObject (ES5 only)
+                if (isEs5Target && "__makeTemplateObject" !in tslibExports) {
+                    val tagStart = expr.tag.pos
+                    val template = expr.template
+                    val templateEnd = when (template) {
+                        is NoSubstitutionTemplateLiteralNode -> template.pos + template.text.length + 2
+                        else -> template.end // fallback
+                    }
+                    val spanLen = templateEnd - tagStart
+                    emitTS2343("__makeTemplateObject", tagStart, spanLen.coerceAtLeast(1), source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is SpreadAssignment -> {
+                            // { ...o } → needs __assign (ES5 only)
+                            if (isEs5Target && "__assign" !in tslibExports) {
+                                // Span: position of "..." + name
+                                val spreadPos = prop.pos
+                                val spreadExpr = prop.expression
+                                val endPos = if (spreadExpr is Identifier) {
+                                    spreadExpr.pos + spreadExpr.text.length
+                                } else {
+                                    spreadExpr.pos + 1
+                                }
+                                val spanLen = endPos - spreadPos
+                                emitTS2343("__assign", spreadPos, spanLen.coerceAtLeast(1), source, fileName)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkBindingForMissingHelper(
+        binding: Expression,
+        source: String,
+        fileName: String,
+        tslibExports: Set<String>,
+    ) {
+        when (binding) {
+            is ObjectBindingPattern -> {
+                for (element in binding.elements) {
+                    if (element is BindingElement && element.dotDotDotToken) {
+                        // { ...x } → needs __rest
+                        if ("__rest" !in tslibExports) {
+                            // Span: position of the identifier 'x' (1 char for simple names)
+                            val nameNode = element.name
+                            val nameStart = nameNode.pos
+                            val nameLen = (nameNode as? Identifier)?.text?.length ?: 1
+                            emitTS2343("__rest", nameStart, nameLen, source, fileName)
+                        }
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Returns the span (start, length) of a decorator including the `@` sign. */
+    private fun getDecoratorSpan(decorator: Decorator, source: String): Pair<Int, Int> {
+        val start = decorator.pos
+        val expr = decorator.expression
+        val endPos = when (expr) {
+            is Identifier -> expr.pos + expr.text.length
+            is CallExpression -> {
+                // Find closing paren
+                source.indexOf(')', expr.pos).let { if (it >= 0) it + 1 else expr.pos + 1 }
+            }
+            else -> start + 4 // fallback: @dec = 4 chars
+        }
+        // Include the "@" sign in the span
+        val spanLen = endPos - start
+        return Pair(start, spanLen.coerceAtLeast(1))
+    }
+
+    /** Returns the set of exported names from a tslib source file. */
+    private fun getTslibExports(file: SourceFile): Set<String> {
+        val exports = mutableSetOf<String>()
+        for (stmt in file.statements) {
+            when (stmt) {
+                is ExportDeclaration -> {
+                    val clause = stmt.exportClause
+                    if (clause is NamedExports) {
+                        for (spec in clause.elements) {
+                            exports.add(spec.name.text)
+                        }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers) stmt.name?.let { exports.add(it.text) }
+                }
+                is VariableStatement -> {
+                    if (ModifierFlag.Export in stmt.modifiers) {
+                        for (decl in stmt.declarationList.declarations) {
+                            val n = decl.name
+                            if (n is Identifier) exports.add(n.text)
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    // declare module "tslib" { ... }
+                    val name = stmt.name
+                    if (name is StringLiteralNode && name.text == "tslib") {
+                        val body = stmt.body
+                        if (body is ModuleBlock) {
+                            for (inner in body.statements) {
+                                when (inner) {
+                                    is FunctionDeclaration -> {
+                                        if (ModifierFlag.Export in inner.modifiers || ModifierFlag.Declare in inner.modifiers) {
+                                            inner.name?.let { exports.add(it.text) }
+                                        }
+                                    }
+                                    is VariableStatement -> {
+                                        for (decl in inner.declarationList.declarations) {
+                                            val n = decl.name
+                                            if (n is Identifier) exports.add(n.text)
+                                        }
+                                    }
+                                    else -> {}
+                                }
+                            }
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return exports
+    }
+
+    private fun emitTS2343(helperName: String, spanStart: Int, spanLen: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+        diagnostics.add(Diagnostic(
+            message = "This syntax requires an imported helper named '$helperName' which does not exist in 'tslib'. Consider upgrading your version of 'tslib'.",
+            category = DiagnosticCategory.Error,
+            code = 2343,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = spanStart,
+            length = spanLen,
+        ))
     }
 
     // -----------------------------------------------------------------------
