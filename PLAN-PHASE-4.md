@@ -356,7 +356,7 @@ array→primitive, named→named) fall through to the old string system which do
   with same name. +1 test (exportClassExtendingIntersection).
 
 **Analysis of remaining test landscape (updated 2026-04-04):**
-- 2,280 failing tests (down from 2,303)
+- 2,276 failing tests (down from 2,303)
 - ~59% produce zero diagnostics — need deep type checking infrastructure
 - ~12% need exactly 1 missing diagnostic code (5-line diffs)
 - 117 tests need exactly 1 missing diagnostic code
