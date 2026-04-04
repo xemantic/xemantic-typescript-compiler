@@ -10452,9 +10452,13 @@ class Checker(
      * Check for TS1192: "Module '...' has no default export."
      * Emitted when a default import binding is used against a module that doesn't
      * export a default value. Suppressed when allowSyntheticDefaultImports is true.
+     *
+     * Also checks for TS2614: "Module '...' has no exported member 'X'. Did you mean
+     * to use 'import X from ...' instead?" — fires when a named import specifier
+     * doesn't exist in the module's exports but the module does have a default export.
      */
     private fun checkDefaultImports() {
-        // allowSyntheticDefaultImports suppresses this check
+        // allowSyntheticDefaultImports suppresses TS1192 check
         if (options.allowSyntheticDefaultImports) return
 
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
@@ -10468,7 +10472,6 @@ class Checker(
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ImportDeclaration) continue
                 val importClause = stmt.importClause ?: continue
-                val defaultBinding = importClause.name ?: continue
                 // Type-only imports don't need a runtime default export
                 if (importClause.isTypeOnly) continue
 
@@ -10476,37 +10479,136 @@ class Checker(
                 val specifier = stmt.moduleSpecifier
                 val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
                 val resolvedFile = resolveModuleSpecifier(moduleName) ?: continue
-
-                // Check if resolved module has a default export
                 val targetResult = fileResults[resolvedFile] ?: continue
-                if (moduleHasDefaultExport(targetResult.sourceFile)) continue
+                val targetFile = targetResult.sourceFile
 
-                // Compute display module name: strip leading "./" from relative specifiers
-                val displayName = when {
-                    moduleName.startsWith("./") -> moduleName.removePrefix("./")
-                    moduleName.startsWith("../") -> moduleName
-                    else -> {
-                        // For bare specifiers, use the resolved file path without extension
-                        resolvedFile.removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
+                val hasDefaultExport = moduleHasDefaultExport(targetFile)
+
+                // TS1192: default binding used but module has no default export
+                val defaultBinding = importClause.name
+                if (defaultBinding != null && !hasDefaultExport) {
+                    // Compute display module name: strip leading "./" from relative specifiers
+                    val displayName = when {
+                        moduleName.startsWith("./") -> moduleName.removePrefix("./")
+                        moduleName.startsWith("../") -> moduleName
+                        else -> {
+                            // For bare specifiers, use the resolved file path without extension
+                            resolvedFile.removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
+                        }
                     }
+                    val nameStart = defaultBinding.pos
+                    val nameLength = defaultBinding.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Module '\"$displayName\"' has no default export.",
+                        category = DiagnosticCategory.Error,
+                        code = 1192,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameStart,
+                        length = nameLength,
+                    ))
                 }
 
-                // Emit TS1192 on the default binding identifier
-                val nameStart = defaultBinding.pos
-                val nameLength = defaultBinding.text.length
-                val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-                diagnostics.add(Diagnostic(
-                    message = "Module '\"$displayName\"' has no default export.",
-                    category = DiagnosticCategory.Error,
-                    code = 1192,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = nameStart,
-                    length = nameLength,
-                ))
+                // TS2614: named import specifier not found in module exports, but
+                // module has a default export — suggest using default import instead.
+                // Only fires when module HAS a default export (otherwise TS1192 is enough).
+                if (hasDefaultExport) {
+                    val namedBindings = importClause.namedBindings
+                    if (namedBindings is NamedImports) {
+                        val moduleNamedExports = getModuleNamedExports(targetFile)
+                        for (importSpecifier in namedBindings.elements) {
+                            if (importSpecifier.isTypeOnly) continue
+                            // The "property name" is what's imported; the "name" is the local binding
+                            val importedName = (importSpecifier.propertyName ?: importSpecifier.name).text
+                            // import { default as X } is a valid way to import the default export — skip
+                            if (importedName == "default") continue
+                            if (importedName !in moduleNamedExports) {
+                                // Squiggle on the propertyName if present, else on the name
+                                val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                                val nameStart = nameNode.pos
+                                val nameLength = nameNode.text.length
+                                val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Module '\"$moduleName\"' has no exported member '$importedName'. Did you mean to use 'import $importedName from \"$moduleName\"' instead?",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2614,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameStart,
+                                    length = nameLength,
+                                ))
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * Returns the set of named exports from a source file (excluding 'default').
+     * Used by TS2614 checking to determine if named imports exist in the module.
+     */
+    private fun getModuleNamedExports(file: SourceFile): Set<String> {
+        val exports = mutableSetOf<String>()
+        for (stmt in file.statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (ModifierFlag.Export in stmt.modifiers) {
+                        for (decl in stmt.declarationList.declarations) {
+                            val name = decl.name
+                            if (name is Identifier) exports.add(name.text)
+                        }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default !in stmt.modifiers) {
+                        stmt.name?.let { exports.add(it.text) }
+                    }
+                }
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers && ModifierFlag.Default !in stmt.modifiers) {
+                        stmt.name?.let { exports.add(it.text) }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers) {
+                        exports.add(stmt.name.text)
+                    }
+                }
+                is TypeAliasDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers) {
+                        exports.add(stmt.name.text)
+                    }
+                }
+                is EnumDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers) {
+                        exports.add(stmt.name.text)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    if (ModifierFlag.Export in stmt.modifiers) {
+                        val name = stmt.name
+                        if (name is Identifier) exports.add(name.text)
+                    }
+                }
+                is ExportDeclaration -> {
+                    // export { A, B, C as D } — add each specifier's exported name
+                    val clause = stmt.exportClause
+                    if (clause is NamedExports) {
+                        for (specifier in clause.elements) {
+                            val exportedName = specifier.name.text
+                            if (exportedName != "default") exports.add(exportedName)
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return exports
     }
 
     /**
