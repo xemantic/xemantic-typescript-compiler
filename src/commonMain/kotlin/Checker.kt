@@ -424,6 +424,12 @@ class Checker(
         if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) {
             checkDownlevelIteration()
         }
+        // 72. Check call/new expression type argument count (TS2558)
+        checkCallTypeArgCount()
+        // 73. Check cross-file duplicate function implementation (TS2393)
+        if (binderResults.size > 1) {
+            checkCrossFileDuplicateFunction()
+        }
         } // end if (!declarationOnly)
     }
 
@@ -11283,6 +11289,13 @@ class Checker(
                         return TypeParamInfo(minRequired, typeParams.size, symbol.name)
                     }
                 }
+                is FunctionDeclaration -> {
+                    val typeParams = decl.typeParameters
+                    if (!typeParams.isNullOrEmpty()) {
+                        val minRequired = typeParams.count { it.default == null }
+                        return TypeParamInfo(minRequired, typeParams.size, symbol.name)
+                    }
+                }
                 else -> {}
             }
         }
@@ -20879,6 +20892,24 @@ class Checker(
             is Identifier -> FuncRef(nameNode.pos, nameNode.text.length)
             else -> null
         }
+        // TS2378: A 'get' accessor must return a value.
+        // Fires when getter body has no return statement and no throw statement.
+        // Both `return;` and `throw X;` suppress this diagnostic.
+        val hasAnyReturnOrThrow = bodyHasAnyReturn(body.statements) || bodyHasThrow(body.statements)
+        if (!hasAnyReturnOrThrow && nameNode is Identifier) {
+            val start = nameNode.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "A 'get' accessor must return a value.",
+                category = DiagnosticCategory.Error,
+                code = 2378,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = nameNode.text.length,
+            ))
+        }
         checkBodyForImplicitReturn(body, retType, false, nameRef, source, fileName)
         // Getters without type annotation: if body has value returns but doesn't always return,
         // emit TS2366 (TypeScript infers non-void return type from the body).
@@ -21123,6 +21154,59 @@ class Checker(
             // Don't recurse into nested function declarations/expressions (they have their own checks)
             is FunctionDeclaration -> {}
             else -> {}
+        }
+    }
+
+    /**
+     * Returns true if the body contains a throw statement. Used for TS2378 suppression.
+     */
+    private fun bodyHasThrow(stmts: List<Statement>): Boolean {
+        return stmts.any { stmtHasThrow(it) }
+    }
+
+    private fun stmtHasThrow(stmt: Statement): Boolean {
+        return when (stmt) {
+            is ThrowStatement -> true
+            is Block -> bodyHasThrow(stmt.statements)
+            is IfStatement -> stmtHasThrow(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { stmtHasThrow(it) } ?: false)
+            is TryStatement -> bodyHasThrow(stmt.tryBlock.statements)
+            is LabeledStatement -> stmtHasThrow(stmt.statement)
+            else -> false
+        }
+    }
+
+    /**
+     * Returns true if the body contains ANY return statement (with or without expression).
+     * Does NOT recurse into nested function bodies. Used for TS2378 (getter must return).
+     */
+    private fun bodyHasAnyReturn(stmts: List<Statement>): Boolean {
+        return stmts.any { stmtHasAnyReturn(it) }
+    }
+
+    private fun stmtHasAnyReturn(stmt: Statement): Boolean {
+        return when (stmt) {
+            is ReturnStatement -> true
+            is Block -> bodyHasAnyReturn(stmt.statements)
+            is IfStatement -> stmtHasAnyReturn(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { stmtHasAnyReturn(it) } ?: false)
+            is WhileStatement -> stmtHasAnyReturn(stmt.statement)
+            is ForStatement -> stmtHasAnyReturn(stmt.statement)
+            is ForInStatement -> stmtHasAnyReturn(stmt.statement)
+            is ForOfStatement -> stmtHasAnyReturn(stmt.statement)
+            is DoStatement -> stmtHasAnyReturn(stmt.statement)
+            is LabeledStatement -> stmtHasAnyReturn(stmt.statement)
+            is SwitchStatement -> stmt.caseBlock.any { clause ->
+                when (clause) {
+                    is CaseClause -> bodyHasAnyReturn(clause.statements)
+                    is DefaultClause -> bodyHasAnyReturn(clause.statements)
+                    else -> false
+                }
+            }
+            is TryStatement -> bodyHasAnyReturn(stmt.tryBlock.statements) ||
+                (stmt.catchClause?.let { bodyHasAnyReturn(it.block.statements) } ?: false) ||
+                (stmt.finallyBlock?.let { bodyHasAnyReturn(it.statements) } ?: false)
+            else -> false
         }
     }
 
@@ -27959,6 +28043,237 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2393: Duplicate function implementation (cross-file)
+    // -----------------------------------------------------------------------
+
+    private fun checkCrossFileDuplicateFunction() {
+        // Only check when using outFile (bundle mode) — separate module files have their own scope
+        if (options.outFile == null) return
+
+        // Collect top-level function names with bodies across non-module files
+        // Map: function name → list of (fileName, position, nameLength)
+        val funcDecls = mutableMapOf<String, MutableList<Triple<String, Int, Int>>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            // Skip module files — they have their own scope
+            if (isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration && stmt.body != null) {
+                    val name = stmt.name?.text ?: continue
+                    funcDecls.getOrPut(name) { mutableListOf() }.add(
+                        Triple(fileName, stmt.name!!.pos, name.length)
+                    )
+                }
+            }
+        }
+
+        // Emit TS2393 for duplicate implementations
+        for ((name, decls) in funcDecls) {
+            if (decls.size < 2) continue
+            // Emit on all .ts declarations (not .js)
+            for ((fileName, pos, length) in decls) {
+                if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+                val source = binderResults.first { it.sourceFile.fileName == fileName }.sourceFile.text
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "Duplicate function implementation.",
+                    category = DiagnosticCategory.Error,
+                    code = 2393,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = pos,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2558: Expected N type arguments, but got M (call/new expressions)
+    // -----------------------------------------------------------------------
+
+    private fun checkCallTypeArgCount() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkCallTypeArgCountInStmts(result.sourceFile.statements, source, fileName, result.locals)
+        }
+    }
+
+    private fun checkCallTypeArgCountInStmts(
+        stmts: List<Statement>, source: String, fileName: String,
+        locals: Map<String, Symbol>,
+    ) {
+        for (stmt in stmts) checkCallTypeArgCountInStmt(stmt, source, fileName, locals)
+    }
+
+    private fun checkCallTypeArgCountInStmt(
+        stmt: Statement, source: String, fileName: String,
+        locals: Map<String, Symbol>,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+            is FunctionDeclaration -> stmt.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+                    is Constructor -> m.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+                    is PropertyDeclaration -> m.initializer?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+                    else -> {}
+                }
+            }
+            is Block -> checkCallTypeArgCountInStmts(stmt.statements, source, fileName, locals)
+            is IfStatement -> {
+                checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
+                checkCallTypeArgCountInStmt(stmt.thenStatement, source, fileName, locals)
+                stmt.elseStatement?.let { checkCallTypeArgCountInStmt(it, source, fileName, locals) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+            is ForStatement -> {
+                checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            }
+            is ForInStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            is ForOfStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            is WhileStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            else -> {}
+        }
+    }
+
+    private fun checkCallTypeArgCountInExpr(
+        expr: Expression, source: String, fileName: String,
+        locals: Map<String, Symbol>,
+    ) {
+        when (expr) {
+            is CallExpression -> {
+                checkCallOrNewTypeArgCount(expr.expression, expr.typeArguments, source, fileName, locals)
+                checkCallTypeArgCountInExpr(expr.expression, source, fileName, locals)
+                for (arg in expr.arguments) checkCallTypeArgCountInExpr(arg, source, fileName, locals)
+            }
+            is NewExpression -> {
+                checkCallOrNewTypeArgCount(expr.expression, expr.typeArguments, source, fileName, locals)
+                checkCallTypeArgCountInExpr(expr.expression, source, fileName, locals)
+                expr.arguments?.forEach { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+            }
+            is BinaryExpression -> {
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    checkCallTypeArgCountInExpr(current.right, source, fileName, locals)
+                    current = current.left
+                }
+                checkCallTypeArgCountInExpr(current, source, fileName, locals)
+            }
+            is ParenthesizedExpression -> checkCallTypeArgCountInExpr(expr.expression, source, fileName, locals)
+            is ConditionalExpression -> {
+                checkCallTypeArgCountInExpr(expr.condition, source, fileName, locals)
+                checkCallTypeArgCountInExpr(expr.whenTrue, source, fileName, locals)
+                checkCallTypeArgCountInExpr(expr.whenFalse, source, fileName, locals)
+            }
+            is PropertyAccessExpression -> checkCallTypeArgCountInExpr(expr.expression, source, fileName, locals)
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> checkCallTypeArgCountInStmts(body.statements, source, fileName, locals)
+                is Expression -> checkCallTypeArgCountInExpr(body, source, fileName, locals)
+                else -> {}
+            }
+            is FunctionExpression -> checkCallTypeArgCountInStmts(expr.body.statements, source, fileName, locals)
+            else -> {}
+        }
+    }
+
+    private fun checkCallOrNewTypeArgCount(
+        callee: Expression,
+        typeArguments: List<TypeNode>?,
+        source: String,
+        fileName: String,
+        locals: Map<String, Symbol>,
+    ) {
+        // Only check if type arguments are provided and non-empty
+        if (typeArguments == null || typeArguments.isEmpty()) return
+
+        // Resolve the callee to a symbol
+        val name = when (callee) {
+            is Identifier -> callee.text
+            else -> return // PropertyAccessExpression, etc. — skip for now
+        }
+        if (name.isEmpty()) return
+
+        // Look up the symbol
+        val symbol = locals[name] ?: globals[name] ?: return
+
+        // Follow import alias
+        val resolved = if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+            try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
+        } else symbol
+
+        // Get type parameters from the function/class declarations
+        var maxTypeParams = -1
+        var minTypeParams = -1
+        var isOverloaded = false
+        for (decl in resolved.declarations) {
+            val typeParams = when (decl) {
+                is FunctionDeclaration -> {
+                    // Check for overloaded functions (multiple declarations)
+                    if (resolved.declarations.count { it is FunctionDeclaration } > 1) {
+                        isOverloaded = true
+                    }
+                    decl.typeParameters
+                }
+                is ClassDeclaration -> decl.typeParameters
+                is InterfaceDeclaration -> decl.typeParameters
+                else -> null
+            } ?: continue
+
+            val paramCount = typeParams.size
+            val minRequired = typeParams.count { it.default == null }
+            if (maxTypeParams < 0 || paramCount > maxTypeParams) maxTypeParams = paramCount
+            if (minTypeParams < 0 || minRequired < minTypeParams) minTypeParams = minRequired
+        }
+
+        if (maxTypeParams < 0) return // no generic declarations found
+        // Skip overloaded functions — each overload may have different type param counts
+        if (isOverloaded) return
+
+        val providedCount = typeArguments.size
+        // Check: too few or too many type arguments
+        if (providedCount in minTypeParams..maxTypeParams) return // correct range
+        // Skip when there are default type parameters — TypeScript uses different messages
+        // (TS2707 etc.) which we don't implement yet
+        if (minTypeParams != maxTypeParams) return
+
+        // Compute squiggle span — covers the type argument text only (no < >)
+        val firstArg = typeArguments.first()
+        val lastArg = typeArguments.last()
+        val start = firstArg.pos
+        // lastArg.end overshoots (includes next token start), so find the actual end
+        // by scanning backwards from lastArg.end for non-whitespace before '>'
+        var endPos = lastArg.end
+        while (endPos > start && endPos < source.length) {
+            val ch = source[endPos - 1]
+            if (ch == '>' || ch == ')' || ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
+                endPos--
+            } else break
+        }
+        val length = endPos - start
+
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Expected $maxTypeParams type arguments, but got $providedCount.",
+            category = DiagnosticCategory.Error,
+            code = 2558,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // TS2440: Import declaration conflicts with local declaration
