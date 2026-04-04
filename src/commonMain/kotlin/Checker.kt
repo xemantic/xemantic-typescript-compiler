@@ -11001,7 +11001,7 @@ class Checker(
             "if", "else", "for", "while", "do", "switch", "case", "default",
             "break", "continue", "return", "throw", "try", "catch", "finally",
             "new", "delete", "typeof", "instanceof", "in", "of", "with",
-            "var", "let", "const", "function", "class", "extends",
+            "var", "const", "function", "class", "extends",
             "import", "export", "from", "as",
             "void", "yield", "debugger",
             // TS type keywords (may appear as Identifiers after parser recovery)
