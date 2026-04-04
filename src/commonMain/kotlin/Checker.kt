@@ -256,6 +256,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14b. Check default imports from modules without default export (TS1192)
+        checkDefaultImports()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
         // 16. Check call expression argument counts (TS2554)
@@ -9662,7 +9664,7 @@ class Checker(
     ) {
         // displayName is used in the message (string literals get extra quotes in TS: ''0'' for '0')
         // groupKey is used for duplicate comparison (only numeric literals are normalized)
-        data class MemberInfo(val displayName: String, val groupKey: String, val kind: String, val nameNode: Node)
+        data class MemberInfo(val displayName: String, val groupKey: String, val kind: String, val nameNode: Node, val memberNode: Node? = null)
 
         fun memberKey(nameNode: Node): Pair<String, String>? {
             return when (nameNode) {
@@ -9698,11 +9700,11 @@ class Checker(
             when (member) {
                 is MethodDeclaration -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "method", member.name))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "method", member.name, member))
                 }
                 is PropertyDeclaration -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "property", member.name))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "property", member.name, member))
                 }
                 is GetAccessor -> {
                     val (display, key) = memberKey(member.name) ?: continue
@@ -9769,6 +9771,121 @@ class Checker(
             for (info in membersToFlag) {
                 emitDuplicate2300(info.displayName, info.nameNode, source, fileName)
             }
+
+            // TS2717: Subsequent property declarations must have the same type
+            // Fires when a property is subsequent to any first declaration with a different type
+            if (hasProperty && group.size >= 2) {
+                val firstMember = group[0]
+                val firstType = getMemberTypeString(firstMember.memberNode)
+                if (firstType != null) {
+                    // Check all subsequent properties (not methods — TS2717 only fires on properties)
+                    for (i in 1 until group.size) {
+                        val info = group[i]
+                        if (info.kind != "property") continue
+                        val laterProp = info.memberNode as? PropertyDeclaration ?: continue
+                        val laterType = getPropertyTypeString(laterProp)
+                        if (laterType != null && laterType != firstType) {
+                            val name = info.displayName
+                            val start = info.nameNode.pos
+                            val length = when (val n = info.nameNode) {
+                                is StringLiteralNode -> n.text.length + 2
+                                is NumericLiteralNode -> n.text.length
+                                else -> name.length
+                            }
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            val firstStart = firstMember.nameNode.pos
+                            val (firstLine, firstChar) = getLineAndCharacterOfPosition(source, firstStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Subsequent property declarations must have the same type.  Property '$name' must be of type '$firstType', but here has type '$laterType'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2717,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                                relatedInformation = listOf(Diagnostic(
+                                    message = "'$name' was also declared here.",
+                                    category = DiagnosticCategory.Message,
+                                    code = 6203,
+                                    fileName = fileName,
+                                    line = firstLine,
+                                    character = firstChar,
+                                    start = firstStart,
+                                    length = when (val n = firstMember.nameNode) {
+                                        is StringLiteralNode -> n.text.length + 2
+                                        is NumericLiteralNode -> n.text.length
+                                        else -> firstMember.displayName.length
+                                    },
+                                )),
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Get a type string from a MemberInfo's member node. */
+    private fun getMemberTypeString(memberNode: Node?): String? {
+        return when (memberNode) {
+            is PropertyDeclaration -> getPropertyTypeString(memberNode)
+            is MethodDeclaration -> getMethodTypeString(memberNode)
+            else -> null
+        }
+    }
+
+    /** Get a method type string formatted as '() => returnType'. */
+    private fun getMethodTypeString(method: MethodDeclaration): String? {
+        val returnType = method.type
+        val returnTypeStr = if (returnType != null) {
+            when (returnType) {
+                is KeywordTypeNode -> returnType.kind.name.lowercase().removeSuffix("keyword")
+                is TypeReference -> (returnType.typeName as? Identifier)?.text
+                else -> formatTypeForDisplay(returnType)
+            }
+        } else {
+            "void"
+        }
+        if (returnTypeStr == null) return null
+        val params = method.parameters
+        if (params.isNullOrEmpty()) return "() => $returnTypeStr"
+        // Build parameter list
+        val paramStrs = params.map { p ->
+            val pName = (p.name as? Identifier)?.text ?: "arg"
+            val pType = if (p.type != null) {
+                when (p.type) {
+                    is KeywordTypeNode -> (p.type as KeywordTypeNode).kind.name.lowercase().removeSuffix("keyword")
+                    is TypeReference -> ((p.type as TypeReference).typeName as? Identifier)?.text
+                    else -> formatTypeForDisplay(p.type!!)
+                }
+            } else "any"
+            "$pName: ${pType ?: "any"}"
+        }
+        return "(${paramStrs.joinToString(", ")}) => $returnTypeStr"
+    }
+
+    /** Get a simple type string from a property declaration for TS2717 comparison. */
+    private fun getPropertyTypeString(prop: PropertyDeclaration): String? {
+        // Check type annotation first
+        val typeNode = prop.type
+        if (typeNode != null) {
+            return when (typeNode) {
+                is TypeReference -> (typeNode.typeName as? Identifier)?.text
+                is KeywordTypeNode -> typeNode.kind.name.lowercase()
+                    .removeSuffix("keyword")
+                else -> formatTypeForDisplay(typeNode)
+            }
+        }
+        // Infer from initializer
+        val init = prop.initializer ?: return null
+        return when (init) {
+            is NumericLiteralNode -> "number"
+            is StringLiteralNode -> "string"
+            is TemplateExpression -> "string"
+            is NoSubstitutionTemplateLiteralNode -> "string"
+            is PrefixUnaryExpression -> if (init.operator == SyntaxKind.Minus) "number" else null
+            else -> null
         }
     }
 
@@ -10325,6 +10442,103 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Default import checking (TS1192)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for TS1192: "Module '...' has no default export."
+     * Emitted when a default import binding is used against a module that doesn't
+     * export a default value. Suppressed when allowSyntheticDefaultImports is true.
+     */
+    private fun checkDefaultImports() {
+        // allowSyntheticDefaultImports suppresses this check
+        if (options.allowSyntheticDefaultImports) return
+
+        val isMultiFile = binderResults.size > 1 || isMultiFileSource
+        if (!isMultiFile) return
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val importClause = stmt.importClause ?: continue
+                val defaultBinding = importClause.name ?: continue
+                // Type-only imports don't need a runtime default export
+                if (importClause.isTypeOnly) continue
+
+                // Resolve the module specifier
+                val specifier = stmt.moduleSpecifier
+                val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
+                val resolvedFile = resolveModuleSpecifier(moduleName) ?: continue
+
+                // Check if resolved module has a default export
+                val targetResult = fileResults[resolvedFile] ?: continue
+                if (moduleHasDefaultExport(targetResult.sourceFile)) continue
+
+                // Compute display module name: strip leading "./" from relative specifiers
+                val displayName = when {
+                    moduleName.startsWith("./") -> moduleName.removePrefix("./")
+                    moduleName.startsWith("../") -> moduleName
+                    else -> {
+                        // For bare specifiers, use the resolved file path without extension
+                        resolvedFile.removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
+                    }
+                }
+
+                // Emit TS1192 on the default binding identifier
+                val nameStart = defaultBinding.pos
+                val nameLength = defaultBinding.text.length
+                val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                diagnostics.add(Diagnostic(
+                    message = "Module '\"$displayName\"' has no default export.",
+                    category = DiagnosticCategory.Error,
+                    code = 1192,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = nameStart,
+                    length = nameLength,
+                ))
+            }
+        }
+    }
+
+    /**
+     * Returns true if the given source file has a default export via:
+     * - `export default <expr>` (ExportAssignment with isExportEquals=false)
+     * - `export default function/class` (declaration with Default modifier)
+     * - `export { X as default }` (ExportDeclaration with a specifier named "default")
+     */
+    private fun moduleHasDefaultExport(file: SourceFile): Boolean {
+        for (stmt in file.statements) {
+            when (stmt) {
+                is ExportAssignment -> {
+                    if (!stmt.isExportEquals) return true
+                }
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Default in stmt.modifiers) return true
+                }
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Default in stmt.modifiers) return true
+                }
+                is ExportDeclaration -> {
+                    val clause = stmt.exportClause
+                    if (clause is NamedExports) {
+                        for (specifier in clause.elements) {
+                            if (specifier.name.text == "default") return true
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
@@ -26677,6 +26891,59 @@ class Checker(
     }
 
     /**
+     * TS2340: Only public and protected methods of the base class are accessible via 'super'.
+     * In ES5, super can only be used to access methods — properties/getters/setters are not
+     * accessible because downlevel emit can't support [[Get]] on super for accessors.
+     */
+    private fun checkSuperPropertyAccessES5(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        val propName = expr.name.text
+        if (enclosingClassType == null) return
+        if (enclosingClassType !is Type.Interface) return
+        // Find the base class type
+        val baseTypes = enclosingClassType.baseTypes
+        if (baseTypes.isNullOrEmpty()) return
+        for (baseType in baseTypes) {
+            if (baseType !is Type.Interface) continue
+            resolveStructuredTypeMembers(baseType)
+            // Find the member in the base class
+            val baseSym = baseType.symbol ?: continue
+            for (decl in baseSym.declarations) {
+                if (decl !is ClassDeclaration) continue
+                for (member in decl.members) {
+                    val memberName = when (member) {
+                        is MethodDeclaration -> (member.name as? Identifier)?.text
+                        is PropertyDeclaration -> (member.name as? Identifier)?.text
+                        is GetAccessor -> (member.name as? Identifier)?.text
+                        is SetAccessor -> (member.name as? Identifier)?.text
+                        else -> null
+                    }
+                    if (memberName != propName) continue
+                    // Methods are OK via super, properties/getters/setters are not
+                    if (member is MethodDeclaration) return // found as method — no error
+                    // Non-method member found — emit TS2340
+                    val start = expr.name.pos
+                    val length = propName.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Only public and protected methods of the base class are accessible via the 'super' keyword.",
+                        category = DiagnosticCategory.Error,
+                        code = 2340,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    return
+                }
+            }
+        }
+    }
+
+    /**
      * Check a single property access expression for TS2341 and TS2339.
      * TS2341 is checked first (private member accessibility).
      */
@@ -26684,6 +26951,11 @@ class Checker(
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // === TS2340: super property access restriction (ES5 only) ===
+        if (expr.expression is Identifier && (expr.expression as Identifier).text == "super" && options.target <= ScriptTarget.ES5) {
+            checkSuperPropertyAccessES5(expr, source, fileName, enclosingClassType)
+        }
+
         // === TS2341: Private member accessibility check ===
         if (checkPrivateMemberAccess(expr, source, fileName, enclosingClassType)) return
 
@@ -28755,6 +29027,14 @@ class Checker(
                 }
                 is ClassDeclaration -> decl.typeParameters
                 is InterfaceDeclaration -> decl.typeParameters
+                is VariableDeclaration -> {
+                    // Variable holding a generic arrow function or function expression
+                    when (val init = decl.initializer) {
+                        is ArrowFunction -> init.typeParameters
+                        is FunctionExpression -> init.typeParameters
+                        else -> null
+                    }
+                }
                 else -> null
             } ?: continue
 

@@ -473,6 +473,12 @@ private val diagnosticComparator = Comparator<Diagnostic> { a, b ->
         fileA == null && fileB != null -> return@Comparator -1
         fileA != null && fileB == null -> return@Comparator 1
         fileA != null && fileB != null -> {
+            // tsconfig.json diagnostics (program-level) sort before source file diagnostics,
+            // matching TypeScript's ordering: program/options diagnostics precede per-file diagnostics
+            val aIsTsconfig = fileA.endsWith("tsconfig.json")
+            val bIsTsconfig = fileB.endsWith("tsconfig.json")
+            if (aIsTsconfig && !bIsTsconfig) return@Comparator -1
+            if (!aIsTsconfig && bIsTsconfig) return@Comparator 1
             val c = fileA.compareTo(fileB)
             if (c != 0) return@Comparator c
         }

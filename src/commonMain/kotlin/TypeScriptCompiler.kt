@@ -580,6 +580,9 @@ class TypeScriptCompiler {
             }
         }
 
+        // Paths validation diagnostics (TS5061/5062/5063/5064/5066/5090)
+        diagnostics.addAll(options.pathsDiagnostics)
+
         if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
             // Single-file compilation
             val file = parsed.files[0]
