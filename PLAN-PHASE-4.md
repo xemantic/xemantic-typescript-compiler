@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-03):** 7,758 / 10,077 tests passing (77.0%).
+**Status (2026-04-03):** 7,765 / 10,077 tests passing (77.1%).
 
 ## Goal
 
@@ -282,15 +282,30 @@ array→primitive, named→named) fall through to the old string system which do
   stringIndexerAndConstructor, stringIndexerAndConstructor1,
   classExtendsInterfaceThatExtendsClassWithPrivates1).
 
+**Completed session 2026-04-03c (+7 tests, 7,758 → 7,765):**
+- TS2341: Private member accessibility check. Handles instance access (`c.x`),
+  static access (`C.e`), subclass `this` access (`this.options` in derived class),
+  and `new X()` type inference for untyped variables. Guards: get/set accessor
+  pairs with mixed visibility (public getter + private setter is allowed),
+  `getClassNameWithTypeParams` for generic class display names (`D<T>`).
+  +5 tests (propertyAccessibility1, propertyAccessibility2, privateVisibility,
+  privateAccessInSubclass1, cloduleStaticMembers).
+- ModuleBlock fix: `checkPropertyAccessInStatement` was casting namespace body
+  to `Block` instead of `ModuleBlock`, so TS2339/TS2341 checks never ran inside
+  namespace bodies. This fixed `cloduleStaticMembers` (TS2341 in clodule pattern).
+- TS2454 co-emit with TS2448: Block-scoped variable use-before-declaration now
+  co-emits TS2454 ("used before being assigned") under strict mode, but only for
+  `let` declarations (not `const`). Added `isConst` to `BlockScopedDecl`.
+  +2 tests (forwardRefInClassProperties, useBeforeDeclaration_destructuring).
+
 **Recommended priority for next items:**
 
 1. **Deeper type display**: Object literal type properties (currently `{ ... }`),
    function `this:` parameter, better return type inference — affects ~22 TS2322 diff tests
 2. **Module resolution**: TS2305/TS2307 would unlock 143+ small-diff error tests
-3. **TS2454 alongside TS2448**: Co-emit TS2454 for block-scoped use-before-declaration
-   in function bodies (forwardRefInClassProperties, +1 test)
-4. **New diagnostic codes**: TS2341 (private access, 6), TS2303 (circular import, 7)
-5. **Relax type engine guards**: Highest ROI but highest risk of FPs
+3. **New diagnostic codes**: TS2303 (circular import, 7), TS2445 (protected access)
+4. **Relax type engine guards**: Highest ROI but highest risk of FPs
+5. **7-line-diff fixes**: ~23 tests each needing 1 missing diagnostic code
 
 ---
 
