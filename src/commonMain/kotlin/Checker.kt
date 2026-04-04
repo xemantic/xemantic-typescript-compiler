@@ -9455,7 +9455,15 @@ class Checker(
 
     /** Normalize numeric string to canonical form for duplicate comparison. */
     private fun normalizeNumericKey(text: String): String {
-        val num = text.toDoubleOrNull() ?: return text
+        val num = when {
+            text.startsWith("0b", ignoreCase = true) || text.startsWith("0B") ->
+                text.substring(2).toLongOrNull(2)?.toDouble()
+            text.startsWith("0o", ignoreCase = true) || text.startsWith("0O") ->
+                text.substring(2).toLongOrNull(8)?.toDouble()
+            text.startsWith("0x", ignoreCase = true) || text.startsWith("0X") ->
+                text.substring(2).toLongOrNull(16)?.toDouble()
+            else -> text.toDoubleOrNull()
+        } ?: return text
         // 0.0 → "0", 1.0 → "1", etc.
         return if (num == num.toLong().toDouble()) num.toLong().toString() else text
     }
