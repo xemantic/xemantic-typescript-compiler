@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-04):** 7,780 / 10,077 tests passing (77.2%).
+**Status (2026-04-04):** 7,789 / 10,077 tests passing (77.3%).
 
 ## Goal
 
@@ -309,7 +309,7 @@ array→primitive, named→named) fall through to the old string system which do
   staticMethodsReferencingClassTypeParameters, genericClassWithStaticsUsingTypeArguments,
   typeParametersInStaticAccessors).
 
-**Completed session 2026-04-04 (+9 tests, 7,771 → 7,780):**
+**Completed session 2026-04-04 (+18 tests, 7,771 → 7,789):**
 - Binder: Interface+Function merge rule in `canMerge` — fixes TS2709 FP for merged
   function+interface symbols (privacyCheckExportAssignment test).
 - TS2440: Skip internal namespace aliases (`import foo = m1`) when they don't
@@ -329,6 +329,11 @@ array→primitive, named→named) fall through to the old string system which do
 - TS2304: Remove `let` from KEYWORD_IDENTIFIERS to allow co-emission with TS1212
   when `let` is used as bare expression statement in strict mode.
   +2 tests (downlevelLetConst6, downlevelLetConst11).
+- JS baseline: symmetric `.d.ts` section stripping in `String?.sameAs(Path)`.
+  Input `.d.ts` files were stripped from expected but not actual output.
+  +9 tests (declarationEmitForGlobalishSpecifierSymlink x2, duplicatePackage_globalMerge,
+  externalModuleResolution2, jsFileCompilationWithDeclarationEmitPathSameAsInput,
+  moduleResolutionWithSuffixes x3).
 - Investigation: relaxing TS7006/TS7019 gate (always-on noImplicitAny) causes
   net regression (-6). Kept gated behind `noImplicitAny || strict`.
 
