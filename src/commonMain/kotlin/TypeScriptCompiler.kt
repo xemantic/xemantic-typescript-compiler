@@ -460,6 +460,35 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS6054: unsupported file extension
+        // Fires for root source files with unsupported extensions (e.g. .js.map, .txt).
+        // Excludes: JSON files (handled via resolveJsonModules), files in node_modules.
+        if (parsed.hasExplicitFilenames) {
+            val supportedExtensions = setOf(".ts", ".tsx", ".d.ts", ".js", ".jsx",
+                ".cts", ".d.cts", ".cjs", ".mts", ".d.mts", ".mjs")
+            for (file in parsed.files) {
+                val fn = file.fileName
+                // Skip node_modules files — those are module resolution artifacts, not root files
+                if (fn.contains("node_modules")) continue
+                // Skip JSON files — handled differently (resolveJsonModules / tsconfig.json)
+                if (fn.endsWith(".json")) continue
+                val baseName = fn.substringAfterLast('/')
+                // Check if the extension (everything from the last dot, or compound like .d.ts) is supported
+                val isSupported = supportedExtensions.any { ext -> baseName.endsWith(ext) }
+                if (!isSupported) {
+                    diagnostics.add(Diagnostic(
+                        message = "File '$fn' has an unsupported extension. The only supported extensions are '.ts', '.tsx', '.d.ts', '.js', '.jsx', '.cts', '.d.cts', '.cjs', '.mts', '.d.mts', '.mjs'.",
+                        category = DiagnosticCategory.Error,
+                        code = 6054,
+                        messageChain = listOf(
+                            "  The file is in the program because:",
+                            "    Root file specified for compilation",
+                        ),
+                    ))
+                }
+            }
+        }
+
         // TS5055: output would overwrite input file
         // TS5056: multiple input files would produce the same output
         if (parsed.hasExplicitFilenames) {
