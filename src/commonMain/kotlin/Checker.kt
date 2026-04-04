@@ -21217,8 +21217,10 @@ class Checker(
     ) {
         when (stmt) {
             is ExportDeclaration -> {
-                // export * from "X" → needs __exportStar
-                if (stmt.exportClause == null && stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
+                // export * from "X" → needs __exportStar (not for System modules — they inline it)
+                val em = options.effectiveModule
+                val isSystemOrAmd = em == ModuleKind.System || em == ModuleKind.AMD || em == ModuleKind.UMD
+                if (!isSystemOrAmd && stmt.exportClause == null && stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
                     if ("__exportStar" !in tslibExports) {
                         // Span: from stmt.pos to after ';' (inclusive)
                         val semiPos = source.indexOf(';', stmt.pos)
