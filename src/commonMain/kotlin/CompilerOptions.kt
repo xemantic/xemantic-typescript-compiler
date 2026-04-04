@@ -102,6 +102,7 @@ data class CompilerOptions(
     val preserveConstEnums: Boolean = false,
     val sourceMap: Boolean = false,
     val noImplicitAny: Boolean = false,
+    val noImplicitAnyExplicitlyFalse: Boolean = false,
     val noImplicitReturns: Boolean = false,
     val noImplicitThis: Boolean = false,
     val strictNullChecks: Boolean = false,
@@ -390,7 +391,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "removecomments" -> options.copy(removeComments = boolValue)
         "preserveconstenums" -> options.copy(preserveConstEnums = boolValue)
         "sourcemap" -> options.copy(sourceMap = boolValue)
-        "noimplicitany" -> options.copy(noImplicitAny = boolValue)
+        "noimplicitany" -> options.copy(noImplicitAny = boolValue, noImplicitAnyExplicitlyFalse = !boolValue)
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
         "noimplicitthis" -> options.copy(noImplicitThis = boolValue)
         "strictnullchecks" -> options.copy(strictNullChecks = boolValue, strictNullChecksExplicitlyFalse = !boolValue)
