@@ -10518,16 +10518,33 @@ class Checker(
                     val nameStart = defaultBinding.pos
                     val nameLength = defaultBinding.text.length
                     val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Module '\"$displayName\"' has no default export.",
-                        category = DiagnosticCategory.Error,
-                        code = 1192,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = nameStart,
-                        length = nameLength,
-                    ))
+                    // TS2613: Module has no default export. Did you mean to use named import?
+                    // Fires when the default binding name matches a named export of the module.
+                    val importName = defaultBinding.text
+                    val moduleNamedExports = getModuleNamedExports(targetFile)
+                    if (importName in moduleNamedExports) {
+                        diagnostics.add(Diagnostic(
+                            message = "Module '\"$displayName\"' has no default export. Did you mean to use 'import { $importName } from \"$displayName\"' instead?",
+                            category = DiagnosticCategory.Error,
+                            code = 2613,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameStart,
+                            length = nameLength,
+                        ))
+                    } else {
+                        diagnostics.add(Diagnostic(
+                            message = "Module '\"$displayName\"' has no default export.",
+                            category = DiagnosticCategory.Error,
+                            code = 1192,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameStart,
+                            length = nameLength,
+                        ))
+                    }
                 }
 
                 // TS2614: named import specifier not found in module exports, but
@@ -27574,20 +27591,40 @@ class Checker(
                     if (memberName != propName) continue
                     // Methods are OK via super, properties/getters/setters are not
                     if (member is MethodDeclaration) return // found as method — no error
-                    // Non-method member found — emit TS2340
                     val start = expr.name.pos
                     val length = propName.length
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Only public and protected methods of the base class are accessible via the 'super' keyword.",
-                        category = DiagnosticCategory.Error,
-                        code = 2340,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+                    // TS2576: Static member accessed via super — use different message
+                    val isStatic = member is PropertyDeclaration &&
+                        ModifierFlag.Static in (member as PropertyDeclaration).modifiers
+                    if (isStatic) {
+                        // Get enclosing class name for the suggestion
+                        val baseClassName = baseSym.declarations.firstOrNull { it is ClassDeclaration }
+                            .let { (it as? ClassDeclaration)?.name?.text }
+                        val suggestion = if (baseClassName != null) " Did you mean to access the static member '${baseClassName}.${propName}' instead?" else ""
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '${baseType.symbol?.name ?: "unknown"}'.$suggestion",
+                            category = DiagnosticCategory.Error,
+                            code = 2576,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    } else {
+                        // Non-method, non-static member — emit TS2340
+                        diagnostics.add(Diagnostic(
+                            message = "Only public and protected methods of the base class are accessible via the 'super' keyword.",
+                            category = DiagnosticCategory.Error,
+                            code = 2340,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
                     return
                 }
             }

@@ -4514,6 +4514,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             do {
                 // Handle missing type arguments (e.g., `Foo<a,,b>`)
                 if (token == SyntaxKind.Comma || token == SyntaxKind.GreaterThan) {
+                    // TS1110: Type expected — empty type argument position
+                    reportError("Type expected.", code = 1110, overrideLength = 1)
                     args.add(KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = getPos(), end = getEnd()))
                 } else {
                     args.add(parseType())
