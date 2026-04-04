@@ -16611,7 +16611,7 @@ class Checker(
                     when {
                         decl.isEnum -> emitTS2450(expr, decl.pos, expr.text, source, fileName)
                         decl.isClass -> emitTS2449(expr, decl.pos, expr.text, source, fileName)
-                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName)
+                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst)
                     }
                 }
             }
@@ -16670,7 +16670,7 @@ class Checker(
         }
     }
 
-    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false)
+    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false, val isConst: Boolean = false)
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
         val decls = mutableMapOf<String, BlockScopedDecl>()
@@ -16685,8 +16685,9 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 val kind = stmt.declarationList.flags
                 if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                    val isConstDecl = kind == SyntaxKind.ConstKeyword
                     for (d in stmt.declarationList.declarations) {
-                        collectBindingNamesEx(d.name, decls)
+                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl)
                     }
                 }
             }
@@ -16727,14 +16728,14 @@ class Checker(
         }
     }
 
-    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>) {
+    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false) {
         when (name) {
-            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos)
+            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst)
             is ObjectBindingPattern -> for (el in name.elements) {
-                collectBindingNamesEx(el.name, decls)
+                collectBindingNamesEx(el.name, decls, isConst)
             }
             is ArrayBindingPattern -> for (el in name.elements) {
-                if (el is BindingElement) collectBindingNamesEx(el.name, decls)
+                if (el is BindingElement) collectBindingNamesEx(el.name, decls, isConst)
             }
             else -> {}
         }
@@ -16949,7 +16950,7 @@ class Checker(
         }
     }
 
-    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String) {
+    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false) {
         val start = useNode.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -16974,6 +16975,21 @@ class Checker(
                 length = name.length,
             )),
         ))
+        // Co-emit TS2454: "Variable 'x' is used before being assigned."
+        // TypeScript emits both TS2448 and TS2454 at the same position under strict mode,
+        // but only for `let` (not `const`) declarations — const is always initialized.
+        if (strictNullChecks && !isConst) {
+            diagnostics.add(Diagnostic(
+                message = "Variable '$name' is used before being assigned.",
+                category = DiagnosticCategory.Error,
+                code = 2454,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
     }
 
     private fun emitTS2450(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String) {
@@ -25567,7 +25583,7 @@ class Checker(
             }
             is LabeledStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             is ModuleDeclaration -> {
-                (stmt.body as? Block)?.let {
+                (stmt.body as? ModuleBlock)?.let {
                     checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType)
                 }
             }
@@ -25694,14 +25710,234 @@ class Checker(
         }
     }
 
+    // -----------------------------------------------------------------------
+    // TS2341: Private member accessibility check
+    // -----------------------------------------------------------------------
+
     /**
-     * Check a single property access expression for TS2339.
-     * Conservative: only check this.X access in class bodies for now.
+     * Check if a property access violates private member accessibility.
+     * Returns true if TS2341 was emitted (caller should skip TS2339 check).
+     */
+    private fun checkPrivateMemberAccess(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ): Boolean {
+        if (expr.expression !is Identifier) return false
+        val identName = (expr.expression as Identifier).text
+        val propName = expr.name.text
+
+        if (identName == "this") {
+            // this.prop — check if accessing private member from base class
+            if (enclosingClassType == null) return false
+            if (enclosingClassType !is Type.Interface) return false
+            resolveStructuredTypeMembers(enclosingClassType)
+            val prop = getPropertyOfType(enclosingClassType, propName) ?: return false
+            val decl = prop.valueDeclaration ?: prop.declarations.firstOrNull() ?: return false
+            if (!isMemberPrivate(decl)) return false
+            val (declaringName, displayName) = findPrivateDeclaringClassInfo(enclosingClassType, propName) ?: return false
+            val enclosingName = enclosingClassType.symbol?.name ?: return false
+            if (enclosingName == declaringName) return false // access within same class is OK
+            emitTS2341(expr, propName, displayName, source, fileName)
+            return true
+        }
+
+        val identSymbol = globals[identName] ?: return false
+
+        if (identSymbol.flags.hasAny(SymbolFlags.Class)) {
+            // Static access: C.prop — check static private members
+            return checkStaticPrivateMemberAccess(expr, identSymbol, propName, source, fileName, enclosingClassType)
+        }
+
+        if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
+            // Instance access: c.prop — resolve type, check if property is private
+            var exprType = getTypeOfSymbol(identSymbol)
+            if (exprType === anyType) {
+                // Try to infer from `new X()` initializer
+                exprType = tryInferNewExpressionType(identSymbol) ?: return false
+            }
+            if (exprType === errorType || exprType === unknownType) return false
+            if (exprType !is Type.Interface) return false
+            resolveStructuredTypeMembers(exprType)
+            val prop = getPropertyOfType(exprType, propName) ?: return false
+            val decl = prop.valueDeclaration ?: prop.declarations.firstOrNull() ?: return false
+            if (!isMemberPrivate(decl)) return false
+            val (declaringName, displayName) = findPrivateDeclaringClassInfo(exprType, propName) ?: return false
+            val enclosingName = (enclosingClassType as? Type.Object)?.symbol?.name
+            if (enclosingName == declaringName) return false
+            emitTS2341(expr, propName, displayName, source, fileName)
+            return true
+        }
+
+        return false
+    }
+
+    /** Check static private member access: C.prop where C is a class symbol. */
+    private fun checkStaticPrivateMemberAccess(
+        expr: PropertyAccessExpression, classSymbol: Symbol, propName: String,
+        source: String, fileName: String, enclosingClassType: Type?,
+    ): Boolean {
+        for (decl in classSymbol.declarations) {
+            if (decl !is ClassDeclaration) continue
+            for (member in decl.members) {
+                val isStatic = when (member) {
+                    is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                    is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                    is GetAccessor -> ModifierFlag.Static in member.modifiers
+                    is SetAccessor -> ModifierFlag.Static in member.modifiers
+                    else -> false
+                }
+                if (!isStatic) continue
+                val memberName = when (member) {
+                    is PropertyDeclaration -> (member.name as? Identifier)?.text
+                    is MethodDeclaration -> (member.name as? Identifier)?.text
+                    is GetAccessor -> (member.name as? Identifier)?.text
+                    is SetAccessor -> (member.name as? Identifier)?.text
+                    else -> null
+                }
+                if (memberName == propName && isMemberPrivate(member)) {
+                    val enclosingName = (enclosingClassType as? Type.Object)?.symbol?.name
+                    if (enclosingName == classSymbol.name) return false // access within same class
+                    val displayName = getClassNameWithTypeParams(classSymbol)
+                    emitTS2341(expr, propName, displayName, source, fileName)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /** Emit TS2341: Property 'X' is private and only accessible within class 'Y'. */
+    private fun emitTS2341(
+        expr: PropertyAccessExpression, propName: String, className: String,
+        source: String, fileName: String,
+    ) {
+        val start = expr.name.pos
+        val length = expr.name.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' is private and only accessible within class '$className'.",
+            category = DiagnosticCategory.Error,
+            code = 2341,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** Get class name with type parameters for error messages (e.g., "D<T>"). */
+    private fun getClassNameWithTypeParams(symbol: Symbol): String {
+        for (decl in symbol.declarations) {
+            if (decl is ClassDeclaration) {
+                val typeParams = decl.typeParameters
+                if (typeParams != null && typeParams.isNotEmpty()) {
+                    val params = typeParams.joinToString(", ") { it.name.text }
+                    return "${symbol.name}<$params>"
+                }
+            }
+        }
+        return symbol.name
+    }
+
+    /**
+     * Find the declaring class of a private member, returning (rawName, displayNameWithTypeParams).
+     * Walks base type chain to find the class where the member is declared as private.
+     */
+    private fun findPrivateDeclaringClassInfo(type: Type.Object, memberName: String): Pair<String, String>? {
+        if (type is Type.Interface) {
+            val symbol = type.symbol
+            if (symbol != null) {
+                for (decl in symbol.declarations) {
+                    val members = when (decl) {
+                        is ClassDeclaration -> decl.members
+                        else -> continue
+                    }
+                    // Collect all members with matching name and check if ALL are private.
+                    // For get/set accessor pairs, if getter is public but setter is private,
+                    // the property is not fully private (reads are allowed).
+                    var foundAnyWithName = false
+                    var allPrivate = true
+                    for (member in members) {
+                        val name = when (member) {
+                            is PropertyDeclaration -> (member.name as? Identifier)?.text
+                            is MethodDeclaration -> (member.name as? Identifier)?.text
+                            is GetAccessor -> (member.name as? Identifier)?.text
+                            is SetAccessor -> (member.name as? Identifier)?.text
+                            else -> null
+                        }
+                        if (name == memberName) {
+                            foundAnyWithName = true
+                            if (!isMemberPrivate(member)) {
+                                allPrivate = false
+                            }
+                        }
+                    }
+                    // Also check constructor parameter properties
+                    for (member in members) {
+                        if (member is Constructor) {
+                            for (param in member.parameters) {
+                                val paramName = (param.name as? Identifier)?.text
+                                if (paramName == memberName) {
+                                    foundAnyWithName = true
+                                    if (ModifierFlag.Private !in param.modifiers) {
+                                        allPrivate = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (foundAnyWithName && allPrivate) {
+                        return Pair(symbol.name, getClassNameWithTypeParams(symbol))
+                    }
+                }
+            }
+            // Walk base types
+            type.baseTypes?.forEach { bt ->
+                if (bt is Type.Object) {
+                    val result = findPrivateDeclaringClassInfo(bt, memberName)
+                    if (result != null) return result
+                }
+            }
+        }
+        return null
+    }
+
+    /** Try to infer the type from a `new X()` or `new A.B()` initializer. */
+    private fun tryInferNewExpressionType(symbol: Symbol): Type? {
+        val decl = symbol.valueDeclaration ?: return null
+        if (decl !is VariableDeclaration) return null
+        val init = decl.initializer ?: return null
+        if (init !is NewExpression) return null
+        val classSymbol = when (val expr = init.expression) {
+            is Identifier -> globals[expr.text]
+            is PropertyAccessExpression -> {
+                val obj = expr.expression
+                if (obj is Identifier) {
+                    val nsSym = globals[obj.text]
+                    if (nsSym != null && nsSym.flags.hasAny(SymbolFlags.Module)) {
+                        nsSym.exports?.get(expr.name.text)
+                    } else null
+                } else null
+            }
+            else -> null
+        }
+        if (classSymbol == null || !classSymbol.flags.hasAny(SymbolFlags.Class)) return null
+        return try { getDeclaredTypeOfSymbol(classSymbol) } catch (_: StackOverflowError) { null }
+    }
+
+    /**
+     * Check a single property access expression for TS2341 and TS2339.
+     * TS2341 is checked first (private member accessibility).
      */
     private fun checkSinglePropertyAccess(
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // === TS2341: Private member accessibility check ===
+        if (checkPrivateMemberAccess(expr, source, fileName, enclosingClassType)) return
+
+        // === TS2339/TS2551: Property does not exist check ===
         // Resolve object type: "this" uses enclosing class type;
         // non-this identifiers use global type resolution.
         val isThisAccess = expr.expression is Identifier && (expr.expression as Identifier).text == "this"
