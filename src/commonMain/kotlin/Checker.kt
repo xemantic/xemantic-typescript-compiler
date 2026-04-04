@@ -21005,7 +21005,35 @@ class Checker(
     private fun checkImportHelpersWithoutTslib() {
         if (!options.importHelpers) return
         // Check if tslib is available in the compilation files
-        val hasTslib = binderResults.any { it.sourceFile.fileName.contains("tslib") }
+        // With classic/AMD/System resolution, tslib.d.ts in root is found.
+        // With node/nodenext resolution, tslib must be in node_modules/tslib/.
+        val moduleRes = options.moduleResolution?.lowercase()
+        val effectiveModuleRes = moduleRes ?: run {
+            when (options.module) {
+                ModuleKind.CommonJS -> "node10"
+                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
+                ModuleKind.NodeNext -> "nodenext"
+                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
+                else -> "node10"
+            }
+        }
+        val isClassicResolution = effectiveModuleRes == "classic"
+        // Check for ambient module "tslib" declaration — counts as found regardless of resolution
+        val hasAmbientTslib = binderResults.any { result ->
+            result.sourceFile.statements.any { stmt ->
+                stmt is ModuleDeclaration && (stmt.name as? StringLiteralNode)?.text == "tslib"
+            }
+        }
+        val hasTslib = hasAmbientTslib || if (isClassicResolution) {
+            // Classic resolution: accepts tslib.d.ts in root or node_modules/tslib/
+            binderResults.any { it.sourceFile.fileName.contains("tslib") }
+        } else {
+            // Modern resolution: only node_modules/tslib/ counts
+            binderResults.any { result ->
+                val fn = result.sourceFile.fileName
+                (fn.contains("node_modules") || fn.contains("node-modules")) && fn.contains("tslib")
+            }
+        }
         if (hasTslib) return
 
         val em = options.effectiveModule
@@ -21132,11 +21160,10 @@ class Checker(
         // Check if the class or any of its members have decorators
         val firstDecorator = stmt.decorators?.firstOrNull()
         if (firstDecorator != null) {
-            // Span covers the first decorator including @
-            val spanStart = firstDecorator.pos
-            val lineEnd = source.indexOf('\n', spanStart).let { if (it < 0) source.length else it }
-            val spanLen = source.substring(spanStart, lineEnd).trimEnd().length
-            emitTS2354(spanStart, spanLen, source, fileName)
+            // Span covers the decorator expression including @
+            // e.g., "@dec" → 4 chars
+            val decoratorSpan = getDecoratorSpan(firstDecorator, source)
+            emitTS2354(decoratorSpan.first, decoratorSpan.second, source, fileName)
             return
         }
         // Also check member decorators (methods, properties, parameters)
@@ -21185,8 +21212,32 @@ class Checker(
      */
     private fun checkMissingTslibHelpers() {
         if (!options.importHelpers) return
-        // Find tslib file in compilation
-        val tslibResult = binderResults.firstOrNull { it.sourceFile.fileName.contains("tslib") } ?: return
+        // Find tslib file in compilation — use same resolution logic as checkImportHelpersWithoutTslib
+        val moduleRes = options.moduleResolution?.lowercase()
+        val effectiveModuleRes = moduleRes ?: run {
+            when (options.module) {
+                ModuleKind.CommonJS -> "node10"
+                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
+                ModuleKind.NodeNext -> "nodenext"
+                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
+                else -> "node10"
+            }
+        }
+        val isClassicResolution2 = effectiveModuleRes == "classic"
+        // Check for ambient module "tslib" declaration — counts as found regardless of resolution
+        val ambientTslibResult = binderResults.firstOrNull { result ->
+            result.sourceFile.statements.any { stmt ->
+                stmt is ModuleDeclaration && (stmt.name as? StringLiteralNode)?.text == "tslib"
+            }
+        }
+        val tslibResult = ambientTslibResult ?: if (isClassicResolution2) {
+            binderResults.firstOrNull { it.sourceFile.fileName.contains("tslib") }
+        } else {
+            binderResults.firstOrNull { result ->
+                val fn = result.sourceFile.fileName
+                (fn.contains("node_modules") || fn.contains("node-modules")) && fn.contains("tslib")
+            }
+        } ?: return
         // Get what tslib exports
         val tslibExports = getTslibExports(tslibResult.sourceFile)
 
