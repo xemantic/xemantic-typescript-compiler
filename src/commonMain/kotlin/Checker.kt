@@ -200,6 +200,11 @@ class Checker(
         if (options.noUnusedLocals || options.noUnusedParameters) {
             checkUnusedDeclarations()
         }
+        // 4b. Check for unused parameter properties (TS6138)
+        // Property declared via constructor parameter but never accessed as this.prop
+        if (options.noUnusedLocals || options.noUnusedParameters) {
+            checkUnusedParameterProperties()
+        }
         // 5. Check for variables used before assignment (TS2454)
         // Requires strictNullChecks (either via strict: true or strictNullChecks: true).
         // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
@@ -1963,6 +1968,134 @@ class Checker(
         val bindingElementCount: Int = 0, // total binding elements in parentBindingPattern
         val parentImportDecl: ImportDeclaration? = null, // parent import for TS6192 grouping
     )
+
+    /**
+     * Check for parameter properties declared in constructors but never accessed as `this.prop`.
+     * Emits TS6138: "Property 'X' is declared but its value is never read."
+     */
+    private fun checkUnusedParameterProperties() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ClassDeclaration) checkUnusedParamPropsInClass(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun checkUnusedParamPropsInClass(classDecl: ClassDeclaration, source: String, fileName: String) {
+        // Find the constructor
+        val ctor = classDecl.members.filterIsInstance<Constructor>().firstOrNull() ?: return
+        // Collect parameter properties (constructor params with access modifiers)
+        val paramProps = ctor.parameters.filter { param ->
+            param.modifiers.any { isParameterPropertyModifier(it) }
+        }
+        if (paramProps.isEmpty()) return
+
+        // Collect names of parameter properties
+        val paramPropNames = paramProps.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        if (paramPropNames.isEmpty()) return
+
+        // Find all `this.propName` accesses in ALL class members (including constructor body)
+        val accessedViaThis = mutableSetOf<String>()
+        for (member in classDecl.members) {
+            when (member) {
+                is MethodDeclaration -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
+                is Constructor -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
+                is GetAccessor -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
+                is SetAccessor -> member.body?.let { collectThisPropertyAccesses(it.statements, accessedViaThis) }
+                is PropertyDeclaration -> member.initializer?.let { collectThisAccessInExpr(it, accessedViaThis) }
+                else -> {}
+            }
+        }
+
+        // Emit TS6138 for parameter properties never accessed as this.prop
+        for (param in paramProps) {
+            val name = param.name as? Identifier ?: continue
+            val propName = name.text
+            if (propName.isEmpty()) continue
+            if (propName in accessedViaThis) continue
+            // Never accessed as this.propName → TS6138
+            val start = name.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' is declared but its value is never read.",
+                category = DiagnosticCategory.Error,
+                code = 6138,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = propName.length,
+            ))
+        }
+    }
+
+    private fun collectThisPropertyAccesses(statements: List<Statement>, result: MutableSet<String>) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ExpressionStatement -> collectThisAccessInExpr(stmt.expression, result)
+                is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { collectThisAccessInExpr(it, result) }
+                }
+                is ReturnStatement -> stmt.expression?.let { collectThisAccessInExpr(it, result) }
+                is IfStatement -> {
+                    collectThisAccessInExpr(stmt.expression, result)
+                    collectThisPropertyAccesses(listOf(stmt.thenStatement), result)
+                    stmt.elseStatement?.let { collectThisPropertyAccesses(listOf(it), result) }
+                }
+                is Block -> collectThisPropertyAccesses(stmt.statements, result)
+                is ForStatement -> {
+                    (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                        it.initializer?.let { init -> collectThisAccessInExpr(init, result) }
+                    }
+                    stmt.condition?.let { collectThisAccessInExpr(it, result) }
+                    stmt.incrementor?.let { collectThisAccessInExpr(it, result) }
+                    collectThisPropertyAccesses(listOf(stmt.statement), result)
+                }
+                is WhileStatement -> {
+                    collectThisAccessInExpr(stmt.expression, result)
+                    collectThisPropertyAccesses(listOf(stmt.statement), result)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun collectThisAccessInExpr(expr: Expression, result: MutableSet<String>) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                val obj = expr.expression
+                if (obj is Identifier && obj.text == "this") {
+                    // this.propName — collect the property name
+                    result.add(expr.name.text)
+                } else {
+                    collectThisAccessInExpr(obj, result)
+                }
+            }
+            is CallExpression -> {
+                collectThisAccessInExpr(expr.expression, result)
+                expr.arguments.forEach { collectThisAccessInExpr(it, result) }
+            }
+            is BinaryExpression -> {
+                collectThisAccessInExpr(expr.left, result)
+                collectThisAccessInExpr(expr.right, result)
+            }
+            is NewExpression -> {
+                collectThisAccessInExpr(expr.expression, result)
+                expr.arguments?.forEach { collectThisAccessInExpr(it, result) }
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> collectThisPropertyAccesses(body.statements, result)
+                is Expression -> collectThisAccessInExpr(body, result)
+                else -> {}
+            }
+            is FunctionExpression -> collectThisPropertyAccesses(expr.body.statements, result)
+            is ParenthesizedExpression -> collectThisAccessInExpr(expr.expression, result)
+            else -> {}
+        }
+    }
 
     private fun checkUnusedDeclarations() {
         for (result in binderResults) {
