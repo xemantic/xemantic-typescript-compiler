@@ -221,6 +221,13 @@ class Checker(
         if (!options.strictExplicitlyFalse) {
             checkImplicitAnyRestParameters()
         }
+        // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
+        //   - ambient declarations (declare var/let/const without type annotation)
+        //   - const/let without type AND without initializer (uninitialized block-scoped vars)
+        // Both fire regardless of noImplicitAny flag.
+        if (!options.strictExplicitlyFalse) {
+            checkImplicitAnyVariables()
+        }
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
         // 9. Check JSX elements for missing type definitions (TS7026)
@@ -5849,6 +5856,78 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+            }
+        }
+    }
+
+    /**
+     * Check for variables that implicitly have 'any' type — fires unconditionally:
+     * 1. Ambient declarations (`declare var/let/const x`) without type annotation
+     * 2. Block-scoped declarations (`const x` / `let x`) without type AND without initializer
+     *    (these can't infer a type, so 'any' is implied).
+     *
+     * These fire regardless of noImplicitAny, unless strict is explicitly false.
+     * Skip if noImplicitAny/strict is on (checkImplicitAnyParameters already handles them).
+     */
+    private fun checkImplicitAnyVariables() {
+        // Skip if checkImplicitAnyParameters already handled these cases (avoids double-emission)
+        if (options.noImplicitAny || options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // Skip JS files
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
+            val source = result.sourceFile.text
+            checkImplicitAnyVarsInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkImplicitAnyVarsInStatements(
+        statements: List<Statement>, source: String, fileName: String
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                    val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                    for (decl in stmt.declarationList.declarations) {
+                        if (decl.type != null) continue  // has type annotation — no TS7005
+                        if (decl.initializer != null) continue  // initializer provides type inference — no TS7005
+                        val name = decl.name as? Identifier ?: continue
+                        if (name.text.isEmpty()) continue
+                        // Case 1: ambient declaration without type or initializer
+                        // Case 2: const without type AND without initializer (can't infer type)
+                        // Note: `let x` (no type, no init) does NOT fire TS7005 — only `const`
+                        val shouldEmit = isDeclare || isConst
+                        if (!shouldEmit) continue
+                        val start = name.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Variable '${name.text}' implicitly has an 'any' type.",
+                            category = DiagnosticCategory.Error,
+                            code = 7005,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = name.text.length,
+                        ))
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { checkImplicitAnyVarsInStatements(it.statements, source, fileName) }
+                is ClassDeclaration -> {} // class members don't get TS7005
+                is ModuleDeclaration -> when (val body = stmt.body) {
+                    is ModuleBlock -> checkImplicitAnyVarsInStatements(body.statements, source, fileName)
+                    else -> {}
+                }
+                is Block -> checkImplicitAnyVarsInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkImplicitAnyVarsInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkImplicitAnyVarsInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
+                else -> {}
             }
         }
     }
