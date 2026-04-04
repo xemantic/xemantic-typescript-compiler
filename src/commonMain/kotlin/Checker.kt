@@ -394,6 +394,8 @@ class Checker(
         checkInterfaceExtendsInterface()
         // 64f3. Check circular base class references (TS2506)
         checkCircularBaseClasses()
+        // 64f3b. Check non-constructor extends (TS2507)
+        checkNonConstructorExtends()
         // 64f5. Check interface multi-base property conflicts (TS2320)
         checkInterfaceMultiBaseConflicts()
         // 64f4. Check index signature property type compatibility (TS2411)
@@ -418,6 +420,10 @@ class Checker(
         checkNamespaceUsedAsType()
         // 70. Check property used before initialization (TS2729)
         checkPropertyUseBeforeInit()
+        // 71. Check downlevelIteration requirement (TS2802)
+        if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) {
+            checkDownlevelIteration()
+        }
         } // end if (!declarationOnly)
     }
 
@@ -16621,7 +16627,7 @@ class Checker(
                     when {
                         decl.isEnum -> emitTS2450(expr, decl.pos, expr.text, source, fileName)
                         decl.isClass -> emitTS2449(expr, decl.pos, expr.text, source, fileName)
-                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst)
+                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer)
                     }
                 }
             }
@@ -16680,7 +16686,7 @@ class Checker(
         }
     }
 
-    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false, val isConst: Boolean = false)
+    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false, val isConst: Boolean = false, val hasInitializer: Boolean = false)
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
         val decls = mutableMapOf<String, BlockScopedDecl>()
@@ -16697,7 +16703,7 @@ class Checker(
                 if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
                     val isConstDecl = kind == SyntaxKind.ConstKeyword
                     for (d in stmt.declarationList.declarations) {
-                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl)
+                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null)
                     }
                 }
             }
@@ -16738,14 +16744,14 @@ class Checker(
         }
     }
 
-    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false) {
+    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false) {
         when (name) {
-            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst)
+            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit)
             is ObjectBindingPattern -> for (el in name.elements) {
-                collectBindingNamesEx(el.name, decls, isConst)
+                collectBindingNamesEx(el.name, decls, isConst, hasInit)
             }
             is ArrayBindingPattern -> for (el in name.elements) {
-                if (el is BindingElement) collectBindingNamesEx(el.name, decls, isConst)
+                if (el is BindingElement) collectBindingNamesEx(el.name, decls, isConst, hasInit)
             }
             else -> {}
         }
@@ -16960,7 +16966,7 @@ class Checker(
         }
     }
 
-    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false) {
+    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false, hasInitializer: Boolean = false) {
         val start = useNode.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -16986,9 +16992,11 @@ class Checker(
             )),
         ))
         // Co-emit TS2454: "Variable 'x' is used before being assigned."
-        // TypeScript emits both TS2448 and TS2454 at the same position under strict mode,
-        // but only for `let` (not `const`) declarations — const is always initialized.
-        if (strictNullChecks && !isConst) {
+        // TypeScript emits both TS2448 and TS2454 at the same position when the declaration
+        // has an initializer (the variable WILL be assigned, but the use is before that point).
+        // Only for `let` (not `const`) — const is always initialized at declaration.
+        // Only when the declaration has an initializer — uninitialized `let x;` doesn't co-emit.
+        if (strictNullChecks && !isConst && hasInitializer) {
             diagnostics.add(Diagnostic(
                 message = "Variable '$name' is used before being assigned.",
                 category = DiagnosticCategory.Error,
@@ -23528,6 +23536,108 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // TS2507: Type is not a constructor function type
+    // -----------------------------------------------------------------------
+
+    private fun checkNonConstructorExtends() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                checkNonConstructorExtendsInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkNonConstructorExtendsInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        // Collect names declared in this scope
+        val classNames = mutableSetOf<String>()
+        val functionNames = mutableSetOf<String>()
+        val varDecls = mutableMapOf<String, VariableDeclaration>() // variable name → declaration
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.let { classNames.add(it.text) }
+                is FunctionDeclaration -> stmt.name?.let { functionNames.add(it.text) }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = (decl.name as? Identifier)?.text ?: continue
+                        varDecls[name] = decl
+                    }
+                }
+                else -> {}
+            }
+        }
+
+        // Check class extends clauses
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val extendsClause = stmt.heritageClauses?.firstOrNull {
+                        it.token == SyntaxKind.ExtendsKeyword
+                    } ?: continue
+                    val baseExpr = extendsClause.types.firstOrNull()?.expression ?: continue
+                    val baseName = (baseExpr as? Identifier)?.text ?: continue
+                    // Only flag if this scope has a variable with this name (shadowing any outer class)
+                    val varDecl = varDecls[baseName] ?: continue
+                    // Skip if the scope also has a class or function with this name (merge)
+                    if (baseName in classNames || baseName in functionNames) continue
+                    // Determine the type name from the variable's type annotation or initializer
+                    val typeName = inferSimpleVarType(varDecl)
+                    if (typeName != null) {
+                        val start = baseExpr.pos
+                        val length = baseName.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$typeName' is not a constructor function type.",
+                            category = DiagnosticCategory.Error,
+                            code = 2507,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkNonConstructorExtendsInStatements(body.statements, source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** Infer the simple primitive type name of a variable declaration.
+     *  Only returns primitive types (number, string, boolean) to avoid FPs
+     *  with named types that might be constructor interfaces. */
+    private fun inferSimpleVarType(decl: VariableDeclaration): String? {
+        // From type annotation — only primitive keywords
+        val typeNode = decl.type
+        if (typeNode is KeywordTypeNode) {
+            return when (typeNode.kind) {
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                else -> null
+            }
+        }
+        // Named type annotations (TypeReference) could be constructor types — skip
+        if (typeNode != null) return null
+        // From initializer
+        val init = decl.initializer ?: return null
+        return when (init) {
+            is NumericLiteralNode -> "number"
+            is StringLiteralNode -> "string"
+            is PrefixUnaryExpression -> if (init.operand is NumericLiteralNode) "number" else null
+            else -> null
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // TS2302: Static members cannot reference class type parameters
     // -----------------------------------------------------------------------
 
@@ -27766,6 +27876,91 @@ class Checker(
         ))
     }
 
+    // TS2802: Type can only be iterated through when using --downlevelIteration
+    // -----------------------------------------------------------------------
+
+    private fun checkDownlevelIteration() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkDownlevelIterationInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkDownlevelIterationInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkDownlevelIterationInStmt(stmt, source, fileName)
+    }
+
+    private fun checkDownlevelIterationInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ForOfStatement -> {
+                // Check if the expression is `arguments` (type IArguments)
+                val expr = stmt.expression
+                if (expr is Identifier && expr.text == "arguments") {
+                    val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'IArguments' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
+                        category = DiagnosticCategory.Error,
+                        code = 2802,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = expr.pos,
+                        length = expr.text.length,
+                    ))
+                }
+                // Recurse into body
+                when (val body = stmt.statement) {
+                    is Block -> checkDownlevelIterationInStatements(body.statements, source, fileName)
+                    else -> checkDownlevelIterationInStmt(body, source, fileName)
+                }
+            }
+            is VariableStatement -> {
+                // Check for array destructuring from `arguments`: let [x, y, z] = arguments
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.name is ArrayBindingPattern && decl.initializer is Identifier) {
+                        val init = decl.initializer as Identifier
+                        if (init.text == "arguments") {
+                            val bindingPattern = decl.name as ArrayBindingPattern
+                            val start = bindingPattern.pos
+                            // Find the closing ] in source text
+                            val closeBracket = source.indexOf(']', start)
+                            val len = if (closeBracket >= 0) closeBracket - start + 1 else bindingPattern.end - start
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Type 'IArguments' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
+                                category = DiagnosticCategory.Error,
+                                code = 2802,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = len,
+                            ))
+                        }
+                    }
+                }
+            }
+            is Block -> checkDownlevelIterationInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkDownlevelIterationInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkDownlevelIterationInStmt(it, source, fileName) }
+            }
+            is WhileStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName)
+            is ForStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> for (member in stmt.members) {
+                when (member) {
+                    is MethodDeclaration -> member.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
+                    is Constructor -> member.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
     // TS2440: Import declaration conflicts with local declaration
     // -----------------------------------------------------------------------
 
@@ -27776,28 +27971,37 @@ class Checker(
             val source = result.sourceFile.text
             val stmts = result.sourceFile.statements
 
-            // Collect all non-import declared names in this file
-            val localNames = mutableSetOf<String>()
+            // Collect all non-import declared names in this file, tracking declaration kind
+            // Variables conflict with import aliases; classes/functions/interfaces can merge
+            val varNames = mutableSetOf<String>()     // variable declarations
+            val mergeableNames = mutableSetOf<String>() // class/function/enum — can merge with internal aliases
             for (stmt in stmts) {
                 when (stmt) {
                     is VariableStatement -> {
                         for (decl in stmt.declarationList.declarations) {
                             val name = (decl.name as? Identifier)?.text ?: continue
-                            localNames.add(name)
+                            varNames.add(name)
                         }
                     }
-                    is FunctionDeclaration -> stmt.name?.let { localNames.add(it.text) }
-                    is ClassDeclaration -> stmt.name?.let { localNames.add(it.text) }
-                    is EnumDeclaration -> localNames.add(stmt.name.text)
+                    is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
+                    is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
+                    is EnumDeclaration -> mergeableNames.add(stmt.name.text)
                     else -> {}
                 }
             }
+            val localNames = varNames + mergeableNames
 
             // Check imports against local names
             for (stmt in stmts) {
                 when (stmt) {
                     is ImportEqualsDeclaration -> {
                         if (stmt.isTypeOnly) continue
+                        // Internal namespace aliases (import foo = m1) can merge with class/function/interface
+                        // but NOT with variable declarations
+                        if (stmt.moduleReference !is ExternalModuleReference) {
+                            val name = stmt.name.text
+                            if (name !in varNames) continue
+                        }
                         val name = stmt.name.text
                         if (name in localNames) {
                             // Error on entire import statement
