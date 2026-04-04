@@ -463,6 +463,8 @@ class Checker(
         }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
+        // 75. Check export assignment expressions in ambient contexts (TS2714)
+        checkAmbientExportAssignmentExpressions()
         } // end if (!declarationOnly)
     }
 
@@ -10676,6 +10678,9 @@ class Checker(
 
                         val specifier = stmt.moduleSpecifier
                         val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
+                        // Only check relative imports — non-relative imports might resolve incorrectly
+                        // (e.g. npm packages with complex node_modules resolution)
+                        if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
                         val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
                         val targetResult = fileResults[resolvedFile] ?: continue
                         val targetFile = targetResult.sourceFile
@@ -10689,6 +10694,8 @@ class Checker(
                         for (specEl in namedBindings.elements) {
                             if (specEl.isTypeOnly) continue
                             val importedName = (specEl.propertyName ?: specEl.name).text
+                            // Skip parse-error artifacts (e.g. `*`, `from` as import names)
+                            if (!importedName[0].isLetter() && importedName[0] != '_' && importedName[0] != '$') continue
                             // 'default' as name: checked by checkDefaultImports (TS1192) or TS2305
                             // Skip 'default' here only if checked already via hasDefaultExport
                             if (importedName == "default") {
@@ -10710,13 +10717,83 @@ class Checker(
                             if (hasExportEquals) continue
                             if (importedName !in allExports) {
                                 val nameNode = specEl.propertyName ?: specEl.name
-                                emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                                // Check if name is declared locally but not exported → TS2459
+                                // or declared locally but exported under a different name → TS2460
+                                val localNames = getModuleLocalNames(targetFile)
+                                val exportAlias = getModuleExportAlias(targetFile, importedName)
+                                when {
+                                    exportAlias != null -> {
+                                        // TS2460: name declared locally, exported as 'exportAlias'
+                                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                        // Add TS2728 related info pointing to the declaration in the target file
+                                        val declPos2460 = getLocalDeclarationPos(targetFile, importedName)
+                                        val targetSource2460 = targetResult.sourceFile.text
+                                        val relatedInfo2460 = if (declPos2460 != null) {
+                                            val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource2460, declPos2460.first)
+                                            listOf(Diagnostic(
+                                                message = "'$importedName' is declared here.",
+                                                category = DiagnosticCategory.Message,
+                                                code = 2728,
+                                                fileName = resolvedFile,
+                                                line = declLine,
+                                                character = declChar,
+                                                start = declPos2460.first,
+                                                length = declPos2460.second,
+                                            ))
+                                        } else emptyList()
+                                        diagnostics.add(Diagnostic(
+                                            message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is exported as '$exportAlias'.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2460,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = nameNode.pos,
+                                            length = nameNode.text.length,
+                                            relatedInformation = relatedInfo2460,
+                                        ))
+                                    }
+                                    importedName in localNames -> {
+                                        // TS2459: name declared locally but not exported
+                                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                        // Add TS2728 related info pointing to the declaration in the target file
+                                        val declPos = getLocalDeclarationPos(targetFile, importedName)
+                                        val targetSource = targetResult.sourceFile.text
+                                        val relatedInfo = if (declPos != null) {
+                                            val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource, declPos.first)
+                                            listOf(Diagnostic(
+                                                message = "'$importedName' is declared here.",
+                                                category = DiagnosticCategory.Message,
+                                                code = 2728,
+                                                fileName = resolvedFile,
+                                                line = declLine,
+                                                character = declChar,
+                                                start = declPos.first,
+                                                length = declPos.second,
+                                            ))
+                                        } else emptyList()
+                                        diagnostics.add(Diagnostic(
+                                            message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is not exported.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2459,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = nameNode.pos,
+                                            length = nameNode.text.length,
+                                            relatedInformation = relatedInfo,
+                                        ))
+                                    }
+                                    else -> emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                                }
                             }
                         }
                     }
                     is ExportDeclaration -> {
                         // export { X } from "./module" — check X against module exports
                         val moduleName = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                        // Only check relative imports — non-relative imports might resolve incorrectly
+                        if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
                         if (stmt.isTypeOnly) continue
                         val clause = stmt.exportClause as? NamedExports ?: continue
 
@@ -10726,6 +10803,7 @@ class Checker(
 
                         val allExports = getModuleAllExports(targetFile)
                         val hasDefaultExport = moduleHasDefaultExport(targetFile)
+                        val hasExportEqualsInTarget = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
 
                         for (specEl in clause.elements) {
                             if (specEl.isTypeOnly) continue
@@ -10733,12 +10811,14 @@ class Checker(
                             // is either propertyName (for `export { X as Y } from ...`) or name
                             val sourceName = (specEl.propertyName ?: specEl.name).text
                             if (sourceName == "default") {
-                                if (!hasDefaultExport && !suppressDefaultReexportError) {
+                                if (!hasDefaultExport && !hasExportEqualsInTarget && !suppressDefaultReexportError) {
                                     val nameNode = specEl.propertyName ?: specEl.name
                                     emitTs2305(source, fileName, moduleName, "default", nameNode)
                                 }
                                 continue
                             }
+                            // Skip named member checks for export= modules (requires type resolution)
+                            if (hasExportEqualsInTarget) continue
                             if (sourceName !in allExports) {
                                 // Only emit if TS2614 wouldn't cover this case
                                 // (TS2614 fires for named imports where module has default)
@@ -10792,6 +10872,97 @@ class Checker(
             exports.add("default")
         }
         return exports
+    }
+
+    /**
+     * Returns all locally-declared names in the source file (exported or not).
+     * Used to distinguish TS2459 (declared but not exported) from TS2305 (not declared).
+     */
+    private fun getModuleLocalNames(file: SourceFile): Set<String> {
+        val names = mutableSetOf<String>()
+        for (stmt in file.statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = decl.name
+                        if (name is Identifier) names.add(name.text)
+                    }
+                }
+                is FunctionDeclaration -> stmt.name?.let { names.add(it.text) }
+                is ClassDeclaration -> stmt.name?.let { names.add(it.text) }
+                is InterfaceDeclaration -> names.add(stmt.name.text)
+                is TypeAliasDeclaration -> names.add(stmt.name.text)
+                is EnumDeclaration -> names.add(stmt.name.text)
+                is ModuleDeclaration -> {
+                    val name = stmt.name
+                    if (name is Identifier) names.add(name.text)
+                }
+                else -> {}
+            }
+        }
+        return names
+    }
+
+    /**
+     * Returns the exported name for a local name that is exported under a different name.
+     * E.g. for `export { bar as baz }`, getModuleExportAlias(file, "bar") returns "baz".
+     * Returns null if bar is not locally declared and re-exported under a different alias.
+     */
+    private fun getModuleExportAlias(file: SourceFile, localName: String): String? {
+        for (stmt in file.statements) {
+            if (stmt !is ExportDeclaration) continue
+            if (stmt.moduleSpecifier != null) continue  // skip re-exports from other modules
+            val clause = stmt.exportClause as? NamedExports ?: continue
+            for (specifier in clause.elements) {
+                val propName = specifier.propertyName?.text
+                val exportedName = specifier.name.text
+                // `export { localName as exportedName }` — propName = localName, name = exportedName
+                if (propName == localName && exportedName != localName) {
+                    return exportedName
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Returns the position (start, length) of the declaration of [name] in [file],
+     * for use as TS2728 related info in TS2459 diagnostics.
+     */
+    private fun getLocalDeclarationPos(file: SourceFile, name: String): Pair<Int, Int>? {
+        for (stmt in file.statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val ident = decl.name as? Identifier ?: continue
+                        if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                    }
+                }
+                is FunctionDeclaration -> {
+                    val ident = stmt.name ?: continue
+                    if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                }
+                is ClassDeclaration -> {
+                    val ident = stmt.name ?: continue
+                    if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                }
+                is InterfaceDeclaration -> {
+                    if (stmt.name.text == name) return Pair(stmt.name.pos, stmt.name.text.length)
+                }
+                is TypeAliasDeclaration -> {
+                    if (stmt.name.text == name) return Pair(stmt.name.pos, stmt.name.text.length)
+                }
+                is EnumDeclaration -> {
+                    if (stmt.name.text == name) return Pair(stmt.name.pos, stmt.name.text.length)
+                }
+                is ModuleDeclaration -> {
+                    val ident = stmt.name as? Identifier ?: continue
+                    if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                }
+                else -> {}
+            }
+        }
+        return null
     }
 
     /**
@@ -18888,6 +19059,9 @@ class Checker(
                 else -> expr.end
             }
         }
+        is TypeOfExpression -> expressionTrueEnd(expr.expression)
+        is VoidExpression -> expressionTrueEnd(expr.expression)
+        is AwaitExpression -> expressionTrueEnd(expr.expression)
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
@@ -29852,6 +30026,96 @@ class Checker(
                 else -> {}
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2714: Export assignment expression must be identifier in ambient context
+    // -----------------------------------------------------------------------
+
+    /**
+     * In ambient contexts (.d.ts files, declare module bodies), `export default X` and
+     * `export = X` require X to be an identifier or qualified name (A.B.C), not an
+     * arbitrary expression like `2 + 2` or `typeof X`.
+     */
+    private fun checkAmbientExportAssignmentExpressions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val isAmbient = isDtsFile(fileName)
+            // Check top-level statements
+            checkAmbientExportAssignInStmts(result.sourceFile.statements, source, fileName, isAmbient)
+        }
+    }
+
+    private fun checkAmbientExportAssignInStmts(
+        stmts: List<Statement>, source: String, fileName: String, ambient: Boolean
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ExportAssignment -> {
+                    if (!ambient) continue
+                    val expr = stmt.expression
+                    if (!isIdentifierOrQualifiedName(expr)) {
+                        // Compute span: the expression itself
+                        val exprStart = expressionTrueStart(expr, source)
+                        val exprEnd = expressionTrueEnd(expr)
+                        val length = maxOf(1, exprEnd - exprStart)
+                        val (line, character) = getLineAndCharacterOfPosition(source, exprStart)
+                        diagnostics.add(Diagnostic(
+                            message = "The expression of an export assignment must be an identifier or qualified name in an ambient context.",
+                            category = DiagnosticCategory.Error,
+                            code = 2714,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = exprStart,
+                            length = length,
+                        ))
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                    val name = stmt.name
+                    // Ambient context if: already ambient, or this is `declare module "..."`, or `declare namespace`
+                    val isStringLiteralModule = name is StringLiteralNode
+                    val newAmbient = ambient || isDeclare || isStringLiteralModule
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkAmbientExportAssignInStmts(body.statements, source, fileName, newAmbient)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * Returns true if [expr] is an identifier or a chain of property accesses on identifiers
+     * (i.e., a qualified name like `A.B.C.D`).
+     */
+    private fun isIdentifierOrQualifiedName(expr: Expression): Boolean {
+        return when (expr) {
+            is Identifier -> true
+            is PropertyAccessExpression -> {
+                // Check the chain: `A.B.C` where each part is an identifier
+                var current: Expression = expr
+                while (current is PropertyAccessExpression) {
+                    current = current.expression
+                }
+                current is Identifier
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * Returns the true start of an expression (skipping leading trivia).
+     */
+    private fun expressionTrueStart(expr: Expression, source: String): Int {
+        var pos = expr.pos
+        // Skip whitespace
+        while (pos < source.length && source[pos].isWhitespace()) pos++
+        return pos
     }
 
     // -----------------------------------------------------------------------
