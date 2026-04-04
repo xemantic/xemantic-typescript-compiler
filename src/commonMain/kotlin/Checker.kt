@@ -445,6 +445,10 @@ class Checker(
         if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) {
             checkDownlevelIteration()
         }
+        // 71b. Check BigInt literals at targets lower than ES2020 (TS2737)
+        if (options.target < ScriptTarget.ES2020) {
+            checkBigIntLiterals()
+        }
         // 72. Check call/new expression type argument count (TS2558)
         checkCallTypeArgCount()
         // 73. Check cross-file duplicate function implementation (TS2393)
@@ -29385,6 +29389,181 @@ class Checker(
                     is Constructor -> member.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
                     else -> {}
                 }
+            }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2737: BigInt literals not available below ES2020
+    // -----------------------------------------------------------------------
+
+    private fun checkBigIntLiterals() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue  // .d.ts files are entirely ambient
+            val source = result.sourceFile.text
+            checkBigIntLiteralsInStmts(result.sourceFile.statements, source, fileName, ambient = false)
+        }
+    }
+
+    private fun checkBigIntLiteralsInStmts(
+        stmts: List<Statement>, source: String, fileName: String, ambient: Boolean
+    ) {
+        for (stmt in stmts) checkBigIntLiteralsInStmt(stmt, source, fileName, ambient)
+    }
+
+    private fun checkBigIntLiteralsInStmt(
+        stmt: Statement, source: String, fileName: String, ambient: Boolean
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                if (!ambient && !isDeclare) {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+                    }
+                }
+            }
+            is ExpressionStatement -> {
+                if (!ambient) checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+            }
+            is ReturnStatement -> {
+                if (!ambient) stmt.expression?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+            }
+            is Block -> checkBigIntLiteralsInStmts(stmt.statements, source, fileName, ambient)
+            is IfStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+                    checkBigIntLiteralsInStmt(stmt.thenStatement, source, fileName, ambient = false)
+                    stmt.elseStatement?.let { checkBigIntLiteralsInStmt(it, source, fileName, ambient = false) }
+                }
+            }
+            is WhileStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+                    checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
+                }
+            }
+            is ForStatement -> {
+                if (!ambient) {
+                    (stmt.initializer as? Expression)?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+                    stmt.condition?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+                    stmt.incrementor?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+                    checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
+                }
+            }
+            is ForOfStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+                    checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
+                }
+            }
+            is ForInStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+                    checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
+                }
+            }
+            is FunctionDeclaration -> {
+                val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                stmt.body?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = isDeclare) }
+            }
+            is ClassDeclaration -> {
+                val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                if (!isDeclare && !ambient) {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let {
+                                checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false)
+                            }
+                            is Constructor -> member.body?.let {
+                                checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false)
+                            }
+                            is PropertyDeclaration -> {
+                                if (ModifierFlag.Declare !in member.modifiers) {
+                                    member.initializer?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                val isDeclare = ModifierFlag.Declare in stmt.modifiers
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    checkBigIntLiteralsInStmts(body.statements, source, fileName, ambient = ambient || isDeclare)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkBigIntLiteralsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BigIntLiteralNode -> {
+                val start = expr.pos
+                val length = expr.text.length  // text already includes the trailing 'n'
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "BigInt literals are not available when targeting lower than ES2020.",
+                    category = DiagnosticCategory.Error,
+                    code = 2737,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            is PrefixUnaryExpression -> checkBigIntLiteralsInExpr(expr.operand, source, fileName)
+            is BinaryExpression -> {
+                checkBigIntLiteralsInExpr(expr.left, source, fileName)
+                checkBigIntLiteralsInExpr(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is CallExpression -> {
+                checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkBigIntLiteralsInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments ?: emptyList()) checkBigIntLiteralsInExpr(arg, source, fileName)
+            }
+            is ArrayLiteralExpression -> {
+                for (el in expr.elements) checkBigIntLiteralsInExpr(el, source, fileName)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkBigIntLiteralsInExpr(prop.initializer, source, fileName)
+                        is ShorthandPropertyAssignment -> {}
+                        is SpreadAssignment -> checkBigIntLiteralsInExpr(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is PropertyAccessExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+                checkBigIntLiteralsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkBigIntLiteralsInExpr(expr.condition, source, fileName)
+                checkBigIntLiteralsInExpr(expr.whenTrue, source, fileName)
+                checkBigIntLiteralsInExpr(expr.whenFalse, source, fileName)
+            }
+            is ArrowFunction -> expr.body.let { body ->
+                when (body) {
+                    is Block -> checkBigIntLiteralsInStmts(body.statements, source, fileName, ambient = false)
+                    is Expression -> checkBigIntLiteralsInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> expr.body.let {
+                checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false)
             }
             else -> {}
         }
