@@ -11260,9 +11260,11 @@ class Checker(
 
     /**
      * Extract type parameter info from a symbol's declarations.
+     * Prioritizes class/interface/type-alias over function declarations for type position checks.
      */
     private fun getTypeParamInfoFromSymbol(symbol: Symbol): TypeParamInfo? {
         var foundClassLike = false
+        // First pass: check class/interface/type-alias declarations (higher priority for type position)
         for (decl in symbol.declarations) {
             when (decl) {
                 is ClassDeclaration -> {
@@ -11291,19 +11293,22 @@ class Checker(
                         return TypeParamInfo(minRequired, typeParams.size, symbol.name)
                     }
                 }
-                is FunctionDeclaration -> {
-                    val typeParams = decl.typeParameters
-                    if (!typeParams.isNullOrEmpty()) {
-                        val minRequired = typeParams.count { it.default == null }
-                        return TypeParamInfo(minRequired, typeParams.size, symbol.name)
-                    }
-                }
                 else -> {}
             }
         }
         // If the symbol has a class/interface/type-alias declaration with 0 type params,
         // it shadows any global builtin with the same name — return (0, 0) to suppress TS2314.
         if (foundClassLike) return TypeParamInfo(0, 0, symbol.name)
+        // Second pass: check function declarations (lower priority — only for value-position checks)
+        for (decl in symbol.declarations) {
+            if (decl is FunctionDeclaration) {
+                val typeParams = decl.typeParameters
+                if (!typeParams.isNullOrEmpty()) {
+                    val minRequired = typeParams.count { it.default == null }
+                    return TypeParamInfo(minRequired, typeParams.size, symbol.name)
+                }
+            }
+        }
         return null
     }
 
