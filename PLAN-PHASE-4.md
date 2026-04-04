@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-04):** 7,789 / 10,077 tests passing (77.3%).
+**Status (2026-04-04):** 7,798 / 10,077 tests passing (77.4%).
 
 ## Goal
 
@@ -337,8 +337,26 @@ array→primitive, named→named) fall through to the old string system which do
 - Investigation: relaxing TS7006/TS7019 gate (always-on noImplicitAny) causes
   net regression (-6). Kept gated behind `noImplicitAny || strict`.
 
+**Completed session 2026-04-04b (+8 tests, 7,789 → 7,797):**
+- TS2558: Type argument count mismatch on call/new expressions. Extended
+  `getTypeParamInfoFromSymbol` to handle FunctionDeclaration. Checks Identifier
+  callees against resolved type param count. Skips overloads and default params.
+  +2 tests (constructorInvocationWithTooFewTypeArgs, callWithWrongNumberOfTypeArguments).
+- TS2378: Get accessor must return a value. Checks getter bodies for absence
+  of any return or throw statement. +1 test (getterMissingReturnError).
+- TS2393: Cross-file duplicate function implementation. Only checks outFile
+  (bundle) mode with non-module files. +2 tests (jsFileCompilationDuplicateFunction* x2).
+- Type display: `{}` instead of `{ ... }` for empty anonymous object types.
+  +1 test (noErrorsInCallback).
+- TS2437: Module hidden by local declaration. Checks import equals declarations
+  inside namespace blocks for shadowed module names. +2 tests
+  (internalImport*ModuleMergedWithClassNotReferencingInstance x2).
+- FP fix: getTypeParamInfoFromSymbol prioritizes interface/class declarations over
+  function declarations for merged symbols. Fixes FP TS2314 for function+interface
+  with same name. +1 test (exportClassExtendingIntersection).
+
 **Analysis of remaining test landscape (updated 2026-04-04):**
-- 2,294 failing tests (down from 2,303)
+- 2,280 failing tests (down from 2,303)
 - ~59% produce zero diagnostics — need deep type checking infrastructure
 - ~12% need exactly 1 missing diagnostic code (5-line diffs)
 - 117 tests need exactly 1 missing diagnostic code
