@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-03):** 7,765 / 10,077 tests passing (77.1%).
+**Status (2026-04-03):** 7,771 / 10,077 tests passing (77.1%).
 
 ## Goal
 
@@ -297,6 +297,26 @@ array→primitive, named→named) fall through to the old string system which do
   co-emits TS2454 ("used before being assigned") under strict mode, but only for
   `let` declarations (not `const`). Added `isConst` to `BlockScopedDecl`.
   +2 tests (forwardRefInClassProperties, useBeforeDeclaration_destructuring).
+
+- TS2300 numeric key normalization: `normalizeNumericKey` now handles binary (`0b11`),
+  octal (`0o3`), and hex (`0x3`) prefixed literals for duplicate property detection.
+  +1 test (duplicateIdentifierDifferentSpelling).
+- TS2302: Static members cannot reference class type parameters. Walks static member
+  type annotations and initializer expressions to detect references to enclosing class
+  type parameters. Guards: method-local type parameters that shadow class type params
+  are excluded from checking.
+  +5 tests (typeParametersInStaticProperties, typeParametersInStaticMethods,
+  staticMethodsReferencingClassTypeParameters, genericClassWithStaticsUsingTypeArguments,
+  typeParametersInStaticAccessors).
+
+**Analysis of remaining test landscape (updated 2026-04-03c):**
+- 2,303 failing tests (down from 2,316)
+- ~62% produce zero diagnostics — need deep type checking infrastructure
+- ~11% need exactly 1 missing diagnostic code (7-line diffs)
+- Top missing codes in 7-line-diff tests: TS2339 edge cases, TS2322 generic contexts,
+  TS7019 (rest param any[]), TS2503 (namespace resolution)
+- Most gains now blocked on: (a) deeper generic instantiation, (b) module resolution,
+  (c) parser error recovery precision
 
 **Recommended priority for next items:**
 
