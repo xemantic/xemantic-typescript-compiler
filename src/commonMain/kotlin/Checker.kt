@@ -465,6 +465,10 @@ class Checker(
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
         checkAmbientExportAssignmentExpressions()
+        // 76. Check for multiple AMD module name directives (TS2458)
+        if (options.effectiveModule == ModuleKind.AMD) {
+            checkMultipleAmdModuleNames()
+        }
         } // end if (!declarationOnly)
     }
 
@@ -30116,6 +30120,56 @@ class Checker(
         // Skip whitespace
         while (pos < source.length && source[pos].isWhitespace()) pos++
         return pos
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2458: Multiple AMD module name directives
+    // -----------------------------------------------------------------------
+
+    /**
+     * In AMD modules, at most one `/// <amd-module name='...'/>` directive is allowed.
+     * If a second one is found, emit TS2458.
+     */
+    private fun checkMultipleAmdModuleNames() {
+        val amdModuleRegex = Regex("""<amd-module\s+name=['"][^'"]+['"]""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val lines = source.split('\n')
+            var foundCount = 0
+            var offset = 0
+            for (line in lines) {
+                val trimmed = line.trimStart()
+                if (!trimmed.startsWith("///")) {
+                    offset += line.length + 1
+                    // directives only at top of file, but keep scanning all lines
+                    // Actually TypeScript only scans until the first non-/// line
+                    break
+                }
+                if (amdModuleRegex.containsMatchIn(trimmed)) {
+                    foundCount++
+                    if (foundCount == 2) {
+                        // Emit TS2458 at the start of this line
+                        val lineStart = offset
+                        val lineEnd = offset + line.length
+                        val (lineNum, character) = getLineAndCharacterOfPosition(source, lineStart)
+                        diagnostics.add(Diagnostic(
+                            message = "An AMD module cannot have multiple name assignments.",
+                            category = DiagnosticCategory.Error,
+                            code = 2458,
+                            fileName = fileName,
+                            line = lineNum,
+                            character = character,
+                            start = lineStart,
+                            length = lineEnd - lineStart,
+                        ))
+                        break
+                    }
+                }
+                offset += line.length + 1
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
