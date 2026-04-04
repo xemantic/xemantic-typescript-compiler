@@ -402,6 +402,8 @@ class Checker(
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
         checkOverloadSignatureCompatibility()
+        // 64i. Check static members referencing class type parameters (TS2302)
+        checkStaticMembersReferenceTypeParams()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
         // 65b. Check subsequent var declaration type mismatch (TS2403)
@@ -23523,6 +23525,186 @@ class Checker(
                 current = classExtends[current]
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2302: Static members cannot reference class type parameters
+    // -----------------------------------------------------------------------
+
+    private fun checkStaticMembersReferenceTypeParams() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    checkTS2302InStatement(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkTS2302InStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                val typeParams = stmt.typeParameters
+                if (typeParams != null && typeParams.isNotEmpty()) {
+                    val typeParamNames = typeParams.map { it.name.text }.toSet()
+                    for (member in stmt.members) {
+                        checkTS2302InClassMember(member, typeParamNames, source, fileName)
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                (stmt.body as? ModuleBlock)?.let {
+                    for (s in it.statements) checkTS2302InStatement(s, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkTS2302InClassMember(member: ClassElement, typeParamNames: Set<String>, source: String, fileName: String) {
+        val isStatic = when (member) {
+            is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+            is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+            is GetAccessor -> ModifierFlag.Static in member.modifiers
+            is SetAccessor -> ModifierFlag.Static in member.modifiers
+            else -> false
+        }
+        if (!isStatic) return
+        when (member) {
+            is PropertyDeclaration -> {
+                member.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                member.initializer?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            }
+            is MethodDeclaration -> {
+                // Exclude method's own type parameters (they shadow class type params)
+                val effectiveNames = member.typeParameters?.let { tps ->
+                    typeParamNames - tps.map { it.name.text }.toSet()
+                } ?: typeParamNames
+                if (effectiveNames.isEmpty()) return
+                for (param in member.parameters) {
+                    param.type?.let { findTypeParamRefsInType(it, effectiveNames, source, fileName) }
+                }
+                member.type?.let { findTypeParamRefsInType(it, effectiveNames, source, fileName) }
+            }
+            is GetAccessor -> {
+                member.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            }
+            is SetAccessor -> {
+                for (param in member.parameters) {
+                    param.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Walk a type node tree to find references to class type parameters. */
+    private fun findTypeParamRefsInType(typeNode: TypeNode, typeParamNames: Set<String>, source: String, fileName: String) {
+        when (typeNode) {
+            is TypeReference -> {
+                val name = typeNode.typeName
+                if (name is Identifier && name.text in typeParamNames) {
+                    emitTS2302(name, source, fileName)
+                }
+                typeNode.typeArguments?.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            }
+            is ArrayType -> findTypeParamRefsInType(typeNode.elementType, typeParamNames, source, fileName)
+            is UnionType -> typeNode.types.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            is IntersectionType -> typeNode.types.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            is ParenthesizedType -> findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            is FunctionType -> {
+                typeNode.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
+                findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            }
+            is ConstructorType -> {
+                typeNode.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
+                findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            }
+            is TypeLiteral -> {
+                for (m in typeNode.members) {
+                    when (m) {
+                        is PropertyDeclaration -> m.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                        is MethodDeclaration -> {
+                            m.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
+                            m.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                        }
+                        is IndexSignature -> m.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is TupleType -> typeNode.elements.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            is OptionalType -> findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            is RestType -> findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+            is ConditionalType -> {
+                findTypeParamRefsInType(typeNode.checkType, typeParamNames, source, fileName)
+                findTypeParamRefsInType(typeNode.extendsType, typeParamNames, source, fileName)
+                findTypeParamRefsInType(typeNode.trueType, typeParamNames, source, fileName)
+                findTypeParamRefsInType(typeNode.falseType, typeParamNames, source, fileName)
+            }
+            is TypeQuery -> {} // typeof x — no type parameter references
+            is IndexedAccessType -> {
+                findTypeParamRefsInType(typeNode.objectType, typeParamNames, source, fileName)
+                findTypeParamRefsInType(typeNode.indexType, typeParamNames, source, fileName)
+            }
+            else -> {} // LiteralType, KeywordType, etc.
+        }
+    }
+
+    /** Walk an expression to find type parameter references in embedded type annotations. */
+    private fun findTypeParamRefsInExpr(expr: Expression, typeParamNames: Set<String>, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                expr.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
+                expr.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                when (val body = expr.body) {
+                    is Expression -> findTypeParamRefsInExpr(body, typeParamNames, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                expr.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
+                expr.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+            }
+            is ParenthesizedExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is BinaryExpression -> {
+                findTypeParamRefsInExpr(expr.left, typeParamNames, source, fileName)
+                findTypeParamRefsInExpr(expr.right, typeParamNames, source, fileName)
+            }
+            is ConditionalExpression -> {
+                findTypeParamRefsInExpr(expr.condition, typeParamNames, source, fileName)
+                findTypeParamRefsInExpr(expr.whenTrue, typeParamNames, source, fileName)
+                findTypeParamRefsInExpr(expr.whenFalse, typeParamNames, source, fileName)
+            }
+            is CallExpression -> {
+                findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                expr.arguments?.forEach { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            }
+            is AsExpression -> {
+                findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInType(expr.type, typeParamNames, source, fileName)
+            }
+            else -> {} // literals, identifiers, etc.
+        }
+    }
+
+    private fun emitTS2302(nameNode: Identifier, source: String, fileName: String) {
+        val start = nameNode.pos
+        val length = nameNode.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Static members cannot reference class type parameters.",
+            category = DiagnosticCategory.Error,
+            code = 2302,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
