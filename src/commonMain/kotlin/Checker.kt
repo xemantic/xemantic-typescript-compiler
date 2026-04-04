@@ -10460,8 +10460,21 @@ class Checker(
      * doesn't exist in the module's exports but the module does have a default export.
      */
     private fun checkDefaultImports() {
-        // allowSyntheticDefaultImports suppresses TS1192 check
-        if (options.allowSyntheticDefaultImports) return
+        // allowSyntheticDefaultImports suppresses TS1192 check.
+        // Explicit false overrides all implicit true conditions.
+        // It is implicitly true when:
+        //   1. Explicitly set to true
+        //   2. module is System (System.js includes synthetic default support)
+        //
+        // Note: esModuleInterop does NOT generally suppress TS1192 for normal modules.
+        // For 'export =' modules with esModuleInterop=true, TS1259 fires instead (handled separately).
+        val effectiveSyntheticDefaults = if (options.allowSyntheticDefaultImportsExplicitlyFalse) {
+            false // Explicit false always wins
+        } else {
+            options.allowSyntheticDefaultImports ||
+            options.effectiveModule == ModuleKind.System
+        }
+        if (effectiveSyntheticDefaults) return
 
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
@@ -10487,8 +10500,12 @@ class Checker(
                 val hasDefaultExport = moduleHasDefaultExport(targetFile)
 
                 // TS1192: default binding used but module has no default export
+                // Suppress for 'export =' modules when esModuleInterop=true (TS1259 would fire instead)
+                val hasExportEquals = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
+                val esModuleInteropActive = options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
+                    !options.allowSyntheticDefaultImportsExplicitlyFalse
                 val defaultBinding = importClause.name
-                if (defaultBinding != null && !hasDefaultExport) {
+                if (defaultBinding != null && !hasDefaultExport && !(hasExportEquals && esModuleInteropActive)) {
                     // Compute display module name: strip leading "./" from relative specifiers
                     val displayName = when {
                         moduleName.startsWith("./") -> moduleName.removePrefix("./")
@@ -10629,6 +10646,9 @@ class Checker(
                     if (ModifierFlag.Default in stmt.modifiers) return true
                 }
                 is ClassDeclaration -> {
+                    if (ModifierFlag.Default in stmt.modifiers) return true
+                }
+                is InterfaceDeclaration -> {
                     if (ModifierFlag.Default in stmt.modifiers) return true
                 }
                 is ExportDeclaration -> {
@@ -28166,6 +28186,24 @@ class Checker(
                 val length = expressionTrueEnd(arg) - start
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
+                // TS6213: If the argument type has construct signatures but no call signatures,
+                // suggest "Did you mean to use 'new' with this expression?"
+                val relatedInfo: List<Diagnostic> = if (argType is Type.Object) {
+                    val constructSigs = getConstructSignaturesOfType(argType)
+                    val callSigs = getCallSignaturesOfType(argType)
+                    if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
+                        listOf(Diagnostic(
+                            message = "Did you mean to use 'new' with this expression?",
+                            category = DiagnosticCategory.Message,
+                            code = 6213,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    } else emptyList()
+                } else emptyList()
                 diagnostics.add(Diagnostic(
                     message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
                     category = DiagnosticCategory.Error,
@@ -28175,6 +28213,7 @@ class Checker(
                     character = character,
                     start = start,
                     length = length,
+                    relatedInformation = relatedInfo,
                 ))
                 break // TypeScript reports only the first failing argument per call
             }
