@@ -216,6 +216,11 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyParameters()
         }
+        // 7b. TS7019: Rest parameter implicitly has 'any[]' type — fires by default unless strict=false
+        // This fires even without noImplicitAny (same behavior as TS7006 for parameter properties).
+        if (!options.strictExplicitlyFalse) {
+            checkImplicitAnyRestParameters()
+        }
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
         // 9. Check JSX elements for missing type definitions (TS7026)
@@ -429,6 +434,10 @@ class Checker(
         // 73. Check cross-file duplicate function implementation (TS2393)
         if (binderResults.size > 1) {
             checkCrossFileDuplicateFunction()
+        }
+        // 73b. Check cross-file block-scoped variable redeclarations (TS2451)
+        if (binderResults.size > 1) {
+            checkCrossFileBlockScopedDuplicates()
         }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
@@ -1974,12 +1983,13 @@ class Checker(
                 is ImportEqualsDeclaration -> return true
                 is ExportDeclaration -> return true
                 is ExportAssignment -> return true
+                // VariableStatement is not a Declaration but can have export modifier
+                is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) return true
                 else -> {
                     if (stmt is Declaration) {
                         val modifiers = when (stmt) {
                             is FunctionDeclaration -> stmt.modifiers
                             is ClassDeclaration -> stmt.modifiers
-                            is VariableStatement -> stmt.modifiers
                             is EnumDeclaration -> stmt.modifiers
                             is InterfaceDeclaration -> stmt.modifiers
                             is TypeAliasDeclaration -> stmt.modifiers
@@ -5703,6 +5713,143 @@ class Checker(
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * Check for rest parameters without type annotations. Emits TS7019.
+     * Fires by default (unlike TS7006 which requires noImplicitAny/strict),
+     * unless strict is explicitly false. Mirrors the TS7006 behavior for
+     * parameter properties in checkParamPropsInParams.
+     *
+     * Note: if noImplicitAny/strict is on, checkParamsForImplicitAny (called from
+     * checkImplicitAnyParameters) already emits TS7019 for rest params. To avoid
+     * double-emission, skip if checkImplicitAnyParameters already ran.
+     */
+    private fun checkImplicitAnyRestParameters() {
+        // Skip if checkImplicitAnyParameters already handled everything (avoids double-emission)
+        if (options.noImplicitAny || options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            // Skip JS files — TypeScript does not check implicit any in JS files
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkRestParamsInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkRestParamsInStatements(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    checkRestParamsForImplicitAny(stmt.parameters, source, fileName)
+                    stmt.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> checkRestParamsForImplicitAny(member.parameters, source, fileName)
+                            is Constructor -> checkRestParamsForImplicitAny(member.parameters, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration) checkRestParamsForImplicitAny(member.parameters, source, fileName)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkRestParamsInStatements(body.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is Block -> checkRestParamsInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkRestParamsInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkRestParamsInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkRestParamsInStatements(listOf(stmt.statement), source, fileName)
+                is ReturnStatement -> stmt.expression?.let { checkRestParamsInExpr(it, source, fileName) }
+                is ExpressionStatement -> checkRestParamsInExpr(stmt.expression, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkRestParamsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                checkRestParamsForImplicitAny(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkRestParamsInStatements(body.statements, source, fileName)
+                    is Expression -> checkRestParamsInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkRestParamsForImplicitAny(expr.parameters, source, fileName)
+                checkRestParamsInStatements(expr.body.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkRestParamsForImplicitAny(parameters: List<Parameter>, source: String, fileName: String) {
+        // First pass: find untyped rest parameters and emit TS7019
+        var hasUntypedRest = false
+        for (param in parameters) {
+            if (!param.dotDotDotToken) continue
+            if (param.isCommentPlaceholder) continue
+            if (param.type != null) continue  // has type annotation — no TS7019
+            val name = param.name
+            if (name !is Identifier) continue
+            hasUntypedRest = true
+            val displayName = if (name.text.isEmpty()) "(Missing)" else name.text
+            // Span covers `...name` (3 chars for `...` + name length)
+            val start = name.pos - 3  // position of `...`
+            val length = 3 + name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Rest parameter '$displayName' implicitly has an 'any[]' type.",
+                category = DiagnosticCategory.Error,
+                code = 7019,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+        // Second pass: when there's an untyped rest param in the list, also emit TS7006
+        // for any untyped regular params (e.g. `function f(...x, y)` — y gets TS7006 too).
+        // This matches TypeScript's behavior when parameter syntax errors are present.
+        if (hasUntypedRest) {
+            for (param in parameters) {
+                if (param.dotDotDotToken) continue  // already handled above
+                if (param.isCommentPlaceholder) continue
+                if (param.type != null) continue
+                if (param.initializer != null) continue
+                val name = param.name
+                if (name !is Identifier || name.text.isEmpty() || name.text == "this") continue
+                if (param.modifiers.any { isParameterPropertyModifier(it) }) continue  // handled separately
+                val start = name.pos
+                val length = if (param.questionToken) name.text.length + 1 else name.text.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                    category = DiagnosticCategory.Error,
+                    code = 7006,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
         }
     }
 
@@ -17552,9 +17699,9 @@ class Checker(
             val param = realParams[i]
             if (param.dotDotDotToken) {
                 val name = param.name
-                // Span covers `...name`
+                // TS1014 span covers only `...` (3 chars), not the param name
                 val start = if (name is Identifier) name.pos - 3 else param.pos
-                val length = if (name is Identifier) 3 + name.text.length else (param.end - 1 - start).coerceAtLeast(1)
+                val length = 3  // just the `...` token
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
                     message = "A rest parameter must be last in a parameter list.",
@@ -28173,6 +28320,88 @@ class Checker(
                     character = character,
                     start = pos,
                     length = length,
+                ))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2451 cross-file: block-scoped variable redeclarations across files
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check for top-level `let`/`const` redeclarations across non-module files.
+     * When multiple non-module files share the global scope, a `let`/`const` in one file
+     * conflicts with any same-named `let`, `const`, or `var` in another file.
+     * Both files get TS2451 with TS6203 related info pointing to the other file.
+     */
+    private fun checkCrossFileBlockScopedDuplicates() {
+        // Collect top-level let/const/var names from non-module files
+        // Map: name → list of (fileName, nameStart, nameLength, isBlockScoped)
+        data class VarInfo(val fileName: String, val nameStart: Int, val nameLength: Int, val isBlockScoped: Boolean)
+        val varDecls = mutableMapOf<String, MutableList<VarInfo>>()
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // Skip module files — they have their own scope
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                val isBlockScoped = stmt.declarationList.flags == SyntaxKind.LetKeyword ||
+                    stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                for (decl in stmt.declarationList.declarations) {
+                    val name = decl.name as? Identifier ?: continue
+                    if (name.text.isEmpty()) continue
+                    varDecls.getOrPut(name.text) { mutableListOf() }.add(
+                        VarInfo(fileName, name.pos, name.text.length, isBlockScoped)
+                    )
+                }
+            }
+        }
+
+        // Emit TS2451 for names that appear in multiple files where at least one is block-scoped
+        for ((name, infos) in varDecls) {
+            if (infos.size < 2) continue
+            val anyBlockScoped = infos.any { it.isBlockScoped }
+            if (!anyBlockScoped) continue  // only var+var conflicts are TS2300, not TS2451
+
+            // Check for duplicates: skip if all declarations are in the same file
+            val fileNames = infos.map { it.fileName }.toSet()
+            if (fileNames.size < 2) continue
+
+            // Emit TS2451 for each declaration, with TS6203 pointing to the other declaration(s)
+            for (info in infos) {
+                val source = binderResults.first { it.sourceFile.fileName == info.fileName }.sourceFile.text
+                val (line, character) = getLineAndCharacterOfPosition(source, info.nameStart)
+                // Related info: one TS6203 per OTHER file declaring the same name
+                val relatedInfo = infos
+                    .filter { it.fileName != info.fileName }
+                    .map { other ->
+                        val otherSource = binderResults.first { it.sourceFile.fileName == other.fileName }.sourceFile.text
+                        val (otherLine, otherChar) = getLineAndCharacterOfPosition(otherSource, other.nameStart)
+                        Diagnostic(
+                            message = "'$name' was also declared here.",
+                            category = DiagnosticCategory.Message,
+                            code = 6203,
+                            fileName = other.fileName,
+                            line = otherLine,
+                            character = otherChar,
+                            start = other.nameStart,
+                            length = other.nameLength,
+                        )
+                    }
+                diagnostics.add(Diagnostic(
+                    message = "Cannot redeclare block-scoped variable '$name'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2451,
+                    fileName = info.fileName,
+                    line = line,
+                    character = character,
+                    start = info.nameStart,
+                    length = info.nameLength,
+                    relatedInformation = relatedInfo,
                 ))
             }
         }
