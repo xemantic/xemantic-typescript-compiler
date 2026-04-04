@@ -174,6 +174,8 @@ data class CompilerOptions(
     val simulatedTypeScriptVersion: String? = null,
     /** Maps lowercase option names to their positions in tsconfig.json (for positioned diagnostics). */
     val tsconfigOptionPositions: Map<String, TsconfigOptionPosition> = emptyMap(),
+    /** Diagnostics from paths validation in tsconfig.json (TS5061/5062/5063/5064/5066/5090). */
+    val pathsDiagnostics: List<Diagnostic> = emptyList(),
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -520,6 +522,148 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         arrayPairs.add(key to items)
     }
 
+    // Parse and validate "paths" object from compilerOptions (nested object with pattern→substitutions)
+    val pathsDiagnostics = mutableListOf<Diagnostic>()
+    val parsedPaths = mutableMapOf<String, List<String>>()
+    val pathsKeyIdx = compilerOptionsBlock.indexOf("\"paths\"")
+    if (pathsKeyIdx >= 0) {
+        val pathsBraceStart = compilerOptionsBlock.indexOf('{', pathsKeyIdx + "\"paths\"".length)
+        if (pathsBraceStart >= 0) {
+            // Find matching closing brace for the paths object
+            var d = 1
+            var p = pathsBraceStart + 1
+            while (p < compilerOptionsBlock.length && d > 0) {
+                when (compilerOptionsBlock[p]) {
+                    '{' -> d++
+                    '}' -> d--
+                }
+                p++
+            }
+            val pathsBlock = compilerOptionsBlock.substring(pathsBraceStart + 1, p - 1)
+            val pathsBlockOffset = blockStart + pathsBraceStart + 1
+
+            // Find each pattern entry: "pattern": value
+            val entryPattern = Regex(""""([^"]*)"(\s*:\s*)""")
+            for (entryMatch in entryPattern.findAll(pathsBlock)) {
+                val pattern = entryMatch.groupValues[1]
+                val afterColon = entryMatch.range.last + 1
+
+                // Determine value type and position
+                var valueStart = afterColon
+                while (valueStart < pathsBlock.length && pathsBlock[valueStart].isWhitespace()) valueStart++
+                if (valueStart >= pathsBlock.length) continue
+
+                when (pathsBlock[valueStart]) {
+                    '[' -> {
+                        // Array value — find closing bracket
+                        val bracketEnd = pathsBlock.indexOf(']', valueStart)
+                        if (bracketEnd < 0) continue
+                        val arrayContent = pathsBlock.substring(valueStart + 1, bracketEnd)
+
+                        // Check for empty array (TS5066)
+                        val items = mutableListOf<String>()
+                        val itemPattern = Regex(""""([^"]*)"""")
+                        val numberPattern = Regex("""(\d+)""")
+
+                        for (itemMatch in itemPattern.findAll(arrayContent)) {
+                            items.add(itemMatch.groupValues[1])
+                        }
+
+                        // Check for non-string elements (TS5064)
+                        // Look for bare numbers in array
+                        val allTokens = Regex("""[^\s,\[\]]+|"[^"]*"""").findAll(arrayContent)
+                        for (token in allTokens) {
+                            val t = token.value.trim()
+                            if (t.isEmpty()) continue
+                            if (t.startsWith("\"")) continue // string — ok
+                            // Non-string element
+                            val elemAbsPos = pathsBlockOffset + valueStart + 1 + token.range.first
+                            val elemLineCol = computeLineAndColumn(json, elemAbsPos)
+                            pathsDiagnostics.add(Diagnostic(
+                                message = "Substitution '$t' for pattern '$pattern' has incorrect type, expected 'string', got 'number'.",
+                                category = DiagnosticCategory.Error,
+                                code = 5064,
+                                fileName = tsconfigFileName,
+                                line = elemLineCol.first,
+                                character = elemLineCol.second,
+                                start = elemAbsPos,
+                                length = t.length,
+                            ))
+                        }
+
+                        if (items.isEmpty() && pathsDiagnostics.none { it.code == 5064 }) {
+                            // TS5066: empty array
+                            val absPos = pathsBlockOffset + valueStart
+                            val lineCol = computeLineAndColumn(json, absPos)
+                            pathsDiagnostics.add(Diagnostic(
+                                message = "Substitutions for pattern '$pattern' shouldn't be an empty array.",
+                                category = DiagnosticCategory.Error,
+                                code = 5066,
+                                fileName = tsconfigFileName,
+                                line = lineCol.first,
+                                character = lineCol.second,
+                                start = absPos,
+                                length = bracketEnd - valueStart + 1,
+                            ))
+                        }
+
+                        parsedPaths[pattern] = items
+
+                        // TS5061/5062: pattern or substitution has more than one '*'
+                        if (pattern.count { it == '*' } > 1) {
+                            val patKeyAbsPos = pathsBlockOffset + entryMatch.range.first
+                            val patKeyLineCol = computeLineAndColumn(json, patKeyAbsPos)
+                            pathsDiagnostics.add(Diagnostic(
+                                message = "Pattern '$pattern' can have at most one '*' character.",
+                                category = DiagnosticCategory.Error,
+                                code = 5061,
+                                fileName = tsconfigFileName,
+                                line = patKeyLineCol.first,
+                                character = patKeyLineCol.second,
+                                start = patKeyAbsPos,
+                                length = pattern.length + 2, // +2 for quotes
+                            ))
+                        }
+                        for (itemMatch in itemPattern.findAll(arrayContent)) {
+                            val sub = itemMatch.groupValues[1]
+                            if (sub.count { it == '*' } > 1) {
+                                val subAbsPos = pathsBlockOffset + valueStart + 1 + itemMatch.range.first
+                                val subLineCol = computeLineAndColumn(json, subAbsPos)
+                                pathsDiagnostics.add(Diagnostic(
+                                    message = "Substitution '$sub' in pattern '$pattern' can have at most one '*' character.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 5062,
+                                    fileName = tsconfigFileName,
+                                    line = subLineCol.first,
+                                    character = subLineCol.second,
+                                    start = subAbsPos,
+                                    length = sub.length + 2, // +2 for quotes
+                                ))
+                            }
+                        }
+                    }
+                    '"' -> {
+                        // String value (not array) — TS5063
+                        val strEnd = pathsBlock.indexOf('"', valueStart + 1)
+                        if (strEnd < 0) continue
+                        val absPos = pathsBlockOffset + valueStart
+                        val lineCol = computeLineAndColumn(json, absPos)
+                        pathsDiagnostics.add(Diagnostic(
+                            message = "Substitutions for pattern '$pattern' should be an array.",
+                            category = DiagnosticCategory.Error,
+                            code = 5063,
+                            fileName = tsconfigFileName,
+                            line = lineCol.first,
+                            character = lineCol.second,
+                            start = absPos,
+                            length = strEnd - valueStart + 1,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
     // Only apply a safe subset of tsconfig options that our transpiler handles correctly.
     val allowedTsconfigOptions = setOf(
         "target", "module", "strict", "noemit", "noemithelpers",
@@ -591,6 +735,55 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
             else -> result
         }
     }
+    // Apply parsed paths
+    if (parsedPaths.isNotEmpty()) {
+        result = result.copy(paths = parsedPaths)
+    }
+
+    // TS5090: Non-relative paths without baseUrl
+    if (result.baseUrl == null && parsedPaths.isNotEmpty() && pathsKeyIdx >= 0) {
+        val pathsBraceStart = compilerOptionsBlock.indexOf('{', pathsKeyIdx + "\"paths\"".length)
+        if (pathsBraceStart >= 0) {
+            var d = 1
+            var p = pathsBraceStart + 1
+            while (p < compilerOptionsBlock.length && d > 0) {
+                when (compilerOptionsBlock[p]) { '{' -> d++; '}' -> d-- }
+                p++
+            }
+            val pathsBlock = compilerOptionsBlock.substring(pathsBraceStart + 1, p - 1)
+            val pathsBlockOffset = blockStart + pathsBraceStart + 1
+            // Find substitution strings and check if they're non-relative
+            val subPattern = Regex(""""([^"]*)"(\s*:\s*)\[([^\]]*)]""")
+            for (entryMatch in subPattern.findAll(pathsBlock)) {
+                val arrayContent = entryMatch.groupValues[3]
+                val arrayStartInBlock = entryMatch.range.first + entryMatch.groupValues[1].length + 2 + entryMatch.groupValues[2].length + 1
+                val itemPattern = Regex(""""([^"]*)"""")
+                for (itemMatch in itemPattern.findAll(arrayContent)) {
+                    val sub = itemMatch.groupValues[1]
+                    if (!sub.startsWith("./") && !sub.startsWith("../")) {
+                        val absPos = pathsBlockOffset + arrayStartInBlock + itemMatch.range.first
+                        val lineCol = computeLineAndColumn(json, absPos)
+                        pathsDiagnostics.add(Diagnostic(
+                            message = "Non-relative paths are not allowed when 'baseUrl' is not set. Did you forget a leading './'?",
+                            category = DiagnosticCategory.Error,
+                            code = 5090,
+                            fileName = tsconfigFileName,
+                            line = lineCol.first,
+                            character = lineCol.second,
+                            start = absPos,
+                            length = sub.length + 2, // +2 for quotes
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // Store paths diagnostics
+    if (pathsDiagnostics.isNotEmpty()) {
+        result = result.copy(pathsDiagnostics = pathsDiagnostics)
+    }
+
     // Merge tsconfig option positions into the result
     if (optionPositions.isNotEmpty()) {
         result = result.copy(tsconfigOptionPositions = result.tsconfigOptionPositions + optionPositions)

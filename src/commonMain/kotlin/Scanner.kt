@@ -86,6 +86,12 @@ class Scanner(private val text: String) {
     /** Whether the last scanned template literal token was unterminated. */
     private var tokenIsUnterminated: Boolean = false
 
+    /** Whether the last scanned numeric literal was a legacy octal (e.g. 01, 0123). */
+    private var isLegacyOctalToken: Boolean = false
+
+    /** Whether the last scanned numeric literal was a decimal with an invalid leading zero (e.g. 08, 09, 08.5). */
+    private var isLeadingZeroDecimalToken: Boolean = false
+
     /** Returns true if the last scanned identifier had an invalid unicode escape. */
     fun hasInvalidUnicodeEscapeInToken(): Boolean = hasInvalidUnicodeEscape
 
@@ -101,6 +107,12 @@ class Scanner(private val text: String) {
 
     /** Returns true if the last scanned template literal was unterminated. */
     fun isTokenUnterminated(): Boolean = tokenIsUnterminated
+
+    /** Returns true if the last scanned numeric literal was a legacy octal literal (e.g., 01, 0123). */
+    fun isLegacyOctalLiteralToken(): Boolean = isLegacyOctalToken
+
+    /** Returns true if the last scanned numeric literal was a decimal with an invalid leading zero (e.g., 08, 09). */
+    fun isLeadingZeroDecimalLiteralToken(): Boolean = isLeadingZeroDecimalToken
 
     // -- Public getters -------------------------------------------------------
 
@@ -218,6 +230,8 @@ class Scanner(private val text: String) {
         trailingComments = null
         precedingLineBreak = false
         tokenIsUnterminated = false
+        isLegacyOctalToken = false
+        isLeadingZeroDecimalToken = false
 
         // Track position right after previous token (before any trivia)
         prevTokenEnd = pos
@@ -720,6 +734,13 @@ class Scanner(private val text: String) {
                 scannedDigits[0] == '0' &&
                 scannedDigits.all { it in '0'..'7' }
 
+        // Check for decimal with invalid leading zero (e.g. 08, 09, 08.5) — not an octal,
+        // but still has a leading '0' followed by more digits.
+        val hasLeadingZeroDecimal = !isLegacyOctalLiteral &&
+                scannedDigits.length >= 2 &&
+                scannedDigits[0] == '0' &&
+                scannedDigits[1].isDigit()
+
         if (!isLegacyOctalLiteral) {
             // Fractional part
             if (pos < end && text[pos] == '.') {
@@ -735,6 +756,13 @@ class Scanner(private val text: String) {
                 }
                 scanDecimalDigits()
             }
+        }
+
+        // Set diagnostic flags for legacy octals and leading-zero decimals
+        if (isLegacyOctalLiteral) {
+            isLegacyOctalToken = true
+        } else if (hasLeadingZeroDecimal) {
+            isLeadingZeroDecimalToken = true
         }
 
         // BigInt suffix — only for pure decimal (no legacy octal like 0123n, no float)

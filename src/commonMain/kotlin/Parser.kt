@@ -22,6 +22,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private val scanner = Scanner(source)
     private var token: SyntaxKind = SyntaxKind.Unknown
+    private var prevToken: SyntaxKind = SyntaxKind.Unknown
     private val diagnostics = mutableListOf<Diagnostic>()
     private var inAsyncContext = topLevelAwait
     private var disallowIn = false
@@ -59,6 +60,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     // ── Infrastructure ──────────────────────────────────────────────────────
 
     private fun nextToken(): SyntaxKind {
+        prevToken = token
         token = scanner.scan()
         return token
     }
@@ -4967,7 +4969,36 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private fun parseNumericLiteral(): NumericLiteralNode {
         val pos = getPos()
         val text = scanner.getTokenText()
+        val isLegacyOctal = scanner.isLegacyOctalLiteralToken()
+        val isLeadingZeroDecimal = scanner.isLeadingZeroDecimalLiteralToken()
+        val hasPrecedingMinus = prevToken == SyntaxKind.Minus
+        // Capture the end of the previous token (right after '-' if present) BEFORE advancing
+        val prevEnd = scanner.getPrevTokenEnd()
         nextToken()
+        if (isLegacyOctal) {
+            // TS1121: Octal literals are not allowed. Use the syntax '0o{digits}'.
+            // Strip the leading '0' and any subsequent leading zeros to get minimal octal representation.
+            val rawDigits = text.substring(1) // strip leading '0'
+            val octalDigits = rawDigits.trimStart('0').ifEmpty { "0" }
+            val prefix = if (hasPrecedingMinus) "-" else ""
+            // When preceded by '-', the squiggle spans '-' + literal (e.g., -01 = 3 chars)
+            val errorStart = if (hasPrecedingMinus) prevEnd - 1 else pos
+            val errorLength = if (hasPrecedingMinus) 1 + text.length else text.length
+            reportError(
+                "Octal literals are not allowed. Use the syntax '${prefix}0o$octalDigits'.",
+                code = 1121,
+                overrideStart = errorStart,
+                overrideLength = errorLength
+            )
+        } else if (isLeadingZeroDecimal) {
+            // TS1489: Decimals with leading zeros are not allowed.
+            reportError(
+                "Decimals with leading zeros are not allowed.",
+                code = 1489,
+                overrideStart = pos,
+                overrideLength = text.length
+            )
+        }
         return NumericLiteralNode(text = text, pos = pos, end = getEnd())
     }
 
