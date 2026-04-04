@@ -95,7 +95,9 @@ infix fun String?.sameAs(expected: Path) {
     // baseline files with mixed LF/CRLF don't cause spurious line-ending failures.
     fun String.normalizeCrlf() = replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").trimEnd() + "\r\n"
     val normalizedExpected = stripped.normalizeCrlf()
-    val normalizedActual = (this ?: "").normalizeCrlf()
+    // Also strip .d.ts sections from actual output — our compiler may include input .d.ts
+    // echoes that the expected baseline has stripped via the same logic.
+    val normalizedActual = stripDtsSection(this ?: "").normalizeCrlf()
     normalizedActual sameAs normalizedExpected
 }
 
