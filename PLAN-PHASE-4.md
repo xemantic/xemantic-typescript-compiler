@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-03):** 7,771 / 10,077 tests passing (77.1%).
+**Status (2026-04-04):** 7,780 / 10,077 tests passing (77.2%).
 
 ## Goal
 
@@ -309,14 +309,40 @@ array→primitive, named→named) fall through to the old string system which do
   staticMethodsReferencingClassTypeParameters, genericClassWithStaticsUsingTypeArguments,
   typeParametersInStaticAccessors).
 
-**Analysis of remaining test landscape (updated 2026-04-03c):**
-- 2,303 failing tests (down from 2,316)
-- ~62% produce zero diagnostics — need deep type checking infrastructure
-- ~11% need exactly 1 missing diagnostic code (7-line diffs)
-- Top missing codes in 7-line-diff tests: TS2339 edge cases, TS2322 generic contexts,
-  TS7019 (rest param any[]), TS2503 (namespace resolution)
+**Completed session 2026-04-04 (+9 tests, 7,771 → 7,780):**
+- Binder: Interface+Function merge rule in `canMerge` — fixes TS2709 FP for merged
+  function+interface symbols (privacyCheckExportAssignment test).
+- TS2440: Skip internal namespace aliases (`import foo = m1`) when they don't
+  conflict with variable declarations. Track varNames vs mergeableNames separately.
+  +1 test (importedModuleClassNameClash).
+- TS2454: Co-emit with TS2448 only when `let` declaration has initializer.
+  Uninitialized `let l1;` doesn't co-emit TS2454, but `let v1 = 0` does.
+  +1 test (letDeclarations-useBeforeDefinition).
+- TS2802: Downlevel iteration check for `arguments` in for-of and array
+  destructuring when target < ES2015 and no `downlevelIteration` flag.
+  +2 tests (argumentsObjectIterator01_ES5, argumentsObjectIterator03_ES5).
+- TS2507: Check extends clause resolving to variable with primitive type
+  (not a class/function) in namespace scope. Conservative — only flags
+  primitive types to avoid FPs with constructor interfaces.
+  +2 tests (classExtendsClauseClassNotReferringConstructor,
+  classExtendsClauseClassMergedWithModuleNotReferingConstructor).
+- TS2304: Remove `let` from KEYWORD_IDENTIFIERS to allow co-emission with TS1212
+  when `let` is used as bare expression statement in strict mode.
+  +2 tests (downlevelLetConst6, downlevelLetConst11).
+- Investigation: relaxing TS7006/TS7019 gate (always-on noImplicitAny) causes
+  net regression (-6). Kept gated behind `noImplicitAny || strict`.
+
+**Analysis of remaining test landscape (updated 2026-04-04):**
+- 2,294 failing tests (down from 2,303)
+- ~59% produce zero diagnostics — need deep type checking infrastructure
+- ~12% need exactly 1 missing diagnostic code (5-line diffs)
+- 117 tests need exactly 1 missing diagnostic code
+- Top missing codes in 5-line-diff tests: TS2339 (15), TS2322 (6), TS2345 (5),
+  TS2307 (5), TS7019 (3), TS1192 (3), TS2792 (3)
+- 5 FP tests: intraBindingPatternReferences (TS7006 contextual), 
+  subtypeReductionWithAnyFunctionType (TS7006 contextual) — need contextual typing
 - Most gains now blocked on: (a) deeper generic instantiation, (b) module resolution,
-  (c) parser error recovery precision
+  (c) contextual typing for lambda parameters
 
 **Recommended priority for next items:**
 
