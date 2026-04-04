@@ -430,6 +430,8 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileDuplicateFunction()
         }
+        // 74. Check module hidden by local declaration (TS2437)
+        checkModuleHiddenByLocal()
         } // end if (!declarationOnly)
     }
 
@@ -28042,6 +28044,85 @@ class Checker(
                 }
             }
             else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2437: Module hidden by local declaration
+    // -----------------------------------------------------------------------
+
+    private fun checkModuleHiddenByLocal() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkModuleHiddenInStmts(result.sourceFile.statements, source, fileName, result.locals)
+        }
+    }
+
+    private fun checkModuleHiddenInStmts(
+        stmts: List<Statement>, source: String, fileName: String,
+        outerLocals: Map<String, Symbol>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        // Collect local variable names in this namespace
+                        val localVarNames = mutableSetOf<String>()
+                        for (s in body.statements) {
+                            when (s) {
+                                is VariableStatement -> {
+                                    for (d in s.declarationList.declarations) {
+                                        val name = d.name
+                                        if (name is Identifier) localVarNames.add(name.text)
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+
+                        // Check import equals declarations
+                        for (s in body.statements) {
+                            if (s is ImportEqualsDeclaration) {
+                                val ref = s.moduleReference
+                                if (ref is Identifier) {
+                                    val refName = ref.text
+                                    // Check if the referenced name is both:
+                                    // 1. A local variable in this namespace
+                                    // 2. A module/class/namespace in the outer scope
+                                    if (refName in localVarNames) {
+                                        val outerSymbol = outerLocals[refName] ?: globals[refName]
+                                        if (outerSymbol != null && outerSymbol.flags.hasAny(
+                                                SymbolFlags.Module or SymbolFlags.Class or SymbolFlags.ValueModule or SymbolFlags.NamespaceModule
+                                            )) {
+                                            val start = ref.pos
+                                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                            diagnostics.add(Diagnostic(
+                                                message = "Module '$refName' is hidden by a local declaration with the same name.",
+                                                category = DiagnosticCategory.Error,
+                                                code = 2437,
+                                                fileName = fileName,
+                                                line = line,
+                                                character = character,
+                                                start = start,
+                                                length = refName.length,
+                                            ))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Recurse into nested namespaces
+                        val innerLocals = mutableMapOf<String, Symbol>()
+                        innerLocals.putAll(outerLocals)
+                        checkModuleHiddenInStmts(body.statements, source, fileName, innerLocals)
+                    }
+                }
+                else -> {}
+            }
         }
     }
 
