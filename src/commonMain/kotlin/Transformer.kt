@@ -1005,6 +1005,14 @@ class Transformer(
         }
         val pureTypeNames = typeOnlyDeclaredNames - runtimeDeclaredNames
 
+        // Pre-scan: collect all value-position references from non-import statements in the
+        // ORIGINAL source. Used to detect unused default import bindings (import c, { x } from "m"
+        // where c is not referenced in any value position → use plain require instead of __importStar).
+        val nonImportOriginalStmts = originalSourceFile.statements.filter {
+            it !is ImportDeclaration && it !is ImportEqualsDeclaration
+        }
+        val valueReferencedNames = collectValueReferences(nonImportOriginalStmts)
+
         // Pre-scan original source for exported namespace/enum names. Their var declarations
         // have no export modifier in the transformed code (it was stripped during namespace/enum
         // transform), so we need to track them separately for hoisting and IIFE arg rewriting.
@@ -1579,31 +1587,42 @@ class Transformer(
                         } else if (clause.name != null && bindings is NamedImports) {
                             // Combined default + named: import c, { x, y } from "m"
                             val localName = clause.name.text
+                            // If the default binding is not referenced in value positions, treat as pure named import
+                            val isDefaultUsed = localName in valueReferencedNames
+                            // Check if all named bindings are also unused → skip the entire import
+                            val anyNamedUsed = bindings.elements.any { element ->
+                                val alias = element.name.text
+                                alias in valueReferencedNames
+                            }
+                            if (!isDefaultUsed && !anyNamedUsed) {
+                                // Nothing from this import is used — skip it entirely (no require generated)
+                                continue
+                            }
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                            if (options.esModuleInterop) {
-                                // If all named bindings are "default", use __importDefault.
-                                // If there are non-default named bindings, use __importStar.
-                                val hasNonDefaultNamedElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
-                                if (hasNonDefaultNamedElement) {
-                                    needsImportStar = true
-                                    result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                                } else {
-                                    needsImportDefault = true
-                                    result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                                }
+                            if (options.esModuleInterop && isDefaultUsed && anyNamedUsed) {
+                                // Both default and named bindings are used → __importStar (like namespace import)
+                                needsImportStar = true
+                                result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                            } else if (options.esModuleInterop && isDefaultUsed) {
+                                // Only default is used → __importDefault
+                                needsImportDefault = true
+                                result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             } else {
+                                // Default unused (named only or neither) — plain require
                                 result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             }
                             val importConstStmt = result.last()
                             importStmtForLocalName[localName] = importConstStmt
-                            // Rename default import: c → tempName.default
-                            renameMap[localName] = PropertyAccessExpression(
-                                expression = syntheticId(tempName),
-                                name = syntheticId("default"),
-                                pos = -1, end = -1,
-                            )
-                            // Track default import temp var for decorator metadata safety wrapping
-                            defaultModuleTempVars.add(tempName)
+                            if (isDefaultUsed) {
+                                // Rename default import: c → tempName.default
+                                renameMap[localName] = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                                // Track default import temp var for decorator metadata safety wrapping
+                                defaultModuleTempVars.add(tempName)
+                            }
                             // Rename named bindings: x → tempName.x, etc.
                             for (element in bindings.elements) {
                                 val importedName = (element.propertyName ?: element.name).text
