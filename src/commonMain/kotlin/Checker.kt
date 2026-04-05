@@ -252,6 +252,8 @@ class Checker(
         checkStrictModeIdentifiers()
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
         checkClassStrictModeIdentifiers()
+        // 12c. Check 'arguments' in class field initializers / static blocks (TS2815)
+        checkArgumentsInClassFieldInitializers()
         // 13. Check export= in ES module files (TS1203)
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
@@ -21577,6 +21579,313 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2815: 'arguments' in class field initializers / static blocks
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS2815: "'arguments' cannot be referenced in property initializers
+     * or class static initialization blocks."
+     * Fires when `arguments` appears in:
+     *   - PropertyDeclaration initializers (including arrow functions inside)
+     *   - ClassStaticBlockDeclaration bodies
+     * Does NOT fire inside regular function expressions/declarations (they have their own `arguments`).
+     * Fires unconditionally (not gated by strict/noImplicitAny).
+     */
+    private fun checkArgumentsInClassFieldInitializers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            findClassesForTS2815InStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun findClassesForTS2815InStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        checkClassMembersForTS2815(stmt.members, source, fileName)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) findClassesForTS2815InStatements(body.statements, source, fileName)
+                }
+                is FunctionDeclaration -> {
+                    stmt.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+                }
+                is Block -> findClassesForTS2815InStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    findClassesForTS2815InStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { findClassesForTS2815InStatements(listOf(it), source, fileName) }
+                }
+                is ReturnStatement -> {
+                    stmt.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
+                }
+                is ExpressionStatement -> findClassesForTS2815InExpr(stmt.expression, source, fileName)
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let { findClassesForTS2815InExpr(it, source, fileName) }
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun findClassesForTS2815InExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ClassExpression -> {
+                if (ModifierFlag.Declare !in expr.modifiers) {
+                    checkClassMembersForTS2815(expr.members, source, fileName)
+                }
+            }
+            is NewExpression -> {
+                findClassesForTS2815InExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { findClassesForTS2815InExpr(it, source, fileName) }
+            }
+            is CallExpression -> {
+                findClassesForTS2815InExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) findClassesForTS2815InExpr(arg, source, fileName)
+            }
+            is ParenthesizedExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                findClassesForTS2815InExpr(expr.left, source, fileName)
+                findClassesForTS2815InExpr(expr.right, source, fileName)
+            }
+            // FunctionExpression/ArrowFunction as the TOP-LEVEL return — look for class inside
+            is FunctionExpression -> {
+                findClassesForTS2815InStatements(expr.body.statements, source, fileName)
+            }
+            is ArrowFunction -> {
+                val body = expr.body
+                if (body is Block) findClassesForTS2815InStatements(body.statements, source, fileName)
+                else if (body is Expression) findClassesForTS2815InExpr(body, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkClassMembersForTS2815(members: List<ClassElement>, source: String, fileName: String) {
+        for (member in members) {
+            when (member) {
+                is PropertyDeclaration -> {
+                    // Check initializer expression — not method bodies
+                    member.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
+                }
+                is ClassStaticBlockDeclaration -> {
+                    // Check static block body
+                    checkStatementsForTS2815Arguments(member.body.statements, source, fileName)
+                }
+                else -> {
+                    // Constructor, MethodDeclaration, GetAccessor, SetAccessor — skip (they have their own arguments)
+                    // But recurse into nested classes
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Walk an expression in a "class field initializer context" — looking for `arguments` identifiers.
+     * Stop recursing into FunctionExpression/FunctionDeclaration bodies (they have their own arguments).
+     * Arrow functions DO propagate the class field context.
+     */
+    private fun checkExprForTS2815Arguments(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is Identifier -> {
+                if (expr.text == "arguments") {
+                    emitTS2815(expr.pos, source, fileName)
+                }
+            }
+            is ArrowFunction -> {
+                // Arrow functions: parameters with defaults, body
+                for (param in expr.parameters) {
+                    param.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
+                }
+                val body = expr.body
+                if (body is Block) checkStatementsForTS2815Arguments(body.statements, source, fileName)
+                else if (body is Expression) checkExprForTS2815Arguments(body, source, fileName)
+            }
+            // FunctionExpression: has own `arguments` — do not emit TS2815, but look for inner classes
+            is FunctionExpression -> {
+                findClassesForTS2815InStatements(expr.body.statements, source, fileName)
+            }
+            // ClassExpression inside field initializer — recurse into its members
+            is ClassExpression -> {
+                checkClassMembersForTS2815(expr.members, source, fileName)
+            }
+            // Other complex expressions — recurse
+            is CallExpression -> {
+                checkExprForTS2815Arguments(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkExprForTS2815Arguments(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkExprForTS2815Arguments(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkExprForTS2815Arguments(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                checkExprForTS2815Arguments(expr.left, source, fileName)
+                checkExprForTS2815Arguments(expr.right, source, fileName)
+            }
+            is PropertyAccessExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkExprForTS2815Arguments(expr.expression, source, fileName)
+                checkExprForTS2815Arguments(expr.argumentExpression, source, fileName)
+            }
+            is ParenthesizedExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkExprForTS2815Arguments(expr.condition, source, fileName)
+                checkExprForTS2815Arguments(expr.whenTrue, source, fileName)
+                checkExprForTS2815Arguments(expr.whenFalse, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkExprForTS2815Arguments(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkExprForTS2815Arguments(expr.operand, source, fileName)
+            is TypeAssertionExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is AsExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is SpreadElement -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkExprForTS2815Arguments(prop.initializer, source, fileName)
+                        is ShorthandPropertyAssignment -> {
+                            // no initializer to check
+                        }
+                        is SpreadAssignment -> checkExprForTS2815Arguments(prop.expression, source, fileName)
+                        is MethodDeclaration -> {
+                            // Method in object literal — has its own arguments
+                            prop.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+                        }
+                        is GetAccessor -> prop.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+                        is SetAccessor -> prop.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ArrayLiteralExpression -> {
+                for (elem in expr.elements) checkExprForTS2815Arguments(elem, source, fileName)
+            }
+            is TemplateExpression -> {
+                for (span in expr.templateSpans) checkExprForTS2815Arguments(span.expression, source, fileName)
+            }
+            is TaggedTemplateExpression -> {
+                checkExprForTS2815Arguments(expr.tag, source, fileName)
+                val tmpl = expr.template
+                if (tmpl is TemplateExpression) {
+                    for (span in tmpl.templateSpans) checkExprForTS2815Arguments(span.expression, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk statements in a "class field initializer context" (like static block bodies).
+     * Stops recursing at FunctionDeclaration bodies.
+     */
+    private fun checkStatementsForTS2815Arguments(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkStatementForTS2815Arguments(stmt, source, fileName)
+    }
+
+    private fun checkStatementForTS2815Arguments(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> checkExprForTS2815Arguments(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkExprForTS2815Arguments(it, source, fileName) }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
+                }
+            }
+            is Block -> checkStatementsForTS2815Arguments(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkExprForTS2815Arguments(stmt.expression, source, fileName)
+                checkStatementForTS2815Arguments(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkStatementForTS2815Arguments(it, source, fileName) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
+                        }
+                    }
+                    is Expression -> checkExprForTS2815Arguments(init, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { checkExprForTS2815Arguments(it, source, fileName) }
+                stmt.incrementor?.let { checkExprForTS2815Arguments(it, source, fileName) }
+                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                checkExprForTS2815Arguments(stmt.expression, source, fileName)
+                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkExprForTS2815Arguments(stmt.expression, source, fileName)
+                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                checkExprForTS2815Arguments(stmt.expression, source, fileName)
+                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
+                checkExprForTS2815Arguments(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkExprForTS2815Arguments(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> { checkExprForTS2815Arguments(clause.expression, source, fileName); clause.statements }
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkStatementsForTS2815Arguments(clauseStmts, source, fileName)
+                }
+            }
+            is TryStatement -> {
+                checkStatementsForTS2815Arguments(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { checkStatementsForTS2815Arguments(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkStatementsForTS2815Arguments(it.statements, source, fileName) }
+            }
+            is ThrowStatement -> stmt.expression?.let { checkExprForTS2815Arguments(it, source, fileName) }
+            is LabeledStatement -> checkStatementForTS2815Arguments(stmt.statement, source, fileName)
+            // FunctionDeclaration inside static block: has own arguments — skip body but recurse for inner classes
+            is FunctionDeclaration -> {
+                stmt.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    checkClassMembersForTS2815(stmt.members, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2815(start: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'arguments' cannot be referenced in property initializers or class static initialization blocks.",
+            category = DiagnosticCategory.Error,
+            code = 2815,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = "arguments".length,
+        ))
     }
 
     // -----------------------------------------------------------------------
