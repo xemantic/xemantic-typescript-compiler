@@ -134,6 +134,9 @@ class Checker(
         get() = state.arithmeticCheckDepth
         set(value) { state.arithmeticCheckDepth = value }
 
+    /** Tracks whether we're inside a static class method/accessor for TS2339 `this` checking. */
+    private var inStaticClassMethod = false
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -28812,14 +28815,23 @@ class Checker(
     ) {
         when (stmt) {
             is ClassDeclaration -> {
+                // Check heritage clause property access (e.g. extends M.B)
+                stmt.heritageClauses?.forEach { clause ->
+                    clause.types.forEach { ewta ->
+                        checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType)
+                    }
+                }
                 // Resolve the class type for "this" inside class body
                 val classType = if (stmt.name != null) {
                     val symbol = globals[stmt.name.text]
                     if (symbol != null) getDeclaredTypeOfSymbol(symbol) else null
                 } else null
+                val savedStatic = inStaticClassMethod
+                inStaticClassMethod = false
                 for (member in stmt.members) {
                     checkPropertyAccessInClassMember(member, source, fileName, classType)
                 }
+                inStaticClassMethod = savedStatic
             }
             is InterfaceDeclaration -> { /* No runtime property access in interfaces */ }
             is FunctionDeclaration -> {
@@ -28899,6 +28911,15 @@ class Checker(
         member: ClassElement, source: String, fileName: String,
         classType: Type?,
     ) {
+        val isStatic = when (member) {
+            is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+            is GetAccessor -> ModifierFlag.Static in member.modifiers
+            is SetAccessor -> ModifierFlag.Static in member.modifiers
+            is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+            else -> false
+        }
+        val savedStatic = inStaticClassMethod
+        if (isStatic) inStaticClassMethod = true
         when (member) {
             is MethodDeclaration -> {
                 member.body?.let {
@@ -28927,6 +28948,7 @@ class Checker(
             }
             else -> {}
         }
+        inStaticClassMethod = savedStatic
     }
 
     private fun checkPropertyAccessInExpr(
@@ -29317,9 +29339,30 @@ class Checker(
         if (checkPrivateMemberAccess(expr, source, fileName, enclosingClassType)) return
 
         // === TS2339/TS2551: Property does not exist check ===
-        // Resolve object type: "this" uses enclosing class type;
-        // non-this identifiers use global type resolution.
         val isThisAccess = expr.expression is Identifier && (expr.expression as Identifier).text == "this"
+        val propName = expr.name.text
+
+        // === Static method "this" access ===
+        // In static methods, "this" refers to the constructor type (typeof C).
+        if (isThisAccess && inStaticClassMethod && enclosingClassType is Type.Object) {
+            val classSymbol = enclosingClassType.symbol ?: return
+            val classDecl = classSymbol.declarations.firstOrNull() as? ClassDeclaration ?: return
+            if (isStaticMemberOfClass(classDecl, propName)) return
+            if (classSymbol.exports?.containsKey(propName) == true) return
+            if (propName in RUNTIME_PROPERTIES) return
+            val typeName = "typeof ${classSymbol.name}"
+            val start = expr.name.pos
+            val length = expr.name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$typeName'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = start, length = length,
+            ))
+            return
+        }
+
         val objectType = if (isThisAccess) {
             if (enclosingClassType == null) return
             enclosingClassType
@@ -29327,6 +29370,28 @@ class Checker(
             if (expr.expression !is Identifier) return
             val identName = (expr.expression as Identifier).text
             val identSymbol = globals[identName] ?: return
+
+            // === Namespace/Module property access ===
+            if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class)) {
+                val exports = identSymbol.exports
+                if (exports != null) {
+                    if (isNameExportedFromNamespace(identSymbol, propName)) return
+                    if (propName in RUNTIME_PROPERTIES) return
+                    val typeName = "typeof $identName"
+                    val start = expr.name.pos
+                    val length = expr.name.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$typeName'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                    return
+                }
+                return
+            }
+
             val exprType = getTypeOfSymbol(identSymbol)
             if (exprType === anyType || exprType === errorType || exprType === unknownType) return
             if (exprType !is Type.Object) return
@@ -29349,7 +29414,6 @@ class Checker(
         if (objectType.properties.isNullOrEmpty()) return
         // Skip if class has base types — incomplete inheritance resolution causes FPs
         if (objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) return
-        val propName = expr.name.text
         // Skip well-known runtime properties
         if (propName in RUNTIME_PROPERTIES) return
         // Check if property exists in type members
@@ -29432,6 +29496,71 @@ class Checker(
                 length = length,
             ))
         }
+    }
+
+    /** Check if `propName` is exported from a namespace symbol. */
+    private fun isNameExportedFromNamespace(nsSym: Symbol, propName: String): Boolean {
+        val memberSym = nsSym.exports?.get(propName) ?: return false
+        if (memberSym.flags.hasAny(SymbolFlags.ExportValue)) return true
+        for (decl in memberSym.declarations) {
+            when (decl) {
+                is FunctionDeclaration -> if (ModifierFlag.Export in decl.modifiers) return true
+                is ClassDeclaration -> if (ModifierFlag.Export in decl.modifiers) return true
+                is InterfaceDeclaration -> if (ModifierFlag.Export in decl.modifiers) return true
+                is TypeAliasDeclaration -> if (ModifierFlag.Export in decl.modifiers) return true
+                is EnumDeclaration -> if (ModifierFlag.Export in decl.modifiers) return true
+                is ModuleDeclaration -> if (ModifierFlag.Export in decl.modifiers) return true
+                else -> {}
+            }
+        }
+        // For variables, scan namespace body for VariableStatement with export modifier
+        for (nsDecl in nsSym.declarations) {
+            val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock ?: continue
+            for (stmt in body.statements) {
+                if (stmt !is VariableStatement) continue
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                for (d in stmt.declarationList.declarations) {
+                    if (d.name is Identifier && (d.name as Identifier).text == propName) return true
+                }
+            }
+        }
+        return false
+    }
+
+    /** Check if `name` is a static member of `classDecl` (including inherited). */
+    private fun isStaticMemberOfClass(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
+        val v = visited ?: mutableSetOf()
+        val className = classDecl.name?.text ?: return false
+        if (!v.add(className)) return false
+        for (m in classDecl.members) {
+            val memberName = when (m) {
+                is PropertyDeclaration -> (m.name as? Identifier)?.text
+                is MethodDeclaration -> (m.name as? Identifier)?.text
+                is GetAccessor -> (m.name as? Identifier)?.text
+                is SetAccessor -> (m.name as? Identifier)?.text
+                else -> null
+            }
+            if (memberName != name) continue
+            val isStatic = when (m) {
+                is PropertyDeclaration -> ModifierFlag.Static in m.modifiers
+                is MethodDeclaration -> ModifierFlag.Static in m.modifiers
+                is GetAccessor -> ModifierFlag.Static in m.modifiers
+                is SetAccessor -> ModifierFlag.Static in m.modifiers
+                else -> false
+            }
+            if (isStatic) return true
+        }
+        val baseExpr = classDecl.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()?.expression
+        if (baseExpr is Identifier) {
+            val baseSym = globals[baseExpr.text]
+            if (baseSym != null) {
+                val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
+                if (baseDecl != null && isStaticMemberOfClass(baseDecl, name, v)) return true
+            }
+        }
+        return false
     }
 
     /**
