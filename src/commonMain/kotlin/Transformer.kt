@@ -1571,6 +1571,60 @@ class Transformer(
                             )
                             // Track default import temp var for decorator metadata safety wrapping
                             defaultModuleTempVars.add(tempName)
+                        } else if (clause.name != null && bindings is NamespaceImport) {
+                            // Combined default + namespace: import X, * as NS from "m"
+                            val defaultLocalName = clause.name.text
+                            val nsLocalName = bindings.name.text
+                            val isDefaultUsed = defaultLocalName in valueReferencedNames
+                            val isNsUsed = nsLocalName in valueReferencedNames
+                            if (!isDefaultUsed && !isNsUsed) {
+                                continue
+                            }
+                            if (options.esModuleInterop && isNsUsed) {
+                                // Namespace is used — use NS name directly as const, like pure import * as NS
+                                needsImportStar = true
+                                result.add(makeImportHelperConst(nsLocalName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                importStmtForLocalName[nsLocalName] = result.last()
+                                // NS keeps its name (no rename needed)
+                                if (isDefaultUsed) {
+                                    // X → NS.default
+                                    importStmtForLocalName[defaultLocalName] = result.last()
+                                    renameMap[defaultLocalName] = PropertyAccessExpression(
+                                        expression = syntheticId(nsLocalName),
+                                        name = syntheticId("default"),
+                                        pos = -1, end = -1,
+                                    )
+                                    defaultModuleTempVars.add(nsLocalName)
+                                }
+                            } else if (isNsUsed) {
+                                // No esModuleInterop: use NS name directly with require
+                                result.add(makeRequireConst(nsLocalName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                importStmtForLocalName[nsLocalName] = result.last()
+                                if (isDefaultUsed) {
+                                    importStmtForLocalName[defaultLocalName] = result.last()
+                                    renameMap[defaultLocalName] = PropertyAccessExpression(
+                                        expression = syntheticId(nsLocalName),
+                                        name = syntheticId("default"),
+                                        pos = -1, end = -1,
+                                    )
+                                }
+                            } else {
+                                // NS unused, only default used — use temp name with __importDefault
+                                val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                                if (options.esModuleInterop) {
+                                    needsImportDefault = true
+                                    result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                } else {
+                                    result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
+                                }
+                                importStmtForLocalName[defaultLocalName] = result.last()
+                                renameMap[defaultLocalName] = PropertyAccessExpression(
+                                    expression = syntheticId(tempName),
+                                    name = syntheticId("default"),
+                                    pos = -1, end = -1,
+                                )
+                                defaultModuleTempVars.add(tempName)
+                            }
                         } else if (bindings is NamespaceImport) {
                             // import * as x from "y"
                             // esModuleInterop: const x = __importStar(require("y"))
