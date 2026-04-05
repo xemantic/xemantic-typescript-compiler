@@ -338,6 +338,8 @@ class Checker(
         checkDuplicateModifiers()
         // 40. Check rest parameter is last (TS1014)
         checkRestParameterLast()
+        // 40b. Check rest element with property name in binding patterns (TS2566)
+        checkRestElementPropertyNames()
         // 41. Check implementation in ambient context (TS1183)
         checkAmbientImplementation()
         // 42. Check arguments collision with rest params (TS2396)
@@ -18827,6 +18829,123 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
+    // Rest element with property name in binding patterns (TS2566)
+    // -----------------------------------------------------------------------
+
+    private fun checkRestElementPropertyNames() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkRestElemPropNamesInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkRestElemPropNamesInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkRestElemPropNamesInStatement(stmt, source, fileName)
+    }
+
+    private fun checkRestElemPropNamesInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                checkRestElemPropNamesInBinding(d.name, source, fileName)
+                d.initializer?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
+            }
+            is ExpressionStatement -> checkRestElemPropNamesInExpr(stmt.expression, source, fileName)
+            is FunctionDeclaration -> {
+                for (p in stmt.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                stmt.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> {
+                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                is Constructor -> {
+                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+            is Block -> checkRestElemPropNamesInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkRestElemPropNamesInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkRestElemPropNamesInStatement(it, source, fileName) }
+            }
+            is ForStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
+                checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
+                checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
+                checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
+            }
+            is ReturnStatement -> stmt.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkRestElemPropNamesInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                for (p in expr.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                val body = expr.body
+                if (body is Block) checkRestElemPropNamesInStatements(body.statements, source, fileName)
+            }
+            is FunctionExpression -> {
+                for (p in expr.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                expr.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkRestElemPropNamesInBinding(node: Node, source: String, fileName: String) {
+        when (node) {
+            is ObjectBindingPattern -> for (elem in node.elements) {
+                // TS2566: rest element cannot have a property name — e.g., { ...a: b }
+                if (elem.dotDotDotToken && elem.propertyName != null) {
+                    // The squiggle is at the binding name (after the colon), not the property name
+                    val nameNode = elem.name
+                    val start = when (nameNode) {
+                        is Identifier -> nameNode.pos
+                        else -> nameNode.pos
+                    }
+                    val length = when (nameNode) {
+                        is Identifier -> nameNode.text.length
+                        else -> 1
+                    }
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "A rest element cannot have a property name.",
+                        category = DiagnosticCategory.Error,
+                        code = 2566,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                // Recurse into nested binding patterns
+                checkRestElemPropNamesInBinding(elem.name, source, fileName)
+            }
+            is ArrayBindingPattern -> for (elem in node.elements) {
+                if (elem is BindingElement) checkRestElemPropNamesInBinding(elem.name, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Implementation in ambient context (TS1183)
     // -----------------------------------------------------------------------
 
@@ -22647,6 +22766,16 @@ class Checker(
                     }
                 }
             }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is GetAccessor -> checkGetAccessorForImplicitReturn(prop, source, fileName)
+                        is MethodDeclaration -> checkMethodForImplicitReturn(prop, source, fileName)
+                        is FunctionExpression -> checkFuncExprForImplicitReturn(prop, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
             else -> {}
         }
     }
@@ -22681,6 +22810,8 @@ class Checker(
 
     private fun checkGetAccessorForImplicitReturn(decl: GetAccessor, source: String, fileName: String) {
         val body = decl.body ?: return
+        // Skip error-recovery sentinel bodies (pos = -1, created when `{` was missing)
+        if (body.pos == -1) return
         val retType = decl.type
         val nameNode = decl.name
         val nameRef = when (nameNode) {
