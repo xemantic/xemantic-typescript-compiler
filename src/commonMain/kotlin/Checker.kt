@@ -347,7 +347,9 @@ class Checker(
         // 42. Check arguments collision with rest params (TS2396)
         // TS2396 only fires at target < ES2015 (no arguments object concern with arrow functions)
         // But TS1215 fires for module files regardless of target
-        if (options.target < ScriptTarget.ES2015) {
+        // Run checkArgumentsCollision if either: target < ES2015 (for TS2396) OR there are module files (for TS1215)
+        val hasModuleFiles = binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
+        if (options.target < ScriptTarget.ES2015 || hasModuleFiles) {
             checkArgumentsCollision()
         }
         // 43. Check initializers in ambient contexts (TS1039)
@@ -11586,14 +11588,75 @@ class Checker(
                 stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                     (stmt.expression as StringLiteralNode).text == "use strict"
             } == true
-            // Module files get TS1215 instead of TS1100 — skip TS1100 for them
-            if (globalStrict || hasUseStrict) {
+            val isModule = isModuleFile(result.sourceFile.statements)
+            // Module files get TS1215 instead of TS1100
+            if (isModule) {
+                checkModuleStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
+            } else if (globalStrict || hasUseStrict) {
                 checkStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
             } else {
                 // Even when the file isn't globally strict, function bodies with their own
                 // "use strict" prologue directives are locally strict and must be checked.
                 checkFunctionLocalStrictMode(result.sourceFile.statements, source, fileName, restricted)
             }
+        }
+    }
+
+    /**
+     * Like checkStrictModeInStatements but uses TS1215 (module-specific) instead of TS1100
+     * for top-level statements. This covers variable declarations and function/class parameters.
+     */
+    private fun checkModuleStrictModeInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        checkModuleStrictModeName(decl.name, source, fileName, restricted)
+                        decl.initializer?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        stmt.name?.let { checkModuleStrictModeName(it, source, fileName, restricted) }
+                        // Don't check function parameters here — checkArgumentsCollision already handles those
+                        // Nested function bodies are just strict (TS1100), not module-specific
+                        stmt.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
+                    }
+                }
+                else -> {
+                    // For other statements (class declarations, etc.), use regular strict mode checking (TS1100)
+                    checkStrictModeInStatement(stmt, source, fileName, restricted)
+                }
+            }
+        }
+    }
+
+    private fun checkModuleStrictModeName(name: Node, source: String, fileName: String, restricted: Set<String>) {
+        when (name) {
+            is Identifier -> {
+                if (name.text in restricted) {
+                    val start = name.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    val word = name.text
+                    val msg = "Invalid use of '$word'. Modules are automatically in strict mode."
+                    diagnostics.add(Diagnostic(
+                        message = msg,
+                        category = DiagnosticCategory.Error,
+                        code = 1215,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = word.length,
+                    ))
+                }
+            }
+            else -> {}
         }
     }
 
@@ -20518,7 +20581,7 @@ class Checker(
             // - target >= ES2015 (implicit strict)
             // - "use strict" prologue directive
             // - module file (ESM is strict)
-            val isModule = result.sourceFile.statements.any { it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment }
+            val isModule = isModuleFile(result.sourceFile.statements)
             val hasUseStrict = result.sourceFile.statements.firstOrNull()?.let { stmt ->
                 stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                     (stmt.expression as StringLiteralNode).text == "use strict"
@@ -20535,45 +20598,72 @@ class Checker(
                 isModule ||
                 hasUseStrict
             // TS2480 runs unconditionally; TS1212 runs in let/const contexts even without global strict
-            walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict, isExpressionStrict = isExpressionStrict)
+            walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule)
         }
     }
 
-    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict) {
-        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict, isExpressionStrict)
+    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict, isModule: Boolean = false) {
+        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
     }
 
-    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict) {
+    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict, isModule: Boolean = false) {
         when (stmt) {
             is VariableStatement -> {
                 val isLetOrConst = stmt.declarationList.flags == SyntaxKind.LetKeyword || stmt.declarationList.flags == SyntaxKind.ConstKeyword
                 for (decl in stmt.declarationList.declarations) {
                     // TS1212 fires in strict mode OR in let/const declarations (let/const implies strict for reserved words)
-                    if (isStrict || isLetOrConst) checkNodeForStrictReserved(decl.name, source, fileName, inClass)
+                    if (isStrict || isLetOrConst) checkNodeForStrictReserved(decl.name, source, fileName, inClass, isModule)
                     // TS2480 fires unconditionally for 'let' in let/const declarations
                     checkLetInLetOrConst(decl.name, stmt.declarationList.flags, source, fileName)
                 }
             }
             is FunctionDeclaration -> if (isStrict) {
                 val name = stmt.name
-                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
+                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
                 // Check parameters
-                for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass)
-                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict) }
+                for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
+                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
             }
             is ClassDeclaration -> if (isStrict) {
                 val name = stmt.name
-                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
+                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
-                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict) }
+                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true, isModule = isModule)
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule) }
                         }
                         is Constructor -> {
-                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict) }
+                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true, isModule = isModule)
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule) }
                         }
+                        else -> {}
+                    }
+                }
+            }
+            is InterfaceDeclaration -> if (isStrict) {
+                checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
+                        is Constructor -> for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
+                        is IndexSignature -> for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
+                        else -> {}
+                    }
+                }
+            }
+            is EnumDeclaration -> if (isStrict) {
+                checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
+            }
+            is ImportEqualsDeclaration -> if (isStrict) {
+                checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
+            }
+            is ImportDeclaration -> if (isStrict) {
+                val clause = stmt.importClause
+                if (clause != null) {
+                    when (val bindings = clause.namedBindings) {
+                        is NamespaceImport -> checkIdentForStrictReserved(bindings.name, source, fileName, inClass, isModule)
+                        is NamedImports -> for (spec in bindings.elements) checkIdentForStrictReserved(spec.name, source, fileName, inClass, isModule)
                         else -> {}
                     }
                 }
@@ -20583,8 +20673,8 @@ class Checker(
                 checkExprForStrictReservedIdents(name, source, fileName, inClass)
                 val body = stmt.body
                 when (body) {
-                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict, isExpressionStrict)
-                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict, isExpressionStrict)
+                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
+                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
                     else -> {}
                 }
             }
@@ -20593,27 +20683,27 @@ class Checker(
                 if (init is VariableDeclarationList) {
                     val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
                     for (d in init.declarations) {
-                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass)
+                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
                         checkLetInLetOrConst(d.name, init.flags, source, fileName)
                     }
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
             }
             is ForOfStatement -> {
                 val init = stmt.initializer
                 if (init is VariableDeclarationList) {
                     val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
                     for (d in init.declarations) {
-                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass)
+                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
                         checkLetInLetOrConst(d.name, init.flags, source, fileName)
                     }
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
             }
-            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass, isStrict, isExpressionStrict)
+            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
             is IfStatement -> {
-                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass, isStrict, isExpressionStrict)
-                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass, isStrict, isExpressionStrict) }
+                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
+                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
             }
             is ExpressionStatement -> if (isExpressionStrict) {
                 // TS1212 for reserved words in expression position only when explicitly strict
@@ -20624,17 +20714,17 @@ class Checker(
         }
     }
 
-    private fun checkNodeForStrictReserved(node: Node, source: String, fileName: String, inClass: Boolean = false) {
+    private fun checkNodeForStrictReserved(node: Node, source: String, fileName: String, inClass: Boolean = false, isModule: Boolean = false) {
         when (node) {
-            is Identifier -> checkIdentForStrictReserved(node, source, fileName, inClass)
+            is Identifier -> checkIdentForStrictReserved(node, source, fileName, inClass, isModule)
             is ObjectBindingPattern -> {
                 for (el in node.elements) {
-                    checkNodeForStrictReserved(el.name, source, fileName, inClass)
+                    checkNodeForStrictReserved(el.name, source, fileName, inClass, isModule)
                 }
             }
             is ArrayBindingPattern -> {
                 for (el in node.elements) {
-                    if (el is BindingElement) checkNodeForStrictReserved(el.name, source, fileName, inClass)
+                    if (el is BindingElement) checkNodeForStrictReserved(el.name, source, fileName, inClass, isModule)
                 }
             }
             else -> {}
@@ -20669,18 +20759,18 @@ class Checker(
         }
     }
 
-    private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String, inClass: Boolean = false) {
+    private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String, inClass: Boolean = false, isModule: Boolean = false) {
         if (id.text in STRICT_MODE_RESERVED_WORDS) {
-            reportTS1212(id, source, fileName, inClass)
+            reportTS1212(id, source, fileName, inClass, isModule)
         }
     }
 
-    private fun reportTS1212(id: Identifier, source: String, fileName: String, inClass: Boolean = false) {
+    private fun reportTS1212(id: Identifier, source: String, fileName: String, inClass: Boolean = false, isModule: Boolean = false) {
         val start = id.pos
         val length = id.text.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        if (inClass) {
-            diagnostics.add(Diagnostic(
+        when {
+            inClass -> diagnostics.add(Diagnostic(
                 message = "Identifier expected. '${id.text}' is a reserved word in strict mode. Class definitions are automatically in strict mode.",
                 category = DiagnosticCategory.Error,
                 code = 1213,
@@ -20690,8 +20780,17 @@ class Checker(
                 start = start,
                 length = length,
             ))
-        } else {
-            diagnostics.add(Diagnostic(
+            isModule -> diagnostics.add(Diagnostic(
+                message = "Identifier expected. '${id.text}' is a reserved word in strict mode. Modules are automatically in strict mode.",
+                category = DiagnosticCategory.Error,
+                code = 1214,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            else -> diagnostics.add(Diagnostic(
                 message = "Identifier expected. '${id.text}' is a reserved word in strict mode.",
                 category = DiagnosticCategory.Error,
                 code = 1212,
