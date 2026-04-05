@@ -31789,8 +31789,33 @@ class Checker(
                                 ))
                             }
                         }
-                        // Named specifiers: import { x } or { x as localAlias }
+                        // Namespace binding: import * as NS
                         val nb = clause.namedBindings
+                        if (nb is NamespaceImport) {
+                            val nsName = nb.name.text
+                            if (nsName in varNames) {
+                                val varAfterImport = stmts.any { s ->
+                                    s is VariableStatement && s.pos > importPos &&
+                                        s.declarationList.declarations.any { d ->
+                                            (d.name as? Identifier)?.text == nsName
+                                        }
+                                }
+                                if (varAfterImport) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, nb.name.pos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Import declaration conflicts with local declaration of '$nsName'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2440,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = nb.name.pos,
+                                        length = nsName.length,
+                                    ))
+                                }
+                            }
+                        }
+                        // Named specifiers: import { x } or { x as localAlias }
                         if (nb is NamedImports) {
                             for (element in nb.elements) {
                                 val localAlias = element.name.text
