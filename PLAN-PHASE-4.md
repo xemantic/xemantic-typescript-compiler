@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-05):** 7,952 / 10,077 tests passing (78.9%).
+**Status (2026-04-05):** 7,961 / 10,077 tests passing (79.0%).
 
 ## Goal
 
@@ -371,7 +371,7 @@ array→primitive, named→named) fall through to the old string system which do
 - TS1268: index signature parameter type validation — skip rest/optional/multi params
 - Transformer: {default as d} in combined import uses __importDefault not __importStar
 
-**Completed session 2026-04-05b (+3 tests, 7,949 → 7,952):**
+**Completed session 2026-04-05b (+12 tests, 7,949 → 7,961):**
 - TS2339 static method `this`: track `inStaticClassMethod` context, emit TS2339
   "does not exist on type 'typeof C'" for instance-only props in static methods.
   Walks extends chain for inherited static members.
@@ -379,16 +379,24 @@ array→primitive, named→named) fall through to the old string system which do
   staticVisibility.
 - TS2339 namespace non-exported access: check namespace exports for `M.prop` patterns,
   distinguish exported vs non-exported members via ExportValue flag and VariableStatement
-  export modifier scanning. Tests: moduleProperty2, cannotInvokeNewOnErrorExpression,
-  extBaseClass2 (already passed via other diagnostics).
-- Heritage clause traversal: add property access checking in class extends expressions
-  (catches `M.B` in `extends M.B` heritage clauses).
-- Note: additional tests pass individually (e.g. internalAliasFunctionInsideLocalModuleWithoutExportAccessError)
-  but were already counted in multi-code passes.
+  export modifier scanning.
+- Heritage clause traversal: property access checking in class extends expressions.
+- FP fixes (+9 additional tests):
+  - `declare namespace` (NamespaceModule) members implicitly exported
+  - Sub-namespace symbols (Module flag) always accessible from parent
+  - Skip namespace check for import aliases (Alias flag)
+  - Static method with explicit `this: Type` parameter: don't treat as static this context
+  - Tests: constDeclarations-access4, moduledecl, commentsModules,
+    esModuleInteropTslibHelpers, unusedParametersThis,
+    blockScopedNamespaceDifferentFile (x2), declFileWithClassNameConflicting...,
+    internalAlias*InsideLocalModuleWithoutExportAccessError (x4),
+    qualifiedModuleLocals, undeclaredBase, classExtendingQualifiedName
 
 **Remaining analysis (updated 2026-04-05b):**
 - Chained namespace access (M.foo.x) not yet supported — needed for ~5 more tests
 - TS2576 (instance→static suggestion) needs instance type inference — 17 baselines
+- Near-miss TS2322: 33 tests, most need generic instantiation (21/33 blocked)
+- FP-only: 18 tests found, 7 from namespace (FIXED), rest need contextual typing/module resolution
 - Most remaining TS2339 near-miss tests need deeper type resolution (array, union, never)
 
 **Recommended priority for next items:**
