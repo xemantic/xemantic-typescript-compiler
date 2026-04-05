@@ -3893,6 +3893,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val multiLineAfterOpen = scanner.hasPrecedingLineBreak()
         val properties = mutableListOf<Node>()
         var hasTrailingComma = false
+        var hadSemicolonRecovery = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             // Skip extra commas (error recovery for double commas like `{ x: 0,, }`)
             if (token == SyntaxKind.Comma) {
@@ -3916,6 +3917,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     properties[properties.size - 1] = withTrailingComments(properties.last(), postSemiTrailing)
                 }
                 hasTrailingComma = false
+                hadSemicolonRecovery = true
             } else if (hadComma) {
                 // Capture any same-line trailing comments that appeared after the comma
                 val postCommaTrailing = scanner.getTrailingComments()
@@ -3933,7 +3935,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // a multi-line object after the last property).
         val closingComments = leadingComments()
         val closeBracePos = scanner.getTokenPos()
-        parseExpected(SyntaxKind.CloseBrace)
+        // When we had semicolon error recovery and reached EOF (no closing `}`), TypeScript
+        // does NOT emit '}'  expected — the semicolon terminated the expression context.
+        if (hadSemicolonRecovery && token == SyntaxKind.EndOfFile) {
+            // Silently pop the openTokenStack without emitting an error
+            if (openTokenStack.isNotEmpty()) openTokenStack.removeAt(openTokenStack.lastIndex)
+        } else {
+            parseExpected(SyntaxKind.CloseBrace)
+        }
         // Use multiLineAfterOpen (line break after `{`) as the multiLine flag.
         // Fallback: also treat as multiLine if the close brace is on a different source line
         // than the open brace AND the difference isn't entirely from within string literals.
