@@ -479,6 +479,8 @@ class Checker(
         if (options.effectiveModule == ModuleKind.AMD) {
             checkMultipleAmdModuleNames()
         }
+        // 77. Check class named 'Object' with CJS/AMD/System/UMD module (TS2725)
+        checkObjectClassNameConflict()
         } // end if (!declarationOnly)
     }
 
@@ -17778,94 +17780,125 @@ class Checker(
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
 
-            checkBlockFuncDeclInStatements(result.sourceFile.statements, source, fileName, inBlock = false)
+            checkBlockFuncDeclInStatements(result.sourceFile.statements, source, fileName, inBlock = false, inClassMethod = false)
         }
     }
 
     private fun checkBlockFuncDeclInStatements(
-        statements: List<Statement>, source: String, fileName: String, inBlock: Boolean
+        statements: List<Statement>, source: String, fileName: String, inBlock: Boolean, inClassMethod: Boolean
     ) {
         for (stmt in statements) {
             if (inBlock && stmt is FunctionDeclaration) {
                 val name = stmt.name ?: continue
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                val (code, message) = if (inClassMethod) {
+                    1251 to "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'. Class definitions are automatically in strict mode."
+                } else {
+                    1250 to "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'."
+                }
                 diagnostics.add(Diagnostic(
-                    message = "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'.",
+                    message = message,
                     category = DiagnosticCategory.Error,
-                    code = 1250,
+                    code = code,
                     fileName = fileName,
                     line = line,
                     character = character,
                     start = name.pos,
                     length = name.text.length,
                 ))
+                // Don't recurse into the function body (new scope, not a block)
+                continue
             }
-            // Recurse into blocks (but NOT function bodies — those create new scopes)
-            checkBlockFuncDeclInStatement(stmt, source, fileName)
+            // Recurse into blocks
+            checkBlockFuncDeclInStatement(stmt, source, fileName, inClassMethod)
         }
     }
 
-    private fun checkBlockFuncDeclInStatement(stmt: Statement, source: String, fileName: String) {
+    private fun checkBlockFuncDeclInStatement(stmt: Statement, source: String, fileName: String, inClassMethod: Boolean) {
         when (stmt) {
             is IfStatement -> {
                 val thenStmt = stmt.thenStatement
                 if (thenStmt is Block) {
-                    checkBlockFuncDeclInStatements(thenStmt.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(thenStmt.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
                 val elseStmt = stmt.elseStatement
                 if (elseStmt is Block) {
-                    checkBlockFuncDeclInStatements(elseStmt.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(elseStmt.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 } else if (elseStmt != null) {
-                    checkBlockFuncDeclInStatement(elseStmt, source, fileName)
+                    checkBlockFuncDeclInStatement(elseStmt, source, fileName, inClassMethod)
                 }
             }
             is ForStatement -> {
                 val body = stmt.statement
                 if (body is Block) {
-                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
             }
             is ForInStatement -> {
                 val body = stmt.statement
                 if (body is Block) {
-                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
             }
             is ForOfStatement -> {
                 val body = stmt.statement
                 if (body is Block) {
-                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
             }
             is WhileStatement -> {
                 val body = stmt.statement
                 if (body is Block) {
-                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
             }
             is DoStatement -> {
                 val body = stmt.statement
                 if (body is Block) {
-                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(body.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
             }
             is Block -> {
                 // Standalone block
-                checkBlockFuncDeclInStatements(stmt.statements, source, fileName, inBlock = true)
+                checkBlockFuncDeclInStatements(stmt.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
             }
             is TryStatement -> {
-                checkBlockFuncDeclInStatements(stmt.tryBlock.statements, source, fileName, inBlock = true)
+                checkBlockFuncDeclInStatements(stmt.tryBlock.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 stmt.catchClause?.let { catch ->
-                    checkBlockFuncDeclInStatements(catch.block.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(catch.block.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
                 stmt.finallyBlock?.let { finally_ ->
-                    checkBlockFuncDeclInStatements(finally_.statements, source, fileName, inBlock = true)
+                    checkBlockFuncDeclInStatements(finally_.statements, source, fileName, inBlock = true, inClassMethod = inClassMethod)
                 }
             }
             is LabeledStatement -> {
-                checkBlockFuncDeclInStatement(stmt.statement, source, fileName)
+                checkBlockFuncDeclInStatement(stmt.statement, source, fileName, inClassMethod)
             }
-            // Don't recurse into functions/classes/modules — they create new scopes
+            is FunctionDeclaration -> {
+                // Recurse into function bodies (new scope, reset inBlock = false)
+                stmt.body?.let { checkBlockFuncDeclInStatements(it.statements, source, fileName, inBlock = false, inClassMethod = false) }
+            }
+            is ClassDeclaration -> {
+                // Recurse into class method bodies with inClassMethod = true
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let {
+                            checkBlockFuncDeclInStatements(it.statements, source, fileName, inBlock = false, inClassMethod = true)
+                        }
+                        is Constructor -> member.body?.let {
+                            checkBlockFuncDeclInStatements(it.statements, source, fileName, inBlock = false, inClassMethod = true)
+                        }
+                        is GetAccessor -> member.body?.let {
+                            checkBlockFuncDeclInStatements(it.statements, source, fileName, inBlock = false, inClassMethod = true)
+                        }
+                        is SetAccessor -> member.body?.let {
+                            checkBlockFuncDeclInStatements(it.statements, source, fileName, inBlock = false, inClassMethod = true)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            // Don't recurse into modules
             else -> {}
         }
     }
@@ -17895,6 +17928,30 @@ class Checker(
                         character = character,
                         start = exportPos,
                         length = 6, // "export"
+                    ))
+                }
+                // TS1079: 'declare' modifier cannot be used with import declarations
+                val importMods = when (stmt) {
+                    is ImportDeclaration -> stmt.modifiers
+                    is ImportEqualsDeclaration -> stmt.modifiers
+                    else -> null
+                }
+                if (importMods != null && ModifierFlag.Declare in importMods) {
+                    // Find the 'declare' keyword position
+                    val searchStart2 = maxOf(0, stmt.pos - 20)
+                    val prefix2 = source.substring(searchStart2, stmt.pos)
+                    val idx2 = prefix2.lastIndexOf("declare")
+                    val declarePos = if (idx2 >= 0) searchStart2 + idx2 else stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, declarePos)
+                    diagnostics.add(Diagnostic(
+                        message = "A 'declare' modifier cannot be used with an import declaration.",
+                        category = DiagnosticCategory.Error,
+                        code = 1079,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = declarePos,
+                        length = 7, // "declare"
                     ))
                 }
             }
@@ -20645,14 +20702,16 @@ class Checker(
                 stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                     (stmt.expression as StringLiteralNode).text == "use strict"
             } == true
-            val isStrict = options.target >= ScriptTarget.ES2015 ||
+            // Use effectiveTarget so ES3/ES5 targets also fire TS1212 for binding names
+            // (TypeScript fires TS1212 for reserved words in binding positions at all targets)
+            val isStrict = options.effectiveTarget >= ScriptTarget.ES2015 ||
                 options.strict == true ||
                 options.alwaysStrict == true ||
                 isModule ||
                 hasUseStrict
-            // For expression-position TS1212: only fire when explicitly strict (alwaysStrict, "use strict",
-            // module, or strict:true) — NOT just because target >= ES2015.
-            val isExpressionStrict = options.strict == true ||
+            // For expression-position TS1212: fire when target >= ES2015 (explicit) or explicitly strict
+            val isExpressionStrict = options.target >= ScriptTarget.ES2015 ||
+                options.strict == true ||
                 options.alwaysStrict == true ||
                 isModule ||
                 hasUseStrict
@@ -31407,6 +31466,59 @@ class Checker(
                     }
                 }
                 offset += line.length + 1
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2725: Class name cannot be 'Object' with CJS/AMD/System/UMD module
+    // -----------------------------------------------------------------------
+
+    private fun checkObjectClassNameConflict() {
+        // Only fires for CommonJS, AMD, System, or UMD modules
+        val moduleName = when (options.effectiveModule) {
+            ModuleKind.CommonJS -> "CommonJS"
+            ModuleKind.AMD -> "AMD"
+            ModuleKind.System -> "System"
+            ModuleKind.UMD -> "UMD"
+            else -> return
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkObjectClassNameInStatements(result.sourceFile.statements, source, fileName, moduleName)
+        }
+    }
+
+    private fun checkObjectClassNameInStatements(
+        stmts: List<Statement>, source: String, fileName: String, moduleName: String
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val name = stmt.name
+                    if (name != null && name.text == "Object") {
+                        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Class name cannot be 'Object' when targeting ES5 and above with module $moduleName.",
+                            category = DiagnosticCategory.Error,
+                            code = 2725,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                        ))
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkObjectClassNameInStatements(body.statements, source, fileName, moduleName)
+                    }
+                }
+                else -> {}
             }
         }
     }
