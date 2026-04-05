@@ -29941,6 +29941,13 @@ class Checker(
     }
 
     private fun checkInvalidAssignInExpr(expr: Expression, source: String, fileName: String) {
+        if (checkDepth > maxCheckDepth) return
+        checkDepth++
+        try {
+        checkInvalidAssignInExprCore(expr, source, fileName)
+        } finally { checkDepth-- }
+    }
+    private fun checkInvalidAssignInExprCore(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
                 // Check if this is an assignment
