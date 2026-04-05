@@ -344,6 +344,8 @@ class Checker(
         checkRestElementPropertyNames()
         // 41. Check implementation in ambient context (TS1183)
         checkAmbientImplementation()
+        // 41b. Check ambient module declarations with relative names (TS2436)
+        checkAmbientRelativeModuleNames()
         // 42. Check arguments collision with rest params (TS2396)
         // TS2396 only fires at target < ES2015 (no arguments object concern with arrow functions)
         // But TS1215 fires for module files regardless of target
@@ -19131,6 +19133,39 @@ class Checker(
         }
     }
 
+    // TS2436: Ambient module declaration cannot specify relative module name.
+    // Only fires in script context (non-module files). Module augmentation in module files is allowed.
+    private fun checkAmbientRelativeModuleNames() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Only check script files (not module files — module augmentation allows relative paths)
+            if (isModuleFile(stmts)) continue
+            for (stmt in stmts) {
+                if (stmt !is ModuleDeclaration) continue
+                if (ModifierFlag.Declare !in stmt.modifiers) continue
+                val nameNode = stmt.name as? StringLiteralNode ?: continue
+                val modulePath = nameNode.text
+                if (modulePath.startsWith("./") || modulePath.startsWith("../") ||
+                    modulePath.startsWith(".\\") || modulePath.startsWith("..\\")) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Ambient module declaration cannot specify relative module name.",
+                        category = DiagnosticCategory.Error,
+                        code = 2436,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameNode.pos,
+                        length = (nameNode.rawText?.length ?: modulePath.length) + 2,
+                    ))
+                }
+            }
+        }
+    }
+
     private fun checkAmbientInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
         for (stmt in stmts) checkAmbientInStatement(stmt, source, fileName, isAmbient)
     }
@@ -19198,6 +19233,7 @@ class Checker(
                 checkAmbientInType(stmt.type, source, fileName)
             }
             is ModuleDeclaration -> {
+                // TS2436 handled separately in checkAmbientRelativeModuleNames()
                 (stmt.body as? ModuleBlock)?.let { checkAmbientInStatements(it.statements, source, fileName, ambient) }
             }
             is Block -> checkAmbientInStatements(stmt.statements, source, fileName, isAmbient)
