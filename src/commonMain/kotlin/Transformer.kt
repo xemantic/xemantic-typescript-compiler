@@ -1645,6 +1645,9 @@ class Transformer(
                             val isDefaultUsed = localName in valueReferencedNames
                             // Check if all named bindings are also unused → skip the entire import
                             val anyNamedUsed = bindings.elements.any { element ->
+                                val importedName = (element.propertyName ?: element.name).text
+                                // `{ default as d }` doesn't count as a named binding — it's still the default
+                                if (importedName == "default") return@any false
                                 val alias = element.name.text
                                 alias in valueReferencedNames
                             }
