@@ -28918,8 +28918,15 @@ class Checker(
             is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
             else -> false
         }
+        // Skip static this check when method has explicit `this` parameter (this: Type)
+        val hasExplicitThisParam = when (member) {
+            is MethodDeclaration -> member.parameters.firstOrNull()?.name.let {
+                it is Identifier && it.text == "this"
+            }
+            else -> false
+        }
         val savedStatic = inStaticClassMethod
-        if (isStatic) inStaticClassMethod = true
+        if (isStatic && !hasExplicitThisParam) inStaticClassMethod = true
         when (member) {
             is MethodDeclaration -> {
                 member.body?.let {
@@ -29372,6 +29379,8 @@ class Checker(
             val identSymbol = globals[identName] ?: return
 
             // === Namespace/Module property access ===
+            // Skip import aliases — can't reliably resolve imported module exports
+            if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
             if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class)) {
                 val exports = identSymbol.exports
                 if (exports != null) {
@@ -29501,6 +29510,11 @@ class Checker(
     /** Check if `propName` is exported from a namespace symbol. */
     private fun isNameExportedFromNamespace(nsSym: Symbol, propName: String): Boolean {
         val memberSym = nsSym.exports?.get(propName) ?: return false
+        // Sub-namespaces (Module flag) are always accessible
+        if (memberSym.flags.hasAny(SymbolFlags.Module)) return true
+        // Ambient namespaces (declare namespace) implicitly export all members
+        if (nsSym.flags.hasAny(SymbolFlags.NamespaceModule)) return true
+        // Non-ambient: check for explicit ExportValue flag
         if (memberSym.flags.hasAny(SymbolFlags.ExportValue)) return true
         for (decl in memberSym.declarations) {
             when (decl) {
