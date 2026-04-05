@@ -398,6 +398,38 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS5052: checkJs with allowJs explicitly set to false
+        if (options.checkJs && options.allowJsExplicitlyFalse) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'checkJs' cannot be specified without specifying option 'allowJs'.",
+                category = DiagnosticCategory.Error,
+                code = 5052,
+            ))
+        }
+        // TS5069: isolatedDeclarations without declaration/composite
+        if (options.isolatedDeclarations && !options.declaration && !options.composite) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'isolatedDeclarations' cannot be specified without specifying option 'declaration' or option 'composite'.",
+                category = DiagnosticCategory.Error,
+                code = 5069,
+            ))
+        }
+        // TS5091: preserveConstEnums explicitly set to false with isolatedModules
+        if (options.isolatedModules && options.preserveConstEnumsExplicitlyFalse) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'preserveConstEnums' cannot be disabled when 'isolatedModules' is enabled.",
+                category = DiagnosticCategory.Error,
+                code = 5091,
+            ))
+        }
+        // TS6379: composite with incremental=false
+        if (options.composite && options.incremental == false) {
+            diagnostics.add(Diagnostic(
+                message = "Composite projects may not disable incremental compilation.",
+                category = DiagnosticCategory.Error,
+                code = 6379,
+            ))
+        }
         // TS5053: option conflicts
         if (options.inlineSourceMap) {
             if (options.mapRoot != null) {

@@ -100,6 +100,7 @@ data class CompilerOptions(
     val declarationMap: Boolean = false,
     val removeComments: Boolean = false,
     val preserveConstEnums: Boolean = false,
+    val preserveConstEnumsExplicitlyFalse: Boolean = false,
     val sourceMap: Boolean = false,
     val noImplicitAny: Boolean = false,
     val noImplicitAnyExplicitlyFalse: Boolean = false,
@@ -128,6 +129,7 @@ data class CompilerOptions(
     val esModuleInteropExplicitlyFalse: Boolean = false,
     val allowSyntheticDefaultImportsExplicitlyFalse: Boolean = false,
     val allowJs: Boolean = false,
+    val allowJsExplicitlyFalse: Boolean = false,
     val checkJs: Boolean = false,
     val isolatedModules: Boolean = false,
     val skipLibCheck: Boolean = false,
@@ -166,6 +168,9 @@ data class CompilerOptions(
     val resolveJsonModule: Boolean = false,
     val noLib: Boolean = false,
     val inlineSourceMap: Boolean = false,
+    val composite: Boolean = false,
+    val incremental: Boolean? = null,
+    val isolatedDeclarations: Boolean = false,
     val ignoreDeprecations: String? = null,
     /**
      * Simulated TypeScript version for version-gated diagnostics (from `// @typeScriptVersion` test directive).
@@ -392,7 +397,10 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "declaration" -> options.copy(declaration = boolValue)
         "declarationmap" -> options.copy(declarationMap = boolValue)
         "removecomments" -> options.copy(removeComments = boolValue)
-        "preserveconstenums" -> options.copy(preserveConstEnums = boolValue)
+        "preserveconstenums" -> options.copy(
+            preserveConstEnums = boolValue,
+            preserveConstEnumsExplicitlyFalse = !boolValue
+        )
         "sourcemap" -> options.copy(sourceMap = boolValue)
         "noimplicitany" -> options.copy(noImplicitAny = boolValue, noImplicitAnyExplicitlyFalse = !boolValue)
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
@@ -416,7 +424,10 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
             esModuleInterop = boolValue,
             esModuleInteropExplicitlyFalse = !boolValue,
         )
-        "allowjs" -> options.copy(allowJs = boolValue)
+        "allowjs" -> options.copy(
+            allowJs = boolValue,
+            allowJsExplicitlyFalse = !boolValue
+        )
         "checkjs" -> options.copy(checkJs = boolValue)
         "isolatedmodules" -> options.copy(isolatedModules = boolValue)
         "skiplibcheck" -> options.copy(skipLibCheck = boolValue)
@@ -455,6 +466,9 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "resolvejsonmodule" -> options.copy(resolveJsonModule = boolValue)
         "nolib" -> options.copy(noLib = boolValue)
         "inlinesourcemap" -> options.copy(inlineSourceMap = boolValue)
+        "composite" -> options.copy(composite = boolValue)
+        "incremental" -> options.copy(incremental = boolValue)
+        "isolateddeclarations" -> options.copy(isolatedDeclarations = boolValue)
         "ignoredeprecations" -> options.copy(ignoreDeprecations = value.trim())
         "typescriptversion" -> options.copy(simulatedTypeScriptVersion = value.trim())
         else -> options
