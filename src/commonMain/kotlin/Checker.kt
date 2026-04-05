@@ -12294,7 +12294,9 @@ class Checker(
             "any", "number", "string", "boolean", "symbol", "bigint",
             "object", "never", "unknown",
             // TS modifiers/contextual keywords
-            "public", "private", "protected", "readonly", "abstract",
+            // Note: "public", "private", "protected" are NOT excluded here — they fire TS2304
+            // when used as standalone identifiers in expression context (e.g., `public\nclass C`).
+            "readonly", "abstract",
             "static", "declare", "override", "accessor",
             "async", "await", "type", "namespace", "module",
             "interface", "enum", "implements", "is",
@@ -20495,24 +20497,31 @@ class Checker(
             // - "use strict" prologue directive
             // - module file (ESM is strict)
             val isModule = result.sourceFile.statements.any { it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment }
+            val hasUseStrict = result.sourceFile.statements.firstOrNull()?.let { stmt ->
+                stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
+                    (stmt.expression as StringLiteralNode).text == "use strict"
+            } == true
             val isStrict = options.target >= ScriptTarget.ES2015 ||
                 options.strict == true ||
                 options.alwaysStrict == true ||
                 isModule ||
-                result.sourceFile.statements.firstOrNull()?.let { stmt ->
-                    stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
-                        (stmt.expression as StringLiteralNode).text == "use strict"
-                } == true
+                hasUseStrict
+            // For expression-position TS1212: only fire when explicitly strict (alwaysStrict, "use strict",
+            // module, or strict:true) — NOT just because target >= ES2015.
+            val isExpressionStrict = options.strict == true ||
+                options.alwaysStrict == true ||
+                isModule ||
+                hasUseStrict
             // TS2480 runs unconditionally; TS1212 runs in let/const contexts even without global strict
-            walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict)
+            walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict, isExpressionStrict = isExpressionStrict)
         }
     }
 
-    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true) {
-        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict)
+    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict) {
+        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict, isExpressionStrict)
     }
 
-    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true) {
+    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict) {
         when (stmt) {
             is VariableStatement -> {
                 val isLetOrConst = stmt.declarationList.flags == SyntaxKind.LetKeyword || stmt.declarationList.flags == SyntaxKind.ConstKeyword
@@ -20528,7 +20537,7 @@ class Checker(
                 if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass)
                 // Check parameters
                 for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass)
-                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict) }
+                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict) }
             }
             is ClassDeclaration -> if (isStrict) {
                 val name = stmt.name
@@ -20537,11 +20546,11 @@ class Checker(
                     when (member) {
                         is MethodDeclaration -> {
                             for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict) }
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict) }
                         }
                         is Constructor -> {
                             for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict) }
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict) }
                         }
                         else -> {}
                     }
@@ -20552,8 +20561,8 @@ class Checker(
                 checkExprForStrictReservedIdents(name, source, fileName, inClass)
                 val body = stmt.body
                 when (body) {
-                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict)
-                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict)
+                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict, isExpressionStrict)
+                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict, isExpressionStrict)
                     else -> {}
                 }
             }
@@ -20566,7 +20575,7 @@ class Checker(
                         checkLetInLetOrConst(d.name, init.flags, source, fileName)
                     }
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict)
             }
             is ForOfStatement -> {
                 val init = stmt.initializer
@@ -20577,15 +20586,16 @@ class Checker(
                         checkLetInLetOrConst(d.name, init.flags, source, fileName)
                     }
                 }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict)
+                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict)
             }
-            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass, isStrict)
+            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass, isStrict, isExpressionStrict)
             is IfStatement -> {
-                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass, isStrict)
-                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass, isStrict) }
+                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass, isStrict, isExpressionStrict)
+                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass, isStrict, isExpressionStrict) }
             }
-            is ExpressionStatement -> if (isStrict) {
-                // Check for `let = 30;` style usage
+            is ExpressionStatement -> if (isExpressionStrict) {
+                // TS1212 for reserved words in expression position only when explicitly strict
+                // (alwaysStrict, "use strict", module, strict:true) — NOT just target >= ES2015.
                 checkExprForStrictReserved(stmt.expression, source, fileName, inClass)
             }
             else -> {}
