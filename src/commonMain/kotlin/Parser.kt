@@ -3598,7 +3598,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
             StringLiteral -> parseStringLiteral()
             NoSubstitutionTemplateLiteral -> {
-                val text = scanner.getTokenValue(); val unterminated = scanner.isTokenUnterminated(); nextToken(); NoSubstitutionTemplateLiteralNode(
+                val text = scanner.getTokenValue(); val unterminated = scanner.isTokenUnterminated()
+                emitStringEscapeErrors()
+                nextToken()
+                NoSubstitutionTemplateLiteralNode(
                     text = text,
                     isUnterminated = unterminated,
                     pos = pos,
@@ -4152,6 +4155,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val text = scanner.getTokenValue()
             val unterminated = scanner.isTokenUnterminated()
             val pos = getPos()
+            emitStringEscapeErrors()
             nextToken()
             return NoSubstitutionTemplateLiteralNode(text = text, isUnterminated = unterminated, pos = pos, end = getEnd())
         }
@@ -4161,6 +4165,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private fun parseTemplateExpression(): TemplateExpression {
         val pos = getPos()
         val headText = scanner.getTokenValue()
+        emitStringEscapeErrors() // emit errors from template head before consuming it
         nextToken() // consume template head
         val head = StringLiteralNode(text = headText, pos = pos, end = getEnd())
         val spans = mutableListOf<TemplateSpan>()
@@ -4172,6 +4177,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val literalKind = scanner.reScanTemplateToken()
             val literalText = scanner.getTokenValue()
             val litPos = getPos()
+            emitStringEscapeErrors() // emit errors from middle/tail before consuming it
             nextToken()
             val literal: Node = if (literalKind == SyntaxKind.TemplateTail) {
                 StringLiteralNode(text = literalText, pos = litPos, end = getEnd())
@@ -4958,6 +4964,27 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         return Identifier(text = value, rawText = rawText, leadingComments = comments, pos = pos, end = getEnd())
     }
 
+    /**
+     * Emits TS1487/TS1488 diagnostics for octal or illegal escape sequences found in the
+     * last scanned string/template literal token. Call BEFORE [nextToken] to capture errors.
+     */
+    private fun emitStringEscapeErrors() {
+        val escapeErrors = scanner.getAndClearStringEscapeErrors()
+        for (err in escapeErrors) {
+            val (line, character) = getLineAndCharacterOfPosition(err.start)
+            diagnostics.add(Diagnostic(
+                message = err.message,
+                category = DiagnosticCategory.Error,
+                code = err.code,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = err.start,
+                length = err.length,
+            ))
+        }
+    }
+
     private fun parseStringLiteral(): StringLiteralNode {
         val pos = getPos()
         val raw = scanner.getTokenText()
@@ -4972,6 +4999,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             isUnterminated -> if (raw.length >= 1) raw.substring(1) else raw  // content after opening quote
             else -> raw
         }
+        // Emit TS1487/TS1488 diagnostics for any escape errors found in this string
+        emitStringEscapeErrors()
         nextToken()
         return StringLiteralNode(text = value, singleQuote = singleQuote, rawText = rawContent,
             isUnterminated = isUnterminated, pos = pos, end = getEnd())

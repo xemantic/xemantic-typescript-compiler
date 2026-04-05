@@ -34,6 +34,15 @@ package com.xemantic.typescript.compiler
  * }
  * ```
  */
+
+/** An octal or illegal escape sequence error found inside a string/template literal. */
+data class StringEscapeError(
+    val start: Int,    // source position of the `\`
+    val length: Int,   // length of the full escape sequence
+    val code: Int,     // 1487 (octal) or 1488 (illegal \8/\9)
+    val message: String,
+)
+
 class Scanner(private val text: String) {
 
     private val end: Int = text.length
@@ -91,6 +100,21 @@ class Scanner(private val text: String) {
 
     /** Whether the last scanned numeric literal was a decimal with an invalid leading zero (e.g. 08, 09, 08.5). */
     private var isLeadingZeroDecimalToken: Boolean = false
+
+    /**
+     * Octal/illegal escape sequence errors found in the last scanned string/template literal.
+     * Each entry is (escapeStart, escapeLength, code, message).
+     * Code 1487 = octal escape, code 1488 = illegal escape (\8 or \9).
+     */
+    private val stringEscapeErrorList: MutableList<StringEscapeError> = mutableListOf()
+
+    /** Returns (and clears) the escape errors from the last scanned string/template literal. */
+    fun getAndClearStringEscapeErrors(): List<StringEscapeError> {
+        if (stringEscapeErrorList.isEmpty()) return emptyList()
+        val result = stringEscapeErrorList.toList()
+        stringEscapeErrorList.clear()
+        return result
+    }
 
     /** Returns true if the last scanned identifier had an invalid unicode escape. */
     fun hasInvalidUnicodeEscapeInToken(): Boolean = hasInvalidUnicodeEscape
@@ -842,6 +866,7 @@ class Scanner(private val text: String) {
     }
 
     private fun scanStringLiteral(): SyntaxKind {
+        stringEscapeErrorList.clear()
         val quote = text[pos]
         pos++ // skip opening quote
         val sb = StringBuilder()
@@ -871,6 +896,7 @@ class Scanner(private val text: String) {
     }
 
     private fun scanEscapeSequence(): String {
+        val backslashPos = pos  // position of the character AFTER '\'  (i.e. pos before consuming first escape char)
         val ch = text[pos]
         pos++
         return when (ch) {
@@ -880,7 +906,34 @@ class Scanner(private val text: String) {
             '\\' -> "\\"
             '\'' -> "'"
             '"' -> "\""
-            '0' -> "\u0000"
+            '0' -> {
+                // \0 followed by any digit → legacy octal attempt (TS1487), value starts at 0
+                // \0 followed by non-digit → null character (valid, no error)
+                if (pos < end && text[pos] in '0'..'9') {
+                    // Legacy octal: \0 followed by any digit makes it an octal escape
+                    val octalStart = backslashPos - 1  // position of '\'
+                    var octalValue = 0
+                    var octalLen = 1  // 1 digit so far ('0')
+                    // Consume additional octal digits (0-7) up to total 3 digits, value ≤ 255
+                    while (pos < end && text[pos] in '0'..'7' && octalLen < 3) {
+                        val next = octalValue * 8 + (text[pos] - '0')
+                        if (next > 255) break
+                        octalValue = next
+                        pos++
+                        octalLen++
+                    }
+                    val hex = octalValue.toString(16).padStart(2, '0')
+                    stringEscapeErrorList.add(StringEscapeError(
+                        start = octalStart,
+                        length = octalLen + 1,  // +1 for '\'
+                        code = 1487,
+                        message = "Octal escape sequences are not allowed. Use the syntax '\\x$hex'.",
+                    ))
+                    octalValue.toChar().toString()
+                } else {
+                    "\u0000"
+                }
+            }
             'b' -> "\b"
             'f' -> "\u000C"
             'v' -> "\u000B"
@@ -916,7 +969,104 @@ class Scanner(private val text: String) {
             }
 
             '\n' -> "" // Line continuation
+
+            in '1'..'7' -> {
+                // Octal escape: \1-\7, possibly followed by more octal digits (max 3 total, value ≤ 255)
+                val octalStart = backslashPos - 1  // position of '\'
+                var octalValue = ch - '0'
+                var octalLen = 1  // 1 digit consumed
+                // Consume up to 2 more octal digits (3 total max) while value ≤ 255
+                while (pos < end && text[pos] in '0'..'7' && octalLen < 3) {
+                    val next = octalValue * 8 + (text[pos] - '0')
+                    if (next > 255) break
+                    octalValue = next
+                    pos++
+                    octalLen++
+                }
+                val hex = octalValue.toString(16).padStart(2, '0')
+                stringEscapeErrorList.add(StringEscapeError(
+                    start = octalStart,
+                    length = octalLen + 1,  // +1 for '\'
+                    code = 1487,
+                    message = "Octal escape sequences are not allowed. Use the syntax '\\x$hex'.",
+                ))
+                octalValue.toChar().toString()
+            }
+
+            '8', '9' -> {
+                // Illegal escape: \8 or \9
+                val octalStart = backslashPos - 1  // position of '\'
+                stringEscapeErrorList.add(StringEscapeError(
+                    start = octalStart,
+                    length = 2,  // '\' + '8' or '9'
+                    code = 1488,
+                    message = "Escape sequence '\\$ch' is not allowed.",
+                ))
+                ch.toString()
+            }
+
             else -> ch.toString()
+        }
+    }
+
+    /**
+     * Called when `\` is seen in a template literal (pos points at `\`).
+     * Looks ahead to detect octal or illegal escape sequences and records errors.
+     * Does NOT advance pos (the caller handles that).
+     */
+    private fun checkTemplateEscapeError() {
+        val backslashPos = pos  // position of '\'
+        if (pos + 1 >= end) return
+        val ch = text[pos + 1]  // first char after '\'
+        when {
+            ch in '1'..'7' -> {
+                // Octal: \1-\7, possibly followed by more octal digits while value ≤ 0xFF
+                var octalValue = ch - '0'
+                var octalLen = 1
+                var lookahead = pos + 2
+                while (lookahead < end && text[lookahead] in '0'..'7') {
+                    val next = octalValue * 8 + (text[lookahead] - '0')
+                    if (next > 255) break
+                    octalValue = next
+                    lookahead++
+                    octalLen++
+                }
+                val hex = octalValue.toString(16).padStart(2, '0')
+                stringEscapeErrorList.add(StringEscapeError(
+                    start = backslashPos,
+                    length = octalLen + 1,
+                    code = 1487,
+                    message = "Octal escape sequences are not allowed. Use the syntax '\\x$hex'.",
+                ))
+            }
+            ch == '0' && pos + 2 < end && text[pos + 2] in '0'..'9' -> {
+                // \0 followed by any digit → legacy octal attempt
+                var octalValue = 0
+                var octalLen = 1
+                var lookahead = pos + 2
+                while (lookahead < end && text[lookahead] in '0'..'7') {
+                    val next = octalValue * 8 + (text[lookahead] - '0')
+                    if (next > 255) break
+                    octalValue = next
+                    lookahead++
+                    octalLen++
+                }
+                val hex = octalValue.toString(16).padStart(2, '0')
+                stringEscapeErrorList.add(StringEscapeError(
+                    start = backslashPos,
+                    length = octalLen + 1,
+                    code = 1487,
+                    message = "Octal escape sequences are not allowed. Use the syntax '\\x$hex'.",
+                ))
+            }
+            ch == '8' || ch == '9' -> {
+                stringEscapeErrorList.add(StringEscapeError(
+                    start = backslashPos,
+                    length = 2,
+                    code = 1488,
+                    message = "Escape sequence '\\$ch' is not allowed.",
+                ))
+            }
         }
     }
 
@@ -932,6 +1082,7 @@ class Scanner(private val text: String) {
     }
 
     private fun scanTemplateLiteral(): SyntaxKind {
+        stringEscapeErrorList.clear()
         pos++ // skip opening backtick
         val sb = StringBuilder()
         while (pos < end) {
@@ -947,6 +1098,8 @@ class Scanner(private val text: String) {
                 return SyntaxKind.TemplateHead
             }
             if (ch == '\\') {
+                // Check for octal/illegal escape sequences and record errors
+                checkTemplateEscapeError()
                 // Preserve raw escape sequences in template literals (do not decode them).
                 // The JS engine decodes them at runtime; we emit the source as-is.
                 sb.append('\\')
@@ -973,6 +1126,7 @@ class Scanner(private val text: String) {
     }
 
     private fun scanTemplateMiddleOrTail(): SyntaxKind {
+        stringEscapeErrorList.clear()
         pos++ // skip } (the closing brace of the template expression)
         val sb = StringBuilder()
         tokenPos = pos - 1 // include the } in the token range
@@ -989,6 +1143,8 @@ class Scanner(private val text: String) {
                 return SyntaxKind.TemplateMiddle
             }
             if (ch == '\\') {
+                // Check for octal/illegal escape sequences and record errors
+                checkTemplateEscapeError()
                 // Preserve raw escape sequences in template literals (do not decode them).
                 sb.append('\\')
                 pos++
