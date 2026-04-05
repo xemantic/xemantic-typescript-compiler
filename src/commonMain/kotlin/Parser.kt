@@ -4492,7 +4492,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseTypeParameter(): TypeParameter? {
         val pos = getPos()
-        val modifiers = parseModifiers().toMutableSet()
+        val modifiers = mutableSetOf<ModifierFlag>()
+        // Handle `const` modifier (TypeScript 5.0 const type parameters)
+        if (token == SyntaxKind.ConstKeyword) {
+            modifiers.add(ModifierFlag.Const)
+            nextToken()
+        }
         // Handle `in`/`out` variance modifiers (TypeScript 4.7+)
         while (token == SyntaxKind.InKeyword || token == SyntaxKind.OutKeyword) {
             modifiers.add(if (token == SyntaxKind.InKeyword) ModifierFlag.In else ModifierFlag.Out)
@@ -5136,7 +5141,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 t == SyntaxKind.StringKeyword ||
                 t == SyntaxKind.SymbolKeyword ||
                 t == SyntaxKind.UndefinedKeyword ||
-                t == SyntaxKind.AccessorKeyword
+                t == SyntaxKind.AccessorKeyword ||
+                // Strict-mode future reserved words: valid identifiers in non-strict/non-generator contexts.
+                // TypeScript allows these as identifier names (var private = 0, var yield = 0, etc.)
+                t == SyntaxKind.PackageKeyword ||
+                t == SyntaxKind.PrivateKeyword ||
+                t == SyntaxKind.ProtectedKeyword ||
+                t == SyntaxKind.PublicKeyword ||
+                t == SyntaxKind.YieldKeyword
 
     private fun isKeyword(): Boolean = token.name.endsWith("Keyword")
 
