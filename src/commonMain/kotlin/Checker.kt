@@ -7089,6 +7089,33 @@ class Checker(
             is ExportAssignment -> {
                 checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
             }
+            is ImportEqualsDeclaration -> {
+                // Check the module reference for TS2503 (internal namespace alias)
+                // Only for non-external (non-require) references: import a = b or import a = b.c
+                val ref = stmt.moduleReference
+                if (ref !is ExternalModuleReference) {
+                    // Find the leftmost identifier in the module reference
+                    val leftmost: Identifier? = when (ref) {
+                        is Identifier -> ref
+                        is QualifiedName -> {
+                            var n: Node = ref
+                            while (n is QualifiedName) n = n.left
+                            n as? Identifier
+                        }
+                        else -> null
+                    }
+                    if (leftmost != null) {
+                        val name = leftmost.text
+                        // Skip invalid identifier starts (numbers, strings) — parser already emits TS1003
+                        // Skip keyword identifiers (null, true, false, this, etc.)
+                        val validIdStart = name.isNotEmpty() &&
+                            (name[0] in 'A'..'Z' || name[0] in 'a'..'z' || name[0] == '_' || name[0] == '$')
+                        if (validIdStart && name !in KEYWORD_IDENTIFIERS && !scope.has(name)) {
+                            emitTS2503(name, leftmost, source, fileName)
+                        }
+                    }
+                }
+            }
             else -> {}
         }
     }
@@ -7662,13 +7689,39 @@ class Checker(
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
                 if (leftmost is Identifier) {
-                    checkIdentifierResolved(leftmost.text, leftmost, scope, source, fileName, inTypePosition = true)
+                    val lname = leftmost.text
+                    // For qualified type references, the leftmost must be a namespace.
+                    // If not found → TS2503 "Cannot find namespace 'x'" (not TS2304).
+                    // Only emit for valid identifier starts (skip parser recovery artifacts).
+                    val validIdStart = lname.isNotEmpty() &&
+                        (lname[0] in 'A'..'Z' || lname[0] in 'a'..'z' || lname[0] == '_' || lname[0] == '$')
+                    if (validIdStart && lname !in KEYWORD_IDENTIFIERS && !scope.has(lname)) {
+                        emitTS2503(lname, leftmost, source, fileName)
+                        return // skip TS2694 check too — leftmost is unresolved
+                    }
                 }
                 // Check QualifiedName segments for TS2694
                 checkQualifiedNameExports(name, source, fileName)
             }
             else -> {}
         }
+    }
+
+    /** Emit TS2503: "Cannot find namespace 'X'." */
+    private fun emitTS2503(name: String, node: Node, source: String, fileName: String) {
+        val start = node.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find namespace '$name'.",
+            category = DiagnosticCategory.Error,
+            code = 2503,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /**
