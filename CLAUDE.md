@@ -188,7 +188,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 - **TS1210 vs TS1100**: TS1210 fires for `arguments`/`eval` in class bodies (always strict). TS1100 fires in external strict mode contexts (functions, modules). TypeScript NEVER emits both for the same node — TS1210 takes priority in class bodies. Suppress TS1100 inside class bodies for these names.
 - **`emitDeclarationOnly` still needs checker**: Multi-file compilation with `emitDeclarationOnly` must still parse/bind/check files for diagnostics like TS1210. But use `declarationOnly = true` to limit checks — running the full checker produces FPs like TS6131 that TypeScript's declaration-only mode suppresses.
-- **`isAlwaysTruthyExpr` vs `isAlwaysTruthyForOrExpr`**: In `||` contexts, TypeScript only flags object-like expressions (function, arrow, object, array, class, regex). Numeric/string literals and `new` expressions are NOT flagged in `||` but ARE flagged in `if`/`else if` conditions.
+- **`isAlwaysTruthyExpr` vs `isAlwaysTruthyForOrExpr`**: In `||` contexts, TypeScript flags object-like expressions (function, arrow, object, array, class, regex) and non-empty string literals. Numeric literals and `new` expressions are NOT flagged in `||` but ARE flagged in `if`/`else if` conditions.
 
 ### Kotlin idioms
 

@@ -13113,6 +13113,8 @@ class Checker(
             is ArrayLiteralExpression -> true
             is ClassExpression -> true
             is RegularExpressionLiteralNode -> true
+            is StringLiteralNode -> expr.text.isNotEmpty()
+            // Note: NumericLiteralNode and NewExpression are NOT flagged in || contexts
             else -> false
         }
     }
