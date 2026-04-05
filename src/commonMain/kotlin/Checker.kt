@@ -10939,22 +10939,37 @@ class Checker(
                                     importedName in localNames -> {
                                         // TS2459: name declared locally but not exported
                                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                                        // Add TS2728 related info pointing to the declaration in the target file
-                                        val declPos = getLocalDeclarationPos(targetFile, importedName)
+                                        // Add TS2728 related info for first declaration + TS6204 "and here" for additional
+                                        val allDeclPositions = getAllLocalDeclarationPositions(targetFile, importedName)
                                         val targetSource = targetResult.sourceFile.text
-                                        val relatedInfo = if (declPos != null) {
-                                            val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource, declPos.first)
-                                            listOf(Diagnostic(
-                                                message = "'$importedName' is declared here.",
-                                                category = DiagnosticCategory.Message,
-                                                code = 2728,
-                                                fileName = resolvedFile,
-                                                line = declLine,
-                                                character = declChar,
-                                                start = declPos.first,
-                                                length = declPos.second,
-                                            ))
-                                        } else emptyList()
+                                        val relatedInfo = buildList {
+                                            allDeclPositions.forEachIndexed { idx, declPos ->
+                                                val (declLine, declChar) = getLineAndCharacterOfPosition(targetSource, declPos.first)
+                                                if (idx == 0) {
+                                                    add(Diagnostic(
+                                                        message = "'$importedName' is declared here.",
+                                                        category = DiagnosticCategory.Message,
+                                                        code = 2728,
+                                                        fileName = resolvedFile,
+                                                        line = declLine,
+                                                        character = declChar,
+                                                        start = declPos.first,
+                                                        length = declPos.second,
+                                                    ))
+                                                } else {
+                                                    add(Diagnostic(
+                                                        message = "and here.",
+                                                        category = DiagnosticCategory.Message,
+                                                        code = 6204,
+                                                        fileName = resolvedFile,
+                                                        line = declLine,
+                                                        character = declChar,
+                                                        start = declPos.first,
+                                                        length = declPos.second,
+                                                    ))
+                                                }
+                                            }
+                                        }
                                         diagnostics.add(Diagnostic(
                                             message = "Module '\"$moduleName\"' declares '$importedName' locally, but it is not exported.",
                                             category = DiagnosticCategory.Error,
@@ -11112,40 +11127,47 @@ class Checker(
      * Returns the position (start, length) of the declaration of [name] in [file],
      * for use as TS2728 related info in TS2459 diagnostics.
      */
-    private fun getLocalDeclarationPos(file: SourceFile, name: String): Pair<Int, Int>? {
+    private fun getLocalDeclarationPos(file: SourceFile, name: String): Pair<Int, Int>? =
+        getAllLocalDeclarationPositions(file, name).firstOrNull()
+
+    /**
+     * Returns ALL positions where [name] is declared in [file], for use as TS2728/TS6204 related info.
+     */
+    private fun getAllLocalDeclarationPositions(file: SourceFile, name: String): List<Pair<Int, Int>> {
+        val result = mutableListOf<Pair<Int, Int>>()
         for (stmt in file.statements) {
             when (stmt) {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         val ident = decl.name as? Identifier ?: continue
-                        if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                        if (ident.text == name) result.add(Pair(ident.pos, ident.text.length))
                     }
                 }
                 is FunctionDeclaration -> {
                     val ident = stmt.name ?: continue
-                    if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                    if (ident.text == name) result.add(Pair(ident.pos, ident.text.length))
                 }
                 is ClassDeclaration -> {
                     val ident = stmt.name ?: continue
-                    if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                    if (ident.text == name) result.add(Pair(ident.pos, ident.text.length))
                 }
                 is InterfaceDeclaration -> {
-                    if (stmt.name.text == name) return Pair(stmt.name.pos, stmt.name.text.length)
+                    if (stmt.name.text == name) result.add(Pair(stmt.name.pos, stmt.name.text.length))
                 }
                 is TypeAliasDeclaration -> {
-                    if (stmt.name.text == name) return Pair(stmt.name.pos, stmt.name.text.length)
+                    if (stmt.name.text == name) result.add(Pair(stmt.name.pos, stmt.name.text.length))
                 }
                 is EnumDeclaration -> {
-                    if (stmt.name.text == name) return Pair(stmt.name.pos, stmt.name.text.length)
+                    if (stmt.name.text == name) result.add(Pair(stmt.name.pos, stmt.name.text.length))
                 }
                 is ModuleDeclaration -> {
                     val ident = stmt.name as? Identifier ?: continue
-                    if (ident.text == name) return Pair(ident.pos, ident.text.length)
+                    if (ident.text == name) result.add(Pair(ident.pos, ident.text.length))
                 }
                 else -> {}
             }
         }
-        return null
+        return result
     }
 
     /**
