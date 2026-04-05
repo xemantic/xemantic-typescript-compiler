@@ -12372,8 +12372,9 @@ class Checker(
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
 
-        /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts). */
-        private val MODIFIER_KEYWORDS_SET = setOf("public", "private", "protected", "static", "readonly", "abstract", "override")
+        /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts).
+         *  Excludes "static" because `static static foo` legitimately gets TS2300. */
+        private val MODIFIER_KEYWORDS_SET = setOf("public", "private", "protected", "readonly", "abstract", "override")
 
         /** Runtime properties that exist on all objects/functions but aren't declared in types.
          *  Skip these in TS2339 checks to avoid false positives. */
@@ -26907,6 +26908,40 @@ class Checker(
             }
             else -> return
         }
+        // TS1268: Check index signature parameter types
+        // Only check single-parameter, non-rest index signatures (multi-param and rest get other errors)
+        val allowedIndexTypes = setOf(SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword, SyntaxKind.SymbolKeyword)
+        for (sig in members.filterIsInstance<IndexSignature>()) {
+            if (sig.parameters.size != 1) continue
+            val param = sig.parameters[0]
+            if (param.dotDotDotToken || param.questionToken) continue
+            val pType = param.type ?: continue
+            val isAllowed = when (pType) {
+                is KeywordTypeNode -> pType.kind in allowedIndexTypes
+                is TemplateLiteralType -> true
+                is ArrayType -> true // rest params have array types; TS1017 covers the error
+                else -> false
+            }
+            if (!isAllowed) {
+                val start = param.name.pos
+                val nameLen = when (val n = param.name) {
+                    is Identifier -> n.text.length
+                    else -> param.name.end - param.name.pos
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.",
+                    category = DiagnosticCategory.Error,
+                    code = 1268,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = nameLen,
+                ))
+            }
+        }
+
         // Find string index signature: [s: string]: T (also check base class)
         var stringIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
             sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
