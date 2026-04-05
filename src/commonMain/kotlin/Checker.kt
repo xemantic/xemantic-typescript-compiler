@@ -9898,7 +9898,12 @@ class Checker(
 
         fun memberKey(nameNode: Node): Pair<String, String>? {
             return when (nameNode) {
-                is Identifier -> nameNode.text.let { it to it }
+                is Identifier -> {
+                    // Skip modifier keywords used as member names (error recovery artifacts)
+                    // e.g., `public private p4` parses as member named "private" — don't flag as duplicate
+                    if (nameNode.text in MODIFIER_KEYWORDS_SET) return null
+                    nameNode.text.let { it to it }
+                }
                 is NumericLiteralNode -> {
                     // Numeric literals are normalized: 0.0 → "0"
                     val normalized = normalizeNumericKey(nameNode.text)
@@ -12366,6 +12371,9 @@ class Checker(
 
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
+
+        /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts). */
+        private val MODIFIER_KEYWORDS_SET = setOf("public", "private", "protected", "static", "readonly", "abstract", "override")
 
         /** Runtime properties that exist on all objects/functions but aren't declared in types.
          *  Skip these in TS2339 checks to avoid false positives. */
@@ -20709,12 +20717,19 @@ class Checker(
                 options.alwaysStrict == true ||
                 isModule ||
                 hasUseStrict
-            // For expression-position TS1212: fire when target >= ES2015 (explicit) or explicitly strict
-            val isExpressionStrict = options.target >= ScriptTarget.ES2015 ||
-                options.strict == true ||
-                options.alwaysStrict == true ||
-                isModule ||
-                hasUseStrict
+            // For expression-position TS1212: fire when explicitly strict, NOT just target >= ES2015.
+            // Target alone doesn't make file-level code strict — only classes, modules, and explicit flags do.
+            // When alwaysStrict is explicitly false, suppress the target-based strictness.
+            val isExpressionStrict = if (options.alwaysStrict == false && options.strictExplicitlyFalse) {
+                // Explicitly non-strict: only fire if module or has "use strict"
+                isModule || hasUseStrict
+            } else {
+                options.target >= ScriptTarget.ES2015 ||
+                    options.strict == true ||
+                    options.alwaysStrict == true ||
+                    isModule ||
+                    hasUseStrict
+            }
             // TS2480 runs unconditionally; TS1212 runs in let/const contexts even without global strict
             walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule)
         }
