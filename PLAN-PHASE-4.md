@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-04):** 7,798 / 10,077 tests passing (77.4%).
+**Status (2026-04-05):** 7,952 / 10,077 tests passing (78.9%).
 
 ## Goal
 
@@ -371,13 +371,31 @@ array→primitive, named→named) fall through to the old string system which do
 - TS1268: index signature parameter type validation — skip rest/optional/multi params
 - Transformer: {default as d} in combined import uses __importDefault not __importStar
 
+**Completed session 2026-04-05b (+3 tests, 7,949 → 7,952):**
+- TS2339 static method `this`: track `inStaticClassMethod` context, emit TS2339
+  "does not exist on type 'typeof C'" for instance-only props in static methods.
+  Walks extends chain for inherited static members.
+  +3 tests: scopeCheckInsideStaticMethod1, scopeCheckExtendedClassInsideStaticMethod1,
+  staticVisibility.
+- TS2339 namespace non-exported access: check namespace exports for `M.prop` patterns,
+  distinguish exported vs non-exported members via ExportValue flag and VariableStatement
+  export modifier scanning. Tests: moduleProperty2, cannotInvokeNewOnErrorExpression,
+  extBaseClass2 (already passed via other diagnostics).
+- Heritage clause traversal: add property access checking in class extends expressions
+  (catches `M.B` in `extends M.B` heritage clauses).
+- Note: additional tests pass individually (e.g. internalAliasFunctionInsideLocalModuleWithoutExportAccessError)
+  but were already counted in multi-code passes.
+
+**Remaining analysis (updated 2026-04-05b):**
+- Chained namespace access (M.foo.x) not yet supported — needed for ~5 more tests
+- TS2576 (instance→static suggestion) needs instance type inference — 17 baselines
+- Most remaining TS2339 near-miss tests need deeper type resolution (array, union, never)
+
 **Recommended priority for next items:**
 
-1. **Static member TS2339**: `C.p` where `p` is non-static → 16 near-miss tests.
-   Requires checking class declarations' static members instead of instance members
-   when identifier is a class symbol.
-2. **Module resolution**: TS2307 would unlock 5 near-miss + many multi-code tests
-3. **Deeper type display / comparison**: TS2322 (8), TS2345 (5) near-miss tests
+1. **Module resolution**: TS2307 would unlock 5 near-miss + many multi-code tests
+2. **Deeper type display / comparison**: TS2322 (8), TS2345 (5) near-miss tests
+3. **Chained namespace access**: M.a.b patterns for ~5 more tests
 4. **Relax type engine guards**: Highest ROI but highest risk of FPs
 
 ---
