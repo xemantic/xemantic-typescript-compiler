@@ -4833,6 +4833,13 @@ class Checker(
             }
             is IfStatement -> {
                 findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
+                // Recurse into else-if chains to check their conditions,
+                // but NOT into body blocks (they may have type-narrowed variables
+                // that our simplified checker can't track via control flow analysis)
+                val elseStmt = stmt.elseStatement
+                if (elseStmt is IfStatement) {
+                    checkUsesOfUninitialized(elseStmt, uninitialized, source, fileName)
+                }
             }
             is ForStatement -> {
                 when (val init = stmt.initializer) {
@@ -7075,9 +7082,14 @@ class Checker(
                 }
             }
             is ModuleDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return
                 // Build namespace scope that includes merged exports from all declarations
                 val nsScope = buildNamespaceScope(stmt, scope, fileName)
+                if (ModifierFlag.Declare in stmt.modifiers) {
+                    // In declare namespaces, skip TS2304 checks (ambient types expected)
+                    // but still check heritage clauses for TS2314 (type argument count)
+                    checkHeritageClausesInDeclareNamespace(stmt, nsScope, source, fileName)
+                    return
+                }
                 when (val body = stmt.body) {
                     is ModuleBlock -> checkUnresolvedInStatements(body.statements, nsScope, source, fileName)
                     is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
@@ -12652,6 +12664,18 @@ class Checker(
             val info = getTypeParamInfoFromSymbol(symbol)
             if (info != null) return info
         }
+        // Also check namespace exports (for types declared inside namespaces)
+        for (result in binderResults) {
+            for ((_, sym) in result.locals) {
+                if (sym.flags.hasAny(SymbolFlags.Module)) {
+                    val exported = sym.exports?.get(name)
+                    if (exported != null) {
+                        val info = getTypeParamInfoFromSymbol(exported)
+                        if (info != null) return info
+                    }
+                }
+            }
+        }
         val globalSymbol = globals[name]
         if (globalSymbol != null) {
             val info = getTypeParamInfoFromSymbol(globalSymbol)
@@ -12873,6 +12897,54 @@ class Checker(
                 start = start,
                 length = length,
             ))
+        }
+    }
+
+    /**
+     * Walk a declare namespace body to check heritage clauses for TS2314.
+     * Called separately because declare namespaces skip TS2304 checking.
+     */
+    private fun checkHeritageClausesInDeclareNamespace(
+        moduleDecl: ModuleDeclaration,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        val body = moduleDecl.body
+        val statements = when (body) {
+            is ModuleBlock -> body.statements
+            is ModuleDeclaration -> {
+                checkHeritageClausesInDeclareNamespace(body, scope, source, fileName)
+                return
+            }
+            else -> return
+        }
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val classScope = scope.child()
+                    stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
+                    stmt.heritageClauses?.forEach { clause ->
+                        for (type in clause.types) {
+                            checkHeritageTypeArgCount(type, classScope, source, fileName)
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    val ifaceScope = scope.child()
+                    stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text) }
+                    stmt.heritageClauses?.forEach { clause ->
+                        for (type in clause.types) {
+                            checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val nsScope = buildNamespaceScope(stmt, scope, fileName)
+                    checkHeritageClausesInDeclareNamespace(stmt, nsScope, source, fileName)
+                }
+                else -> {}
+            }
         }
     }
 
