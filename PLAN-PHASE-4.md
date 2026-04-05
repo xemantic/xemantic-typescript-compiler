@@ -355,26 +355,30 @@ array→primitive, named→named) fall through to the old string system which do
   function declarations for merged symbols. Fixes FP TS2314 for function+interface
   with same name. +1 test (exportClassExtendingIntersection).
 
-**Analysis of remaining test landscape (updated 2026-04-04):**
-- 2,276 failing tests (down from 2,303)
-- ~59% produce zero diagnostics — need deep type checking infrastructure
-- ~12% need exactly 1 missing diagnostic code (5-line diffs)
-- 117 tests need exactly 1 missing diagnostic code
-- Top missing codes in 5-line-diff tests: TS2339 (15), TS2322 (6), TS2345 (5),
-  TS2307 (5), TS7019 (3), TS1192 (3), TS2792 (3)
-- 5 FP tests: intraBindingPatternReferences (TS7006 contextual), 
-  subtypeReductionWithAnyFunctionType (TS7006 contextual) — need contextual typing
-- Most gains now blocked on: (a) deeper generic instantiation, (b) module resolution,
-  (c) contextual typing for lambda parameters
+**Analysis of remaining test landscape (updated 2026-04-05):**
+- 2,128 failing tests (down from 2,276)
+- ~61% (1,289) produce zero diagnostics — need deep type checking infrastructure
+- 86 near-miss tests (1 missing code, 0 FPs): TS2339 (16), TS2322 (8), TS2345 (5), TS2307 (5)
+- 7 FP-only tests (0 missing, only extra diagnostics)
+- 237 JS emit failures
+- Most gains now blocked on: (a) deeper type engine (TS2322/TS2339/TS2345),
+  (b) module resolution (TS2307), (c) contextual typing for lambda params (TS7006 FP)
+
+**Completed session 2026-04-05 (+4 tests, 7,942 → 7,946):**
+- TS1212 FP: suppress expression-position check when alwaysStrict:false + strict:false
+- TS2300 FP: skip modifier keywords (public/private/protected/...) in class member
+  duplicate checking — error recovery artifacts. Excludes 'static'.
+- TS1268: index signature parameter type validation — skip rest/optional/multi params
+- Transformer: {default as d} in combined import uses __importDefault not __importStar
 
 **Recommended priority for next items:**
 
-1. **Deeper type display**: Object literal type properties (currently `{ ... }`),
-   function `this:` parameter, better return type inference — affects ~22 TS2322 diff tests
-2. **Module resolution**: TS2305/TS2307 would unlock 143+ small-diff error tests
-3. **New diagnostic codes**: TS2303 (circular import, 7), TS2445 (protected access)
+1. **Static member TS2339**: `C.p` where `p` is non-static → 16 near-miss tests.
+   Requires checking class declarations' static members instead of instance members
+   when identifier is a class symbol.
+2. **Module resolution**: TS2307 would unlock 5 near-miss + many multi-code tests
+3. **Deeper type display / comparison**: TS2322 (8), TS2345 (5) near-miss tests
 4. **Relax type engine guards**: Highest ROI but highest risk of FPs
-5. **7-line-diff fixes**: ~23 tests each needing 1 missing diagnostic code
 
 ---
 
