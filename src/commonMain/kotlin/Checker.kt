@@ -3988,8 +3988,9 @@ class Checker(
         siblingStatements: List<Statement>? = null,
     ) {
         val typeParams = cls.typeParameters
-        if (typeParams.isNullOrEmpty() || !(options.noUnusedLocals || options.noUnusedParameters)) return
-        // Skip if another declaration merges with this class (interface/namespace)
+        // Class type params are only checked with noUnusedParameters (not noUnusedLocals alone)
+        if (typeParams.isNullOrEmpty() || !options.noUnusedParameters) return
+        // Skip if another declaration merges with this class (interface/namespace) — same file
         val className = cls.name?.text
         if (className != null && siblingStatements != null) {
             val hasMerge = siblingStatements.any { stmt ->
@@ -4003,6 +4004,11 @@ class Checker(
                 }
             }
             if (hasMerge) return
+        }
+        // Skip if another declaration merges with this class across files (via globals)
+        if (className != null) {
+            val globalSymbol = globals[className]
+            if (globalSymbol != null && globalSymbol.declarations.any { it.kind == SyntaxKind.InterfaceDeclaration || it.kind == SyntaxKind.ModuleDeclaration }) return
         }
 
         val tpScope = UnusedScope()
@@ -4057,6 +4063,33 @@ class Checker(
         reportUnusedTypeParams(tpScope, typeParams, source, fileName)
     }
 
+    /** Check if a class declaration uses any of the named type parameters in its members. */
+    private fun classUsesTypeParams(cls: ClassDeclaration, typeParamNames: Set<String>): Boolean {
+        val tpScope = UnusedScope()
+        // Add all type param names as "declarations" — we just want to see which ones are referenced
+        for (name in typeParamNames) {
+            tpScope.declarations.add(UnusedDecl(name = name, nameNode = Identifier(text = name), declNode = Identifier(text = name), isExported = false, isParameter = false, isTypeOnly = true))
+        }
+        for (member in cls.members) {
+            when (member) {
+                is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, tpScope) }
+                is MethodDeclaration -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                    member.type?.let { collectTypeRefs(it, tpScope) }
+                }
+                is Constructor -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                }
+                is GetAccessor -> member.type?.let { collectTypeRefs(it, tpScope) }
+                is SetAccessor -> {
+                    member.parameters.forEach { p -> p.type?.let { collectTypeRefs(it, tpScope) } }
+                }
+                else -> {}
+            }
+        }
+        return tpScope.referencedNames.any { it in typeParamNames }
+    }
+
     private fun checkUnusedInterfaceTypeParams(
         iface: InterfaceDeclaration,
         source: String,
@@ -4065,11 +4098,8 @@ class Checker(
     ) {
         val typeParams = iface.typeParameters
         if (typeParams.isNullOrEmpty() || !(options.noUnusedLocals || options.noUnusedParameters)) return
-        // Skip if another declaration merges or if there are multiple interfaces with same name
         val ifaceName = iface.name.text
-        // Check cross-file merges via globals symbol table
-        val globalSymbol = globals[ifaceName]
-        if (globalSymbol != null && globalSymbol.declarations.size > 1) return
+        // Same-file merge check: if class/interface/namespace with same name in same file, skip
         if (siblingStatements != null) {
             val hasMerge = siblingStatements.any { stmt ->
                 stmt !== iface && when (stmt) {
@@ -4083,6 +4113,21 @@ class Checker(
                 }
             }
             if (hasMerge) return
+        }
+        // Cross-file merge check
+        val globalSymbol = globals[ifaceName]
+        if (globalSymbol != null) {
+            // Skip if multiple interface/namespace declarations (normal interface merging)
+            val nonClassDecls = globalSymbol.declarations.count {
+                it.kind == SyntaxKind.InterfaceDeclaration || it.kind == SyntaxKind.ModuleDeclaration
+            }
+            if (nonClassDecls > 1) return
+            // For class+interface cross-file merge: skip if the class uses any of the type params
+            val typeParamNames = typeParams.map { it.name.text }.toSet()
+            val classDecls = globalSymbol.declarations.filterIsInstance<ClassDeclaration>()
+            for (classDecl in classDecls) {
+                if (classUsesTypeParams(classDecl, typeParamNames)) return
+            }
         }
 
         val tpScope = UnusedScope()
@@ -16692,18 +16737,12 @@ class Checker(
                 // Skip leading whitespace
                 var spanStart = start
                 while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                // Calculate span: from modifier to end of type or name
-                // Use the type pos + type text length if present, otherwise name
-                val contentEnd = param.type?.let { typeNode ->
-                    // For keyword types (string, number, etc.), use the type pos + keyword length
-                    // For other types, use type.end - 1 to skip trailing trivia
-                    var te = typeNode.end
-                    while (te > typeNode.pos && te <= source.length && source[te - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' }) te--
-                    te
-                } ?: run {
-                    var ne = param.name.end
-                    while (ne > param.name.pos && ne <= source.length && source[ne - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' }) ne--
-                    ne
+                // Calculate span: from modifier to end of initializer, type, or name
+                val rawEnd = param.initializer?.end ?: param.type?.end ?: param.name.end
+                var contentEnd = rawEnd
+                while (contentEnd > spanStart && contentEnd <= source.length &&
+                    source[contentEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
+                    contentEnd--
                 }
                 val spanEnd = contentEnd
                 val length = spanEnd - spanStart
@@ -20160,15 +20199,17 @@ class Checker(
     private fun reportTS2371ForParams(params: List<Parameter>, source: String, fileName: String) {
         for (param in params) {
             val init = param.initializer ?: continue
-            val nameStart = param.name.pos
-            // Span from name start to initializer end, trimming trailing trivia
+            // Span starts at beginning of parameter (including access modifiers like 'public')
+            var spanStart = param.pos
+            while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+            // Span from spanStart to initializer end, trimming trailing trivia
             var spanEnd = init.end
-            while (spanEnd > nameStart && spanEnd <= source.length &&
+            while (spanEnd > spanStart && spanEnd <= source.length &&
                 source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
                 spanEnd--
             }
-            val length = (spanEnd - nameStart).coerceAtLeast(1)
-            val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+            val length = (spanEnd - spanStart).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
             diagnostics.add(Diagnostic(
                 message = "A parameter initializer is only allowed in a function or constructor implementation.",
                 category = DiagnosticCategory.Error,
@@ -20176,7 +20217,7 @@ class Checker(
                 fileName = fileName,
                 line = line,
                 character = character,
-                start = nameStart,
+                start = spanStart,
                 length = length,
             ))
         }
@@ -30600,26 +30641,23 @@ class Checker(
                         }
                     }
                     is ImportDeclaration -> {
+                        // TS2440 fires for default bindings that conflict with local vars,
+                        // but NOT for named specifiers { x } in external module imports.
                         val clause = stmt.importClause ?: continue
-                        val namedBindings = clause.namedBindings
-                        if (namedBindings is NamedImports) {
-                            for (spec in namedBindings.elements) {
-                                if (spec.isTypeOnly) continue
-                                val localName = spec.name.text
-                                if (localName in localNames) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, spec.name.pos)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Import declaration conflicts with local declaration of '$localName'.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2440,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = spec.name.pos,
-                                        length = localName.length,
-                                    ))
-                                }
-                            }
+                        val defaultName = clause.name?.text
+                        if (defaultName != null && defaultName in varNames) {
+                            // Default binding conflicts with a local var declaration
+                            val (line, character) = getLineAndCharacterOfPosition(source, clause.name!!.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Import declaration conflicts with local declaration of '$defaultName'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2440,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = clause.name!!.pos,
+                                length = defaultName.length,
+                            ))
                         }
                     }
                     else -> {}
