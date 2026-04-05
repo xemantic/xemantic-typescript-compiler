@@ -10562,8 +10562,17 @@ class Checker(
                 val hasExportEquals = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
                 val esModuleInteropActive = options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
                     !options.allowSyntheticDefaultImportsExplicitlyFalse
+                // Suppress for JS CJS files (no ESM exports) when esModuleInterop=true —
+                // module.exports becomes a synthetic default export under esModuleInterop.
+                val targetIsJsCjs = esModuleInteropActive &&
+                    (resolvedFile.endsWith(".js") || resolvedFile.endsWith(".jsx") ||
+                     resolvedFile.endsWith(".cjs") || resolvedFile.endsWith(".mjs")) &&
+                    targetFile.statements.none { it is ExportAssignment || it is ExportDeclaration ||
+                        (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
+                        (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||
+                        (it is VariableStatement && ModifierFlag.Export in it.modifiers) }
                 val defaultBinding = importClause.name
-                if (defaultBinding != null && !hasDefaultExport && !(hasExportEquals && esModuleInteropActive)) {
+                if (defaultBinding != null && !hasDefaultExport && !(hasExportEquals && esModuleInteropActive) && !targetIsJsCjs) {
                     // Compute display module name: strip leading "./" from relative specifiers
                     val displayName = when {
                         moduleName.startsWith("./") -> moduleName.removePrefix("./")
@@ -16065,8 +16074,13 @@ class Checker(
                 walkExprForDelete(operand, source, fileName, isStrict)
             }
             is BinaryExpression -> {
-                walkExprForDelete(expr.left, source, fileName, isStrict)
-                walkExprForDelete(expr.right, source, fileName, isStrict)
+                // Iteratively walk binary chains to avoid StackOverflow on deep trees
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkExprForDelete(current.right, source, fileName, isStrict)
+                    current = current.left
+                }
+                walkExprForDelete(current, source, fileName, isStrict)
             }
             is CallExpression -> {
                 walkExprForDelete(expr.expression, source, fileName, isStrict)
@@ -16111,15 +16125,16 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkConstAssignmentInStatements(result.sourceFile.statements, source, fileName, mutableSetOf())
+            checkConstAssignmentInStatements(result.sourceFile.statements, source, fileName, mutableMapOf())
         }
     }
 
+    // Map from name -> diagnostic code (2588=const, 2629=class, 2628=enum, 2630=func, 2708=namespace)
     private fun checkConstAssignmentInStatements(
         statements: List<Statement>,
         source: String,
         fileName: String,
-        constNames: MutableSet<String>,
+        constNames: MutableMap<String, Int>,
     ) {
         for (stmt in statements) {
             // Collect const declarations
@@ -16128,14 +16143,26 @@ class Checker(
                     for (decl in stmt.declarationList.declarations) {
                         val name = decl.name
                         if (name is Identifier) {
-                            constNames.add(name.text)
+                            constNames[name.text] = 2588
                         }
                     }
                 }
             }
             // Collect class names — classes are also immutable bindings (TS2629)
             if (stmt is ClassDeclaration && stmt.name != null) {
-                constNames.add(stmt.name!!.text)
+                constNames[stmt.name!!.text] = 2629
+            }
+            // Collect enum names — enums are immutable bindings (TS2628)
+            if (stmt is EnumDeclaration) {
+                constNames[stmt.name.text] = 2628
+            }
+            // Collect function names — function declarations are immutable bindings (TS2630)
+            if (stmt is FunctionDeclaration && stmt.name != null) {
+                constNames[stmt.name!!.text] = 2630
+            }
+            // Collect namespace names — namespaces are not values (TS2708)
+            if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+                constNames[(stmt.name as Identifier).text] = 2708
             }
             // Check for assignments to const variables
             checkConstAssignmentInStatement(stmt, source, fileName, constNames)
@@ -16146,7 +16173,7 @@ class Checker(
         stmt: Statement,
         source: String,
         fileName: String,
-        constNames: Set<String>,
+        constNames: Map<String, Int>,
     ) {
         when (stmt) {
             is ExpressionStatement -> checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
@@ -16161,16 +16188,16 @@ class Checker(
                 checkConstAssignmentInStatement(stmt.thenStatement, source, fileName, constNames)
                 stmt.elseStatement?.let { checkConstAssignmentInStatement(it, source, fileName, constNames) }
             }
-            is Block -> checkConstAssignmentInStatements(stmt.statements, source, fileName, constNames.toMutableSet())
+            is Block -> checkConstAssignmentInStatements(stmt.statements, source, fileName, constNames.toMutableMap())
             is ForStatement -> {
                 // Collect const in for init
-                val forConsts = constNames.toMutableSet()
+                val forConsts = constNames.toMutableMap()
                 when (val init = stmt.initializer) {
                     is VariableDeclarationList -> {
                         if (init.flags == SyntaxKind.ConstKeyword) {
                             for (decl in init.declarations) {
                                 val name = decl.name
-                                if (name is Identifier) forConsts.add(name.text)
+                                if (name is Identifier) forConsts[name.text] = 2588
                             }
                         }
                     }
@@ -16199,20 +16226,20 @@ class Checker(
                         is DefaultClause -> clause.statements
                         else -> emptyList()
                     }
-                    checkConstAssignmentInStatements(stmts, source, fileName, constNames.toMutableSet())
+                    checkConstAssignmentInStatements(stmts, source, fileName, constNames.toMutableMap())
                 }
             }
             is TryStatement -> {
-                checkConstAssignmentInStatements(stmt.tryBlock.statements, source, fileName, constNames.toMutableSet())
+                checkConstAssignmentInStatements(stmt.tryBlock.statements, source, fileName, constNames.toMutableMap())
                 stmt.catchClause?.block?.let {
-                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableSet())
+                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap())
                 }
                 stmt.finallyBlock?.let {
-                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableSet())
+                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap())
                 }
             }
             is FunctionDeclaration -> {
-                stmt.body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, mutableSetOf()) }
+                stmt.body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, mutableMapOf()) }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
@@ -16224,13 +16251,13 @@ class Checker(
                         else -> null
                     }
                     // Pass outer constNames so class/enum assignments in methods are caught
-                    body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableSet()) }
+                    body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap()) }
                 }
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
                 if (body is ModuleBlock) {
-                    checkConstAssignmentInStatements(body.statements, source, fileName, constNames.toMutableSet())
+                    checkConstAssignmentInStatements(body.statements, source, fileName, constNames.toMutableMap())
                 }
             }
             is LabeledStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
@@ -16242,7 +16269,7 @@ class Checker(
         expr: Expression,
         source: String,
         fileName: String,
-        constNames: Set<String>,
+        constNames: Map<String, Int>,
     ) {
         when (expr) {
             is BinaryExpression -> {
@@ -16261,7 +16288,7 @@ class Checker(
                         || op == SyntaxKind.QuestionQuestionEquals) {
                         val left = current.left
                         if (left is Identifier && left.text in constNames) {
-                            emitTS2588(left, source, fileName)
+                            emitReadonlyAssignment(left, source, fileName, constNames[left.text] ?: 2588)
                         }
                         // Check assignment to readonly property (TS2540)
                         checkReadonlyAssignmentTarget(left, source, fileName)
@@ -16275,7 +16302,7 @@ class Checker(
                 if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
                     val operand = unwrapParens(expr.operand)
                     if (operand is Identifier && operand.text in constNames) {
-                        emitTS2588(operand, source, fileName)
+                        emitReadonlyAssignment(operand, source, fileName, constNames[operand.text] ?: 2588)
                     }
                     // Check readonly property (TS2540)
                     checkReadonlyAssignmentTarget(operand, source, fileName)
@@ -16286,7 +16313,7 @@ class Checker(
                 if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
                     val operand = unwrapNonNull(expr.operand)
                     if (operand is Identifier && operand.text in constNames) {
-                        emitTS2588(operand, source, fileName)
+                        emitReadonlyAssignment(operand, source, fileName, constNames[operand.text] ?: 2588)
                     }
                     // Check readonly property (TS2540)
                     checkReadonlyAssignmentTarget(operand, source, fileName)
@@ -16305,12 +16332,12 @@ class Checker(
             }
             is ArrowFunction -> {
                 when (val body = expr.body) {
-                    is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableSetOf())
+                    is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
                     else -> {} // Arrow with expression body — const from outer scope may or may not apply
                 }
             }
             is FunctionExpression -> {
-                checkConstAssignmentInStatements(expr.body.statements, source, fileName, mutableSetOf())
+                checkConstAssignmentInStatements(expr.body.statements, source, fileName, mutableMapOf())
             }
             else -> {}
         }
@@ -16427,11 +16454,11 @@ class Checker(
         }
     }
 
-    private fun emitTS2588(id: Identifier, source: String, fileName: String) {
+    private fun emitReadonlyAssignment(id: Identifier, source: String, fileName: String, fallbackCode: Int = 2588) {
         val start = id.pos
         val length = id.text.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        // Check if the name is a class (TS2629) or enum (TS2628) rather than const (TS2588)
+        // Check symbol type to determine the exact diagnostic code
         // Search file locals, globals, and namespace exports recursively
         val binderResult = fileResults[fileName]
         var symbol = binderResult?.locals?.get(id.text) ?: globals[id.text]
@@ -16451,12 +16478,27 @@ class Checker(
             symbol = searchExports(binderResult.locals)
         }
         val (message, code) = when {
+            symbol?.flags?.hasAny(SymbolFlags.Module) == true ->
+                "Cannot use namespace '${id.text}' as a value." to 2708
+            symbol?.flags?.hasAny(SymbolFlags.Function) == true ->
+                "Cannot assign to '${id.text}' because it is a function." to 2630
             symbol?.flags?.hasAny(SymbolFlags.Class) == true ->
                 "Cannot assign to '${id.text}' because it is a class." to 2629
             symbol?.flags?.hasAny(SymbolFlags.Enum) == true ->
                 "Cannot assign to '${id.text}' because it is an enum." to 2628
-            else ->
+            symbol != null ->
                 "Cannot assign to '${id.text}' because it is a constant." to 2588
+            else -> {
+                // Symbol not found in binder locals — use fallback code from constNames map
+                val msg = when (fallbackCode) {
+                    2708 -> "Cannot use namespace '${id.text}' as a value."
+                    2630 -> "Cannot assign to '${id.text}' because it is a function."
+                    2629 -> "Cannot assign to '${id.text}' because it is a class."
+                    2628 -> "Cannot assign to '${id.text}' because it is an enum."
+                    else -> "Cannot assign to '${id.text}' because it is a constant."
+                }
+                msg to fallbackCode
+            }
         }
         diagnostics.add(Diagnostic(
             message = message,
