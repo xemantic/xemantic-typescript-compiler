@@ -1988,6 +1988,43 @@ class Checker(
         return resolveModuleSpecifier(specifier)
     }
 
+    /**
+     * Resolve a relative module specifier strictly relative to the context file's directory,
+     * WITHOUT falling back to global (non-directory-aware) resolution.
+     * Used for TS2307/TS2792 checks where directory context must be respected.
+     */
+    private fun resolveModuleSpecifierStrictRelative(specifier: String, contextFileName: String): String? {
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null
+        val dir = contextFileName.substringBeforeLast('/', "")
+        val basePath = if (dir.isEmpty()) specifier else "$dir/${specifier.removePrefix("./")}"
+        val normalized = normalizePath(basePath)
+        // Strip .js/.jsx extensions to allow TypeScript to resolve .ts/.tsx instead
+        val withoutJs = when {
+            normalized.endsWith(".js") -> normalized.removeSuffix(".js")
+            normalized.endsWith(".jsx") -> normalized.removeSuffix(".jsx")
+            else -> null
+        }
+        val candidates = buildList {
+            add(normalized)
+            add("$normalized.ts")
+            add("$normalized.tsx")
+            add("$normalized.d.ts")
+            if (withoutJs != null) {
+                add(withoutJs)
+                add("$withoutJs.ts")
+                add("$withoutJs.tsx")
+                add("$withoutJs.d.ts")
+            }
+            add(normalized.removePrefix("./"))
+            add("${normalized.removePrefix("./")}.ts")
+            add("${normalized.removePrefix("./")}.tsx")
+        }
+        for (candidate in candidates) {
+            if (candidate in fileResults) return candidate
+        }
+        return null
+    }
+
     /** Normalize a path by resolving `..` and `.` segments. */
     private fun normalizePath(path: String): String {
         val parts = path.split('/')
@@ -10465,6 +10502,18 @@ class Checker(
                 }
                 if (isMultiFile) {
                     val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+                    // Determine effective module resolution to distinguish node vs classic
+                    val moduleRes = options.moduleResolution?.lowercase()
+                    val effectiveModuleRes = moduleRes ?: run {
+                        when (options.module) {
+                            ModuleKind.CommonJS -> "node10"
+                            ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
+                            ModuleKind.NodeNext -> "nodenext"
+                            ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
+                            else -> "node10"
+                        }
+                    }
+                    val isClassicResolution = effectiveModuleRes !in setOf("node", "node10", "node16", "nodenext", "bundler")
                     if (isSideEffectImport) {
                         // Side-effect imports: TS2882
                         if (isRelative) {
@@ -10477,8 +10526,25 @@ class Checker(
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         }
+                    } else if (isClassicResolution) {
+                        // For classic/AMD/System/UMD module resolution, emit TS2792 in multi-file
+                        // when the module can't be resolved. Node-based resolution is skipped to avoid FPs
+                        // from complex paths/symlinks/index.ts resolution scenarios.
+                        // Skip .json imports (handled by TS5070 resolveJsonModule+classic incompatibility).
+                        if (!moduleName.endsWith(".json")) {
+                            val resolved = if (isRelative) {
+                                // For relative specifiers, resolve strictly relative to the importing file's dir
+                                // (no fallback to global resolution that ignores directory context)
+                                resolveModuleSpecifierStrictRelative(moduleName, fileName)
+                            } else {
+                                resolveModuleSpecifier(moduleName, null)
+                            }
+                            if (resolved == null && moduleName !in ambientModuleNames && moduleName !in dtsFileBaseNames) {
+                                emitTS2307(specifier, moduleName, source, fileName)
+                            }
+                        }
                     }
-                    // Skip TS2307/TS2792 in multi-file — resolveModuleSpecifier is too
+                    // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs.
                 } else {
                     if (isSideEffectImport) {
