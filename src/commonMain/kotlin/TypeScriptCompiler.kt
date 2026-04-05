@@ -422,6 +422,27 @@ class TypeScriptCompiler {
                 code = 5053,
             ))
         }
+        if (options.noLib && options.lib.isNotEmpty()) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'lib' cannot be specified with option 'noLib'.",
+                category = DiagnosticCategory.Error,
+                code = 5053,
+            ))
+        }
+        // TS2318: Cannot find global type 'X' — fires when noLib is true
+        if (options.noLib) {
+            val missingGlobals = listOf(
+                "Array", "Boolean", "CallableFunction", "Function", "IArguments",
+                "NewableFunction", "Number", "Object", "RegExp", "String"
+            )
+            for (name in missingGlobals) {
+                diagnostics.add(Diagnostic(
+                    message = "Cannot find global type '$name'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2318,
+                ))
+            }
+        }
 
         // TS5095: moduleResolution=bundler with incompatible module
         if (options.moduleResolution?.lowercase() == "bundler") {
@@ -515,17 +536,27 @@ class TypeScriptCompiler {
             } else {
                 // No outFile — check per-file output conflicts
                 val outputToSources = mutableMapOf<String, MutableList<String>>()
+                val isJsxPreserveMode = options.jsx?.lowercase() == "preserve"
                 for (file in parsed.files) {
                     val fn = file.fileName
                     // Skip node_modules files — they are not emitted
                     if (fn.contains("node_modules")) continue
                     // Compute output JS path for compilable files
+                    // .js/.jsx/.mjs/.cjs inputs are only emitted when allowJs is true
                     val jsOutput = when {
                         fn.endsWith(".ts") && !fn.endsWith(".d.ts") -> fn.substringBeforeLast(".ts") + ".js"
                         fn.endsWith(".tsx") -> fn.substringBeforeLast(".tsx") + ".js"
                         fn.endsWith(".mts") -> fn.substringBeforeLast(".mts") + ".mjs"
                         fn.endsWith(".cts") -> fn.substringBeforeLast(".cts") + ".cjs"
-                        fn.endsWith(".js") || fn.endsWith(".jsx") || fn.endsWith(".mjs") || fn.endsWith(".cjs") -> fn
+                        // .js/.mjs/.cjs only emitted with allowJs
+                        fn.endsWith(".js") || fn.endsWith(".mjs") || fn.endsWith(".cjs") ->
+                            if (options.allowJs) fn else null
+                        // .jsx only emitted with allowJs; output is .jsx only if jsx=preserve, otherwise .js
+                        fn.endsWith(".jsx") ->
+                            if (options.allowJs) {
+                                if (isJsxPreserveMode) fn
+                                else fn.substringBeforeLast(".jsx") + ".js"
+                            } else null
                         else -> null
                     }
                     if (jsOutput != null) {
