@@ -1712,6 +1712,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val name = parsePropertyName()
                 val params = parseParameterList()
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+                // In type/interface context, accessor bodies are invalid (TS1183)
+                // Consume the body to prevent it leaking into outer statement list
+                if (token == SyntaxKind.OpenBrace) {
+                    val bodyStart = getPos()
+                    parseBlock()  // consume and discard the body
+                    val bodyEnd = scanner.getPrevTokenEnd()
+                    reportError("An implementation cannot be declared in ambient contexts.", 1183, bodyEnd - bodyStart, bodyStart)
+                }
                 return if (isGet) {
                     GetAccessor(
                         name = name,
