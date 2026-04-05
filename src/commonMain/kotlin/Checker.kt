@@ -31761,21 +31761,33 @@ class Checker(
                         }
                     }
                     is ImportDeclaration -> {
-                        // TS2440 fires for bindings that conflict with local var declarations that come
-                        // AFTER the import (import first, then var — see TypeScript's duplicate binding rules).
+                        // TS2440 fires for bindings that conflict with local var declarations.
+                        // Rule: fires when there's a var with the same name AFTER the import AND
+                        // NO var with the same name BEFORE the import (first occurrence determines the slot).
                         val clause = stmt.importClause ?: continue
                         val importPos = stmt.pos
+
+                        // Helper: check if name conflicts (var after import, no var before import)
+                        fun hasVarConflict(name: String): Boolean {
+                            val varBeforeImport = stmts.any { s ->
+                                s is VariableStatement && s.pos < importPos &&
+                                    s.declarationList.declarations.any { d ->
+                                        (d.name as? Identifier)?.text == name
+                                    }
+                            }
+                            if (varBeforeImport) return false
+                            return stmts.any { s ->
+                                s is VariableStatement && s.pos > importPos &&
+                                    s.declarationList.declarations.any { d ->
+                                        (d.name as? Identifier)?.text == name
+                                    }
+                            }
+                        }
+
                         // Default binding
                         val defaultName = clause.name?.text
                         if (defaultName != null && defaultName in varNames) {
-                            // Check if the var declaration comes AFTER this import
-                            val varAfterImport = stmts.any { s ->
-                                s is VariableStatement && s.pos > importPos &&
-                                    s.declarationList.declarations.any { d ->
-                                        (d.name as? Identifier)?.text == defaultName
-                                    }
-                            }
-                            if (varAfterImport) {
+                            if (hasVarConflict(defaultName)) {
                                 val (line, character) = getLineAndCharacterOfPosition(source, clause.name!!.pos)
                                 diagnostics.add(Diagnostic(
                                     message = "Import declaration conflicts with local declaration of '$defaultName'.",
@@ -31794,12 +31806,7 @@ class Checker(
                         if (nb is NamespaceImport) {
                             val nsName = nb.name.text
                             if (nsName in varNames) {
-                                val varAfterImport = stmts.any { s ->
-                                    s is VariableStatement && s.pos > importPos &&
-                                        s.declarationList.declarations.any { d ->
-                                            (d.name as? Identifier)?.text == nsName
-                                        }
-                                }
+                                val varAfterImport = hasVarConflict(nsName)
                                 if (varAfterImport) {
                                     val (line, character) = getLineAndCharacterOfPosition(source, nb.name.pos)
                                     diagnostics.add(Diagnostic(
@@ -31820,14 +31827,7 @@ class Checker(
                             for (element in nb.elements) {
                                 val localAlias = element.name.text
                                 if (localAlias in varNames) {
-                                    // Check if the var declaration comes AFTER this import
-                                    val varAfterImport = stmts.any { s ->
-                                        s is VariableStatement && s.pos > importPos &&
-                                            s.declarationList.declarations.any { d ->
-                                                (d.name as? Identifier)?.text == localAlias
-                                            }
-                                    }
-                                    if (varAfterImport) {
+                                    if (hasVarConflict(localAlias)) {
                                         // Position at the start of the element (propertyName if aliased, otherwise name)
                                         // Span covers the full element including "as" keyword: "x as y"
                                         val startNode = element.propertyName ?: element.name
