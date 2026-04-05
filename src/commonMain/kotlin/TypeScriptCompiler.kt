@@ -543,8 +543,13 @@ class TypeScriptCompiler {
                     if (fn.contains("node_modules")) continue
                     // Compute output JS path for compilable files
                     // .js/.jsx/.mjs/.cjs inputs are only emitted when allowJs is true
+                    // Check for declaration-only files: .d.ts, .d.mts, .d.cts, or *.d.*.ts (allowArbitraryExtensions)
+                    val isDeclFile = fn.endsWith(".d.ts") || fn.endsWith(".d.mts") || fn.endsWith(".d.cts") ||
+                        (fn.endsWith(".ts") && fn.substringBeforeLast(".ts").endsWith(".d.html") ||
+                         fn.endsWith(".ts") && fn.substringBeforeLast(".ts").contains(".d.") &&
+                         fn.substringBeforeLast(".ts").substringAfterLast(".d.").isNotEmpty())
                     val jsOutput = when {
-                        fn.endsWith(".ts") && !fn.endsWith(".d.ts") -> fn.substringBeforeLast(".ts") + ".js"
+                        fn.endsWith(".ts") && !isDeclFile -> fn.substringBeforeLast(".ts") + ".js"
                         fn.endsWith(".tsx") -> fn.substringBeforeLast(".tsx") + ".js"
                         fn.endsWith(".mts") -> fn.substringBeforeLast(".mts") + ".mjs"
                         fn.endsWith(".cts") -> fn.substringBeforeLast(".cts") + ".cjs"
@@ -806,7 +811,12 @@ class TypeScriptCompiler {
                     (!options.allowJs || file.content.isBlank())) {
                     continue
                 }
-                val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
+                val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts") ||
+                    // *.d.*.ts — declaration files with custom extensions (allowArbitraryExtensions)
+                    // e.g., foo.d.html.ts, foo.d.css.ts
+                    (file.fileName.endsWith(".ts") && !file.fileName.endsWith(".d.ts") &&
+                     file.fileName.contains(".d.") &&
+                     file.fileName.substringBeforeLast(".ts").substringAfterLast(".d.").isNotEmpty())
                 // .tsx files without --jsx: skip only if the file content is blank
                 // (TypeScript reports an error for JSX syntax without --jsx, but still emits non-JSX tsx content)
                 if (file.fileName.endsWith(".tsx") && options.jsx == null && file.content.isBlank()) {
