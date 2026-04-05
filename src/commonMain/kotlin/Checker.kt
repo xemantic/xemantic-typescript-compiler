@@ -29395,6 +29395,8 @@ class Checker(
     private fun getTypeFromTypeLiteral(node: TypeLiteral): Type {
         val members = mutableMapOf<String, Symbol>()
         val properties = mutableListOf<Symbol>()
+        val callSignatures = mutableListOf<Signature>()
+        val constructSignatures = mutableListOf<Signature>()
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> {
@@ -29413,16 +29415,12 @@ class Checker(
                     symbolTypes[sym.id] = propType
                 }
                 is MethodDeclaration -> {
-                    val name = when (val n = member.name) {
-                        is Identifier -> n.text
-                        is StringLiteralNode -> n.text
-                        else -> continue
+                    val nameNode = member.name
+                    val name = when (nameNode) {
+                        is Identifier -> nameNode.text
+                        is StringLiteralNode -> nameNode.text
+                        else -> ""
                     }
-                    val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
-                    sym.declarations.add(member)
-                    sym.valueDeclaration = member
-                    members[name] = sym
-                    properties.add(sym)
                     val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
                     val params = getParameterSymbols(member.parameters)
                     val sig = Signature(
@@ -29433,10 +29431,21 @@ class Checker(
                             !it.questionToken && !it.dotDotDotToken && it.initializer == null
                         },
                     )
-                    val methodType = Type.Object()
-                    methodType.callSignatures = listOf(sig)
-                    methodType.properties = emptyList()
-                    symbolTypes[sym.id] = methodType
+                    if (name.isEmpty()) {
+                        // Call signature: MethodDeclaration with empty name
+                        callSignatures.add(sig)
+                    } else {
+                        // Named method member
+                        val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                        sym.declarations.add(member)
+                        sym.valueDeclaration = member
+                        members[name] = sym
+                        properties.add(sym)
+                        val methodType = Type.Object()
+                        methodType.callSignatures = listOf(sig)
+                        methodType.properties = emptyList()
+                        symbolTypes[sym.id] = methodType
+                    }
                 }
                 else -> continue
             }
@@ -29444,6 +29453,8 @@ class Checker(
         val objType = Type.Object()
         objType.members = members
         objType.properties = properties
+        if (callSignatures.isNotEmpty()) objType.callSignatures = callSignatures
+        if (constructSignatures.isNotEmpty()) objType.constructSignatures = constructSignatures
         return objType
     }
 
