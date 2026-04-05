@@ -29393,8 +29393,57 @@ class Checker(
 
     /** Create an object type from a TypeLiteral node (e.g., `{ x: number; y: string }`). */
     private fun getTypeFromTypeLiteral(node: TypeLiteral): Type {
+        val members = mutableMapOf<String, Symbol>()
+        val properties = mutableListOf<Symbol>()
+        for (member in node.members) {
+            when (member) {
+                is PropertyDeclaration -> {
+                    val name = when (val n = member.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> continue
+                    }
+                    val propType = if (member.type != null) getTypeFromTypeNode(member.type!!) else anyType
+                    val sym = Symbol(SymbolFlags.Property, name)
+                    sym.declarations.add(member)
+                    sym.valueDeclaration = member
+                    members[name] = sym
+                    properties.add(sym)
+                    symbolTypes[sym.id] = propType
+                }
+                is MethodDeclaration -> {
+                    val name = when (val n = member.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> continue
+                    }
+                    val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                    sym.declarations.add(member)
+                    sym.valueDeclaration = member
+                    members[name] = sym
+                    properties.add(sym)
+                    val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                    val params = getParameterSymbols(member.parameters)
+                    val sig = Signature(
+                        declaration = member,
+                        parameters = params,
+                        resolvedReturnType = returnType,
+                        minArgumentCount = member.parameters.count {
+                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                        },
+                    )
+                    val methodType = Type.Object()
+                    methodType.callSignatures = listOf(sig)
+                    methodType.properties = emptyList()
+                    symbolTypes[sym.id] = methodType
+                }
+                else -> continue
+            }
+        }
         val objType = Type.Object()
-        // TODO: resolve members from node.members
+        objType.members = members
+        objType.properties = properties
         return objType
     }
 
