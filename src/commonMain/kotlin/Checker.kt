@@ -23276,7 +23276,10 @@ class Checker(
                     if (i == start) { depth++; i++ } // TypeLiteral `{}` — enter it
                     else break // start of body block
                 }
-                ch == '\n' || ch == '\r' -> break
+                ch == '\n' || ch == '\r' -> {
+                    if (depth > 0) i++ // inside delimiters: continue past newlines (multi-line types)
+                    else break
+                }
                 depth > 0 -> i++ // inside delimiters: consume everything
                 ch == ',' || ch == ';' -> break
                 ch == '=' -> {
