@@ -10526,10 +10526,10 @@ class Checker(
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         }
-                    } else if (isClassicResolution) {
+                    } else if (isClassicResolution && options.paths.isNullOrEmpty() && options.baseUrl == null) {
                         // For classic/AMD/System/UMD module resolution, emit TS2792 in multi-file
-                        // when the module can't be resolved. Node-based resolution is skipped to avoid FPs
-                        // from complex paths/symlinks/index.ts resolution scenarios.
+                        // when the module can't be resolved. Skip when paths/baseUrl are configured
+                        // since those require complex path remapping that our simple resolver can't handle.
                         // Skip .json imports (handled by TS5070 resolveJsonModule+classic incompatibility).
                         if (!moduleName.endsWith(".json")) {
                             val resolved = if (isRelative) {
