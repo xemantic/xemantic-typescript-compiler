@@ -9293,6 +9293,20 @@ class Checker(
                     val name = stmt.name
                     decls.add(DeclInfo(name.text, "import=", name))
                 }
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: continue
+                    // Default binding: import X from "..."
+                    clause.name?.let { decls.add(DeclInfo(it.text, "import", it)) }
+                    // Named bindings
+                    val nb = clause.namedBindings
+                    when (nb) {
+                        is NamespaceImport -> decls.add(DeclInfo(nb.name.text, "import", nb.name))
+                        is NamedImports -> for (element in nb.elements) {
+                            decls.add(DeclInfo(element.name.text, "import", element.name))
+                        }
+                        else -> {}
+                    }
+                }
                 // Collect hoisted var declarations from for-loop initializers.
                 // var is function-scoped, so `for (var x; ;)` creates a declaration at this level.
                 is ForStatement -> {
@@ -9366,6 +9380,15 @@ class Checker(
             val importEqCount = group.count { it.kind == "import=" }
             if (hasImportEq && importEqCount >= 2) {
                 for (decl in group.filter { it.kind == "import=" }) {
+                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+
+            // Check for duplicate import bindings (import X + import X → TS2300 on both)
+            // Allowed: import + interface (value+type merge OK)
+            val importCount = group.count { it.kind == "import" }
+            if (importCount >= 2) {
+                for (decl in group.filter { it.kind == "import" }) {
                     emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
                 }
             }
@@ -31738,23 +31761,72 @@ class Checker(
                         }
                     }
                     is ImportDeclaration -> {
-                        // TS2440 fires for default bindings that conflict with local vars,
-                        // but NOT for named specifiers { x } in external module imports.
+                        // TS2440 fires for bindings that conflict with local var declarations that come
+                        // AFTER the import (import first, then var — see TypeScript's duplicate binding rules).
                         val clause = stmt.importClause ?: continue
+                        val importPos = stmt.pos
+                        // Default binding
                         val defaultName = clause.name?.text
                         if (defaultName != null && defaultName in varNames) {
-                            // Default binding conflicts with a local var declaration
-                            val (line, character) = getLineAndCharacterOfPosition(source, clause.name!!.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Import declaration conflicts with local declaration of '$defaultName'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2440,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = clause.name!!.pos,
-                                length = defaultName.length,
-                            ))
+                            // Check if the var declaration comes AFTER this import
+                            val varAfterImport = stmts.any { s ->
+                                s is VariableStatement && s.pos > importPos &&
+                                    s.declarationList.declarations.any { d ->
+                                        (d.name as? Identifier)?.text == defaultName
+                                    }
+                            }
+                            if (varAfterImport) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, clause.name!!.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Import declaration conflicts with local declaration of '$defaultName'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2440,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = clause.name!!.pos,
+                                    length = defaultName.length,
+                                ))
+                            }
+                        }
+                        // Named specifiers: import { x } or { x as localAlias }
+                        val nb = clause.namedBindings
+                        if (nb is NamedImports) {
+                            for (element in nb.elements) {
+                                val localAlias = element.name.text
+                                if (localAlias in varNames) {
+                                    // Check if the var declaration comes AFTER this import
+                                    val varAfterImport = stmts.any { s ->
+                                        s is VariableStatement && s.pos > importPos &&
+                                            s.declarationList.declarations.any { d ->
+                                                (d.name as? Identifier)?.text == localAlias
+                                            }
+                                    }
+                                    if (varAfterImport) {
+                                        // Position at the start of the element (propertyName if aliased, otherwise name)
+                                        // Span covers the full element including "as" keyword: "x as y"
+                                        val startNode = element.propertyName ?: element.name
+                                        val startPos = startNode.pos
+                                        val spanLen = if (element.propertyName != null) {
+                                            // "x as y" — from property name start to alias name end
+                                            element.name.pos + element.name.text.length - startPos
+                                        } else {
+                                            localAlias.length
+                                        }
+                                        val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                                        diagnostics.add(Diagnostic(
+                                            message = "Import declaration conflicts with local declaration of '$localAlias'.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2440,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = startPos,
+                                            length = spanLen,
+                                        ))
+                                    }
+                                }
+                            }
                         }
                     }
                     else -> {}
