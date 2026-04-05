@@ -16401,16 +16401,26 @@ class Checker(
     }
 
     /** Check if a property access targets a readonly property. */
-    private fun isReadonlyPropertyAccess(expr: PropertyAccessExpression): Boolean {
+    private fun isReadonlyPropertyAccess(expr: PropertyAccessExpression, fileName: String? = null): Boolean {
         val objExpr = expr.expression
         val propName = expr.name.text
-        // Check namespace/module exports for const variables
+        // Check namespace/module exports for const variables, and enum member access
         if (objExpr is Identifier) {
-            val objSymbol = globals[objExpr.text]
-            if (objSymbol != null && objSymbol.flags.hasAny(SymbolFlags.Module)) {
-                val exportSymbol = objSymbol.exports?.get(propName)
-                if (exportSymbol != null && isConstExport(objSymbol, propName)) {
-                    return true
+            val objName = objExpr.text
+            val objSymbol = globals[objName] ?: (if (fileName != null) fileResults[fileName]?.locals?.get(objName) else null)
+            if (objSymbol != null) {
+                if (objSymbol.flags.hasAny(SymbolFlags.Module)) {
+                    val exportSymbol = objSymbol.exports?.get(propName)
+                    if (exportSymbol != null && isConstExport(objSymbol, propName)) {
+                        return true
+                    }
+                }
+                // Enum members are always readonly (TS2540)
+                if (objSymbol.flags.hasAny(SymbolFlags.Enum)) {
+                    val exportSymbol = objSymbol.exports?.get(propName)
+                    if (exportSymbol != null && exportSymbol.flags.hasAny(SymbolFlags.EnumMember)) {
+                        return true
+                    }
                 }
             }
         }
@@ -16479,7 +16489,7 @@ class Checker(
         val unwrapped = unwrapParens(target)
         when (unwrapped) {
             is PropertyAccessExpression -> {
-                if (isReadonlyPropertyAccess(unwrapped)) {
+                if (isReadonlyPropertyAccess(unwrapped, fileName)) {
                     emitTS2540(unwrapped.name.text, unwrapped.name.pos, unwrapped.name.text.length, source, fileName)
                 }
             }
