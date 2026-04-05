@@ -401,6 +401,8 @@ class Checker(
         }
         // 62. Check block-scoped declarations outside blocks (TS1156)
         checkBlockScopedDeclarationsInSingleBody()
+        // 62b. Check var shadowing outer block-scoped name (TS2481)
+        checkOuterScopeVarShadowing()
         // 63. Check class member initializers referencing constructor params/vars (TS2301)
         checkConstructorParamInInitializers()
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
@@ -23873,6 +23875,262 @@ class Checker(
     // -----------------------------------------------------------------------
     // TS1156 — block-scoped declarations outside blocks
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // TS2481: var shadowing outer block-scoped name
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS2481: "Cannot initialize outer scoped variable 'x' in the same scope as block scoped declaration 'x'."
+     * Fires when a `var` in an inner scope has the same name as a `let`/`const` in an outer block scope
+     * within the same function.
+     */
+    private fun checkOuterScopeVarShadowing() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Walk file-level statements with empty outer scope chain
+            walkBodyForVarShadowing(result.sourceFile.statements, source, fileName, mutableListOf())
+        }
+    }
+
+    /**
+     * Walk a function body (or file-level statements) looking for `var` declarations
+     * that shadow outer `let`/`const` names.
+     * [outerScopes]: list of sets of let/const names in each outer block scope
+     */
+    private fun walkBodyForVarShadowing(
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+        outerScopes: MutableList<MutableSet<String>>
+    ) {
+        // Collect the let/const names at THIS block level first (for forward references)
+        val currentScope = mutableSetOf<String>()
+        collectLetConstNamesInStmts(stmts, currentScope)
+        outerScopes.add(currentScope)
+        // Now walk each statement
+        for (stmt in stmts) {
+            walkStmtForVarShadowing(stmt, source, fileName, outerScopes)
+        }
+        outerScopes.removeAt(outerScopes.lastIndex)
+    }
+
+    /**
+     * Collect all let/const names declared directly in these statements (not recursing into nested blocks).
+     */
+    private fun collectLetConstNamesInStmts(stmts: List<Statement>, out: MutableSet<String>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    val kind = stmt.declarationList.flags
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in stmt.declarationList.declarations) {
+                            collectVarBindingNames(d.name, out)
+                        }
+                    }
+                }
+                else -> {} // Other statements don't add block-scoped names at this level
+            }
+        }
+    }
+
+    /** Collect identifier names from a binding pattern (Expression that is Identifier/ObjectBinding/ArrayBinding). */
+    private fun collectVarBindingNames(binding: Expression, out: MutableSet<String>) {
+        when (binding) {
+            is Identifier -> out.add(binding.text)
+            is ObjectBindingPattern -> for (el in binding.elements) {
+                if (el is BindingElement) collectVarBindingNames(el.name, out)
+            }
+            is ArrayBindingPattern -> for (el in binding.elements) {
+                if (el is BindingElement) collectVarBindingNames(el.name, out)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkStmtForVarShadowing(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        outerScopes: MutableList<MutableSet<String>>
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                val kind = stmt.declarationList.flags
+                if (kind != SyntaxKind.LetKeyword && kind != SyntaxKind.ConstKeyword) {
+                    // var declaration — check each name against outer scopes
+                    for (d in stmt.declarationList.declarations) {
+                        checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                    }
+                }
+            }
+            is ForStatement -> {
+                // Check for-init var/let/const declarations
+                val init = stmt.initializer
+                val loopScope = mutableSetOf<String>()
+                if (init is VariableDeclarationList) {
+                    val kind = init.flags
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        // for (let v; ...) — v is block-scoped to the for loop (add to loop scope)
+                        for (d in init.declarations) collectVarBindingNames(d.name, loopScope)
+                    } else {
+                        // for (var v = 0; ...) — check for shadowing
+                        for (d in init.declarations) {
+                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                        }
+                    }
+                }
+                // The body executes within the loop scope (includes for-let variables)
+                outerScopes.add(loopScope)
+                val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
+                for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes)
+                outerScopes.removeAt(outerScopes.lastIndex)
+            }
+            is ForInStatement -> {
+                // for (let/const x in ...) or for (var x in ...)
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    val kind = init.flags
+                    val loopScope = mutableSetOf<String>()
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in init.declarations) collectVarBindingNames(d.name, loopScope)
+                    } else {
+                        // var: check for shadowing
+                        for (d in init.declarations) {
+                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                        }
+                    }
+                    // Push the loop scope (for let vars) before walking body
+                    outerScopes.add(loopScope)
+                    val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
+                    for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes)
+                    outerScopes.removeAt(outerScopes.lastIndex)
+                }
+            }
+            is ForOfStatement -> {
+                // for (let/const x of ...) or for (var x of ...)
+                val init = stmt.initializer
+                if (init is VariableDeclarationList) {
+                    val kind = init.flags
+                    val loopScope = mutableSetOf<String>()
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in init.declarations) collectVarBindingNames(d.name, loopScope)
+                    } else {
+                        // var: check for shadowing
+                        for (d in init.declarations) {
+                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                        }
+                    }
+                    // Push loop scope before walking body
+                    outerScopes.add(loopScope)
+                    val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
+                    for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes)
+                    outerScopes.removeAt(outerScopes.lastIndex)
+                }
+            }
+            is Block -> walkBodyForVarShadowing(stmt.statements, source, fileName, outerScopes)
+            is IfStatement -> {
+                // Walk both branches as inner block scopes (even if no braces)
+                val thenStmts = if (stmt.thenStatement is Block) (stmt.thenStatement as Block).statements else listOf(stmt.thenStatement)
+                walkBodyForVarShadowing(thenStmts, source, fileName, outerScopes)
+                val elseStmt = stmt.elseStatement
+                if (elseStmt != null) {
+                    val elseStmts = if (elseStmt is Block) (elseStmt as Block).statements else listOf(elseStmt)
+                    walkBodyForVarShadowing(elseStmts, source, fileName, outerScopes)
+                }
+            }
+            is WhileStatement -> {
+                val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
+                walkBodyForVarShadowing(bodyStmts, source, fileName, outerScopes)
+            }
+            is DoStatement -> {
+                val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
+                walkBodyForVarShadowing(bodyStmts, source, fileName, outerScopes)
+            }
+            is TryStatement -> {
+                walkBodyForVarShadowing(stmt.tryBlock.statements, source, fileName, outerScopes)
+                stmt.catchClause?.let { walkBodyForVarShadowing(it.block.statements, source, fileName, outerScopes) }
+                stmt.finallyBlock?.let { walkBodyForVarShadowing(it.statements, source, fileName, outerScopes) }
+            }
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    // Switch clauses share one scope (they don't get separate scopes)
+                    for (s in clauseStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes)
+                }
+            }
+            is LabeledStatement -> walkStmtForVarShadowing(stmt.statement, source, fileName, outerScopes)
+            // Function/class declarations start fresh function scopes — don't recurse with current chain
+            is FunctionDeclaration -> {
+                stmt.body?.let { walkBodyForVarShadowing(it.statements, source, fileName, mutableListOf()) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is Constructor -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        else -> null
+                    }
+                    body?.let { walkBodyForVarShadowing(it.statements, source, fileName, mutableListOf()) }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) walkBodyForVarShadowing(body.statements, source, fileName, mutableListOf())
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check a var binding expression against the current outer scopes for TS2481.
+     * Emits TS2481 if the name exists in any outer block scope.
+     */
+    private fun checkVarDeclForShadowing(
+        binding: Expression,
+        source: String,
+        fileName: String,
+        outerScopes: MutableList<MutableSet<String>>
+    ) {
+        when (binding) {
+            is Identifier -> {
+                val name = binding.text
+                // Check all scopes — does any scope in outerScopes contain 'name'?
+                for (scope in outerScopes) {
+                    if (name in scope) {
+                        val start = binding.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot initialize outer scoped variable '$name' in the same scope as block scoped declaration '$name'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2481,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = name.length,
+                        ))
+                        break
+                    }
+                }
+            }
+            is ObjectBindingPattern -> for (el in binding.elements) {
+                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes)
+            }
+            is ArrayBindingPattern -> for (el in binding.elements) {
+                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes)
+            }
+            else -> {}
+        }
+    }
 
     /**
      * TS1156: `const`/`let`/`type`/`interface` declarations can only be
