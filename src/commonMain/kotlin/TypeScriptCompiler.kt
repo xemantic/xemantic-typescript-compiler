@@ -430,6 +430,14 @@ class TypeScriptCompiler {
                 code = 6379,
             ))
         }
+        // TS5074: incremental without outFile/tsBuildInfoFile (in non-tsconfig context)
+        if (options.incremental == true && options.outFile == null && !options.composite) {
+            diagnostics.add(Diagnostic(
+                message = "Option '--incremental' can only be specified using tsconfig, emitting to single file or when option '--tsBuildInfoFile' is specified.",
+                category = DiagnosticCategory.Error,
+                code = 5074,
+            ))
+        }
         // TS5053: option conflicts
         if (options.inlineSourceMap) {
             if (options.mapRoot != null) {
