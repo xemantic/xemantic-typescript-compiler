@@ -2532,6 +2532,17 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 else -> break@loop
             }
             if (mod in mods) break@loop  // duplicate modifier — second occurrence is actually the member name
+            // Access modifiers are mutually exclusive: public/private/protected cannot combine.
+            // If we already have an access modifier and see another, break — second is the member name.
+            val isAccessModifier = mod == ModifierFlag.Public || mod == ModifierFlag.Private || mod == ModifierFlag.Protected
+            val hasAccessModifier = ModifierFlag.Public in mods || ModifierFlag.Private in mods || ModifierFlag.Protected in mods
+            if (isAccessModifier && hasAccessModifier) break@loop
+            // Don't consume an access modifier if the next token (after it) is '}' or EOF —
+            // in that case the modifier keyword is being used as a standalone property name.
+            if (isAccessModifier) {
+                val nextToken = lookAhead { scanner.scan(); scanner.getToken() }
+                if (nextToken == SyntaxKind.CloseBrace || nextToken == SyntaxKind.EndOfFile) break@loop
+            }
             mods.add(mod)
             nextToken()
         }
