@@ -1400,6 +1400,21 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val decorators = parseDecorators()
         val modifiers = parseModifiers()
 
+        // TS1434: 'static' keyword appearing as a class member name is unexpected.
+        // This happens when 'static' appears twice: `static static foo` or `public static static foo`.
+        // After parseModifiers(), if token is still StaticKeyword, the 2nd 'static' is used as name.
+        // Only fire if the NEXT token after the 2nd 'static' is on the SAME LINE (no line break),
+        // which indicates the 2nd 'static' is part of a member declaration (not standalone).
+        if (token == SyntaxKind.StaticKeyword) {
+            val nextHasLineBreak = lookAhead {
+                scanner.scan() // skip the second 'static'
+                scanner.hasPrecedingLineBreak()
+            }
+            if (!nextHasLineBreak) {
+                reportError("Unexpected keyword or identifier.", code = 1434, overrideLength = "static".length)
+            }
+        }
+
         if (token == SyntaxKind.ConstructorKeyword ||
             (isIdentifier() && scanner.getTokenValue() == "constructor")
         ) {

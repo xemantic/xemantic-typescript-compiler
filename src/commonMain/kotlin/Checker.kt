@@ -18685,18 +18685,24 @@ class Checker(
                     source.substring(pos, pos + kw.length) == kw &&
                     (pos + kw.length >= source.length || !source[pos + kw.length].isLetterOrDigit())) {
                     if (kw in seen) {
-                        // Duplicate modifier
-                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                        diagnostics.add(Diagnostic(
-                            message = "'$kw' modifier already seen.",
-                            category = DiagnosticCategory.Error,
-                            code = 1030,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = pos,
-                            length = kw.length,
-                        ))
+                        // TS1030 is suppressed for 'static' as member name:
+                        // When 'static' appears twice (e.g., `static static foo` or `public static static bar()`),
+                        // the second 'static' is used as the member name. TypeScript emits TS1434 at that
+                        // position instead of TS1030, so we skip TS1030 for 'static' duplicates.
+                        if (kw != "static") {
+                            // Duplicate modifier
+                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                            diagnostics.add(Diagnostic(
+                                message = "'$kw' modifier already seen.",
+                                category = DiagnosticCategory.Error,
+                                code = 1030,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = pos,
+                                length = kw.length,
+                            ))
+                        }
                     }
                     // Check ordering: visibility modifiers must precede static
                     if ((kw == "public" || kw == "private" || kw == "protected") && "static" in seen) {
