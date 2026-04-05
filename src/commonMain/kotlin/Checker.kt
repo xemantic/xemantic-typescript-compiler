@@ -12439,6 +12439,8 @@ class Checker(
             "infer", "keyof", "unique", "asserts", "satisfies", "out",
             // JS strict mode reserved words
             "package",
+            // ECMAScript resource management
+            "using",
         )
 
         /**
