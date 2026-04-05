@@ -21416,17 +21416,17 @@ class Checker(
             val source = result.sourceFile.text
             // Strict mode: fires when alwaysStrict is not explicitly false
             val isStrict = options.alwaysStrict != false
-            walkForWithStatements(result.sourceFile.statements, source, fileName, isStrict)
+            walkForWithStatements(result.sourceFile.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
         }
     }
 
-    private fun walkForWithStatements(stmts: List<Statement>, source: String, fileName: String, isStrict: Boolean) {
+    private fun walkForWithStatements(stmts: List<Statement>, source: String, fileName: String, isStrict: Boolean, isInAsync: Boolean, isInWith: Boolean) {
         for (stmt in stmts) {
-            walkStmtForWithStatements(stmt, source, fileName, isStrict)
+            walkStmtForWithStatements(stmt, source, fileName, isStrict, isInAsync, isInWith)
         }
     }
 
-    private fun walkStmtForWithStatements(stmt: Statement, source: String, fileName: String, isStrict: Boolean) {
+    private fun walkStmtForWithStatements(stmt: Statement, source: String, fileName: String, isStrict: Boolean, isInAsync: Boolean, isInWith: Boolean) {
         when (stmt) {
             is WithStatement -> {
                 var spanStart = stmt.pos
@@ -21445,49 +21445,65 @@ class Checker(
                         length = 4, // "with".length
                     ))
                 }
-                // TS2410: span = from 'with' to closing ')' of the condition.
-                // Find the matching ')' by scanning forward from 'with ' and tracking depth.
-                // Only emit TS2410 if the with statement is well-formed (balanced parens).
-                var spanEnd2 = spanStart + 4 // skip 'with'
-                while (spanEnd2 < source.length && source[spanEnd2] != '(') spanEnd2++
-                var depth = 0
-                var balanced = false
-                while (spanEnd2 < source.length) {
-                    when (source[spanEnd2]) {
-                        '(' -> { depth++; spanEnd2++ }
-                        ')' -> {
-                            spanEnd2++ // include the ')'
-                            if (--depth == 0) { balanced = true; break }
+                // Only emit TS1300 and TS2410 for the outermost 'with' in a chain (not nested withs).
+                if (!isInWith) {
+                    if (isInAsync) {
+                        // TS1300: 'with' not allowed in async function block
+                        diagnostics.add(Diagnostic(
+                            message = "'with' statements are not allowed in an async function block.",
+                            category = DiagnosticCategory.Error,
+                            code = 1300,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = spanStart,
+                            length = 4,
+                        ))
+                    }
+                    // TS2410: span = from 'with' to closing ')' of the condition.
+                    // Find the matching ')' by scanning forward from 'with ' and tracking depth.
+                    // Only emit TS2410 if the with statement is well-formed (balanced parens).
+                    var spanEnd2 = spanStart + 4 // skip 'with'
+                    while (spanEnd2 < source.length && source[spanEnd2] != '(') spanEnd2++
+                    var depth = 0
+                    var balanced = false
+                    while (spanEnd2 < source.length) {
+                        when (source[spanEnd2]) {
+                            '(' -> { depth++; spanEnd2++ }
+                            ')' -> {
+                                spanEnd2++ // include the ')'
+                                if (--depth == 0) { balanced = true; break }
+                            }
+                            else -> spanEnd2++
                         }
-                        else -> spanEnd2++
+                    }
+                    if (balanced) {
+                        val ts2410Length = spanEnd2 - spanStart
+                        diagnostics.add(Diagnostic(
+                            message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2410,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = spanStart,
+                            length = ts2410Length,
+                        ))
                     }
                 }
-                if (balanced) {
-                    val ts2410Length = spanEnd2 - spanStart
-                    diagnostics.add(Diagnostic(
-                        message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2410,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = spanStart,
-                        length = ts2410Length,
-                    ))
-                }
-                // Recurse into the body statement
-                walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+                // Recurse into the body statement — now inside a with, TS2410 and TS1300 suppressed
+                walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith = true)
             }
-            is Block -> walkForWithStatements(stmt.statements, source, fileName, isStrict)
+            is Block -> walkForWithStatements(stmt.statements, source, fileName, isStrict, isInAsync, isInWith)
             is IfStatement -> {
-                walkStmtForWithStatements(stmt.thenStatement, source, fileName, isStrict)
-                stmt.elseStatement?.let { walkStmtForWithStatements(it, source, fileName, isStrict) }
+                walkStmtForWithStatements(stmt.thenStatement, source, fileName, isStrict, isInAsync, isInWith)
+                stmt.elseStatement?.let { walkStmtForWithStatements(it, source, fileName, isStrict, isInAsync, isInWith) }
             }
-            is ForStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
-            is ForInStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
-            is ForOfStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
-            is WhileStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
-            is DoStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
+            is ForStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
+            is ForInStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
+            is ForOfStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
+            is WhileStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
+            is DoStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
             is SwitchStatement -> {
                 for (clause in stmt.caseBlock) {
                     val stmts2 = when (clause) {
@@ -21495,21 +21511,23 @@ class Checker(
                         is DefaultClause -> clause.statements
                         else -> emptyList()
                     }
-                    walkForWithStatements(stmts2, source, fileName, isStrict)
+                    walkForWithStatements(stmts2, source, fileName, isStrict, isInAsync, isInWith)
                 }
             }
             is TryStatement -> {
-                walkForWithStatements(stmt.tryBlock.statements, source, fileName, isStrict)
-                stmt.catchClause?.block?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
-                stmt.finallyBlock?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                walkForWithStatements(stmt.tryBlock.statements, source, fileName, isStrict, isInAsync, isInWith)
+                stmt.catchClause?.block?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync, isInWith) }
+                stmt.finallyBlock?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync, isInWith) }
             }
-            is LabeledStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict)
-            // Function bodies: recurse (with becomes valid JS-wise inside them, but TS still checks)
+            is LabeledStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
+            // Function bodies: recurse, tracking async context, resetting isInWith
             is FunctionDeclaration -> {
-                stmt.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                val fnIsAsync = ModifierFlag.Async in stmt.modifiers
+                stmt.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = fnIsAsync, isInWith = false) }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
+                    val memberIsAsync = member is MethodDeclaration && ModifierFlag.Async in member.modifiers
                     val body = when (member) {
                         is MethodDeclaration -> member.body
                         is Constructor -> member.body
@@ -21517,34 +21535,36 @@ class Checker(
                         is SetAccessor -> member.body
                         else -> null
                     }
-                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = memberIsAsync, isInWith = false) }
                 }
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
-                if (body is ModuleBlock) walkForWithStatements(body.statements, source, fileName, isStrict)
+                if (body is ModuleBlock) walkForWithStatements(body.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
             }
-            is ExpressionStatement -> walkExprForWithStatements(stmt.expression, source, fileName, isStrict)
+            is ExpressionStatement -> walkExprForWithStatements(stmt.expression, source, fileName, isStrict, isInWith)
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { walkExprForWithStatements(it, source, fileName, isStrict) }
+                    decl.initializer?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
                 }
             }
             else -> {}
         }
     }
 
-    private fun walkExprForWithStatements(expr: Expression, source: String, fileName: String, isStrict: Boolean) {
+    private fun walkExprForWithStatements(expr: Expression, source: String, fileName: String, isStrict: Boolean, isInWith: Boolean) {
         when (expr) {
             is FunctionExpression -> {
-                walkForWithStatements(expr.body.statements, source, fileName, isStrict)
+                val fnIsAsync = ModifierFlag.Async in expr.modifiers
+                walkForWithStatements(expr.body.statements, source, fileName, isStrict, isInAsync = fnIsAsync, isInWith = false)
             }
             is ArrowFunction -> {
                 val body = expr.body
-                if (body is Block) walkForWithStatements(body.statements, source, fileName, isStrict)
+                if (body is Block) walkForWithStatements(body.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
             }
             is ClassExpression -> {
                 for (member in expr.members) {
+                    val memberIsAsync = member is MethodDeclaration && ModifierFlag.Async in member.modifiers
                     val body = when (member) {
                         is MethodDeclaration -> member.body
                         is Constructor -> member.body
@@ -21552,7 +21572,7 @@ class Checker(
                         is SetAccessor -> member.body
                         else -> null
                     }
-                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict) }
+                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = memberIsAsync, isInWith = false) }
                 }
             }
             else -> {}
