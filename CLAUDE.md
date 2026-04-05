@@ -200,7 +200,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 4: Structural type checker.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,632 / 10,077 tests passing (~75.7%). Current work: replace string-based type representation with Type sealed class hierarchy, implement structural typing engine (TS2322/TS2339/TS2345), prepare for parallel checking via Kotlin coroutines (inspired by tsgo's N-checker goroutine model).
+**Phase 4: Structural type checker.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,967 / 10,077 tests passing (~79.1%). Current work: replace string-based type representation with Type sealed class hierarchy, implement structural typing engine (TS2322/TS2339/TS2345), prepare for parallel checking via Kotlin coroutines (inspired by tsgo's N-checker goroutine model).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
