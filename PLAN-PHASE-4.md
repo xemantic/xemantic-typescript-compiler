@@ -1254,7 +1254,7 @@ relaxes guards and activates features to harvest test gains.
   **Estimated gain:** ~40-80 tests (conservative — many need multiple fixes)
   **File:** `Checker.kt` — `checkSinglePropertyAccess`, `checkPropertyAccess`
 
-- [ ] **8.1. Relax canUseTypeEngine guards incrementally**
+- [x] **8.1. Relax canUseTypeEngine guards incrementally** (8.1a+b done, 8.1c+d cause regressions — deferred)
 
   **Problem:** `canUseTypeEngine` has 6 blocking conditions added as FP guards during
   Phase 5-7. With Phase 7's cycle detection and structural comparison in place, several
