@@ -24728,6 +24728,14 @@ class Checker(
         // Function→function: both sides have call signatures
         if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
             targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) return true
+        // Tuple targets: only safe when source is clearly incompatible (function/primitive)
+        // Array→tuple needs contextual typing (not yet implemented) so skip those
+        if (targetType is Type.Object && targetType.tupleElementTypes != null) {
+            if (sourceIsPrimitive) return true
+            if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty()) return true
+        }
+        // Tuple sources: safe to compare against primitive targets
+        if (sourceType is Type.Object && sourceType.tupleElementTypes != null && targetIsPrimitive) return true
         // TypeParam targets (for generic constraint checking)
         if (sourceIsPrimitive && targetType is Type.TypeParam) return true
         return false
@@ -26273,6 +26281,11 @@ class Checker(
                 }
             }
             is Type.Object -> {
+                // Tuple type: display as [T1, T2, ...]
+                val tupleElems = type.tupleElementTypes
+                if (tupleElems != null) {
+                    return "[${tupleElems.joinToString(", ") { typeToString(it) }}]"
+                }
                 val callSigs = type.callSignatures
                 val ctorSigs = type.constructSignatures
                 // Function type: show signatures
@@ -30585,8 +30598,45 @@ class Checker(
 
     /** Create a tuple type from a TupleType node. */
     private fun getTupleType(node: TupleType): Type {
-        // TODO: proper tuple type
-        return Type.Object()
+        val elementTypes = node.elements.map { elem ->
+            when (elem) {
+                is NamedTupleMember -> getTypeFromTypeNode(elem.type)
+                is OptionalType -> getTypeFromTypeNode(elem.type)
+                is RestType -> getTypeFromTypeNode(elem.type)
+                else -> getTypeFromTypeNode(elem)
+            }
+        }
+        val tupleObj = Type.Object()
+        tupleObj.tupleElementTypes = elementTypes
+        // Create numbered property symbols: "0", "1", "2", ...
+        val props = mutableListOf<Symbol>()
+        val members = symbolTable()
+        for ((i, elemType) in elementTypes.withIndex()) {
+            val propSymbol = Symbol(
+                flags = SymbolFlags.Property,
+                name = i.toString(),
+            )
+            symbolTypes[propSymbol.id] = elemType
+            props.add(propSymbol)
+            members[propSymbol.name] = propSymbol
+        }
+        // Add readonly "length" property with literal type
+        val lengthSymbol = Symbol(
+            flags = SymbolFlags.Property,
+            name = "length",
+        )
+        symbolTypes[lengthSymbol.id] = Type.NumberLiteral(elementTypes.size.toDouble())
+        props.add(lengthSymbol)
+        members["length"] = lengthSymbol
+        tupleObj.properties = props
+        tupleObj.members = members
+        // Tuple has a number index signature for element access
+        if (elementTypes.isNotEmpty()) {
+            val elementUnion = if (elementTypes.size == 1) elementTypes[0]
+                else getUnionType(elementTypes)
+            tupleObj.numberIndexInfo = IndexInfo(keyType = numberType, type = elementUnion)
+        }
+        return tupleObj
     }
 
     /** Create a Type from a literal type node (e.g., `type X = "hello"` or `type Y = 42`). */
