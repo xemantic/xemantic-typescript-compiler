@@ -1327,7 +1327,7 @@ relaxes guards and activates features to harvest test gains.
   **Estimated gain:** ~20-40 tests
   **File:** `Checker.kt` — `checkArithmeticOperandTypes`
 
-- [ ] **8.5. Enable TS2322 for more assignment patterns**
+- [x] **8.5. Enable TS2322 for more assignment patterns** (partial: fixed duplicate elaboration for element access/type assertions, +2 tests)
 
   **Problem:** The TS2322 checker only fires in specific AST patterns (variable declarations,
   return statements, assignment expressions). Missing patterns include:

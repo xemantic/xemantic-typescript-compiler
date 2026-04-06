@@ -25388,7 +25388,9 @@ class Checker(
                     val needsElaboration = !isSimpleLiteral(init) &&
                         init !is CallExpression && init !is NewExpression &&
                         init !is DeleteExpression && init !is AwaitExpression &&
-                        init !is BinaryExpression && init !is ParenthesizedExpression
+                        init !is BinaryExpression && init !is ParenthesizedExpression &&
+                        init !is ElementAccessExpression && init !is AsExpression &&
+                        init !is TypeAssertionExpression
                     if (needsElaboration) chain.add("  $message")
                     if (targetType is Type.TypeParam) {
                         val targetName = targetType.symbol?.name ?: "T"
