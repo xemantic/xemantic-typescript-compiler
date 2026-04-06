@@ -24837,8 +24837,13 @@ class Checker(
         if (sourceIsPrimitive && targetType is Type.Object && targetType.symbol != null) return true
         // Object↔Object structural comparison — safe with recursive cycle detection (7.0).
         if (sourceType is Type.Object && targetType is Type.Object) {
-            // Skip array types (getArrayType returns anyType → empty Object, causes FPs)
-            if (isArrayLikeType(sourceType) || isArrayLikeType(targetType)) return false
+            // Skip array types when both are arrays (getArrayType returns anyType → empty Object)
+            // Allow array→non-array (always fails) and non-array→array (always fails)
+            val sourceIsArray = isArrayLikeType(sourceType)
+            val targetIsArray = isArrayLikeType(targetType)
+            if (sourceIsArray && targetIsArray) return false
+            // Array→tuple needs contextual typing — skip
+            if (sourceIsArray && targetType.tupleElementTypes != null) return false
             // Skip types with unresolved type parameters (incomplete generic instantiation)
             if (hasUnresolvedTypeParams(sourceType) || hasUnresolvedTypeParams(targetType)) return false
             resolveStructuredTypeMembers(sourceType)
@@ -24846,9 +24851,13 @@ class Checker(
             // Skip class-instance vs constructor-type comparison (typeof C / new() => T)
             if (sourceType.constructSignatures.isNullOrEmpty() && !targetType.constructSignatures.isNullOrEmpty()) return false
             if (!sourceType.constructSignatures.isNullOrEmpty() && targetType.constructSignatures.isNullOrEmpty()) return false
-            // Skip when source is an empty object literal (no members) — {} is assignable to most types
+            // Empty source object {} — only skip if target also has no required properties
+            // (empty→non-empty should fail, empty→empty is trivially assignable)
             if (sourceType.symbol == null && sourceType.properties.isNullOrEmpty() &&
-                sourceType.callSignatures.isNullOrEmpty() && sourceType.constructSignatures.isNullOrEmpty()) return false
+                sourceType.callSignatures.isNullOrEmpty() && sourceType.constructSignatures.isNullOrEmpty()) {
+                if (targetType.properties.isNullOrEmpty()) return false
+                // Target has properties — let the comparison through (will correctly fail)
+            }
             // Skip when target has malformed members (empty name) from unresolved mapped types
             val targetProps = targetType.properties
             if (targetProps != null && targetProps.any { it.name.isEmpty() }) return false
