@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-06):** 7,981 / 10,077 tests passing (79.2%). Phase 7 COMPLETE.
+**Status (2026-04-06):** 7,981 / 10,077 tests passing (79.2%). Active queue: Phase 8.
 
 ## Goal
 
@@ -1221,6 +1221,145 @@ infrastructure that makes future test gains cascade naturally.
 
 **Parallel tracks:** 7.0 + 7.1 can run in parallel (independent). 7.7 is independent
 throughout. All other items must follow the dependency chain.
+
+---
+
+## Phase 8 — Harvest Test Gains from Infrastructure
+
+**Status:** 7,981 / 10,077 tests passing (79.2%). 2,096 failing.
+
+**Strategy:** Phase 7 built all foundational type system infrastructure (cycle detection,
+structural comparison, overloads, indexed access, conditional/mapped types, narrowing).
+The infrastructure is sound but **under-activated** — overly conservative guards prevent
+valid comparisons, and type checkers only activate for certain type categories. Phase 8
+relaxes guards and activates features to harvest test gains.
+
+**Estimated total gain:** ~300-425 tests (bringing total to ~82-84%).
+
+### QUEUE
+
+- [ ] **8.0. Expand TS2339 to check property access on all Object types**
+
+  **Problem:** `checkSinglePropertyAccess` only fires for `Type.Interface` identifiers.
+  `Type.Object` (anonymous object literals, function types, type literals) is skipped
+  entirely — ~123 "none produced" failures need TS2339 on non-interface object types.
+
+  **Implementation:**
+  - In `checkSinglePropertyAccess`: extend the object type gate to include `Type.Object`
+    (not just `Type.Interface`)
+  - For `this.prop` in object literals: check against the object literal's own type
+  - Guard: skip Type.Object with no resolved members (empty/unresolved types)
+  - Guard: skip when `getTypeOfExpression` returns `anyType` for the base
+
+  **Estimated gain:** ~40-80 tests (conservative — many need multiple fixes)
+  **File:** `Checker.kt` — `checkSinglePropertyAccess`, `checkPropertyAccess`
+
+- [ ] **8.1. Relax canUseTypeEngine guards incrementally**
+
+  **Problem:** `canUseTypeEngine` has 6 blocking conditions added as FP guards during
+  Phase 5-7. With Phase 7's cycle detection and structural comparison in place, several
+  guards are now overly conservative:
+
+  **Sub-items (test each independently):**
+
+  **8.1a.** Allow empty source objects (`{}`): Currently blocked because `{}` is assignable
+  to most types in TypeScript. But `{}` assigned to a type with required properties SHOULD
+  fail. Fix: only skip when target also has no required properties.
+
+  **8.1b.** Allow array element comparison: Currently `isArrayLikeType` blocks all array
+  comparisons. Fix: allow when both sides are arrays or when comparing array to non-array
+  (always fails). Skip only array→tuple (needs contextual typing).
+
+  **8.1c.** Allow interface→interface where target extends source: Currently blocked for
+  "narrowing scenarios." Fix: only block in if-then/switch-case contexts, allow in
+  variable declarations and return statements.
+
+  **8.1d.** Allow Union source → Object target when all union constituents are concrete
+  (no anyType members).
+
+  **Estimated gain:** ~50-100 tests
+  **File:** `Checker.kt` — `canUseTypeEngine`
+
+- [ ] **8.2. Expand isSimpleCheckableType for TS2345 argument checking**
+
+  **Problem:** `isSimpleCheckableType` rejects unions containing non-primitive types.
+  With Object↔Object comparison now working, union arguments containing object types
+  can be safely checked.
+
+  **Implementation:**
+  - Allow unions where all constituents are either primitive or resolved Object types
+  - Allow function types (Object with call signatures) as checkable
+  - Guard: skip unions containing `anyType` or `errorType` constituents
+
+  **Estimated gain:** ~30-60 tests
+  **File:** `Checker.kt` — `isSimpleCheckableType`
+
+- [ ] **8.3. Propagate parameter types to all checker passes**
+
+  **Problem:** `currentLocalTypes` is only populated during the TS2322 walk.
+  TS2339/TS2345 checker passes don't have access to function parameter types, so
+  `getTypeOfIdentifier` returns `anyType` for parameters in those contexts.
+
+  **Implementation:**
+  - In `checkPropertyAccessInStatement` (TS2339): when entering a function/method body,
+    save/restore `currentLocalTypes` and populate with parameter types (same pattern as
+    `checkFunctionBody` in the TS2322 walk)
+  - In `checkCallTypesInStatement` (TS2345): same treatment
+  - Share the parameter type population logic in a helper function
+
+  **Estimated gain:** ~20-40 tests
+  **File:** `Checker.kt` — `checkPropertyAccessInStatement`, `checkCallTypesInStatement`
+
+- [ ] **8.4. Implement binary operator type checking (TS2365/TS2362/TS2363)**
+
+  **Problem:** Arithmetic operators (`+`, `-`, `*`, `/`, `%`) don't validate operand types.
+  Tests expect TS2365 ("Operator cannot be applied to types"), TS2362 ("Left-hand side
+  must be of type 'any', 'number', 'bigint' or an enum type"), TS2363 (right-hand side).
+
+  **Implementation:**
+  - In the arithmetic checking pass: for binary expressions with arithmetic operators,
+    resolve both operand types via `getTypeOfExpression`
+  - Check: both operands must be `number`, `bigint`, `any`, `enum`, or (for `+`) `string`
+  - Emit TS2365 when both sides are wrong, TS2362 for left-only, TS2363 for right-only
+  - Skip when either side is `anyType` or `errorType`
+  - Handle: capital-N `Number` object type is NOT valid for arithmetic (common test pattern)
+
+  **Estimated gain:** ~20-40 tests
+  **File:** `Checker.kt` — `checkArithmeticOperandTypes`
+
+- [ ] **8.5. Enable TS2322 for more assignment patterns**
+
+  **Problem:** The TS2322 checker only fires in specific AST patterns (variable declarations,
+  return statements, assignment expressions). Missing patterns include:
+  - Property assignments in object literals: `{ prop: value }` where `value` type doesn't
+    match the expected property type from contextual typing
+  - Spread assignments: `{ ...obj }` where spread type conflicts
+  - Destructuring assignments: `const { a }: T = expr` where expr type mismatches
+
+  **Implementation:**
+  - Add contextual type checking in object literal property assignments
+  - Handle destructuring pattern type checking
+  - Integrate with the existing `checkVarDeclAssignability` infrastructure
+
+  **Estimated gain:** ~20-30 tests
+  **File:** `Checker.kt` — `checkTypeAssignabilityInStatements`
+
+- [ ] **8.6. Fix typeToString display for complex types**
+
+  **Problem:** Several "diff" test failures are from incorrect type display in diagnostic
+  messages. `typeToString` doesn't handle all type display patterns correctly:
+  - Generic types: `Map<string, number>` instead of `Map`
+  - Function types: `(x: number) => void` display
+  - Intersection types: `A & B` display
+  - Qualified names: `Namespace.Type` display
+
+  **Implementation:**
+  - Improve `typeToString` to handle Reference types with type arguments
+  - Handle intersection display
+  - Handle qualified name paths for types from namespaces
+
+  **Estimated gain:** ~10-20 tests (diff tests where diagnostics fire but display wrong)
+  **File:** `Checker.kt` — `typeToString`
 
 ---
 
