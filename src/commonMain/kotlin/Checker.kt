@@ -24701,29 +24701,35 @@ class Checker(
         // Never compare when either side is unresolved
         if (sourceType === anyType || sourceType === errorType) return false
         if (targetType === anyType || targetType === errorType) return false
-        val sourceIsIntrinsic = sourceType is Type.Intrinsic
-        val targetIsIntrinsic = targetType is Type.Intrinsic
-        // null/undefined → intrinsic target (strictNullChecks handles assignability)
+        // "Primitive-like" = intrinsic or literal types (string, number, boolean, "hello", 42, etc.)
+        val sourceIsPrimitive = sourceType is Type.Intrinsic || sourceType is Type.StringLiteral ||
+            sourceType is Type.NumberLiteral || sourceType is Type.BigIntLiteral
+        val targetIsPrimitive = targetType is Type.Intrinsic || targetType is Type.StringLiteral ||
+            targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral
         val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-        if (sourceIsNullish && targetIsIntrinsic) return true
-        // null/undefined → named type or function type
-        if (sourceIsNullish && targetType is Type.Interface) return true
-        if (sourceIsNullish && targetType is Type.Reference) return true
-        // null/undefined → function/constructor type (Type.Object with signatures)
-        if (sourceIsNullish && targetType is Type.Object &&
-            (!targetType.callSignatures.isNullOrEmpty() || !targetType.constructSignatures.isNullOrEmpty())) return true
-        // null/undefined → type literal / anonymous object with properties
-        if (sourceIsNullish && targetType is Type.Object && !targetType.properties.isNullOrEmpty()) return true
-        // null/undefined → union type (relation engine checks each constituent)
-        if (sourceIsNullish && targetType is Type.Union) return true
-        // intrinsic↔intrinsic (number→string, etc.)
-        if (sourceIsIntrinsic && targetIsIntrinsic) return true
-        // Object type → intrinsic target (object/interface/class/array is never assignable to primitive)
-        if (sourceType is Type.Object && targetIsIntrinsic) return true
-        // Function→function: both sides have call signatures — safe because anyType in
-        // unresolved return/param types is handled by isSimpleTypeRelatedTo (any→anything)
+        // null/undefined → anything non-error (strictNullChecks handling in relation engine)
+        if (sourceIsNullish) return true
+        // Primitive ↔ Primitive (intrinsic↔intrinsic, literal↔literal, literal↔intrinsic, etc.)
+        if (sourceIsPrimitive && targetIsPrimitive) return true
+        // Object/Interface/Reference → Primitive target (never assignable)
+        if (sourceType is Type.Object && targetIsPrimitive) return true
+        // Primitive → Object target (only for anonymous objects/type literals, not named interfaces)
+        // Named interface/class targets need proper structural comparison to avoid FPs
+        if (sourceIsPrimitive && targetType is Type.Object && targetType.symbol == null) return true
+        // Union source → primitive target (safe: primitives don't need control flow narrowing)
+        // Skip Union → Object/Interface targets since those often need narrowing we don't implement
+        if (sourceType is Type.Union && targetIsPrimitive) {
+            val hasNullish = sourceType.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+            if (!hasNullish) return true
+        }
+        if (sourceType is Type.Intersection) return true
+        // Anything → Union/Intersection target
+        if (targetType is Type.Union || targetType is Type.Intersection) return true
+        // Function→function: both sides have call signatures
         if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
             targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) return true
+        // TypeParam targets (for generic constraint checking)
+        if (sourceIsPrimitive && targetType is Type.TypeParam) return true
         return false
     }
 
@@ -25040,8 +25046,20 @@ class Checker(
                 if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
                     chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                } else if (sourceType is Type.Union) {
+                    // Union source: find the last failing constituent for elaboration (matches TypeScript)
+                    var lastFailingConstituent: Type? = null
+                    for (constituent in sourceType.types) {
+                        if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
+                            lastFailingConstituent = constituent
+                        }
+                    }
+                    if (lastFailingConstituent != null) {
+                        val constStr = typeToString(lastFailingConstituent)
+                        chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
+                    }
                 } else {
-                    // Add elaboration chain for non-trivial expressions (not literals, not calls)
+                    // For non-literal, non-call expressions, TypeScript duplicates the message as elaboration
                     val needsElaboration = !isSimpleLiteral(init) &&
                         init !is CallExpression && init !is NewExpression &&
                         init !is DeleteExpression && init !is AwaitExpression &&
@@ -25100,12 +25118,18 @@ class Checker(
                 if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
                     chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
-                } else {
-                    val needsElaboration = !isSimpleLiteral(init) &&
-                        init !is CallExpression && init !is NewExpression &&
-                        init !is DeleteExpression && init !is AwaitExpression &&
-                        init !is BinaryExpression && init !is ParenthesizedExpression
-                    if (needsElaboration) chain.add("  $message")
+                } else if (sourceType is Type.Union) {
+                    // Union source: find the last failing constituent for elaboration (matches TypeScript)
+                    var lastFailing: Type? = null
+                    for (constituent in sourceType.types) {
+                        if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
+                            lastFailing = constituent
+                        }
+                    }
+                    if (lastFailing != null) {
+                        val constStr = typeToString(lastFailing)
+                        chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
+                    }
                 }
                 diagnostics.add(Diagnostic(
                     message = message,
@@ -25221,12 +25245,19 @@ class Checker(
                             if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                                 tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
                                 chain.addAll(getFunctionMismatchElaboration(sourceType, tt))
+                            } else if (sourceType is Type.Union) {
+                                // Union source: find the last failing constituent (matches TypeScript)
+                                var lastFailing: Type? = null
+                                for (constituent in sourceType.types) {
+                                    if (!checkTypeRelatedTo(constituent, tt, assignableRelation)) {
+                                        lastFailing = constituent
+                                    }
+                                }
+                                if (lastFailing != null) {
+                                    val constStr = typeToString(lastFailing)
+                                    chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
+                                }
                             } else {
-                                val needsElaboration = !isSimpleLiteral(expr.right) &&
-                                    expr.right !is CallExpression && expr.right !is NewExpression &&
-                                    expr.right !is DeleteExpression && expr.right !is AwaitExpression &&
-                                    expr.right !is BinaryExpression && expr.right !is ParenthesizedExpression
-                                if (needsElaboration) chain.add("  $message")
                                 if (tt is Type.TypeParam) {
                                     val targetName = tt.symbol?.name ?: "T"
                                     chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
@@ -25837,7 +25868,15 @@ class Checker(
             // Unary expressions
             is PrefixUnaryExpression -> when (expr.operator) {
                 SyntaxKind.Exclamation -> booleanType
-                SyntaxKind.Minus, SyntaxKind.Plus, SyntaxKind.Tilde -> numberType
+                SyntaxKind.Minus -> {
+                    // -42 → NumberLiteral(-42), -1n → BigIntLiteral("-1")
+                    when (val operand = expr.operand) {
+                        is NumericLiteralNode -> Type.NumberLiteral(-(operand.text.toDoubleOrNull() ?: 0.0))
+                        is BigIntLiteralNode -> Type.BigIntLiteral("-${operand.text.removeSuffix("n")}")
+                        else -> numberType
+                    }
+                }
+                SyntaxKind.Plus, SyntaxKind.Tilde -> numberType
                 SyntaxKind.PlusPlus, SyntaxKind.MinusMinus -> numberType
                 else -> anyType
             }
@@ -26222,7 +26261,10 @@ class Checker(
                 val args = type.resolvedTypeArguments
                 // Array types display as T[] (not Array<T>)
                 if (type.target === globalArrayType && args != null && args.size == 1) {
-                    "${typeToString(args[0])}[]"
+                    val elemStr = typeToString(args[0])
+                    // Parenthesize union/intersection element types: (A | B)[] not A | B[]
+                    if (args[0] is Type.Union || args[0] is Type.Intersection) "($elemStr)[]"
+                    else "$elemStr[]"
                 } else {
                     val target = type.target.symbol?.name ?: "Object"
                     if (args != null && args.isNotEmpty()) {
@@ -30227,6 +30269,9 @@ class Checker(
         if (sf.hasAny(TypeFlags.Void) && tf.hasAny(TypeFlags.Undefined)) return true
         // When strict null checks are off, null/undefined assignable to everything
         if (!strictNullChecks && sf.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return true
+        // number → enum type (TypeScript allows number → enum)
+        if (sf.hasAny(TypeFlags.NumberLike) && target is Type.Object && target.symbol != null &&
+            target.symbol!!.flags.hasAny(SymbolFlags.Enum)) return true
         // object type (non-primitive) — primitives are NOT assignable to object
         if (tf.hasAny(TypeFlags.NonPrimitive)) {
             return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
@@ -30705,7 +30750,10 @@ class Checker(
         val seen = mutableSetOf<Int>()
         val deduped = filtered.filter { seen.add(it.id) }
         if (deduped.size == 1) return deduped[0]
-        return Type.Union(deduped)
+        // Sort by TypeFlags value to match TypeScript's display order
+        // TypeScript sorts: string(4) < number(8) < boolean(16) < bigint(64) < ...
+        val sorted = deduped.sortedBy { it.flags.value }
+        return Type.Union(sorted)
     }
 
     /** Construct an intersection type from a list of constituent types, with basic normalization. */
@@ -30729,6 +30777,16 @@ class Checker(
         filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }
         // Single type — no intersection needed
         if (filtered.size == 1) return filtered[0]
+        // Reduce incompatible primitive intersections to never:
+        // e.g., number & boolean, string & number → never
+        val primitiveFlags = TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or
+            TypeFlags.BigInt or TypeFlags.ESSymbol or TypeFlags.Void or TypeFlags.Null or TypeFlags.Undefined
+        val primitives = filtered.filter { it.flags.hasAny(primitiveFlags) }
+        if (primitives.size >= 2) {
+            // Two distinct primitive types → always never
+            val distinctPrimitiveKinds = primitives.map { it.flags.value and primitiveFlags.value }.toSet()
+            if (distinctPrimitiveKinds.size >= 2) return neverType
+        }
         return Type.Intersection(filtered)
     }
 
