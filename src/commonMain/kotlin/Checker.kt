@@ -25218,6 +25218,39 @@ class Checker(
                 }
             }
         }
+        // Handle `typeof x === "string"` (and !==)
+        if (expr is BinaryExpression) {
+            val op = expr.operator
+            if (op == SyntaxKind.EqualsEqualsEquals || op == SyntaxKind.ExclamationEqualsEquals) {
+                val (typeofExpr, litExpr) = when {
+                    expr.left is TypeOfExpression && expr.right is StringLiteralNode -> expr.left to expr.right
+                    expr.right is TypeOfExpression && expr.left is StringLiteralNode -> expr.right to expr.left
+                    else -> null to null
+                }
+                if (typeofExpr is TypeOfExpression && litExpr is StringLiteralNode) {
+                    val varId = typeofExpr.expression as? Identifier ?: return null
+                    val varName = varId.text
+                    val typeGuard = litExpr.text
+                    // For === checks, narrow to the typeof type in the then-branch
+                    if (op == SyntaxKind.EqualsEqualsEquals) {
+                        val narrowedType = typeofTypeGuardToType(typeGuard) ?: return null
+                        return varName to narrowedType
+                    }
+                    // For !== checks, narrow by removing the typeof type in the then-branch
+                    if (op == SyntaxKind.ExclamationEqualsEquals) {
+                        val varType = currentLocalTypes[varName] ?: return null
+                        if (varType !is Type.Union) return null
+                        val guardFlags = typeofTypeGuardFlags(typeGuard) ?: return null
+                        val filtered = varType.types.filter { !it.flags.hasAny(guardFlags) }
+                        return when {
+                            filtered.isEmpty() -> null
+                            filtered.size == 1 -> varName to filtered[0]
+                            else -> varName to getUnionType(filtered)
+                        }
+                    }
+                }
+            }
+        }
         // Handle truthiness: `if (x)` → narrow by removing null/undefined
         if (expr is Identifier) {
             val varName = expr.text
@@ -25231,6 +25264,36 @@ class Checker(
             }
         }
         return null
+    }
+
+    /** Map typeof type guard string to the corresponding Type. */
+    private fun typeofTypeGuardToType(guard: String): Type? {
+        return when (guard) {
+            "string" -> stringType
+            "number" -> numberType
+            "boolean" -> booleanType
+            "symbol" -> esSymbolType
+            "bigint" -> bigintType
+            "undefined" -> undefinedType
+            "function" -> anyType // function type — too broad to narrow precisely
+            "object" -> anyType // object type — too broad to narrow precisely
+            else -> null
+        }
+    }
+
+    /** Map typeof type guard string to TypeFlags for removal from a union. */
+    private fun typeofTypeGuardFlags(guard: String): TypeFlags? {
+        return when (guard) {
+            "string" -> TypeFlags.StringLike
+            "number" -> TypeFlags.NumberLike
+            "boolean" -> TypeFlags.BooleanLike
+            "symbol" -> TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol
+            "bigint" -> TypeFlags.BigIntLike
+            "undefined" -> TypeFlags.Undefined
+            "function" -> TypeFlags.None // can't reliably identify function types by flags
+            "object" -> TypeFlags.None // can't reliably identify object types by flags
+            else -> null
+        }
     }
 
     private fun checkVarDeclAssignability(
