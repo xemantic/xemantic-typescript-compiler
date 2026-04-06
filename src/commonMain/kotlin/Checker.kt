@@ -3913,11 +3913,13 @@ class Checker(
                 else -> null
             }
             val refs = mutableSetOf<String>()
+            // Build param name → string literal values map for this[param] resolution
+            val paramLiterals = buildParamLiteralMap(member)
             when (member) {
-                is MethodDeclaration -> member.body?.let { collectPropertyAccessNames(it, refs) }
-                is Constructor -> member.body?.let { collectPropertyAccessNames(it, refs) }
-                is GetAccessor -> member.body?.let { collectPropertyAccessNames(it, refs) }
-                is SetAccessor -> member.body?.let { collectPropertyAccessNames(it, refs) }
+                is MethodDeclaration -> member.body?.let { collectPropertyAccessNames(it, refs, paramLiterals) }
+                is Constructor -> member.body?.let { collectPropertyAccessNames(it, refs, paramLiterals) }
+                is GetAccessor -> member.body?.let { collectPropertyAccessNames(it, refs, paramLiterals) }
+                is SetAccessor -> member.body?.let { collectPropertyAccessNames(it, refs, paramLiterals) }
                 is PropertyDeclaration -> member.initializer?.let { collectPropertyAccessNamesInExpr(it, refs) }
                 else -> {}
             }
@@ -3947,76 +3949,76 @@ class Checker(
         }
     }
 
-    private fun collectPropertyAccessNames(block: Block, names: MutableSet<String>) {
+    private fun collectPropertyAccessNames(block: Block, names: MutableSet<String>, paramLiterals: Map<String, Set<String>> = emptyMap()) {
         for (stmt in block.statements) {
-            collectPropertyAccessNamesInStmt(stmt, names)
+            collectPropertyAccessNamesInStmt(stmt, names, paramLiterals)
         }
     }
 
-    private fun collectPropertyAccessNamesInStmt(stmt: Statement, names: MutableSet<String>) {
+    private fun collectPropertyAccessNamesInStmt(stmt: Statement, names: MutableSet<String>, paramLiterals: Map<String, Set<String>> = emptyMap()) {
         when (stmt) {
-            is ExpressionStatement -> collectPropertyAccessNamesInExpr(stmt.expression, names)
+            is ExpressionStatement -> collectPropertyAccessNamesInExpr(stmt.expression, names, paramLiterals)
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { collectPropertyAccessNamesInExpr(it, names) }
+                    decl.initializer?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
                 }
             }
-            is ReturnStatement -> stmt.expression?.let { collectPropertyAccessNamesInExpr(it, names) }
+            is ReturnStatement -> stmt.expression?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             is IfStatement -> {
-                collectPropertyAccessNamesInExpr(stmt.expression, names)
-                collectPropertyAccessNamesInStmt(stmt.thenStatement, names)
-                stmt.elseStatement?.let { collectPropertyAccessNamesInStmt(it, names) }
+                collectPropertyAccessNamesInExpr(stmt.expression, names, paramLiterals)
+                collectPropertyAccessNamesInStmt(stmt.thenStatement, names, paramLiterals)
+                stmt.elseStatement?.let { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
             }
-            is Block -> stmt.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+            is Block -> stmt.statements.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
             is ForStatement -> {
                 when (val init = stmt.initializer) {
-                    is Expression -> collectPropertyAccessNamesInExpr(init, names)
+                    is Expression -> collectPropertyAccessNamesInExpr(init, names, paramLiterals)
                     else -> {}
                 }
-                stmt.condition?.let { collectPropertyAccessNamesInExpr(it, names) }
-                stmt.incrementor?.let { collectPropertyAccessNamesInExpr(it, names) }
-                collectPropertyAccessNamesInStmt(stmt.statement, names)
+                stmt.condition?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
+                stmt.incrementor?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
+                collectPropertyAccessNamesInStmt(stmt.statement, names, paramLiterals)
             }
             is WhileStatement -> {
-                collectPropertyAccessNamesInExpr(stmt.expression, names)
-                collectPropertyAccessNamesInStmt(stmt.statement, names)
+                collectPropertyAccessNamesInExpr(stmt.expression, names, paramLiterals)
+                collectPropertyAccessNamesInStmt(stmt.statement, names, paramLiterals)
             }
             is DoStatement -> {
-                collectPropertyAccessNamesInStmt(stmt.statement, names)
-                collectPropertyAccessNamesInExpr(stmt.expression, names)
+                collectPropertyAccessNamesInStmt(stmt.statement, names, paramLiterals)
+                collectPropertyAccessNamesInExpr(stmt.expression, names, paramLiterals)
             }
             is SwitchStatement -> {
-                collectPropertyAccessNamesInExpr(stmt.expression, names)
+                collectPropertyAccessNamesInExpr(stmt.expression, names, paramLiterals)
                 for (clause in stmt.caseBlock) {
                     when (clause) {
                         is CaseClause -> {
-                            collectPropertyAccessNamesInExpr(clause.expression, names)
-                            clause.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                            collectPropertyAccessNamesInExpr(clause.expression, names, paramLiterals)
+                            clause.statements.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
                         }
-                        is DefaultClause -> clause.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                        is DefaultClause -> clause.statements.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
                         else -> {}
                     }
                 }
             }
             is TryStatement -> {
-                stmt.tryBlock.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
-                stmt.catchClause?.block?.statements?.forEach { collectPropertyAccessNamesInStmt(it, names) }
-                stmt.finallyBlock?.statements?.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                stmt.tryBlock.statements.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
+                stmt.catchClause?.block?.statements?.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
+                stmt.finallyBlock?.statements?.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
             }
-            is ThrowStatement -> stmt.expression?.let { collectPropertyAccessNamesInExpr(it, names) }
+            is ThrowStatement -> stmt.expression?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             else -> {}
         }
     }
 
-    private fun collectPropertyAccessNamesInExpr(expr: Expression, names: MutableSet<String>) {
+    private fun collectPropertyAccessNamesInExpr(expr: Expression, names: MutableSet<String>, paramLiterals: Map<String, Set<String>> = emptyMap()) {
         when (expr) {
             is PropertyAccessExpression -> {
                 names.add(expr.name.text)
-                collectPropertyAccessNamesInExpr(expr.expression, names)
+                collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             }
             is CallExpression -> {
-                collectPropertyAccessNamesInExpr(expr.expression, names)
-                expr.arguments.forEach { collectPropertyAccessNamesInExpr(it, names) }
+                collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+                expr.arguments.forEach { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             }
             is BinaryExpression -> {
                 if (expr.operator == SyntaxKind.Equals) {
@@ -4039,68 +4041,107 @@ class Checker(
                         }
                     } else if (left is PropertyAccessExpression) {
                         // this.x = ... → only recurse into the base (this), not the property name
-                        collectPropertyAccessNamesInExpr(left.expression, names)
+                        collectPropertyAccessNamesInExpr(left.expression, names, paramLiterals)
                     } else {
-                        collectPropertyAccessNamesInExpr(left, names)
+                        collectPropertyAccessNamesInExpr(left, names, paramLiterals)
                     }
                 } else {
-                    collectPropertyAccessNamesInExpr(expr.left, names)
+                    collectPropertyAccessNamesInExpr(expr.left, names, paramLiterals)
                 }
-                collectPropertyAccessNamesInExpr(expr.right, names)
+                collectPropertyAccessNamesInExpr(expr.right, names, paramLiterals)
             }
-            is PrefixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names)
-            is PostfixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names)
-            is ParenthesizedExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
+            is PrefixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names, paramLiterals)
+            is PostfixUnaryExpression -> collectPropertyAccessNamesInExpr(expr.operand, names, paramLiterals)
+            is ParenthesizedExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is ConditionalExpression -> {
-                collectPropertyAccessNamesInExpr(expr.condition, names)
-                collectPropertyAccessNamesInExpr(expr.whenTrue, names)
-                collectPropertyAccessNamesInExpr(expr.whenFalse, names)
+                collectPropertyAccessNamesInExpr(expr.condition, names, paramLiterals)
+                collectPropertyAccessNamesInExpr(expr.whenTrue, names, paramLiterals)
+                collectPropertyAccessNamesInExpr(expr.whenFalse, names, paramLiterals)
             }
             is NewExpression -> {
-                collectPropertyAccessNamesInExpr(expr.expression, names)
-                expr.arguments?.forEach { collectPropertyAccessNamesInExpr(it, names) }
+                collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+                expr.arguments?.forEach { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             }
             is ElementAccessExpression -> {
-                collectPropertyAccessNamesInExpr(expr.expression, names)
-                collectPropertyAccessNamesInExpr(expr.argumentExpression, names)
+                collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+                collectPropertyAccessNamesInExpr(expr.argumentExpression, names, paramLiterals)
                 // String literal element access like obj["name"] counts as accessing "name"
                 val arg = expr.argumentExpression
-                if (arg is StringLiteralNode) names.add(arg.text)
+                if (arg is StringLiteralNode) {
+                    names.add(arg.text)
+                } else if (arg is Identifier && paramLiterals.isNotEmpty()) {
+                    // this[param] where param has string literal union type
+                    paramLiterals[arg.text]?.let { names.addAll(it) }
+                }
             }
             is TemplateExpression -> {
-                expr.templateSpans.forEach { collectPropertyAccessNamesInExpr(it.expression, names) }
+                expr.templateSpans.forEach { collectPropertyAccessNamesInExpr(it.expression, names, paramLiterals) }
             }
             is ArrowFunction -> {
                 when (val body = expr.body) {
-                    is Block -> body.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
-                    is Expression -> collectPropertyAccessNamesInExpr(body, names)
+                    is Block -> body.statements.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
+                    is Expression -> collectPropertyAccessNamesInExpr(body, names, paramLiterals)
                     else -> {}
                 }
             }
             is FunctionExpression -> {
-                expr.body.statements.forEach { collectPropertyAccessNamesInStmt(it, names) }
+                expr.body.statements.forEach { collectPropertyAccessNamesInStmt(it, names, paramLiterals) }
             }
-            is ArrayLiteralExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names) }
+            is ArrayLiteralExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
-                        is PropertyAssignment -> collectPropertyAccessNamesInExpr(prop.initializer, names)
+                        is PropertyAssignment -> collectPropertyAccessNamesInExpr(prop.initializer, names, paramLiterals)
                         is ShorthandPropertyAssignment -> {}
-                        is SpreadAssignment -> collectPropertyAccessNamesInExpr(prop.expression, names)
+                        is SpreadAssignment -> collectPropertyAccessNamesInExpr(prop.expression, names, paramLiterals)
                         else -> {}
                     }
                 }
             }
-            is AsExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is NonNullExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is TypeAssertionExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is AwaitExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is SpreadElement -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is DeleteExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is VoidExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is TypeOfExpression -> collectPropertyAccessNamesInExpr(expr.expression, names)
-            is CommaListExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names) }
+            is AsExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is NonNullExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is TypeAssertionExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is AwaitExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is SpreadElement -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is DeleteExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is VoidExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is TypeOfExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is CommaListExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             else -> {}
+        }
+    }
+
+    /**
+     * Build a map of parameter name → string literal values from type annotations.
+     * Used to resolve `this[param]` as reads of the named properties.
+     */
+    private fun buildParamLiteralMap(member: ClassElement): Map<String, Set<String>> {
+        val params = when (member) {
+            is MethodDeclaration -> member.parameters
+            is Constructor -> member.parameters
+            is GetAccessor -> member.parameters
+            is SetAccessor -> member.parameters
+            else -> return emptyMap()
+        }
+        val result = mutableMapOf<String, Set<String>>()
+        for (param in params) {
+            val paramName = (param.name as? Identifier)?.text ?: continue
+            val type = param.type ?: continue
+            val literals = extractStringLiteralsFromType(type)
+            if (literals.isNotEmpty()) result[paramName] = literals
+        }
+        return result
+    }
+
+    private fun extractStringLiteralsFromType(type: TypeNode): Set<String> {
+        return when (type) {
+            is LiteralType -> {
+                val lit = type.literal
+                if (lit is StringLiteralNode) setOf(lit.text) else emptySet()
+            }
+            is UnionType -> type.types.flatMapTo(mutableSetOf()) { extractStringLiteralsFromType(it) }
+            is ParenthesizedType -> extractStringLiteralsFromType(type.type)
+            else -> emptySet()
         }
     }
 

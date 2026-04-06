@@ -1379,7 +1379,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
 
 ### QUEUE
 
-- [ ] **9.0. Suppress TS6133 FP for indexed property access (LOW)**
+- [x] **9.0. Suppress TS6133 FP for indexed property access (LOW)**
 
   **Problem:** `typeGuardNarrowsIndexedAccessOfKnownProperty9` — TS6133 "declared but
   never read" fires for class properties `a` and `b` that ARE read via indexed access
