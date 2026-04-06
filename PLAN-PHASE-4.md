@@ -417,13 +417,207 @@ array→primitive, named→named) fall through to the old string system which do
 - Initializer type inference tested → 6 regressions (TS2403 FPs), reverted.
   Partial inference is worse than no inference.
 
-**Recommended priority for next items:**
+---
 
-1. **Type resolution improvement**: The #1 blocker — `getTypeOfExpression` returns anyType
-   for most identifiers. Needs lib.d.ts synthetic types or full import resolution.
-2. **Module resolution**: TS2307 would unlock 5 near-miss + many multi-code tests
-3. **Chained namespace access**: M.a.b patterns for ~5 more tests
-4. **Control flow narrowing**: Would unlock 9 FP-only tests + many near-miss tests
+## Phase 6 — Type Resolution Queue
+
+**Bottleneck analysis (2026-04-06):** 2,102 failing tests. 1,238 (66%) produce zero diagnostics.
+The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` returning `anyType` is.
+
+**Failing test blocker distribution (pure single-code tests):**
+
+| Blocker | TS2322 (149) | TS2339 (34) | TS2345 (36) | TS2353 (17) | Total |
+|---------|-------------|-------------|-------------|-------------|-------|
+| Generics | 85 (57%) | 14 (41%) | 19 (53%) | 3 | ~121 |
+| Namespaces | 38 (26%) | 3 | 4 | 1 | ~46 |
+| No annotation | 22 (15%) | — | — | — | ~22 |
+| Multi-file | 8 | 8 (24%) | 5 | 3 | ~24 |
+| Imports | 3 | 7 (21%) | 3 | 3 | ~16 |
+| typeof | 7 | 1 | 1 | 0 | ~9 |
+| Lib types | 3 | 2 | 1 | 0 | ~6 |
+
+**Dependencies between items:**
+```
+6.0 (tuple) ─────────────────────────┐
+6.1 (typeof) ────────────────────────┤
+6.2 (generics) ──┬── 6.5 (structural)┼── 6.7 (contextual typing)
+6.3 (inference)──┘                    │
+6.4 (namespaces) ────────────────────┤
+6.6 (imports) ───────────────────────┘
+6.8 (narrowing) ── independent, FP prevention
+```
+
+### QUEUE
+
+- [ ] **6.0. Tuple type resolution**
+
+  `getTupleType` currently returns bare `Type.Object()`. Create proper tuple types
+  with indexed members (`0: T1, 1: T2, ...`) and `length` property.
+
+  **Implementation:**
+  - In `getTupleType(node: TupleType)`: create `Type.Object` with numbered properties
+  - Each element type → property symbol with name "0", "1", etc.
+  - Add `length: NumberLiteral(n)` property
+  - Handle `NamedTupleMember`, `OptionalType`, `RestType` in elements
+  - Array-like: set the target to `globalArrayType` for `T[]`-style display
+
+  **Unlocks:** `assigningFunctionToTupleIssuesError` + tuple-related tests
+  **File:** `Checker.kt` — `getTupleType`
+  **Estimated gain:** 3-5 tests
+
+- [ ] **6.1. TypeQuery (typeof) resolution**
+
+  `typeof X` in type annotation position returns `anyType`. Implement resolution
+  to the type of value `X`.
+
+  **Implementation:**
+  - In `getTypeFromTypeNodeWorker`, case `TypeQuery`:
+    - Resolve the entity name to a symbol (via globals/locals)
+    - For class symbols: return the constructor type (Object with construct signature)
+    - For function symbols: return the function type (via `getTypeOfFunction`)
+    - For variable symbols: return the declared/inferred type
+  - Handle qualified names: `typeof A.B.C`
+
+  **Unlocks:** `classSideInheritance3`, `assignToFn`, typeof-based tests
+  **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
+  **Estimated gain:** 5-10 tests
+
+- [ ] **6.2. Generic type instantiation — connect existing infrastructure**
+
+  The #1 blocker (57% of TS2322, 53% of TS2345). Infrastructure exists
+  (`instantiateType`, `createTypeMapper`, `Type.Reference`) but is not connected
+  to member resolution or call type checking.
+
+  **Implementation — 3 sub-items:**
+
+  **6.2a.** Type.Reference member instantiation:
+  - In `resolveReferenceMembers`: after getting target members, apply type mapper
+  - Create mapper from `target.typeParameters` → `ref.resolvedTypeArguments`
+  - Instantiate each property's type, each call/construct signature's params and return
+  - Use existing `instantiateType` and `instantiateSignature`
+
+  **6.2b.** `getTypeFromTypeReference` for user-defined generics:
+  - When `Foo<number>` is encountered and `Foo` has type parameters:
+  - Create `Type.Reference(fooInterface, [numberType])`
+  - Currently only handles Array/ReadonlyArray — extend to all generics
+  - Cache instantiated references by (target, typeArgs) to avoid duplicates
+
+  **6.2c.** `instantiateSignature` parameter types:
+  - Currently only instantiates return types (TODO at line 30568)
+  - Must also instantiate parameter types for TS2345 argument checking
+  - Create new parameter symbols with substituted types
+
+  **Unlocks:** ~85 TS2322, ~19 TS2345, ~14 TS2339 tests (with overlap)
+  **File:** `Checker.kt` — `resolveReferenceMembers`, `getTypeFromTypeReference`, `instantiateSignature`
+  **Estimated gain:** 30-60 tests (the single highest-ROI item)
+
+- [ ] **6.3. Variable type inference from initializers (scoped)**
+
+  `var x = 42` should infer `numberType` for x. Previous attempt caused TS2403 FPs
+  from partial inference. Fix: only use in TS2322 context, not globally.
+
+  **Implementation:**
+  - Do NOT change `getTypeOfVariableOrProperty` (causes TS2403 FPs)
+  - Instead, populate `currentLocalTypes` from initializers during TS2322 walk:
+    - In `checkVarDeclAssignability`, when `decl.type == null && decl.initializer != null`:
+      - `val inferred = getTypeOfExpression(decl.initializer)`
+      - If non-anyType: `currentLocalTypes[name.text] = inferred`
+  - Also populate in `checkAssignmentExpression` for `checkFunctionBody`
+  - This keeps inference scoped to TS2322 context only
+
+  **Unlocks:** ~22 TS2322 tests where vars have no annotation but clear initializers
+  **File:** `Checker.kt` — `checkVarDeclAssignability`, `checkFunctionBody`
+  **Estimated gain:** 5-15 tests
+
+- [ ] **6.4. Namespace property type resolution**
+
+  `ns.member` in expression position should resolve the type of the namespace export.
+  `getTypeOfPropertyAccess` works but relies on `getApparentType` which doesn't resolve
+  namespace symbols properly.
+
+  **Implementation:**
+  - In `getTypeOfPropertyAccess`: when `objectType` is anyType, try namespace lookup:
+    - If expr.expression is Identifier, look up in globals
+    - If symbol has Module flag, look up propName in symbol.exports
+    - Return `getTypeOfSymbol(exportSymbol)`
+  - Handle chained access: `ns.sub.member` (recursive)
+  - Handle class+namespace merge (clodule): check both class instance and namespace exports
+
+  **Unlocks:** ~38 TS2322 namespace tests (assignmentCompatability11-45 series)
+  **File:** `Checker.kt` — `getTypeOfPropertyAccess`, `getTypeOfIdentifier`
+  **Estimated gain:** 10-20 tests
+
+- [ ] **6.5. Structural member resolution improvements**
+
+  `objectTypeRelatedTo` needs complete member resolution for named types.
+  Current gaps: inherited members from base types, method signatures,
+  index signatures, construct signatures.
+
+  **Implementation:**
+  - Ensure `resolveInterfaceMembers` collects ALL members including inherited
+  - Property type comparison for overridden members
+  - Method signature structural comparison (parameter count, types, return type)
+  - Index signature compatibility (string index, number index)
+  - Optional vs required property distinction
+
+  **Depends on:** 6.2 (generics) for generic base type member resolution
+  **Unlocks:** Prevents FPs when canUseTypeEngine is widened for Object↔Object
+  **File:** `Checker.kt` — `objectTypeRelatedTo`, `resolveInterfaceMembers`
+  **Estimated gain:** 5-10 tests directly + enables widening canUseTypeEngine
+
+- [ ] **6.6. Import/cross-file type resolution**
+
+  Imported names should resolve to their target types across files.
+  `resolveAliasTarget` follows alias chains but module specifier resolution is incomplete.
+
+  **Implementation:**
+  - `resolveModuleSpecifier(specifier, fromFile)` → target BinderResult
+  - For relative specifiers: find matching file in binderResults
+  - For `export =` / `export default`: resolve the exported symbol
+  - For named exports: look up in target file's locals/exports
+  - Connect to `getTypeOfIdentifier`: when symbol is Alias, follow to target type
+
+  **Unlocks:** ~24 multi-file tests, ~16 import tests
+  **File:** `Checker.kt` — module resolution
+  **Estimated gain:** 10-20 tests
+
+- [ ] **6.7. Basic contextual typing**
+
+  When a function expression is assigned to a typed variable, infer parameter types
+  from the target type's call signature.
+
+  **Implementation:**
+  - In `getTypeOfArrowFunction` / `getTypeOfFunctionExpression`:
+    - Accept optional `contextualType: Type?` parameter
+    - If contextualType has call signatures, use their parameter types
+  - In `checkVarDeclAssignability` / `checkAssignmentExpression`:
+    - When source is ArrowFunction/FunctionExpression and target has call signatures,
+      pass target type as contextual type
+  - Prevents TS7006 FPs for callback parameters
+
+  **Depends on:** 6.2 (generics) for generic callback types
+  **Unlocks:** 3 pure FP-only tests + ~24 TS7006 FP-affected tests
+  **File:** `Checker.kt` — expression type inference
+  **Estimated gain:** 5-10 tests
+
+- [ ] **6.8. Basic control flow narrowing**
+
+  After `if (x !== null)`, narrow `x: T | null` to `x: T`.
+  Prevents FPs from Union→non-union assignments in guarded contexts.
+
+  **Implementation — incremental approach:**
+  - Track narrowing state in a `NarrowingContext` during statement traversal
+  - typeof narrowing: `if (typeof x === "string")` → x is string
+  - Null/undefined narrowing: `if (x !== null)` → remove null from union
+  - Truthiness narrowing: `if (x)` → remove null/undefined from union
+  - Apply narrowing in the then-branch of if/else statements
+  - Do NOT attempt exhaustive switch analysis (too complex, low ROI)
+
+  **Independent of other items (FP prevention)**
+  **Unlocks:** 2 known FP regressions (classStaticPropertyTypeGuard, partiallyDiscriminantedUnions)
+    + enables wider canUseTypeEngine for Union→non-primitive
+  **File:** `Checker.kt` — `checkTypeAssignabilityInStatements`
+  **Estimated gain:** 3-8 tests directly + FP prevention for future widening
 
 ---
 
