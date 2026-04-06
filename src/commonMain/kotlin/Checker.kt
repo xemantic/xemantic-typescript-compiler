@@ -158,6 +158,19 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** File-level symbol table for the file currently being checked. Set by checker passes
+     *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
+     *  variables) without going through globals (which may have merge conflicts). */
+    private var currentFileLocals: SymbolTable? = null
+
+    /** The file name currently being checked — used to look up file-level type maps. */
+    private var currentCheckFileName: String? = null
+
+    /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
+     *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
+     *  to resolve file-level identifiers across all checker passes. */
+    private val fileLocalTypeMaps = HashMap<String, Map<String, Type>>()
+
     /** Contextual type for function expressions — set when evaluating an initializer whose
      *  target has call signatures (e.g., `var f: (x: number) => void = (x) => { ... }`).
      *  Used by getTypeOfArrowFunction/getTypeOfFunctionExpression to infer parameter types. */
@@ -200,6 +213,8 @@ class Checker(
         computeAllEnumValues()
         // 3. Track import references across all files
         trackAllImportReferences()
+        // 3b. Build per-file type maps for file-level declarations
+        buildFileLocalTypeMaps()
 
         // For declarationOnly mode, only run class strict-mode checks (TS1210)
         if (declarationOnly) {
@@ -1195,6 +1210,31 @@ class Checker(
     private fun trackAllImportReferences() {
         for (result in binderResults) {
             trackReferencesInStatements(result.sourceFile.statements, result)
+        }
+    }
+
+    /**
+     * Build per-file type maps containing types for all file-level declarations.
+     * These maps enable getTypeOfIdentifier to resolve file-level names across all
+     * checker passes, not just during the TS2322 walk.
+     */
+    private fun buildFileLocalTypeMaps() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val typeMap = mutableMapOf<String, Type>()
+            for ((name, symbol) in result.locals) {
+                try {
+                    val type = getTypeOfSymbol(symbol)
+                    if (type !== anyType && type !== errorType) {
+                        typeMap[name] = type
+                    }
+                } catch (_: StackOverflowError) {
+                    // Circular type resolution — skip
+                }
+            }
+            if (typeMap.isNotEmpty()) {
+                fileLocalTypeMaps[fileName] = typeMap
+            }
         }
     }
 
@@ -8941,6 +8981,25 @@ class Checker(
             is Type.BigIntLiteral -> bigintType
             trueType, falseType -> booleanType
             else -> type
+        }
+    }
+
+    /**
+     * Infer the type of a variable from its initializer expression, with widening.
+     * Returns `anyType` for expressions that can't be reliably inferred.
+     * Skips null/undefined initializers (declare-then-assign patterns).
+     */
+    private fun inferTypeFromInitializer(init: Expression): Type {
+        // Skip null/undefined — "declare then assign" pattern
+        if (init is Identifier && (init.text == "null" || init.text == "undefined")) return anyType
+        return try {
+            val raw = getTypeOfExpression(init)
+            if (raw === anyType || raw === errorType) anyType
+            // Skip null/undefined/void inferred types
+            else if (raw.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) anyType
+            else widenType(raw)
+        } catch (_: StackOverflowError) {
+            anyType
         }
     }
 
@@ -24767,6 +24826,8 @@ class Checker(
             val source = result.sourceFile.text
             val varTypes = mutableMapOf<String, String>()
             currentLocalTypes = mutableMapOf()
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
             checkTypeAssignabilityInStatements(result.sourceFile.statements, source, fileName, varTypes, returnType = null, typeParams = emptySet())
         }
         // Post-filter: suppress TS2322 for null/undefined→NamedType when the named type
@@ -25688,15 +25749,29 @@ class Checker(
             is VariableDeclaration -> {
                 // Type annotation takes priority
                 decl.type?.let { return getTypeFromTypeNode(it) }
-                // No annotation — return anyType (initializer inference causes FPs in TS2403/TS2322)
+                // Infer from initializer (widened: literals → base types)
+                decl.initializer?.let { init ->
+                    val inferred = inferTypeFromInitializer(init)
+                    if (inferred !== anyType && inferred !== errorType) return inferred
+                }
                 anyType
             }
             is Parameter -> {
                 decl.type?.let { return getTypeFromTypeNode(it) }
+                // Infer from default value
+                decl.initializer?.let { init ->
+                    val inferred = inferTypeFromInitializer(init)
+                    if (inferred !== anyType && inferred !== errorType) return inferred
+                }
                 anyType
             }
             is PropertyDeclaration -> {
                 decl.type?.let { return getTypeFromTypeNode(it) }
+                // Infer from initializer
+                decl.initializer?.let { init ->
+                    val inferred = inferTypeFromInitializer(init)
+                    if (inferred !== anyType && inferred !== errorType) return inferred
+                }
                 anyType
             }
             is MethodDeclaration -> {
@@ -26218,8 +26293,17 @@ class Checker(
             "false" -> falseType
             "NaN", "Infinity" -> numberType
             else -> {
-                // Check local scope first (populated during TS2322 checking)
+                // Check local scope first (populated during TS2322 checking walk)
                 currentLocalTypes[id.text]?.let { return it }
+                // Check pre-built file-level type map (covers annotated file-level declarations)
+                currentCheckFileName?.let { fn ->
+                    fileLocalTypeMaps[fn]?.get(id.text)?.let { return it }
+                }
+                // Check file-level locals symbol table (for symbols not in type map)
+                currentFileLocals?.get(id.text)?.let { symbol ->
+                    val type = getTypeOfSymbol(symbol)
+                    if (type !== anyType && type !== errorType) return type
+                }
                 // Then look up symbol in globals
                 val symbol = globals[id.text]
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
@@ -27697,6 +27781,8 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
             try {
                 for (stmt in result.sourceFile.statements) {
                     checkImplementsClausesInStatement(stmt, source, fileName)
@@ -27705,6 +27791,8 @@ class Checker(
                 // Circular type resolution — skip
             }
         }
+        currentFileLocals = null
+        currentCheckFileName = null
     }
 
     private fun checkImplementsClausesInStatement(stmt: Statement, source: String, fileName: String) {
@@ -28369,6 +28457,8 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
             try {
                 for (stmt in result.sourceFile.statements) {
                     checkPropertyOverrideInStatement(stmt, source, fileName)
@@ -28377,6 +28467,8 @@ class Checker(
                 // Circular type resolution — skip
             }
         }
+        currentFileLocals = null
+        currentCheckFileName = null
     }
 
     private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String) {
@@ -28997,12 +29089,16 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
             try {
                 checkConstraintsInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) {
                 // Circular type resolution — skip
             }
         }
+        currentFileLocals = null
+        currentCheckFileName = null
     }
 
     private fun checkConstraintsInStatements(stmts: List<Statement>, source: String, fileName: String) {
@@ -29264,6 +29360,8 @@ class Checker(
             // Skip .js files — property access patterns differ
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
             try {
                 checkPropertyAccessInStatements(
                     result.sourceFile.statements, source, fileName,
@@ -29273,6 +29371,8 @@ class Checker(
                 // Circular type resolution in complex files — skip gracefully
             }
         }
+        currentFileLocals = null
+        currentCheckFileName = null
     }
 
     private fun checkPropertyAccessInStatements(
@@ -30073,12 +30173,16 @@ class Checker(
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
                 fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
             val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
             try {
                 checkCallTypesInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) {
                 // Safety net for deeply nested ASTs
             }
         }
+        currentFileLocals = null
+        currentCheckFileName = null
     }
 
     private fun checkCallTypesInStatements(statements: List<Statement>, source: String, fileName: String) {

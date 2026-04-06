@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-06):** 7,981 / 10,077 tests passing (79.2%).
+**Status (2026-04-06):** 7,981 / 10,077 tests passing (79.2%). Active queue: Phase 7.
 
 ## Goal
 
@@ -910,29 +910,317 @@ Improve multi-file name resolution and diagnostics.
 
 ---
 
+## Phase 7 — Infrastructure Unblocking Queue
+
+**Status:** 7,981 / 10,077 tests passing (79.2%). 2,096 failing.
+
+**Strategy:** Instead of chasing individual test gains, implement foundational features
+in dependency order. Each item unblocks the items below it. The goal is to build the
+infrastructure that makes future test gains cascade naturally.
+
+**Dependency graph:**
+```
+7.0 (recursive type tracking)
+ └─▶ 7.2 (open Object↔Object comparison)
+      └─▶ 7.5 (overload resolution)
+           └─▶ 7.6 (indexed access types)
+                └─▶ 7.8 (conditional types)
+                └─▶ 7.9 (mapped types)
+
+7.1 (scope-chain identifier resolution)
+ └─▶ 7.3 (variable initializer type inference)
+      └─▶ 7.4 (property access chain typing)
+           └─▶ 7.5 (overload resolution — needs typed arguments)
+
+7.7 (control flow graph) — independent, but enables 7.2 safety
+```
+
+### QUEUE
+
+- [x] **7.0. Recursive type cycle detection in structural comparison**
+
+  **Problem:** `canUseTypeEngine` blocks named↔named interface and Reference type
+  comparison because recursive types (e.g. `interface List<T> { next: List<T> }`)
+  cause infinite expansion. The current `maxRelationDepth` counter is a blunt depth
+  limit that doesn't distinguish different comparison pairs.
+
+  **Implementation:**
+  - Add a `recursionStack: MutableSet<Long>` to the checker (packed source.id/target.id)
+  - In `checkTypeRelatedTo`: before recursing, check if (source.id, target.id) is already
+    on the stack. If so, return `Ternary.Maybe` (assume compatible — TypeScript's approach)
+  - Push the pair before calling `structuredTypeRelatedTo`, pop after
+  - This replaces the blunt `relationDepth >= maxRelationDepth` with precise cycle detection
+  - Reference: TypeScript's `overflow` tracking in `structuredTypeRelatedTo`; tsgo's
+    `overflowCheckSet` in `relater.go`
+
+  **Unblocks:** 7.2 (Object↔Object comparison) — the primary reason canUseTypeEngine
+  rejects named interface pairs and Reference types.
+
+  **File:** `Checker.kt` — `checkTypeRelatedTo`, `structuredTypeRelatedTo`
+
+- [x] **7.1. Scope-chain identifier type resolution**
+
+  **Problem:** `getTypeOfIdentifier` only resolves: literal keywords (`undefined`, `NaN`),
+  `currentLocalTypes` (populated only during TS2322 walk), and global symbols. For any
+  local variable, parameter, or function-scoped name, it returns `anyType`. This is THE
+  fundamental blocker — 58% of failing tests produce zero diagnostics because expressions
+  can't be typed.
+
+  **Implementation:**
+  - Add `resolveSymbolAtLocation(identifier: Identifier): Symbol?` that walks the AST
+    parent chain to find the enclosing scope, then searches:
+    1. Block-scoped declarations (let/const in enclosing blocks)
+    2. Function parameters
+    3. Variable declarations in enclosing functions
+    4. Class members (for `this.x` — already partially handled)
+    5. File-level locals (binder's `result.locals`)
+    6. Globals
+  - Integrate with the binder's existing symbol tables — the binder already creates symbols
+    for all declarations, we just don't look them up from expression positions
+  - In `getTypeOfIdentifier`: call `resolveSymbolAtLocation` instead of only checking globals
+  - Use `getTypeOfSymbol` on the resolved symbol to get its type
+  - For annotated declarations, this immediately works (type annotations already resolve)
+
+  **Design consideration:** The binder currently only creates file-level symbol tables
+  (`result.locals`). Function/block-level symbols are NOT in these tables. Two approaches:
+  (a) Extend binder to build nested scope tables (larger change, cleaner long-term)
+  (b) Walk the AST parent chain from the identifier to find enclosing declarations (simpler)
+  Start with (b) and upgrade to (a) if performance is an issue.
+
+  **Unblocks:** Everything downstream — without typed identifiers, `getTypeOfExpression`
+  returns `anyType` for most variables, making all TS2322/TS2345/TS2339 checking impossible
+  for non-literal expressions.
+
+  **File:** `Checker.kt` — `getTypeOfIdentifier`, new `resolveSymbolAtLocation`
+
+- [ ] **7.2. Open canUseTypeEngine for Object↔Object structural comparison**
+
+  **Problem:** `canUseTypeEngine` currently blocks all named↔named interface comparison
+  and Reference type targets. With 7.0's cycle detection in place, these can be safely enabled.
+
+  **Implementation:**
+  - Remove the `targetType is Type.Interface && targetType.symbol != null` exclusion for
+    anonymous → named (line 24753-24754)
+  - Add: named Interface → named Interface (both symbols non-null)
+  - Add: Reference → Interface and Interface → Reference
+  - Add: Reference → Reference (generic instantiation comparison)
+  - Keep guards for: Union → Object (needs narrowing), anyType/errorType (unresolved)
+  - Run full test suite after each guard relaxation to catch regressions
+
+  **Depends on:** 7.0 (recursive type cycle detection)
+
+  **Unblocks:** 7.5 (overload resolution — needs to compare argument types against parameter
+  types which are often interfaces/classes), generic constraint checking (TS2344), class
+  hierarchy checking (TS2416/TS2420), and hundreds of TS2322 tests where both sides are
+  named types.
+
+  **File:** `Checker.kt` — `canUseTypeEngine`
+
+- [ ] **7.3. Variable initializer type inference (general)**
+
+  **Problem:** `getTypeOfVariableOrProperty` returns `anyType` for unannotated variables
+  (comment at line 25688: "initializer inference causes FPs in TS2403/TS2322"). The
+  previous scoped approach (6.3, `currentLocalTypes`) only works during TS2322 walk.
+  We need general initializer inference that's safe across all checking contexts.
+
+  **Implementation:**
+  - In `getTypeOfVariableOrProperty`, for `VariableDeclaration` without type annotation:
+    - If the initializer is a literal, infer directly (already exists for numeric/string/bool)
+    - If the initializer is a function/arrow expression, create function type
+    - If the initializer is a `new X()` call, infer the class type
+    - If the initializer is an identifier with a known type, use that type
+    - Apply widening: literal types → base types (42 → number, "hello" → string)
+    - Skip inference when initializer is `null`/`undefined` (declare-then-assign pattern)
+  - Guard against TS2403 FPs: store inferred types in a separate cache (`inferredVarTypes`)
+    and don't use them in TS2403 (redeclaration) checking
+  - Same treatment for `Parameter` default values and `PropertyDeclaration` initializers
+
+  **Depends on:** 7.1 (to resolve identifier initializers like `let x = y`)
+
+  **Unblocks:** 7.4 (property access needs the base to be typed), contextual typing for
+  callbacks, return type inference, most "none produced" tests where the source or target
+  type comes from an unannotated variable.
+
+  **File:** `Checker.kt` — `getTypeOfVariableOrProperty`
+
+- [ ] **7.4. Property access chain typing**
+
+  **Problem:** `getTypeOfPropertyAccess` works when the base type resolves, but cascading
+  `anyType` from `getTypeOfIdentifier` means most property access chains (`obj.prop.method()`)
+  return `anyType`. With 7.1 and 7.3 providing base types, property access chains will
+  resolve naturally — but we need to handle additional patterns.
+
+  **Implementation:**
+  - Handle `ElementAccessExpression` (bracket notation): `obj["prop"]` → resolve string
+    literal key to member, `arr[0]` → resolve numeric key for tuples
+  - Handle optional chaining: `obj?.prop` → same as `obj.prop` but nullable result
+  - Handle `as const` (const assertions): narrow to literal types
+  - Handle enum member access: `Enum.Member` → resolve to enum member type
+  - Improve `getTypeOfPropertyAccess` to search index signatures when named property
+    not found
+
+  **Depends on:** 7.1 (base identifier resolution), 7.3 (base variable inference)
+
+  **Unblocks:** TS2339 checking (property doesn't exist — need to type the base first),
+  method call return types (need to resolve method → get its signature → return type).
+
+  **File:** `Checker.kt` — `getTypeOfPropertyAccess`, new `getTypeOfElementAccess`
+
+- [ ] **7.5. Overload resolution**
+
+  **Problem:** `getReturnTypeOfCallExpression` returns `anyType` for overloaded functions
+  (line 26417: "returns anyType to avoid picking the wrong overload"). This cascades:
+  any variable assigned from an overloaded call is `anyType`, losing all downstream typing.
+  229 missing diagnostic instances blocked on this (TS2554, TS2769).
+
+  **Implementation:**
+  - Implement `resolveCall(signatures: List<Signature>, args: List<Expression>): Signature?`
+  - For each overload signature (in order):
+    1. Check arity: `args.size >= sig.minArgumentCount && args.size <= sig.parameters.size`
+    2. Check argument types: for each arg, `checkTypeRelatedTo(getTypeOfExpression(arg),
+       paramType, assignableRelation)`
+    3. First matching overload wins (TypeScript's approach)
+  - If no overload matches: use the implementation signature's return type (if available)
+    or `anyType`
+  - For TS2769 diagnostic: when no overload matches, emit the error with elaboration
+    showing each overload's incompatibility
+  - Handle generic overloads: basic type argument inference from argument types
+
+  **Depends on:** 7.2 (Object↔Object comparison — overload parameters are often interfaces),
+  7.1+7.3 (typed arguments)
+
+  **Unblocks:** Typed return values from stdlib functions (Array.map, Promise.then, etc.),
+  TS2769 diagnostics, chained call typing, builder pattern APIs.
+
+  **File:** `Checker.kt` — new `resolveCall`, modify `getReturnTypeOfCallExpression`
+
+- [ ] **7.6. Indexed access types (T[K])**
+
+  **Problem:** `IndexedAccessType` in type position returns `anyType`. This blocks
+  mapped types, many utility types, and real-world patterns like `Config["database"]`.
+
+  **Implementation:**
+  - In `getTypeFromTypeNodeWorker`, for `IndexedAccessType`:
+    - Resolve `objectType` and `indexType`
+    - If indexType is a string literal: look up named property on objectType
+    - If indexType is `number`: return index signature type or array element type
+    - If indexType is a union: create union of indexed access results
+    - If indexType is `keyof T`: create union of all property types
+  - Implement `keyof T` in `getTypeFromTypeOperator`:
+    - Collect all property names from T's members
+    - Create union of string literal types for each name
+  - Handle `T[number]` for array/tuple types
+
+  **Depends on:** 7.2 (needs structural member resolution for the object type)
+
+  **Unblocks:** 7.8 (conditional types use indexed access), 7.9 (mapped types use
+  `T[K]` in their body), utility types like `Pick`, `Record`, `ReturnType`.
+
+  **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
+
+- [ ] **7.7. Control flow graph and type narrowing**
+
+  **Problem:** Only basic null/undefined narrowing in if-then branches exists (6.8).
+  No discriminated unions, no `typeof` narrowing, no `instanceof`, no type guard
+  functions. Union→Object comparison is blocked in `canUseTypeEngine` because without
+  narrowing, comparing `string | number` to `{ length: number }` causes FPs.
+
+  **Implementation (phased):**
+
+  **7.7a.** `typeof` narrowing:
+  - In `if (typeof x === "string")`: narrow `x` to `string` in then-branch
+  - Handle: `"string"`, `"number"`, `"boolean"`, `"function"`, `"object"`, `"undefined"`
+  - Remove narrowed type from else-branch
+
+  **7.7b.** `instanceof` narrowing:
+  - In `if (x instanceof Foo)`: narrow `x` to `Foo` in then-branch
+  - Requires: resolving `Foo` to a class type and intersecting with current type
+
+  **7.7c.** Discriminated union narrowing:
+  - In `if (x.kind === "circle")`: narrow `x` from `Circle | Square` to `Circle`
+  - Requires: checking literal property types in union constituents
+
+  **7.7d.** Truthiness narrowing expansion:
+  - Remove `null | undefined` from type in truthy branches (already exists)
+  - Add: empty string / zero removal for string/number unions
+  - Narrow in else-branch (add null/undefined, etc.)
+
+  **Independent** of other items. Each sub-item can be implemented and tested separately.
+
+  **Unblocks:** Safe Union→Object comparison in canUseTypeEngine (with narrowing,
+  we can allow these comparisons), discriminated union patterns, type guard functions,
+  exhaustiveness checking.
+
+  **File:** `Checker.kt` — `extractNullNarrowing` → `extractNarrowing` (generalized)
+
+- [ ] **7.8. Conditional types (basic)**
+
+  **Problem:** `ConditionalType` returns `anyType`. Conditional types are the foundation
+  of TypeScript's utility types (`Extract`, `Exclude`, `NonNullable`, `ReturnType`, etc.).
+
+  **Implementation:**
+  - In `getTypeFromTypeNodeWorker`, for `ConditionalType` (`T extends U ? X : Y`):
+    - Resolve T, U, X, Y
+    - If T is concrete (not a type parameter): evaluate `isTypeRelatedTo(T, U)`
+    - If true → return X, if false → return Y
+    - If T is a union: distribute — `(A | B) extends U ? X : Y` →
+      `(A extends U ? X : Y) | (B extends U ? X : Y)`
+    - If T is an unresolved type parameter: return the conditional type unevaluated
+      (or anyType as conservative fallback)
+  - Handle `infer` keyword: in the true branch, extract inferred type from the constraint
+    position (e.g., `T extends (...args: any[]) => infer R ? R : never` → extract return type)
+
+  **Depends on:** 7.6 (conditional types often use indexed access in branches),
+  7.2 (extends clause uses type relation)
+
+  **Unblocks:** `ReturnType<T>`, `Parameters<T>`, `Extract<T, U>`, `Exclude<T, U>`,
+  `NonNullable<T>`, `InstanceType<T>`, and all user-defined conditional types.
+
+  **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
+
+- [ ] **7.9. Mapped types**
+
+  **Problem:** `MappedType` returns `anyType`. Mapped types power TypeScript's most
+  common utility types (`Partial<T>`, `Required<T>`, `Readonly<T>`, `Pick<T, K>`,
+  `Record<K, V>`).
+
+  **Implementation:**
+  - In `getTypeFromTypeNodeWorker`, for `MappedType` (`{ [K in keyof T]: ... }`):
+    - Resolve the constraint type (usually `keyof T`)
+    - For each key in the constraint: create a property with the mapped type
+    - Handle modifiers: `+readonly`, `-readonly`, `+?`, `-?`
+    - For `Record<K, V>`: constraint is K, type is V — create object with K-typed keys
+  - Create `Type.Object` with computed properties
+  - Handle homomorphic mapped types (preserve optional/readonly from source)
+
+  **Depends on:** 7.6 (`keyof` and indexed access for the mapped body)
+
+  **Unblocks:** `Partial<T>`, `Required<T>`, `Readonly<T>`, `Pick<T, K>`,
+  `Record<K, V>`, `Omit<T, K>`, and user-defined mapped types.
+
+  **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
+
+---
+
 ## Execution order
 
-**Phase 5a** (immediate): Track A — TS2322 analysis + guard relaxation
-**Phase 5b** (parallel): Track B — JS emit fixes (independent of checker)
-**Phase 5c** (after 5a): Track C — New diagnostics (TS2420, TS2416, TS2792, TS2343)
-**Phase 5d** (after 5a): Track D — Unblock TS2339 + TS2345 widening
-**Phase 5e** (as-needed): Track E — Cross-file resolution
+**Phase 7** (active): Infrastructure unblocking — work items 7.0–7.9 in dependency order.
 
-Tracks A+B can run in parallel (different files). Tracks C+D depend on
-Track A's structural comparison improvements.
+| Item | Feature | Depends on | Unblocks |
+|------|---------|------------|----------|
+| 7.0 | Recursive type cycle detection | — | 7.2 |
+| 7.1 | Scope-chain identifier resolution | — | 7.3, 7.4, 7.5 |
+| 7.2 | Open Object↔Object comparison | 7.0 | 7.5, 7.6, TS2322/TS2344/TS2416 |
+| 7.3 | Variable initializer inference | 7.1 | 7.4, contextual typing |
+| 7.4 | Property access chain typing | 7.1, 7.3 | TS2339, method call typing |
+| 7.5 | Overload resolution | 7.2, 7.1+7.3 | TS2769/TS2554, stdlib typing |
+| 7.6 | Indexed access types (T[K]) | 7.2 | 7.8, 7.9, utility types |
+| 7.7 | Control flow narrowing | — | Union→Object safety, discriminated unions |
+| 7.8 | Conditional types | 7.6, 7.2 | Extract, Exclude, ReturnType |
+| 7.9 | Mapped types | 7.6 | Partial, Required, Record |
 
-### Projected test gains
-
-| Track | Tests gained | Cumulative |
-|-------|-------------|------------|
-| A — TS2322 deepening | +30-40 | ~7,700 |
-| B — JS emit fixes | +30-40 | ~7,740 |
-| C — New diagnostics | +30-40 | ~7,780 |
-| D — Unblock deferred | +25-35 | ~7,810 |
-| E — Cross-file | +15-20 | ~7,830 |
-| **Total Phase 5** | **~130-175** | **~7,830 (77.7%)** |
-
-Conservative — assumes significant overlap between code targets.
+**Parallel tracks:** 7.0 + 7.1 can run in parallel (independent). 7.7 is independent
+throughout. All other items must follow the dependency chain.
 
 ---
 
