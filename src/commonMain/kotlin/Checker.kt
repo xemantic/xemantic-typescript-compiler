@@ -25602,7 +25602,7 @@ class Checker(
             is TypePredicate -> booleanType
             is TypeLiteral -> getTypeFromTypeLiteral(node)
             is TypeOperator -> getTypeFromTypeOperator(node)
-            is IndexedAccessType -> anyType // TODO: indexed access types
+            is IndexedAccessType -> getTypeFromIndexedAccess(node)
             is ConditionalType -> anyType // TODO: conditional types
             is MappedType -> anyType // TODO: mapped types
             is TemplateLiteralType -> stringType // template literal types are string-like
@@ -31481,11 +31481,127 @@ class Checker(
     /** Handle TypeOperator nodes (keyof, unique, readonly). */
     private fun getTypeFromTypeOperator(node: TypeOperator): Type {
         return when (node.operator) {
-            SyntaxKind.KeyOfKeyword -> anyType // TODO: keyof type
+            SyntaxKind.KeyOfKeyword -> getKeyofType(getTypeFromTypeNode(node.type))
             SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
             SyntaxKind.ReadonlyKeyword -> getTypeFromTypeNode(node.type) // readonly just adds modifier
             else -> anyType
         }
+    }
+
+    /**
+     * Resolve an IndexedAccessType node: T[K] → the type of property K on T.
+     * e.g., `{ a: number; b: string }["a"]` → `number`
+     */
+    private fun getTypeFromIndexedAccess(node: IndexedAccessType): Type {
+        val objectType = getTypeFromTypeNode(node.objectType)
+        val indexType = getTypeFromTypeNode(node.indexType)
+        if (objectType === anyType || objectType === errorType) return anyType
+        if (indexType === anyType || indexType === errorType) return anyType
+        return getIndexedAccessType(objectType, indexType)
+    }
+
+    /**
+     * Resolve T[K] at the type level:
+     * - String literal K → look up named property
+     * - Number → number index signature type
+     * - Union K → union of T[each constituent]
+     * - keyof T → union of all property types
+     */
+    private fun getIndexedAccessType(objectType: Type, indexType: Type): Type {
+        // String literal key: T["prop"] → type of property "prop"
+        if (indexType is Type.StringLiteral) {
+            val prop = getPropertyOfType(objectType, indexType.value)
+            if (prop != null) return getTypeOfSymbol(prop)
+            // Check string index signature
+            if (objectType is Type.Object) {
+                resolveStructuredTypeMembers(objectType)
+                val strIdx = objectType.stringIndexInfo
+                if (strIdx != null) return strIdx.type
+            }
+            return anyType
+        }
+        // Number literal key: T[0] → type of property "0" (tuple)
+        if (indexType is Type.NumberLiteral) {
+            val idx = indexType.value.toInt().toString()
+            val prop = getPropertyOfType(objectType, idx)
+            if (prop != null) return getTypeOfSymbol(prop)
+            // Check number index signature
+            if (objectType is Type.Object) {
+                resolveStructuredTypeMembers(objectType)
+                val numIdx = objectType.numberIndexInfo
+                if (numIdx != null) return numIdx.type
+            }
+            return anyType
+        }
+        // Number type as index: T[number] → number index signature type
+        if (indexType.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLike)) {
+            if (objectType is Type.Object) {
+                resolveStructuredTypeMembers(objectType)
+                val numIdx = objectType.numberIndexInfo
+                if (numIdx != null) return numIdx.type
+                // For tuple types, return union of all element types
+                val tupleTypes = objectType.tupleElementTypes
+                if (tupleTypes != null && tupleTypes.isNotEmpty()) {
+                    return getUnionType(tupleTypes)
+                }
+            }
+            return anyType
+        }
+        // String type as index: T[string] → string index signature type
+        if (indexType.flags.hasAny(TypeFlags.String or TypeFlags.StringLike)) {
+            if (objectType is Type.Object) {
+                resolveStructuredTypeMembers(objectType)
+                val strIdx = objectType.stringIndexInfo
+                if (strIdx != null) return strIdx.type
+            }
+            return anyType
+        }
+        // Union index: T[A | B] → T[A] | T[B]
+        if (indexType is Type.Union) {
+            val types = indexType.types.map { getIndexedAccessType(objectType, it) }
+                .filter { it !== anyType }
+            if (types.isNotEmpty()) return getUnionType(types)
+            return anyType
+        }
+        return anyType
+    }
+
+    /**
+     * Get the keyof type for a type: produces a union of string literal types for each
+     * property name. e.g., `keyof { a: number; b: string }` → `"a" | "b"`.
+     */
+    private fun getKeyofType(type: Type): Type {
+        if (type === anyType || type === errorType) return stringType // keyof any = string
+        if (type is Type.Object) {
+            // Only use already-resolved properties to avoid triggering member resolution
+            // during init (which can cause test ordering sensitivity).
+            val props = type.properties
+            if (props != null) {
+                if (props.isEmpty()) return neverType
+                val literals = props.map { Type.StringLiteral(it.name) }
+                return getUnionType(literals)
+            }
+            // Members not yet resolved — trigger resolution
+            try {
+                resolveStructuredTypeMembers(type)
+                val resolvedProps = type.properties
+                if (resolvedProps.isNullOrEmpty()) return stringType
+                val literals = resolvedProps.map { Type.StringLiteral(it.name) }
+                return getUnionType(literals)
+            } catch (_: StackOverflowError) {
+                return stringType
+            }
+        }
+        if (type is Type.Union) {
+            // keyof (A | B) = keyof A & keyof B (intersection of keys)
+            // Simplified: return string for now
+            return stringType
+        }
+        if (type is Type.TypeParam) {
+            // keyof T where T is a type parameter — return string | number | symbol
+            return stringType
+        }
+        return stringType
     }
 
     // -----------------------------------------------------------------------

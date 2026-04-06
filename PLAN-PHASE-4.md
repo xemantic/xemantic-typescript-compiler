@@ -1094,7 +1094,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — new `resolveCall`, modify `getReturnTypeOfCallExpression`
 
-- [ ] **7.6. Indexed access types (T[K])**
+- [x] **7.6. Indexed access types (T[K])**
 
   **Problem:** `IndexedAccessType` in type position returns `anyType`. This blocks
   mapped types, many utility types, and real-world patterns like `Config["database"]`.
