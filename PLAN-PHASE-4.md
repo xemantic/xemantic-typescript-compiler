@@ -1118,7 +1118,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
 
-- [ ] **7.7. Control flow graph and type narrowing**
+- [x] **7.7. Control flow graph and type narrowing** (7.7a: typeof narrowing)
 
   **Problem:** Only basic null/undefined narrowing in if-then branches exists (6.8).
   No discriminated unions, no `typeof` narrowing, no `instanceof`, no type guard
