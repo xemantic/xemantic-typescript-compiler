@@ -643,24 +643,23 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
 
   **File:** `Checker.kt` — `resolveAliasTarget`, `getDeclaredTypeOfSymbolWorker`
 
-- [ ] **6.7. Basic contextual typing**
+- [x] **6.7. Basic contextual typing**
 
   When a function expression is assigned to a typed variable, infer parameter types
   from the target type's call signature.
 
-  **Implementation:**
-  - In `getTypeOfArrowFunction` / `getTypeOfFunctionExpression`:
-    - Accept optional `contextualType: Type?` parameter
-    - If contextualType has call signatures, use their parameter types
-  - In `checkVarDeclAssignability` / `checkAssignmentExpression`:
-    - When source is ArrowFunction/FunctionExpression and target has call signatures,
-      pass target type as contextual type
-  - Prevents TS7006 FPs for callback parameters
+  **Implementation (completed):**
+  - Added `contextualType` field — set when evaluating function expression initializers
+  - `applyContextualParameterTypes` infers parameter types from contextual call signature
+  - Applied in both variable declarations and assignment expressions when the target
+    type is an Object with call signatures and the source is ArrowFunction/FunctionExpression
+  - Parameter types stored via symbolTypes[] so getTypeOfSymbol returns contextual type
 
-  **Depends on:** 6.2 (generics) for generic callback types
-  **Unlocks:** 3 pure FP-only tests + ~24 TS7006 FP-affected tests
+  **Result:** 0 direct test gains — TS7006 FP tests also need the TS7006 checker to
+  check for contextual types, and most tests don't set `noImplicitAny`. Infrastructure
+  is regression-free and enables correct parameter type inference for function expressions.
+
   **File:** `Checker.kt` — expression type inference
-  **Estimated gain:** 5-10 tests
 
 - [ ] **6.8. Basic control flow narrowing**
 
