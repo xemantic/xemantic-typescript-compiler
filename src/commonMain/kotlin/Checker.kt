@@ -1223,13 +1223,36 @@ class Checker(
             val fileName = result.sourceFile.fileName
             val typeMap = mutableMapOf<String, Type>()
             for ((name, symbol) in result.locals) {
-                try {
-                    val type = getTypeOfSymbol(symbol)
-                    if (type !== anyType && type !== errorType) {
-                        typeMap[name] = type
+                // Only resolve types for symbols that are NOT simple variables
+                // (variable inference via getTypeOfExpression can be expensive on stress tests)
+                if (symbol.flags.hasAny(SymbolFlags.Function or SymbolFlags.Class or
+                        SymbolFlags.Interface or SymbolFlags.Enum or SymbolFlags.TypeAlias or
+                        SymbolFlags.Alias)) {
+                    try {
+                        val type = getTypeOfSymbol(symbol)
+                        if (type !== anyType && type !== errorType) {
+                            typeMap[name] = type
+                        }
+                    } catch (_: StackOverflowError) {
+                        // Circular type resolution — skip
                     }
-                } catch (_: StackOverflowError) {
-                    // Circular type resolution — skip
+                } else if (symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
+                    // For variables, only resolve if they have a type annotation (cheap)
+                    val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+                    val hasAnnotation = when (decl) {
+                        is VariableDeclaration -> decl.type != null
+                        is Parameter -> decl.type != null
+                        is PropertyDeclaration -> decl.type != null
+                        else -> false
+                    }
+                    if (hasAnnotation) {
+                        try {
+                            val type = getTypeOfSymbol(symbol)
+                            if (type !== anyType && type !== errorType) {
+                                typeMap[name] = type
+                            }
+                        } catch (_: StackOverflowError) {}
+                    }
                 }
             }
             if (typeMap.isNotEmpty()) {
@@ -26544,11 +26567,57 @@ class Checker(
         resolveStructuredTypeMembers(calleeType)
         val sigs = calleeType.callSignatures
         if (sigs.isNullOrEmpty()) return anyType
-        // For named types (interfaces/classes) with multiple call signatures, we can't
-        // properly resolve overloads — return anyType to avoid false positives.
-        if (sigs.size > 1 && calleeType is Type.Interface) return anyType
-        // Use the first signature's return type (simple resolution)
-        return sigs[0].resolvedReturnType ?: anyType
+        // Single signature — simple resolution
+        if (sigs.size == 1) return sigs[0].resolvedReturnType ?: anyType
+        // Multiple signatures on interfaces — skip overload resolution (inherited overloads
+        // with specialized string literal params need proper literal type matching)
+        if (calleeType is Type.Interface) return anyType
+        // Multiple signatures on functions — attempt overload resolution
+        return resolveCallOverload(sigs, expr.arguments)?.resolvedReturnType ?: anyType
+    }
+
+    /**
+     * Basic overload resolution: try each signature in order, return the first that matches
+     * the call's argument count. If argument types are available, prefer the best type match.
+     */
+    private fun resolveCallOverload(signatures: List<Signature>, args: List<Expression>): Signature? {
+        val argCount = args.size
+        // First pass: find overloads matching by arity
+        val arityMatches = signatures.filter { sig ->
+            val maxParams = sig.parameters.size
+            argCount >= sig.minArgumentCount && argCount <= maxParams
+        }
+        if (arityMatches.isEmpty()) {
+            // No arity match — try with rest parameters (last param is rest)
+            val restMatches = signatures.filter { sig ->
+                val lastParam = sig.parameters.lastOrNull()
+                val hasRest = lastParam != null && lastParam.declarations.any { d ->
+                    d is Parameter && d.dotDotDotToken
+                }
+                argCount >= sig.minArgumentCount && (argCount <= sig.parameters.size || hasRest)
+            }
+            return restMatches.firstOrNull() ?: signatures.lastOrNull()
+        }
+        if (arityMatches.size == 1) return arityMatches[0]
+        // Multiple arity matches — try type-based resolution
+        for (sig in arityMatches) {
+            var allMatch = true
+            for ((i, arg) in args.withIndex()) {
+                if (i >= sig.parameters.size) break
+                val paramType = getTypeOfSymbol(sig.parameters[i])
+                if (paramType === anyType || paramType === errorType) continue
+                val argType = getTypeOfExpression(arg)
+                if (argType === anyType || argType === errorType) continue
+                if (!isSimpleTypeRelatedTo(argType, paramType) &&
+                    !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                    allMatch = false
+                    break
+                }
+            }
+            if (allMatch) return sig
+        }
+        // No type match — return first arity match
+        return arityMatches[0]
     }
 
     /** Get the return type of a new expression by resolving the construct signature. */

@@ -1066,7 +1066,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `getTypeOfPropertyAccess`, new `getTypeOfElementAccess`
 
-- [ ] **7.5. Overload resolution**
+- [x] **7.5. Overload resolution**
 
   **Problem:** `getReturnTypeOfCallExpression` returns `anyType` for overloaded functions
   (line 26417: "returns anyType to avoid picking the wrong overload"). This cascades:
