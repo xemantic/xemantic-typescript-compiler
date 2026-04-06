@@ -1405,7 +1405,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 1 test
   **File:** `Checker.kt` — `isDefinitelyTerminating`, `clauseStmtsTerminate`
 
-- [ ] **9.2. Add missing KNOWN_GLOBALS for web/test APIs (LOW)**
+- [x] **9.2. Add missing KNOWN_GLOBALS for web/test APIs (LOW)**
 
   **Problem:** FP TS2304 for `importScripts` (web worker API), and FP TS2552 for `$`
   (jQuery), `suite` (test framework). These are well-known globals missing from our list.

@@ -12709,9 +12709,13 @@ class Checker(
             "process", "Buffer",
             "__dirname", "__filename",
             "__non_webpack_require__",
+            // Web Worker APIs
+            "importScripts",
             // Testing frameworks
             "describe", "it", "test", "expect", "jest", "beforeEach", "afterEach",
-            "beforeAll", "afterAll",
+            "beforeAll", "afterAll", "suite",
+            // jQuery / common libraries
+            "$", "jQuery",
             // Common global augmentations
             "Symbol",
             // JSX namespace (available when JSX is enabled)
