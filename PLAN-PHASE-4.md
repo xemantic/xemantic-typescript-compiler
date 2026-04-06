@@ -1178,7 +1178,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
 
-- [ ] **7.9. Mapped types**
+- [x] **7.9. Mapped types**
 
   **Problem:** `MappedType` returns `anyType`. Mapped types power TypeScript's most
   common utility types (`Partial<T>`, `Required<T>`, `Readonly<T>`, `Pick<T, K>`,
