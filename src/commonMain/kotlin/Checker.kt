@@ -6527,10 +6527,12 @@ class Checker(
         }
     }
 
-    private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String) {
+    private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String, contextuallyTyped: Boolean = false) {
         when (expr) {
             is ArrowFunction -> {
-                checkParamsForImplicitAny(expr.parameters, source, fileName)
+                if (!contextuallyTyped) {
+                    checkParamsForImplicitAny(expr.parameters, source, fileName)
+                }
                 when (val body = expr.body) {
                     is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
                     is Expression -> checkImplicitAnyInExpr(body, source, fileName)
@@ -6538,7 +6540,9 @@ class Checker(
                 }
             }
             is FunctionExpression -> {
-                checkParamsForImplicitAny(expr.parameters, source, fileName)
+                if (!contextuallyTyped) {
+                    checkParamsForImplicitAny(expr.parameters, source, fileName)
+                }
                 checkImplicitAnyInStatements(expr.body.statements, source, fileName)
             }
             is ClassExpression -> {
@@ -6550,48 +6554,29 @@ class Checker(
                 for (prop in expr.properties) {
                     when (prop) {
                         is MethodDeclaration -> {
-                            checkParamsForImplicitAny(prop.parameters, source, fileName)
+                            if (!contextuallyTyped) {
+                                checkParamsForImplicitAny(prop.parameters, source, fileName)
+                            }
                             prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
                         }
                         is PropertyAssignment -> {
-                            checkImplicitAnyInExpr(prop.initializer, source, fileName)
+                            // Propagate contextual typing to property initializers
+                            checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped)
                         }
                         else -> {}
                     }
                 }
             }
             is CallExpression -> {
-                // Callback args get contextual typing — skip TS7006 for their params
+                // All call args get contextual typing from parameter types
                 for (arg in expr.arguments) {
-                    when (arg) {
-                        is ArrowFunction -> {
-                            // Skip param checking — types inferred from call context
-                            when (val body = arg.body) {
-                                is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
-                                is Expression -> checkImplicitAnyInExpr(body, source, fileName)
-                                else -> {}
-                            }
-                        }
-                        is FunctionExpression -> {
-                            // Skip param checking — types inferred from call context
-                            checkImplicitAnyInStatements(arg.body.statements, source, fileName)
-                        }
-                        else -> checkImplicitAnyInExpr(arg, source, fileName)
-                    }
+                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = true)
                 }
             }
             is NewExpression -> {
                 // Same as CallExpression — constructor args get contextual typing
                 for (arg in (expr.arguments ?: emptyList())) {
-                    when (arg) {
-                        is ArrowFunction -> when (val body = arg.body) {
-                            is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
-                            is Expression -> checkImplicitAnyInExpr(body, source, fileName)
-                            else -> {}
-                        }
-                        is FunctionExpression -> checkImplicitAnyInStatements(arg.body.statements, source, fileName)
-                        else -> checkImplicitAnyInExpr(arg, source, fileName)
-                    }
+                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = true)
                 }
             }
             is BinaryExpression -> {
@@ -6602,12 +6587,14 @@ class Checker(
                 }
                 checkImplicitAnyInExpr(current, source, fileName)
             }
-            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName)
+            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped)
             is ConditionalExpression -> {
-                checkImplicitAnyInExpr(expr.whenTrue, source, fileName)
-                checkImplicitAnyInExpr(expr.whenFalse, source, fileName)
+                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped)
+                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped)
             }
             is ArrayLiteralExpression -> {
+                // Do NOT propagate contextual typing through arrays — array element type
+                // depends on the array type parameter which may be a union (ambiguous)
                 expr.elements.forEach { checkImplicitAnyInExpr(it, source, fileName) }
             }
             else -> {}

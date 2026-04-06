@@ -1422,7 +1422,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 2-5 tests (reduces FPs in tests with other correct diagnostics)
   **File:** `Checker.kt` — `KNOWN_GLOBALS`
 
-- [ ] **9.3. Suppress TS7006 for parameters with contextual types (MEDIUM)**
+- [x] **9.3. Suppress TS7006 for parameters with contextual types (MEDIUM)**
 
   **Problem:** 24 tests have FP TS7006 ("Parameter implicitly has 'any' type") for
   parameters that should be contextually typed. 3 pure-FP tests:
