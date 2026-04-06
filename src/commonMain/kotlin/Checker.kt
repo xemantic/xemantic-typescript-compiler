@@ -936,57 +936,76 @@ class Checker(
     private fun mergeModuleAugmentations() {
         val processedSpecifiers = mutableSetOf<String>()
         for (result in binderResults) {
-            for (stmt in result.sourceFile.statements) {
-                if (stmt !is ModuleDeclaration) continue
-                val name = stmt.name as? StringLiteralNode ?: continue
-                val specifier = name.text
-                if (!processedSpecifiers.add(specifier)) continue
+            collectModuleAugmentations(result.sourceFile.statements, processedSpecifiers)
+        }
+    }
 
-                // Find the augmentation module symbol in globals
-                val augModule = globals[specifier] ?: continue
-                val augExports = augModule.exports ?: continue
+    private fun collectModuleAugmentations(statements: List<Statement>, processedSpecifiers: MutableSet<String>) {
+        for (stmt in statements) {
+            if (stmt !is ModuleDeclaration) continue
+            val name = stmt.name as? StringLiteralNode ?: continue
+            val specifier = name.text
 
-                // Resolve the specifier to a target file
-                val targetFile = resolveModuleSpecifier(specifier, stmt)
+            // Recursively process nested module declarations inside this one
+            // (e.g. `declare module "D" { module "a" { interface A { ... } } }`)
+            val body = stmt.body
+            if (body is ModuleBlock) {
+                collectModuleAugmentations(body.statements, processedSpecifiers)
+            }
 
-                // Merge each augmented export into the corresponding global symbol.
-                // For file-based modules (relative specifiers), augmented exports should
-                // merge with the target file's exported symbols which are already in globals.
-                // For ambient modules (non-relative), the augmented exports are already
-                // merged by mergeSymbolTable — but inner interfaces/namespaces that match
-                // global names still need explicit merging.
-                for ((exportName, augSymbol) in augExports) {
-                    val globalSymbol = globals[exportName] ?: continue
-                    // Only merge if the augmented symbol adds new capabilities (namespace exports,
-                    // interface declarations) to the existing global symbol.
+            if (!processedSpecifiers.add(specifier)) continue
+
+            // Find the augmentation module symbol in globals
+            val augModule = globals[specifier] ?: continue
+            val augExports = augModule.exports ?: continue
+
+            // Resolve the specifier to a target file
+            val targetFile = resolveModuleSpecifier(specifier, stmt)
+
+            // Merge each augmented export into the corresponding global symbol.
+            for ((exportName, augSymbol) in augExports) {
+                val globalSymbol = globals[exportName]
+                if (globalSymbol != null) {
                     if (augSymbol.exports != null) {
                         if (globalSymbol.exports == null) globalSymbol.exports = symbolTable()
                         mergeSymbolTable(globalSymbol.exports!!, augSymbol.exports!!)
-                        // Add Module flag so property access resolution knows to check exports
                         globalSymbol.flags = globalSymbol.flags or (augSymbol.flags and SymbolFlags.Module)
                     }
                     if (augSymbol.declarations.isNotEmpty()) {
-                        // Add interface/namespace declarations from augmentations
                         for (decl in augSymbol.declarations) {
                             if (decl !in globalSymbol.declarations) {
                                 globalSymbol.declarations.add(decl)
                             }
                         }
                     }
+                } else {
+                    // New export not yet in globals — add it
+                    globals[exportName] = augSymbol
                 }
+            }
 
-                // Also merge augmented exports into the target file's binder result locals,
-                // so that import resolution (which uses fileResults[targetFile].locals) sees them.
-                if (targetFile != null) {
-                    val targetResult = fileResults[targetFile]
-                    if (targetResult != null) {
-                        for ((exportName, augSymbol) in augExports) {
-                            val localSymbol = targetResult.locals[exportName]
-                            if (localSymbol != null && augSymbol.exports != null) {
+            // Also merge augmented exports into the target file's binder result locals
+            if (targetFile != null) {
+                val targetResult = fileResults[targetFile]
+                if (targetResult != null) {
+                    for ((exportName, augSymbol) in augExports) {
+                        val localSymbol = targetResult.locals[exportName]
+                        if (localSymbol != null) {
+                            if (augSymbol.exports != null) {
                                 if (localSymbol.exports == null) localSymbol.exports = symbolTable()
                                 mergeSymbolTable(localSymbol.exports!!, augSymbol.exports!!)
                                 localSymbol.flags = localSymbol.flags or (augSymbol.flags and SymbolFlags.Module)
                             }
+                            if (augSymbol.declarations.isNotEmpty()) {
+                                for (decl in augSymbol.declarations) {
+                                    if (decl !in localSymbol.declarations) {
+                                        localSymbol.declarations.add(decl)
+                                    }
+                                }
+                            }
+                        } else {
+                            // New export — add to target file's locals
+                            targetResult.locals[exportName] = augSymbol
                         }
                     }
                 }

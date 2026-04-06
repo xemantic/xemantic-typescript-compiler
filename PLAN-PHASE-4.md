@@ -1437,7 +1437,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 3 pure-FP tests + reduces FPs in ~21 mixed tests
   **File:** `Checker.kt` — `checkImplicitAnyParameters`
 
-- [ ] **9.4. Fix module augmentation export merging for TS2339 (MEDIUM)**
+- [x] **9.4. Fix module augmentation export merging for TS2339 (MEDIUM)**
 
   **Problem:** `moduleAugmentationsImports4` — TS2339 fires for properties exported
   from other files via module augmentation (`declare module "X" { export function y() }`).
