@@ -208,7 +208,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 8: Harvest Test Gains.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,981 / 10,077 tests passing (~79.2%). Phase 7 built all foundational infrastructure (cycle detection, structural comparison, overloads, indexed access, conditional/mapped types, typeof narrowing). Phase 8 relaxes conservative guards and activates features to harvest test gains from that infrastructure.
+**Phase 9: Targeted FP Suppression.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,983 / 10,077 tests passing (79.2%). Phase 8 relaxed guards and added infrastructure with minimal test gains (+2). Phase 9 targets false positive suppression (22 pure-FP tests), JS emit fixes (237 failures), and common FP patterns in mixed-diff tests. 56% of failures produce zero diagnostics (blocked on lib.d.ts types) — Phase 9 focuses on the other 44%.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
