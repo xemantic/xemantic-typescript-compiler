@@ -25345,7 +25345,7 @@ class Checker(
             is LiteralType -> getTypeFromLiteralTypeNode(node)
             is FunctionType -> getFunctionTypeFromNode(node)
             is ConstructorType -> getFunctionTypeFromConstructorNode(node)
-            is TypeQuery -> anyType // TODO: getTypeOfSymbol for typeof expressions
+            is TypeQuery -> getTypeFromTypeQuery(node)
             is ParenthesizedType -> getTypeFromTypeNode(node.type)
             is ThisType -> anyType // TODO: proper this-type resolution
             is TypePredicate -> booleanType
@@ -30639,6 +30639,71 @@ class Checker(
         return tupleObj
     }
 
+    /** Resolve a typeof type query: `typeof X` in type annotation position. */
+    private fun getTypeFromTypeQuery(node: TypeQuery): Type {
+        val exprName = node.exprName
+        when (exprName) {
+            is Identifier -> {
+                // Handle special built-in names
+                when (exprName.text) {
+                    "undefined" -> return undefinedType
+                    "NaN", "Infinity" -> return numberType
+                    "true", "false" -> return booleanType
+                }
+                // Check local scope first
+                currentLocalTypes[exprName.text]?.let { return it }
+                // Look up in globals
+                val symbol = globals[exprName.text] ?: return anyType
+                return getTypeOfSymbolForTypeQuery(symbol)
+            }
+            is QualifiedName -> {
+                // typeof A.B.C — resolve chain
+                val symbol = resolveQualifiedName(exprName) ?: return anyType
+                return getTypeOfSymbolForTypeQuery(symbol)
+            }
+            else -> return anyType
+        }
+    }
+
+    /** Get the type of a symbol as it appears in a typeof query.
+     *  For classes, returns the constructor type (static side), not the instance type.
+     *  For functions/variables, delegates to getTypeOfSymbol. */
+    private fun getTypeOfSymbolForTypeQuery(symbol: Symbol): Type {
+        val flags = symbol.flags
+        return when {
+            flags.hasAny(SymbolFlags.Class) -> {
+                // typeof ClassName → constructor type with construct signature
+                val classType = getDeclaredTypeOfSymbol(symbol)
+                if (classType === anyType || classType === errorType) return anyType
+                val ctorType = Type.Object()
+                ctorType.symbol = symbol
+                // Create construct signature that returns the class instance type
+                val ctorSig = Signature(
+                    resolvedReturnType = classType,
+                    parameters = emptyList(), // simplified — TODO: actual ctor params
+                )
+                ctorType.constructSignatures = listOf(ctorSig)
+                // Copy static members from class symbol exports
+                val staticProps = mutableListOf<Symbol>()
+                val staticMembers = symbolTable()
+                symbol.exports?.forEach { (name, exportSym) ->
+                    staticProps.add(exportSym)
+                    staticMembers[name] = exportSym
+                }
+                if (staticProps.isNotEmpty()) {
+                    ctorType.properties = staticProps
+                    ctorType.members = staticMembers
+                }
+                ctorType
+            }
+            flags.hasAny(SymbolFlags.Alias) -> {
+                val target = resolveAliasTarget(symbol)
+                if (target != null && target !== symbol) getTypeOfSymbolForTypeQuery(target) else anyType
+            }
+            else -> getTypeOfSymbol(symbol)
+        }
+    }
+
     /** Create a Type from a literal type node (e.g., `type X = "hello"` or `type Y = 42`). */
     private fun getTypeFromLiteralTypeNode(node: LiteralType): Type {
         return when (val literal = node.literal) {
@@ -30985,6 +31050,25 @@ class Checker(
                 val elements = typeNode.elements.map { formatTypeForDisplay(it) }
                 if (elements.any { it == null }) return null
                 "[${elements.joinToString(", ")}]"
+            }
+            is TypeQuery -> {
+                val name = when (val expr = typeNode.exprName) {
+                    is Identifier -> expr.text
+                    is QualifiedName -> {
+                        // Build "A.B.C" from nested QualifiedName
+                        fun fmt(n: Node): String? = when (n) {
+                            is Identifier -> n.text
+                            is QualifiedName -> {
+                                val l = fmt(n.left) ?: return null
+                                "$l.${n.right.text}"
+                            }
+                            else -> null
+                        }
+                        fmt(expr) ?: return null
+                    }
+                    else -> return null
+                }
+                "typeof $name"
             }
             else -> null
         }
