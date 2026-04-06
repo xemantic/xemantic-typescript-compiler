@@ -14126,11 +14126,10 @@ class Checker(
                 (thenTerm && elseTerm) || (thenTerm && stmt.elseStatement == null && isAlwaysTrue(stmt.expression))
             }
             is SwitchStatement -> {
-                // All cases + default terminate → switch is terminating
+                // All cases terminate → switch is terminating
                 val clauses = stmt.caseBlock
                 val hasDefault = clauses.any { it is DefaultClause }
-                if (!hasDefault) return false
-                clauses.all { clause ->
+                val allTerminate = clauses.all { clause ->
                     val clauseStmts = when (clause) {
                         is CaseClause -> clause.statements
                         is DefaultClause -> clause.statements
@@ -14139,6 +14138,12 @@ class Checker(
                     // Empty case clauses fall through to the next
                     clauseStmts.isEmpty() || clauseStmts.any { isDefinitelyTerminating(it) }
                 }
+                if (hasDefault) return allTerminate
+                // No default: treat as exhaustive if all case clauses have statements and terminate
+                // (heuristic — we can't verify exhaustiveness without full type info)
+                if (!allTerminate) return false
+                val caseClauses = clauses.filterIsInstance<CaseClause>()
+                caseClauses.isNotEmpty() && caseClauses.all { it.statements.isNotEmpty() }
             }
             is TryStatement -> {
                 // Try block terminates and there's no catch that doesn't terminate
