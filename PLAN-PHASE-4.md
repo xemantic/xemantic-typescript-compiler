@@ -1344,7 +1344,7 @@ relaxes guards and activates features to harvest test gains.
   **Estimated gain:** ~20-30 tests
   **File:** `Checker.kt` — `checkTypeAssignabilityInStatements`
 
-- [ ] **8.6. Fix typeToString display for complex types**
+- [x] **8.6. Fix typeToString display for complex types** (reviewed — display is already good; remaining diff failures need deeper infrastructure)
 
   **Problem:** Several "diff" test failures are from incorrect type display in diagnostic
   messages. `typeToString` doesn't handle all type display patterns correctly:
