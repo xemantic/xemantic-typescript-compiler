@@ -208,7 +208,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 4/6: Type Resolution Queue.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,981 / 10,077 tests passing (~79.2%). Current work: deepen type resolution (typeof, generics, namespaces, variable inference), implement structural typing engine (TS2322/TS2339/TS2345), prepare for parallel checking via Kotlin coroutines (inspired by tsgo's N-checker goroutine model).
+**Phase 7: Infrastructure Unblocking.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,981 / 10,077 tests passing (~79.2%). Current work: build foundational type system infrastructure in dependency order — recursive type cycle detection, scope-chain identifier resolution, Object↔Object structural comparison, overload resolution, indexed access/conditional/mapped types. Focus on features that unblock other features, not individual test gains.
 
 ### Execution protocol (MANDATORY — follow exactly)
 

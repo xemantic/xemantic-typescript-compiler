@@ -24810,11 +24810,59 @@ class Checker(
         if (sourceType is Type.Object && sourceType.tupleElementTypes != null && targetIsPrimitive) return true
         // TypeParam targets (for generic constraint checking)
         if (sourceIsPrimitive && targetType is Type.TypeParam) return true
-        // Anonymous Object → Named Interface (object literal → interface/class).
-        // Safe: anonymous types can't create recursive comparison loops.
-        // Excludes Type.Reference targets since generic instantiation can create recursive cycles.
-        if (sourceType is Type.Object && sourceType.symbol == null &&
-            targetType is Type.Interface && targetType.symbol != null) return true
+        // Primitive → named Object target (never structurally compatible)
+        if (sourceIsPrimitive && targetType is Type.Object && targetType.symbol != null) return true
+        // Object↔Object structural comparison — safe with recursive cycle detection (7.0).
+        if (sourceType is Type.Object && targetType is Type.Object) {
+            // Skip array types (getArrayType returns anyType → empty Object, causes FPs)
+            if (isArrayLikeType(sourceType) || isArrayLikeType(targetType)) return false
+            // Skip types with unresolved type parameters (incomplete generic instantiation)
+            if (hasUnresolvedTypeParams(sourceType) || hasUnresolvedTypeParams(targetType)) return false
+            resolveStructuredTypeMembers(sourceType)
+            resolveStructuredTypeMembers(targetType)
+            // Skip class-instance vs constructor-type comparison (typeof C / new() => T)
+            if (sourceType.constructSignatures.isNullOrEmpty() && !targetType.constructSignatures.isNullOrEmpty()) return false
+            if (!sourceType.constructSignatures.isNullOrEmpty() && targetType.constructSignatures.isNullOrEmpty()) return false
+            // Skip when source is an empty object literal (no members) — {} is assignable to most types
+            if (sourceType.symbol == null && sourceType.properties.isNullOrEmpty() &&
+                sourceType.callSignatures.isNullOrEmpty() && sourceType.constructSignatures.isNullOrEmpty()) return false
+            // Skip when target has malformed members (empty name) from unresolved mapped types
+            val targetProps = targetType.properties
+            if (targetProps != null && targetProps.any { it.name.isEmpty() }) return false
+            // Skip interface→interface where target extends source (narrowing scenario)
+            if (sourceType is Type.Interface && targetType is Type.Interface) {
+                val targetBases = targetType.baseTypes
+                if (targetBases != null && targetBases.any { it === sourceType }) return false
+            }
+            return true
+        }
+        // TypeParam ↔ Object (for generic constraint checking)
+        if (sourceIsPrimitive && targetType is Type.TypeParam) return true
+        if (sourceType is Type.Object && targetType is Type.TypeParam) return true
+        return false
+    }
+
+    /** Check if an Object type looks like an unresolved array type (empty after member resolution). */
+    private fun isArrayLikeType(type: Type.Object): Boolean {
+        // Array types from getArrayType() are currently empty Object() with no symbol
+        // Real array types from TypeReference[Array<T>] have the globalArrayType symbol
+        if (type.symbol?.name == "Array" || type.symbol?.name == "ReadonlyArray") return true
+        // Tuple types with element types are OK — they have proper members
+        if (type.tupleElementTypes != null) return false
+        // If it's a Reference whose target is the global array, skip
+        if (type is Type.Reference && type.target?.symbol?.name == "Array") return true
+        return false
+    }
+
+    /** Check if a type's display name contains unresolved type parameters (e.g. "B<V>"). */
+    private fun hasUnresolvedTypeParams(type: Type.Object): Boolean {
+        if (type is Type.Reference) {
+            // Check if any type argument is a TypeParam
+            val args = type.resolvedTypeArguments
+            if (args != null) {
+                return args.any { it is Type.TypeParam }
+            }
+        }
         return false
     }
 
