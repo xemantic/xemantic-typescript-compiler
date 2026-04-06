@@ -1016,7 +1016,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `canUseTypeEngine`
 
-- [ ] **7.3. Variable initializer type inference (general)**
+- [x] **7.3. Variable initializer type inference (general)** (implemented as part of 7.1)
 
   **Problem:** `getTypeOfVariableOrProperty` returns `anyType` for unannotated variables
   (comment at line 25688: "initializer inference causes FPs in TS2403/TS2322"). The
@@ -1043,7 +1043,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `getTypeOfVariableOrProperty`
 
-- [ ] **7.4. Property access chain typing**
+- [x] **7.4. Property access chain typing**
 
   **Problem:** `getTypeOfPropertyAccess` works when the base type resolves, but cascading
   `anyType` from `getTypeOfIdentifier` means most property access chains (`obj.prop.method()`)
