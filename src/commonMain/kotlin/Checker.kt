@@ -92,6 +92,9 @@ class Checker(
         // Recursion depth counters
         var checkDepth = 0
         var relationDepth = 0
+        /** Tracks (source.id, target.id) pairs currently being compared to detect recursive types.
+         *  When a pair is already on the stack, we assume compatibility (TypeScript's approach). */
+        val relationComparisonStack = HashSet<Long>()
         var argCountDepth = 0
         var callTypeCheckDepth = 0
         var arithmeticCheckDepth = 0
@@ -30647,15 +30650,24 @@ class Checker(
         val cached = relation.get(source.id, target.id)
         if (cached == Ternary.True) return true
         if (cached == Ternary.False) return false
-        // Depth limit
+        // Depth limit (safety net)
         if (relationDepth >= maxRelationDepth) return false
+        // Cycle detection: if we're already comparing this (source, target) pair,
+        // assume compatibility to break the cycle (TypeScript's approach for recursive types).
+        val pairKey = packRelationKey(source.id, target.id)
+        if (pairKey in state.relationComparisonStack) return true
+        state.relationComparisonStack.add(pairKey)
         relationDepth++
         val result = structuredTypeRelatedTo(source, target, relation)
         relationDepth--
+        state.relationComparisonStack.remove(pairKey)
         val ternary = if (result) Ternary.True else Ternary.False
         relation.set(source.id, target.id, ternary)
         return result
     }
+
+    private fun packRelationKey(a: Int, b: Int): Long =
+        (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
 
     /**
      * 4c. Core structural comparison — handles unions, intersections, and objects.
