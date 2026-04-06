@@ -26419,14 +26419,25 @@ class Checker(
                     if (sym != null) sym.name
                     else {
                         // Anonymous object type — format as { prop: type; ... }
+                        val parts = mutableListOf<String>()
+                        // Index signatures first
+                        type.stringIndexInfo?.let { info ->
+                            val readonly = if (info.isReadonly) "readonly " else ""
+                            parts.add("${readonly}[x: string]: ${typeToString(info.type)}")
+                        }
+                        type.numberIndexInfo?.let { info ->
+                            val readonly = if (info.isReadonly) "readonly " else ""
+                            parts.add("${readonly}[x: number]: ${typeToString(info.type)}")
+                        }
+                        // Properties
                         val props = type.properties
-                        if (props != null && props.isNotEmpty()) {
-                            val entries = props.joinToString("; ") { p ->
+                        if (props != null) {
+                            for (p in props) {
                                 val propType = symbolTypes[p.id]
-                                "${p.name}: ${if (propType != null) typeToString(propType) else "any"}"
+                                parts.add("${p.name}: ${if (propType != null) typeToString(propType) else "any"}")
                             }
-                            "{ $entries; }"
-                        } else "{}"
+                        }
+                        if (parts.isNotEmpty()) "{ ${parts.joinToString("; ")}; }" else "{}"
                     }
                 }
             }
@@ -30936,7 +30947,38 @@ class Checker(
                         symbolTypes[sym.id] = methodType
                     }
                 }
+                is IndexSignature -> {
+                    // Handled in second pass below
+                }
+                is Constructor -> {
+                    val params = getParameterSymbols(member.parameters)
+                    constructSignatures.add(Signature(
+                        declaration = member,
+                        parameters = params,
+                        resolvedReturnType = anyType,
+                        minArgumentCount = member.parameters.count {
+                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                        },
+                    ))
+                }
                 else -> continue
+            }
+        }
+        // Second pass: collect index signatures
+        var stringIndexInfo: IndexInfo? = null
+        var numberIndexInfo: IndexInfo? = null
+        for (member in node.members) {
+            if (member is IndexSignature) {
+                val indexType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                val paramType = member.parameters.firstOrNull()?.type
+                val isNumber = paramType is KeywordTypeNode && paramType.kind == SyntaxKind.NumberKeyword
+                val info = IndexInfo(
+                    keyType = if (isNumber) numberType else stringType,
+                    type = indexType,
+                    isReadonly = ModifierFlag.Readonly in member.modifiers,
+                    declaration = member,
+                )
+                if (isNumber) numberIndexInfo = info else stringIndexInfo = info
             }
         }
         val objType = Type.Object()
@@ -30944,6 +30986,8 @@ class Checker(
         objType.properties = properties
         if (callSignatures.isNotEmpty()) objType.callSignatures = callSignatures
         if (constructSignatures.isNotEmpty()) objType.constructSignatures = constructSignatures
+        objType.stringIndexInfo = stringIndexInfo
+        objType.numberIndexInfo = numberIndexInfo
         return objType
     }
 
