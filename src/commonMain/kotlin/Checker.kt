@@ -26256,7 +26256,7 @@ class Checker(
 
             // Property access
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
-            is ElementAccessExpression -> anyType // TODO: indexed access
+            is ElementAccessExpression -> getTypeOfElementAccess(expr)
 
             // Unary expressions
             is PrefixUnaryExpression -> when (expr.operator) {
@@ -26535,10 +26535,7 @@ class Checker(
     /** Get the return type of a call expression by resolving the callee's call signature. */
     private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
         val calleeType = when (val callee = expr.expression) {
-            is Identifier -> {
-                val sym = globals[callee.text] ?: return anyType
-                getTypeOfSymbol(sym)
-            }
+            is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
             else -> return anyType
         }
@@ -26557,10 +26554,7 @@ class Checker(
     /** Get the return type of a new expression by resolving the construct signature. */
     private fun getReturnTypeOfNewExpression(expr: NewExpression): Type {
         val calleeType = when (val callee = expr.expression) {
-            is Identifier -> {
-                val sym = globals[callee.text] ?: return anyType
-                getTypeOfSymbol(sym)
-            }
+            is Identifier -> getTypeOfIdentifier(callee)
             else -> return anyType
         }
         if (calleeType === anyType || calleeType === errorType) return anyType
@@ -26586,7 +26580,7 @@ class Checker(
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
         val nsSymbol = when (objExpr) {
-            is Identifier -> globals[objExpr.text]
+            is Identifier -> currentFileLocals?.get(objExpr.text) ?: globals[objExpr.text]
             is PropertyAccessExpression -> {
                 // Chained access: resolve the intermediate namespace symbol
                 resolvePropertyAccessToSymbol(objExpr)
@@ -26604,7 +26598,7 @@ class Checker(
     /** Resolve a property access expression to its symbol (for namespace chaining). */
     private fun resolvePropertyAccessToSymbol(expr: PropertyAccessExpression): Symbol? {
         val baseSymbol = when (val base = expr.expression) {
-            is Identifier -> globals[base.text]
+            is Identifier -> currentFileLocals?.get(base.text) ?: globals[base.text]
             is PropertyAccessExpression -> resolvePropertyAccessToSymbol(base)
             else -> null
         }
@@ -26612,6 +26606,43 @@ class Checker(
             return baseSymbol.exports?.get(expr.name.text)
         }
         return null
+    }
+
+    /** Get the type of an element access expression (e.g., `obj["prop"]`, `arr[0]`). */
+    private fun getTypeOfElementAccess(expr: ElementAccessExpression): Type {
+        val objectType = getTypeOfExpression(expr.expression)
+        if (objectType === anyType || objectType === errorType) return anyType
+        val indexExpr = expr.argumentExpression ?: return anyType
+        // String literal key: obj["prop"] → resolve as named property
+        if (indexExpr is StringLiteralNode) {
+            val prop = getPropertyOfType(objectType, indexExpr.text)
+            if (prop != null) return getTypeOfSymbol(prop)
+        }
+        // Numeric literal key: arr[0] → resolve for tuple types
+        if (indexExpr is NumericLiteralNode && objectType is Type.Object) {
+            resolveStructuredTypeMembers(objectType)
+            val idx = indexExpr.text
+            val prop = objectType.members?.get(idx)
+            if (prop != null) return getTypeOfSymbol(prop)
+            // Check number index signature
+            val numIdx = objectType.numberIndexInfo
+            if (numIdx != null) return numIdx.type
+        }
+        // Check index signatures on the apparent type
+        val apparent = getApparentType(objectType)
+        if (apparent is Type.Object) {
+            resolveStructuredTypeMembers(apparent)
+            val indexType = getTypeOfExpression(indexExpr)
+            if (indexType.flags.hasAny(TypeFlags.StringLike)) {
+                val strIdx = apparent.stringIndexInfo
+                if (strIdx != null) return strIdx.type
+            }
+            if (indexType.flags.hasAny(TypeFlags.NumberLike)) {
+                val numIdx = apparent.numberIndexInfo
+                if (numIdx != null) return numIdx.type
+            }
+        }
+        return anyType
     }
 
     /** Get the type of a binary expression. */
