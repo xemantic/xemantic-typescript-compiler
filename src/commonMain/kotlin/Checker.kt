@@ -155,6 +155,11 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** Contextual type for function expressions — set when evaluating an initializer whose
+     *  target has call signatures (e.g., `var f: (x: number) => void = (x) => { ... }`).
+     *  Used by getTypeOfArrowFunction/getTypeOfFunctionExpression to infer parameter types. */
+    private var contextualType: Type? = null
+
     /** Synthetic global Array interface — used as target for `Type.Reference` in array types.
      *  Avoids returning `anyType` for `T[]` / `Array<T>` type annotations. */
     private val globalArrayType = Type.Interface().also {
@@ -25075,7 +25080,13 @@ class Checker(
         // Use the Type-based engine (Phase 4) for clear-cut cases
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
+            // Set contextual type for function expression parameter inference
+            val savedContextual = contextualType
+            if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
+                contextualType = targetType
+            }
             val sourceType = getTypeOfExpression(init)
+            contextualType = savedContextual
             if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
@@ -25275,7 +25286,13 @@ class Checker(
                     }
                     if (targetType != null && targetType !== anyType && targetType !== errorType) {
                         val tt = targetType!!
+                        // Set contextual type for function expression parameter inference
+                        val savedContextual = contextualType
+                        if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression)) {
+                            contextualType = tt
+                        }
                         val sourceType = getTypeOfExpression(expr.right)
+                        contextualType = savedContextual
                         if (canUseTypeEngine(sourceType, tt) && !checkTypeRelatedTo(sourceType, tt, assignableRelation)) {
                             val displaySource = typeToString(sourceType)
                             val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
@@ -26243,6 +26260,8 @@ class Checker(
             }
         }
         val params = getParameterSymbols(expr.parameters)
+        // Apply contextual typing: infer parameter types from contextual call signature
+        applyContextualParameterTypes(params, expr.parameters)
         val sig = Signature(
             declaration = expr,
             parameters = params,
@@ -26262,6 +26281,8 @@ class Checker(
         val returnType = expr.type?.let { getTypeFromTypeNode(it) }
             ?: if (expr.body != null && !hasReturnWithExpression(expr.body!!)) voidType else anyType
         val params = getParameterSymbols(expr.parameters)
+        // Apply contextual typing: infer parameter types from contextual call signature
+        applyContextualParameterTypes(params, expr.parameters)
         val sig = Signature(
             declaration = expr,
             parameters = params,
@@ -26274,6 +26295,31 @@ class Checker(
         fnType.callSignatures = listOf(sig)
         fnType.properties = emptyList()
         return fnType
+    }
+
+    /**
+     * Apply contextual parameter types from the current contextual type's call signature.
+     * For each unannotated parameter, if the contextual type has a matching parameter
+     * with a known type, set it via symbolTypes.
+     */
+    private fun applyContextualParameterTypes(params: List<Symbol>, astParams: List<Parameter>) {
+        val ctx = contextualType ?: return
+        if (ctx !is Type.Object) return
+        resolveStructuredTypeMembers(ctx)
+        val ctxSigs = ctx.callSignatures
+        if (ctxSigs.isNullOrEmpty()) return
+        val ctxSig = ctxSigs[0] // Use first call signature
+        val ctxParams = ctxSig.parameters
+        for ((i, param) in params.withIndex()) {
+            if (i >= ctxParams.size) break
+            // Only apply if parameter has no type annotation
+            val astParam = astParams.getOrNull(i + if (astParams.firstOrNull()?.let { (it.name as? Identifier)?.text } == "this") 1 else 0)
+            if (astParam?.type != null) continue // has explicit type annotation
+            val ctxParamType = getTypeOfSymbol(ctxParams[i])
+            if (ctxParamType !== anyType && ctxParamType !== errorType) {
+                symbolTypes[param.id] = ctxParamType
+            }
+        }
     }
 
     /** Check if a block contains any return statement with an expression. */
