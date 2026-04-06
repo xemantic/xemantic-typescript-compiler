@@ -993,7 +993,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `getTypeOfIdentifier`, new `resolveSymbolAtLocation`
 
-- [ ] **7.2. Open canUseTypeEngine for Object↔Object structural comparison**
+- [x] **7.2. Open canUseTypeEngine for Object↔Object structural comparison**
 
   **Problem:** `canUseTypeEngine` currently blocks all named↔named interface comparison
   and Reference type targets. With 7.0's cycle detection in place, these can be safely enabled.
