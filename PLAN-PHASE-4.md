@@ -1238,7 +1238,7 @@ relaxes guards and activates features to harvest test gains.
 
 ### QUEUE
 
-- [ ] **8.0. Expand TS2339 to check property access on all Object types**
+- [x] **8.0. Expand TS2339 to check property access on all Object types**
 
   **Problem:** `checkSinglePropertyAccess` only fires for `Type.Interface` identifiers.
   `Type.Object` (anonymous object literals, function types, type literals) is skipped
