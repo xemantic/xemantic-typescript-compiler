@@ -32196,7 +32196,410 @@ class Checker(
     // type is DEFINITIVELY non-numeric (literal string, literal boolean, etc.)
     // and not just any resolved type.
     private fun checkArithmeticOperandTypes() {
-        // TODO: Phase 4b item 14a — implement with conservative operand type checking
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                checkArithmeticInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) { }
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun checkArithmeticInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkArithmeticInStatement(stmt, source, fileName)
+    }
+
+    private fun checkArithmeticInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> checkArithmeticInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { checkArithmeticInExpr(it, source, fileName) }
+                }
+            }
+            is ReturnStatement -> stmt.expression?.let { checkArithmeticInExpr(it, source, fileName) }
+            is Block -> checkArithmeticInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkArithmeticInExpr(stmt.expression, source, fileName)
+                checkArithmeticInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkArithmeticInStatement(it, source, fileName) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> init.declarations.forEach { d ->
+                        d.initializer?.let { checkArithmeticInExpr(it, source, fileName) }
+                    }
+                    is Expression -> checkArithmeticInExpr(init, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { checkArithmeticInExpr(it, source, fileName) }
+                stmt.incrementor?.let { checkArithmeticInExpr(it, source, fileName) }
+                checkArithmeticInStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> checkArithmeticInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkArithmeticInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> {
+                checkArithmeticInExpr(stmt.expression, source, fileName)
+                checkArithmeticInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkArithmeticInStatement(stmt.statement, source, fileName)
+                checkArithmeticInExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                checkArithmeticInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            checkArithmeticInExpr(clause.expression, source, fileName)
+                            checkArithmeticInStatements(clause.statements, source, fileName)
+                        }
+                        is DefaultClause -> checkArithmeticInStatements(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkArithmeticInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+            }
+            is FunctionDeclaration -> {
+                stmt.body?.let { body ->
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    populateParameterLocalTypes(stmt.parameters)
+                    checkArithmeticInStatements(body.statements, source, fileName)
+                    currentLocalTypes = savedLocalTypes
+                }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { body ->
+                            val savedLocalTypes = currentLocalTypes
+                            currentLocalTypes = currentLocalTypes.toMutableMap()
+                            populateParameterLocalTypes(member.parameters)
+                            checkArithmeticInStatements(body.statements, source, fileName)
+                            currentLocalTypes = savedLocalTypes
+                        }
+                        is Constructor -> member.body?.let { body ->
+                            val savedLocalTypes = currentLocalTypes
+                            currentLocalTypes = currentLocalTypes.toMutableMap()
+                            populateParameterLocalTypes(member.parameters)
+                            checkArithmeticInStatements(body.statements, source, fileName)
+                            currentLocalTypes = savedLocalTypes
+                        }
+                        is GetAccessor -> member.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> member.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                        is PropertyDeclaration -> member.initializer?.let { checkArithmeticInExpr(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ThrowStatement -> stmt.expression?.let { checkArithmeticInExpr(it, source, fileName) }
+            is LabeledStatement -> checkArithmeticInStatement(stmt.statement, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                checkArithmeticInStatements(it.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkArithmeticInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                checkArithmeticInExpr(expr.left, source, fileName)
+                checkArithmeticInExpr(expr.right, source, fileName)
+                checkBinaryOperatorTypes(expr, source, fileName)
+            }
+            is ParenthesizedExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkArithmeticInExpr(expr.condition, source, fileName)
+                checkArithmeticInExpr(expr.whenTrue, source, fileName)
+                checkArithmeticInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkArithmeticInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkArithmeticInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkArithmeticInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkArithmeticInExpr(expr.operand, source, fileName)
+            is ArrayLiteralExpression -> expr.elements.forEach { checkArithmeticInExpr(it, source, fileName) }
+            is NewExpression -> {
+                checkArithmeticInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkArithmeticInExpr(it, source, fileName) }
+            }
+            is ArrowFunction -> {
+                val savedLocalTypes = currentLocalTypes
+                currentLocalTypes = currentLocalTypes.toMutableMap()
+                populateParameterLocalTypes(expr.parameters)
+                when (val body = expr.body) {
+                    is Block -> checkArithmeticInStatements(body.statements, source, fileName)
+                    is Expression -> checkArithmeticInExpr(body, source, fileName)
+                    else -> {}
+                }
+                currentLocalTypes = savedLocalTypes
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { checkArithmeticInExpr(it.expression, source, fileName) }
+            is AsExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkArithmeticInExpr(prop.initializer, source, fileName)
+                        is SpreadAssignment -> checkArithmeticInExpr(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ElementAccessExpression -> {
+                checkArithmeticInExpr(expr.expression, source, fileName)
+                checkArithmeticInExpr(expr.argumentExpression, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Check a binary expression for arithmetic type errors (TS2362/TS2363/TS2365). */
+    private fun checkBinaryOperatorTypes(expr: BinaryExpression, source: String, fileName: String) {
+        val op = expr.operator
+        // Only check arithmetic and comparison operators
+        val isArithmetic = op == SyntaxKind.Minus || op == SyntaxKind.Asterisk ||
+            op == SyntaxKind.Slash || op == SyntaxKind.Percent ||
+            op == SyntaxKind.AsteriskAsterisk ||
+            op == SyntaxKind.LessThanLessThan || op == SyntaxKind.GreaterThanGreaterThan ||
+            op == SyntaxKind.GreaterThanGreaterThanGreaterThan ||
+            op == SyntaxKind.Ampersand || op == SyntaxKind.Bar || op == SyntaxKind.Caret
+        val isCompoundArithmetic = op == SyntaxKind.MinusEquals || op == SyntaxKind.AsteriskEquals ||
+            op == SyntaxKind.SlashEquals || op == SyntaxKind.PercentEquals ||
+            op == SyntaxKind.AsteriskAsteriskEquals ||
+            op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals ||
+            op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals ||
+            op == SyntaxKind.AmpersandEquals || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals
+        val isPlus = op == SyntaxKind.Plus
+        val isPlusEquals = op == SyntaxKind.PlusEquals
+        val isComparison = op == SyntaxKind.LessThan || op == SyntaxKind.GreaterThan ||
+            op == SyntaxKind.LessThanEquals || op == SyntaxKind.GreaterThanEquals
+
+        if (!isArithmetic && !isCompoundArithmetic && !isPlus && !isPlusEquals && !isComparison) return
+
+        val leftType = getTypeOfExpression(expr.left)
+        val rightType = getTypeOfExpression(expr.right)
+
+        // Skip if either side is anyType or errorType (unresolvable)
+        if (leftType === anyType || leftType === errorType) return
+        if (rightType === anyType || rightType === errorType) return
+        // Skip unknown type
+        if (leftType === unknownType || rightType === unknownType) return
+        // Skip null/undefined operands — only checked with strictNullChecks
+        if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+        if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+        // Skip when either side is a non-wrapper Object type (class, interface, etc.)
+        // TypeScript handles these via other checks (TS2629 etc.), not arithmetic checks.
+        // Only wrapper types (Number, Boolean, String) get arithmetic errors.
+        if (isNonWrapperObjectType(leftType) || isNonWrapperObjectType(rightType)) return
+
+        val leftOk = isValidArithmeticOperand(leftType, isPlus || isPlusEquals)
+        val rightOk = isValidArithmeticOperand(rightType, isPlus || isPlusEquals)
+
+        // For + / +=: if both sides are valid, skip (string + string, number + number)
+        // but if types are incompatible (number + bigint, string + Number), emit TS2365
+        if (isPlus || isPlusEquals) {
+            if (leftOk && rightOk) {
+                // Check for number + bigint mixing
+                val leftIsNumber = isNumberLikeType(leftType)
+                val rightIsNumber = isNumberLikeType(rightType)
+                val leftIsBigInt = isBigIntLikeType(leftType)
+                val rightIsBigInt = isBigIntLikeType(rightType)
+                if ((leftIsNumber && rightIsBigInt) || (leftIsBigInt && rightIsNumber)) {
+                    emitTs2365(expr, op, leftType, rightType, source, fileName)
+                }
+                return
+            }
+            // For +: if either is string, allow (string concatenation)
+            if (isStringLikeType(leftType) || isStringLikeType(rightType)) return
+        }
+
+        if (isArithmetic || isCompoundArithmetic) {
+            // For strict arithmetic: both sides must be number/bigint/any/enum
+            if (!leftOk && !rightOk) {
+                // Both bad — emit TS2362 + TS2363
+                emitTs2362(expr.left, source, fileName)
+                emitTs2363(expr.right, source, fileName)
+                return
+            }
+            if (!leftOk) {
+                emitTs2362(expr.left, source, fileName)
+                return
+            }
+            if (!rightOk) {
+                emitTs2363(expr.right, source, fileName)
+                return
+            }
+            // Both OK — check number/bigint mixing
+            val leftIsNumber = isNumberLikeType(leftType)
+            val rightIsNumber = isNumberLikeType(rightType)
+            val leftIsBigInt = isBigIntLikeType(leftType)
+            val rightIsBigInt = isBigIntLikeType(rightType)
+            if ((leftIsNumber && rightIsBigInt) || (leftIsBigInt && rightIsNumber)) {
+                emitTs2365(expr, op, leftType, rightType, source, fileName)
+            }
+            return
+        }
+
+        if (isPlus || isPlusEquals) {
+            // Neither side is valid for + and neither is string — emit TS2365
+            if (!leftOk && !rightOk) {
+                emitTs2365(expr, op, leftType, rightType, source, fileName)
+                return
+            }
+            // One side is valid, other is not — emit TS2365
+            emitTs2365(expr, op, leftType, rightType, source, fileName)
+            return
+        }
+
+        if (isComparison) {
+            // Comparison: both must be comparable types (string, number, bigint, any, enum)
+            val leftComparable = isComparableType(leftType)
+            val rightComparable = isComparableType(rightType)
+            if (leftComparable && rightComparable) return
+            emitTs2365(expr, op, leftType, rightType, source, fileName)
+        }
+    }
+
+    /** Check if a type is valid for arithmetic operations. */
+    private fun isValidArithmeticOperand(type: Type, allowString: Boolean): Boolean {
+        if (type === anyType) return true
+        if (isNumberLikeType(type)) return true
+        if (isBigIntLikeType(type)) return true
+        if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return true
+        // Enum literal types
+        if (type.flags.hasAny(TypeFlags.EnumLiteral)) return true
+        // Unions: all constituents must be valid
+        if (type is Type.Union) return type.types.all { isValidArithmeticOperand(it, allowString) }
+        if (allowString && isStringLikeType(type)) return true
+        return false
+    }
+
+    /** Check if type is number, number literal, or Number-enum. */
+    private fun isNumberLikeType(type: Type): Boolean {
+        if (type.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral)) return true
+        if (type.flags.hasAny(TypeFlags.EnumLiteral)) return true
+        if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return true
+        if (type is Type.Union) return type.types.all { isNumberLikeType(it) }
+        return false
+    }
+
+    /** Check if type is bigint or bigint literal. */
+    private fun isBigIntLikeType(type: Type): Boolean {
+        if (type.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral)) return true
+        if (type is Type.Union) return type.types.all { isBigIntLikeType(it) }
+        return false
+    }
+
+    /** Check if type is string or string literal. */
+    private fun isStringLikeType(type: Type): Boolean {
+        if (type.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral)) return true
+        if (type is Type.Union) return type.types.any { isStringLikeType(it) }
+        return false
+    }
+
+    /** Check if type is valid for comparison operators. */
+    /** Check if type is a non-wrapper Object type (user class/interface, not Number/Boolean/String). */
+    private fun isNonWrapperObjectType(type: Type): Boolean {
+        if (type !is Type.Object) return false
+        val name = type.symbol?.name ?: return true // anonymous objects are non-wrapper
+        return name != "Number" && name != "Boolean" && name != "String" && name != "Symbol" && name != "BigInt"
+    }
+
+    private fun isComparableType(type: Type): Boolean {
+        if (type === anyType) return true
+        if (isNumberLikeType(type)) return true
+        if (isBigIntLikeType(type)) return true
+        if (isStringLikeType(type)) return true
+        if (type.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral)) return true
+        if (type is Type.Union) return type.types.all { isComparableType(it) }
+        return false
+    }
+
+    private fun emitTs2365(expr: BinaryExpression, op: SyntaxKind, leftType: Type, rightType: Type, source: String, fileName: String) {
+        val opText = getOperatorText(op)
+        val leftStr = typeToString(leftType)
+        val rightStr = typeToString(rightType)
+        val start = expr.left.pos
+        val length = expressionTrueEnd(expr.right) - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Operator '$opText' cannot be applied to types '$leftStr' and '$rightStr'.",
+            category = DiagnosticCategory.Error, code = 2365,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
+    }
+
+    private fun emitTs2362(operand: Expression, source: String, fileName: String) {
+        val start = operand.pos
+        val length = expressionTrueEnd(operand) - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.",
+            category = DiagnosticCategory.Error, code = 2362,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
+    }
+
+    private fun emitTs2363(operand: Expression, source: String, fileName: String) {
+        val start = operand.pos
+        val length = expressionTrueEnd(operand) - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.",
+            category = DiagnosticCategory.Error, code = 2363,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
+    }
+
+    private fun getOperatorText(op: SyntaxKind): String = when (op) {
+        SyntaxKind.Plus -> "+"
+        SyntaxKind.Minus -> "-"
+        SyntaxKind.Asterisk -> "*"
+        SyntaxKind.Slash -> "/"
+        SyntaxKind.Percent -> "%"
+        SyntaxKind.AsteriskAsterisk -> "**"
+        SyntaxKind.PlusEquals -> "+="
+        SyntaxKind.MinusEquals -> "-="
+        SyntaxKind.AsteriskEquals -> "*="
+        SyntaxKind.SlashEquals -> "/="
+        SyntaxKind.PercentEquals -> "%="
+        SyntaxKind.AsteriskAsteriskEquals -> "**="
+        SyntaxKind.LessThan -> "<"
+        SyntaxKind.GreaterThan -> ">"
+        SyntaxKind.LessThanEquals -> "<="
+        SyntaxKind.GreaterThanEquals -> ">="
+        SyntaxKind.LessThanLessThan -> "<<"
+        SyntaxKind.GreaterThanGreaterThan -> ">>"
+        SyntaxKind.GreaterThanGreaterThanGreaterThan -> ">>>"
+        SyntaxKind.Ampersand -> "&"
+        SyntaxKind.Bar -> "|"
+        SyntaxKind.Caret -> "^"
+        SyntaxKind.LessThanLessThanEquals -> "<<="
+        SyntaxKind.GreaterThanGreaterThanEquals -> ">>="
+        SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> ">>>="
+        SyntaxKind.AmpersandEquals -> "&="
+        SyntaxKind.BarEquals -> "|="
+        SyntaxKind.CaretEquals -> "^="
+        else -> op.name
     }
 
     // -----------------------------------------------------------------------
