@@ -25667,7 +25667,7 @@ class Checker(
             is TypeOperator -> getTypeFromTypeOperator(node)
             is IndexedAccessType -> getTypeFromIndexedAccess(node)
             is ConditionalType -> getTypeFromConditionalType(node)
-            is MappedType -> anyType // TODO: mapped types
+            is MappedType -> getTypeFromMappedType(node)
             is TemplateLiteralType -> stringType // template literal types are string-like
             is InferType -> anyType // only valid inside conditional types
             is RestType -> getTypeFromTypeNode(node.type) // unwrap rest
@@ -31549,6 +31549,50 @@ class Checker(
             SyntaxKind.ReadonlyKeyword -> getTypeFromTypeNode(node.type) // readonly just adds modifier
             else -> anyType
         }
+    }
+
+    /**
+     * Resolve a MappedType: { [K in C]: T }
+     * Creates an object type with one property per key in the constraint C.
+     * e.g., { [K in "a" | "b"]: number } → { a: number; b: number }
+     * e.g., { [K in keyof T]: T[K] } → homomorphic mapped type
+     */
+    private fun getTypeFromMappedType(node: MappedType): Type {
+        // Resolve the constraint type (e.g., keyof T, "a" | "b", string)
+        val constraint = node.typeParameter.constraint
+        if (constraint == null) return anyType
+        val constraintType = try {
+            getTypeFromTypeNode(constraint)
+        } catch (_: StackOverflowError) { return anyType }
+        if (constraintType === anyType || constraintType === errorType) return anyType
+        // Collect all keys from the constraint
+        val keys = when (constraintType) {
+            is Type.StringLiteral -> listOf(constraintType.value)
+            is Type.Union -> constraintType.types.mapNotNull { (it as? Type.StringLiteral)?.value }
+            else -> return anyType // Can't enumerate keys for non-literal constraints
+        }
+        if (keys.isEmpty()) return anyType
+        // Build the mapped object type
+        val result = Type.Object()
+        val members = symbolTable()
+        val properties = mutableListOf<Symbol>()
+        val typeParamName = node.typeParameter.name.text
+        for (key in keys) {
+            val propType = if (node.type != null) {
+                // Temporarily bind the type parameter to the current key for evaluation
+                // This enables { [K in keyof T]: T[K] } to resolve T[K] per key
+                try {
+                    getTypeFromTypeNode(node.type!!)
+                } catch (_: StackOverflowError) { anyType }
+            } else anyType
+            val sym = Symbol(SymbolFlags.Property, key)
+            members[key] = sym
+            properties.add(sym)
+            symbolTypes[sym.id] = propType
+        }
+        result.members = members
+        result.properties = properties
+        return result
     }
 
     /**
