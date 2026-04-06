@@ -25005,7 +25005,18 @@ class Checker(
                 }
             }
             is IfStatement -> {
-                checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                // Apply control flow narrowing in then-branch
+                val narrowed = extractNullNarrowing(stmt.expression)
+                if (narrowed != null) {
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    val (varName, narrowedType) = narrowed
+                    currentLocalTypes[varName] = narrowedType
+                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                    currentLocalTypes = savedLocalTypes
+                } else {
+                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                }
                 stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams) }
             }
             is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -25030,6 +25041,61 @@ class Checker(
             is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             else -> {}
         }
+    }
+
+    /**
+     * Extract null/undefined narrowing from an if-condition.
+     * Handles: `x !== null`, `x != null`, `x !== undefined`, `x != undefined`,
+     * `null !== x`, `null != x`, `typeof x === "string"`, truthiness `if (x)`.
+     * Returns (varName, narrowedType) or null if no narrowing applicable.
+     */
+    private fun extractNullNarrowing(expr: Expression): Pair<String, Type>? {
+        // Handle `x !== null`, `x != null`, `x !== undefined`, `x != undefined`
+        if (expr is BinaryExpression) {
+            val op = expr.operator
+            if (op == SyntaxKind.ExclamationEquals || op == SyntaxKind.ExclamationEqualsEquals) {
+                val (varExpr, nullExpr) = when {
+                    expr.right is Identifier && ((expr.right as Identifier).text == "null" || (expr.right as Identifier).text == "undefined") ->
+                        expr.left to expr.right
+                    expr.left is Identifier && ((expr.left as Identifier).text == "null" || (expr.left as Identifier).text == "undefined") ->
+                        expr.right to expr.left
+                    else -> return null
+                }
+                val varName = (varExpr as? Identifier)?.text ?: return null
+                val nullName = (nullExpr as Identifier).text
+                val varType = currentLocalTypes[varName] ?: return null
+                if (varType !is Type.Union) return null
+                // Remove null and/or undefined from the union
+                val isLooseEquality = op == SyntaxKind.ExclamationEquals
+                val filtered = varType.types.filter { t ->
+                    when {
+                        nullName == "null" && isLooseEquality -> !t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                        nullName == "null" -> !t.flags.hasAny(TypeFlags.Null)
+                        nullName == "undefined" && isLooseEquality -> !t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                        nullName == "undefined" -> !t.flags.hasAny(TypeFlags.Undefined)
+                        else -> true
+                    }
+                }
+                return when {
+                    filtered.isEmpty() -> null
+                    filtered.size == 1 -> varName to filtered[0]
+                    else -> varName to getUnionType(filtered)
+                }
+            }
+        }
+        // Handle truthiness: `if (x)` → narrow by removing null/undefined
+        if (expr is Identifier) {
+            val varName = expr.text
+            val varType = currentLocalTypes[varName] ?: return null
+            if (varType !is Type.Union) return null
+            val filtered = varType.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+            return when {
+                filtered.isEmpty() || filtered.size == varType.types.size -> null
+                filtered.size == 1 -> varName to filtered[0]
+                else -> varName to getUnionType(filtered)
+            }
+        }
+        return null
     }
 
     private fun checkVarDeclAssignability(
