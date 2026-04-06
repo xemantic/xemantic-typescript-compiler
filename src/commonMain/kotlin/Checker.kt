@@ -30169,6 +30169,8 @@ class Checker(
                 val exports = identSymbol.exports
                 if (exports != null) {
                     if (isNameExportedFromNamespace(identSymbol, propName)) return
+                    // Enum members are always accessible on the enum type
+                    if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return
                     if (propName in RUNTIME_PROPERTIES) return
                     val typeName = "typeof $identName"
                     val start = expr.name.pos
@@ -30197,16 +30199,15 @@ class Checker(
             }
             exprType
         }
-        // Only check Interface types
-        if (objectType !is Type.Interface) return
-        if (objectType.symbol == null) return
+        // Check Interface and Object types (anonymous object literals, type literals, etc.)
+        if (objectType !is Type.Object) return
         // Skip enum types
-        if (objectType.symbol!!.flags.hasAny(SymbolFlags.Enum)) return
+        if (objectType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return
         // Resolve members
         resolveStructuredTypeMembers(objectType)
         if (objectType.properties.isNullOrEmpty()) return
-        // Skip if class has base types — incomplete inheritance resolution causes FPs
-        if (objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) return
+        // Skip if class/interface has base types — incomplete inheritance resolution causes FPs
+        if (objectType is Type.Interface && objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) return
         // Skip well-known runtime properties
         if (propName in RUNTIME_PROPERTIES) return
         // Check if property exists in type members
