@@ -25481,6 +25481,11 @@ class Checker(
                 enumType.symbol = symbol
                 enumType
             }
+            flags.hasAny(SymbolFlags.Alias) -> {
+                // Import alias — resolve to target symbol's declared type
+                val target = resolveAliasTarget(symbol)
+                if (target != null && target !== symbol) getDeclaredTypeOfSymbol(target) else anyType
+            }
             flags.hasAny(SymbolFlags.TypeParameter) -> {
                 val typeParam = Type.TypeParam()
                 typeParam.symbol = symbol
@@ -25720,15 +25725,14 @@ class Checker(
     private fun resolveAliasTarget(symbol: Symbol): Symbol? {
         // Use the checker-local LinkStore target if available
         getSymbolTarget(symbol)?.let { return it }
-        // Otherwise try resolveAlias logic from the checker's existing infrastructure
-        val visited = mutableSetOf<Int>()
-        var current = symbol
-        while (current.flags.hasAny(SymbolFlags.Alias)) {
-            if (!visited.add(current.id)) return null // cycle
-            val target = getSymbolTarget(current) ?: return null
-            current = target
+        // Trigger full cross-file resolution if no cached target
+        if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+            return try {
+                val resolved = resolveAlias(symbol)
+                if (resolved !== symbol) resolved else null
+            } catch (_: StackOverflowError) { null }
         }
-        return current
+        return null
     }
 
     // -----------------------------------------------------------------------
