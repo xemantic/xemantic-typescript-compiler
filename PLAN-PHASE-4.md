@@ -1363,6 +1363,176 @@ relaxes guards and activates features to harvest test gains.
 
 ---
 
+## Phase 9 — Targeted FP Suppression and Emission Fixes
+
+**Status**: 7,983 / 10,077 tests passing (79.2%). 2,094 failing.
+
+**Strategy**: Phase 8 revealed that guard relaxation yields near-zero gains because 56%
+of failures produce NO diagnostics (blocked on lib.d.ts / deep type resolution). Phase 9
+focuses on the other 44%: suppressing false positives (+22 pure-FP tests), fixing JS emit
+regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
+
+**Failure breakdown**:
+- 1,177 (56%) produce zero diagnostics → BLOCKED (need lib.d.ts types)
+- 681 (33%) produce wrong diagnostics → FP suppression + checker fixes
+- 237 (11%) JS emit failures → emitter/transformer fixes
+
+### QUEUE
+
+- [ ] **9.0. Suppress TS6133 FP for indexed property access (LOW)**
+
+  **Problem:** `typeGuardNarrowsIndexedAccessOfKnownProperty9` — TS6133 "declared but
+  never read" fires for class properties `a` and `b` that ARE read via indexed access
+  (`this[key]`). Our unused-variable checker doesn't track `ElementAccessExpression`
+  as a "read" of the accessed property.
+
+  **Fix:** In the TS6133 checker, when scanning for uses of a class member, also check
+  `ElementAccessExpression` nodes where the argument matches the property name string.
+  
+  **Estimated gain:** 1 test
+  **File:** `Checker.kt` — unused declaration checker
+
+- [ ] **9.1. Fix exhaustive switch fallthrough detection (LOW-MEDIUM)**
+
+  **Problem:** `reachabilityChecks4` — TS7029 fallthrough fires for `case 'SLIDE':` that
+  contains a nested switch covering ALL enum values (all cases return). TypeScript recognizes
+  exhaustive nested switches as terminating.
+
+  **Fix:** In `clauseStmtsTerminate`, check if the last statement is a `SwitchStatement`
+  where ALL clauses terminate AND the switch expression's type is a union/enum with all
+  values covered.
+  
+  **Estimated gain:** 1 test
+  **File:** `Checker.kt` — `isDefinitelyTerminating`, `clauseStmtsTerminate`
+
+- [ ] **9.2. Add missing KNOWN_GLOBALS for web/test APIs (LOW)**
+
+  **Problem:** FP TS2304 for `importScripts` (web worker API), and FP TS2552 for `$`
+  (jQuery), `suite` (test framework). These are well-known globals missing from our list.
+
+  **Fix:** Add to `KNOWN_GLOBALS`: `importScripts`, `$`, `jQuery`, `suite`, `describe`,
+  `it`, `expect`, `beforeEach`, `afterEach`, `beforeAll`, `afterAll`, `jest`, `test`,
+  `self`, `globalThis`, `queueMicrotask`, `structuredClone`, `atob`, `btoa`, `fetch`,
+  `Response`, `Request`, `Headers`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`,
+  `AbortController`, `AbortSignal`, `Blob`, `File`, `FormData`, `MessageChannel`,
+  `MessagePort`, `Worker`, `SharedWorker`, `performance`, `navigator`, `location`,
+  `console`, `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`,
+  `requestAnimationFrame`, `cancelAnimationFrame`.
+
+  **Estimated gain:** 2-5 tests (reduces FPs in tests with other correct diagnostics)
+  **File:** `Checker.kt` — `KNOWN_GLOBALS`
+
+- [ ] **9.3. Suppress TS7006 for parameters with contextual types (MEDIUM)**
+
+  **Problem:** 24 tests have FP TS7006 ("Parameter implicitly has 'any' type") for
+  parameters that should be contextually typed. 3 pure-FP tests:
+  `intraBindingPatternReferences`, `subtypeReductionWithAnyFunctionType`,
+  `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny`.
+
+  **Fix:** Before emitting TS7006, check if the parameter's parent function/arrow is
+  being assigned to a typed target (variable with type annotation, function parameter,
+  return statement). If the target type has call signatures, the parameter's type is
+  contextually inferred — suppress TS7006.
+
+  **Estimated gain:** 3 pure-FP tests + reduces FPs in ~21 mixed tests
+  **File:** `Checker.kt` — `checkImplicitAnyParameters`
+
+- [ ] **9.4. Fix module augmentation export merging for TS2339 (MEDIUM)**
+
+  **Problem:** `moduleAugmentationsImports4` — TS2339 fires for properties exported
+  from other files via module augmentation (`declare module "X" { export function y() }`).
+  `mergeModuleAugmentations` runs but doesn't fully merge exports into the namespace
+  symbol's export table.
+
+  **Fix:** In `mergeModuleAugmentations`, ensure that function/variable declarations
+  inside augmentation blocks are added to the target module's exports. Currently only
+  handles type-level declarations.
+
+  **Estimated gain:** 1 pure-FP test + 3-5 mixed tests with namespace FP TS2339
+  **File:** `Checker.kt` — `mergeModuleAugmentations`
+
+- [ ] **9.5. Suppress TS2322 for `as unknown` type assertions (LOW)**
+
+  **Problem:** `privateFieldAssignabilityFromUnknown` has FP TS2322 for `{} as unknown`
+  assigned to a class type. The `as unknown` assertion should suppress assignability
+  checking — `unknown` is the top type.
+
+  **Fix:** In `canUseTypeEngine` or `checkVarDeclAssignability`, skip the check when
+  the source expression is an `AsExpression` with target type `unknown`. TypeScript
+  treats `expr as unknown as T` as always-valid (double assertion pattern).
+
+  **Estimated gain:** 1 test (but also has missing TS18028, may need both)
+  **File:** `Checker.kt` — `checkVarDeclAssignability`
+
+- [ ] **9.6. Fix TS2322 FP for object literal → named interface comparison (MEDIUM)**
+
+  **Problem:** 33 tests have FP TS2322 where an object literal `{ a: 1, b: "x" }` is
+  compared to a named interface `Foo` and incorrectly fails. The structural comparison
+  resolves the object literal's properties but can't resolve the named interface's
+  members (returns anyType for the interface).
+
+  **Fix:** In `objectTypeRelatedTo`, when the target is a named Interface, try resolving
+  its members via `resolveStructuredTypeMembers`. If the target has resolved properties,
+  do member-by-member comparison. Guard: skip when target has unresolved type parameters
+  or base types from imports.
+
+  **Estimated gain:** 5-15 tests (reduces FPs in mixed tests)
+  **File:** `Checker.kt` — `objectTypeRelatedTo`, `canUseTypeEngine`
+
+- [ ] **9.7. Fix JS emit for CommonJS require/exports patterns (MEDIUM-HIGH)**
+
+  **Problem:** 40 JS emit tests fail on CommonJS patterns. Top issues:
+  - Extra `Object.defineProperty(exports, "__esModule", { value: true })` when not needed
+  - Missing `exports.X = X` statements
+  - Wrong `require()` call patterns for re-exports
+
+  **Fix:** Audit `transformToCommonJS` for these patterns. Key: only emit `__esModule`
+  when the file has ES module syntax (import/export). Ensure `exports.X` is emitted
+  for all exported declarations.
+
+  **Estimated gain:** 10-20 tests
+  **File:** `Transformer.kt` — `transformToCommonJS`
+
+- [ ] **9.8. Fix JS emit for import/export helper ordering (MEDIUM)**
+
+  **Problem:** 20 JS emit tests fail on import/export helper function ordering.
+  `__importStar`, `__importDefault`, `__exportStar` helpers are emitted in wrong order
+  or with wrong conditional checks.
+
+  **Fix:** Review helper emission order against TypeScript's output. Ensure helpers
+  appear before their first usage. Fix `esModuleInterop` conditional checks.
+
+  **Estimated gain:** 5-10 tests
+  **File:** `Transformer.kt` — helper emission
+
+- [ ] **9.9. Fix JS emit for class member transforms (MEDIUM)**
+
+  **Problem:** 14 JS emit tests fail on class member transformations:
+  - Static class blocks not transformed
+  - Class field initializers in wrong position
+  - Missing `#private` field downlevel transforms
+
+  **Fix:** Audit class transform output against TypeScript baselines for these patterns.
+
+  **Estimated gain:** 5-8 tests
+  **File:** `Transformer.kt` — class transforms
+
+- [ ] **9.10. Reduce TS2322 FPs from function type comparison (MEDIUM)**
+
+  **Problem:** 22 tests have FP TS2322 from incorrect function type comparison.
+  Common pattern: `(a: string) => void` reported as not assignable to
+  `(a: string) => void` (identical types). The issue is that function parameter
+  names or optional modifiers differ in the comparison.
+
+  **Fix:** In function type comparison (`signatureRelatedTo`), check parameter types
+  only, not parameter names. Handle optional parameters: a function with fewer
+  required params is assignable to one with more optional params.
+
+  **Estimated gain:** 3-8 tests
+  **File:** `Checker.kt` — `signatureRelatedTo`
+
+---
+
 ## Previously deferred items (from Phase 4b)
 
 These remain deferred until their blockers are resolved:
