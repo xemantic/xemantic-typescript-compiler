@@ -25396,15 +25396,22 @@ class Checker(
                     return getArrayType(getTypeFromTypeNode(typeArgs[0]))
                 }
             }
-            "Promise" -> {
-                // Promise<T> is an object type — for now just return anyType for generics
-                // TODO: proper generic type resolution
-            }
         }
         // Look up the symbol in globals
         val symbol = globals[name]
         if (symbol != null) {
-            return getDeclaredTypeOfSymbol(symbol)
+            val declaredType = getDeclaredTypeOfSymbol(symbol)
+            // If the type has type parameters and the reference has type arguments,
+            // create a generic instantiation (Type.Reference)
+            if (declaredType is Type.Interface) {
+                val typeParams = declaredType.typeParameters
+                val typeArgs = node.typeArguments
+                if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
+                    val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                    return Type.Reference(declaredType, resolvedTypeArguments = resolvedArgs)
+                }
+            }
+            return declaredType
         }
         // Not found — return errorType (TS2304 handles the diagnostic separately)
         return errorType
@@ -25784,15 +25791,62 @@ class Checker(
 
     /** Resolve members of a generic type reference by instantiating target members. */
     private fun resolveReferenceMembers(type: Type.Reference) {
-        // For now, just resolve the target's members directly
-        // TODO: instantiate with type argument mapper when generic infra is ready
         resolveStructuredTypeMembers(type.target)
-        type.members = type.target.members
-        type.properties = type.target.properties
-        type.callSignatures = type.target.callSignatures
-        type.constructSignatures = type.target.constructSignatures
-        type.stringIndexInfo = type.target.stringIndexInfo
-        type.numberIndexInfo = type.target.numberIndexInfo
+        val typeParams = type.target.typeParameters
+        val typeArgs = type.resolvedTypeArguments
+        // If we have both type parameters and arguments, instantiate members with mapper
+        if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
+            val mapper = createTypeMapper(typeParams, typeArgs)
+            // Instantiate properties
+            val targetProps = type.target.properties
+            if (targetProps != null) {
+                val newMembers = symbolTable()
+                val newProps = mutableListOf<Symbol>()
+                for (prop in targetProps) {
+                    val propType = getTypeOfSymbol(prop)
+                    val instantiated = instantiateType(propType, mapper)
+                    if (instantiated !== propType) {
+                        // Create new symbol with instantiated type
+                        val newProp = Symbol(prop.flags, prop.name)
+                        newProp.declarations.addAll(prop.declarations)
+                        newProp.valueDeclaration = prop.valueDeclaration
+                        symbolTypes[newProp.id] = instantiated
+                        newProps.add(newProp)
+                        newMembers[newProp.name] = newProp
+                    } else {
+                        newProps.add(prop)
+                        newMembers[prop.name] = prop
+                    }
+                }
+                type.properties = newProps
+                type.members = newMembers
+            } else {
+                type.properties = type.target.properties
+                type.members = type.target.members
+            }
+            // Instantiate call signatures
+            type.callSignatures = type.target.callSignatures?.map { instantiateSignature(it, mapper) }
+            type.constructSignatures = type.target.constructSignatures?.map { instantiateSignature(it, mapper) }
+            // Instantiate index signatures
+            type.stringIndexInfo = type.target.stringIndexInfo?.let {
+                val instType = instantiateType(it.type, mapper)
+                if (instType !== it.type) IndexInfo(it.keyType, instType, it.isReadonly, it.declaration)
+                else it
+            }
+            type.numberIndexInfo = type.target.numberIndexInfo?.let {
+                val instType = instantiateType(it.type, mapper)
+                if (instType !== it.type) IndexInfo(it.keyType, instType, it.isReadonly, it.declaration)
+                else it
+            }
+        } else {
+            // No type parameters or args — just copy from target
+            type.members = type.target.members
+            type.properties = type.target.properties
+            type.callSignatures = type.target.callSignatures
+            type.constructSignatures = type.target.constructSignatures
+            type.stringIndexInfo = type.target.stringIndexInfo
+            type.numberIndexInfo = type.target.numberIndexInfo
+        }
     }
 
     /** Resolve members of an anonymous object type (object literal type, function type, etc.). */
@@ -30578,14 +30632,22 @@ class Checker(
      */
     private fun instantiateSignature(sig: Signature, mapper: TypeMapper): Signature {
         val newReturnType = sig.resolvedReturnType?.let { instantiateType(it, mapper) }
-        // Parameter types are resolved lazily from their declarations, so we need to create
-        // new parameter symbols with mapped types if the parameters have type annotations
-        // involving type parameters. For now, return the original parameters — the type
-        // resolution in getTypeOfSymbol will pick up the original (non-instantiated) types.
+        // Instantiate parameter types — create new symbols with mapped types
+        val newParams = sig.parameters.map { param ->
+            val paramType = getTypeOfSymbol(param)
+            val instantiated = instantiateType(paramType, mapper)
+            if (instantiated !== paramType) {
+                val newParam = Symbol(param.flags, param.name)
+                newParam.declarations.addAll(param.declarations)
+                newParam.valueDeclaration = param.valueDeclaration
+                symbolTypes[newParam.id] = instantiated
+                newParam
+            } else param
+        }
         return Signature(
             declaration = sig.declaration,
             typeParameters = null, // instantiated signature has no type parameters
-            parameters = sig.parameters,
+            parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
         )

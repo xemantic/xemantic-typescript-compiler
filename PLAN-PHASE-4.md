@@ -438,6 +438,15 @@ array→primitive, named→named) fall through to the old string system which do
   - Qualified names: `typeof A.B.C` via resolveQualifiedName
 - `formatTypeForDisplay` extended for TypeQuery → `typeof X` display
 - +1 test: `typeofUndefined`
+- 6.2: Generic type instantiation — connected existing infrastructure:
+  - 6.2a: `resolveReferenceMembers` now applies TypeMapper to properties, signatures,
+    and index info. Creates new symbols with instantiated types.
+  - 6.2b: `getTypeFromTypeReference` now creates `Type.Reference(target, typeArgs)`
+    for user-defined generics like `Foo<number>`, not just Array/ReadonlyArray.
+  - 6.2c: `instantiateSignature` now instantiates parameter types (creates new
+    parameter symbols with mapped types), not just return types.
+  - Infrastructure only — 0 direct test gains. Most generic tests also need namespace
+    property resolution (6.4) or import resolution (6.6) for the value side.
 
 ---
 
@@ -504,7 +513,7 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
   **File:** `Checker.kt` — `getTypeFromTypeNodeWorker`
   **Estimated gain:** 5-10 tests
 
-- [ ] **6.2. Generic type instantiation — connect existing infrastructure**
+- [x] **6.2. Generic type instantiation — connect existing infrastructure**
 
   The #1 blocker (57% of TS2322, 53% of TS2345). Infrastructure exists
   (`instantiateType`, `createTypeMapper`, `Type.Reference`) but is not connected
