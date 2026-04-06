@@ -464,6 +464,14 @@ array→primitive, named→named) fall through to the old string system which do
   - Infrastructure only — 0 direct gains. Namespace assignment tests need
     deeper variable inference chains and Object→Object comparison in canUseTypeEngine.
 
+**Session 2026-04-06b summary:** +6 tests (7,975 → 7,981). Implemented items 6.0-6.4.
+Most remaining test gains blocked on deep type system features: control flow narrowing,
+contextual typing, structural Object→Object comparison in canUseTypeEngine.
+Items 6.5-6.8 remain infrastructure-only with uncertain ROI.
+Of 2,096 failing tests: 226 need TS2322, 85 need TS2339, 82 need TS2345 (all "none produced").
+11 pure FP tests found (extra diagnostics only), requiring: contextual typing (TS7006),
+exhaustive switch analysis (TS2366), control flow narrowing, pretty format.
+
 ---
 
 ## Phase 6 — Type Resolution Queue
