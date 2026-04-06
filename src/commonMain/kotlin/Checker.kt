@@ -24725,9 +24725,14 @@ class Checker(
         if (sourceType is Type.Intersection) return true
         // Anything → Union/Intersection target
         if (targetType is Type.Union || targetType is Type.Intersection) return true
-        // Function→function: both sides have call signatures
-        if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
-            targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) return true
+        // Function→function: both sides have call signatures.
+        // Resolve members lazily first — named interfaces may have unresolved call sigs.
+        if (sourceType is Type.Object && targetType is Type.Object) {
+            resolveStructuredTypeMembers(sourceType)
+            resolveStructuredTypeMembers(targetType)
+            if (!sourceType.callSignatures.isNullOrEmpty() &&
+                !targetType.callSignatures.isNullOrEmpty()) return true
+        }
         // Tuple targets: only safe when source is clearly incompatible (function/primitive)
         // Array→tuple needs contextual typing (not yet implemented) so skip those
         if (targetType is Type.Object && targetType.tupleElementTypes != null) {
@@ -24738,6 +24743,11 @@ class Checker(
         if (sourceType is Type.Object && sourceType.tupleElementTypes != null && targetIsPrimitive) return true
         // TypeParam targets (for generic constraint checking)
         if (sourceIsPrimitive && targetType is Type.TypeParam) return true
+        // Anonymous Object → Named Interface (object literal → interface/class).
+        // Safe: anonymous types can't create recursive comparison loops.
+        // Excludes Type.Reference targets since generic instantiation can create recursive cycles.
+        if (sourceType is Type.Object && sourceType.symbol == null &&
+            targetType is Type.Interface && targetType.symbol != null) return true
         return false
     }
 
@@ -25598,6 +25608,47 @@ class Checker(
                 decl.type?.let { return getTypeFromTypeNode(it) }
                 anyType
             }
+            is MethodDeclaration -> {
+                // Named method — create a function type with call signature(s).
+                // Skip unnamed members (call/construct signatures) — those are
+                // tracked separately, not as property types.
+                val methodName = (decl.name as? Identifier)?.text
+                if (methodName.isNullOrEmpty() || methodName == "new") return anyType
+                val fnType = Type.Object()
+                // Collect all method declarations for overloads (same name)
+                val methodDecls = symbol.declarations.filterIsInstance<MethodDeclaration>()
+                val overloadDecls = methodDecls.filter { it.body == null }
+                val implDecl = methodDecls.find { it.body != null }
+                val sigDecls = if (overloadDecls.isNotEmpty()) overloadDecls else listOfNotNull(implDecl)
+                fnType.callSignatures = if (sigDecls.isNotEmpty()) {
+                    sigDecls.map { md ->
+                        val returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        Signature(
+                            declaration = md,
+                            parameters = getParameterSymbols(md.parameters),
+                            resolvedReturnType = returnType,
+                            minArgumentCount = md.parameters.count {
+                                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                            },
+                        )
+                    }
+                } else {
+                    val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                    listOf(Signature(
+                        declaration = decl,
+                        parameters = getParameterSymbols(decl.parameters),
+                        resolvedReturnType = returnType,
+                        minArgumentCount = decl.parameters.count {
+                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                        },
+                    ))
+                }
+                fnType
+            }
+            is GetAccessor -> {
+                decl.type?.let { return getTypeFromTypeNode(it) }
+                anyType
+            }
             else -> anyType
         }
     }
@@ -25704,8 +25755,10 @@ class Checker(
             return
         }
         val members = symbolTable()
-        val callSignatures = mutableListOf<Signature>()
-        val constructSignatures = mutableListOf<Signature>()
+        val ownCallSignatures = mutableListOf<Signature>()
+        val ownConstructSignatures = mutableListOf<Signature>()
+        val inheritedCallSignatures = mutableListOf<Signature>()
+        val inheritedConstructSignatures = mutableListOf<Signature>()
         var stringIndexInfo: IndexInfo? = null
         var numberIndexInfo: IndexInfo? = null
 
@@ -25716,8 +25769,8 @@ class Checker(
                 baseType.members?.forEach { (name, sym) ->
                     if (name !in members) members[name] = sym
                 }
-                baseType.callSignatures?.let { callSignatures.addAll(it) }
-                baseType.constructSignatures?.let { constructSignatures.addAll(it) }
+                baseType.callSignatures?.let { inheritedCallSignatures.addAll(it) }
+                baseType.constructSignatures?.let { inheritedConstructSignatures.addAll(it) }
                 if (stringIndexInfo == null) stringIndexInfo = baseType.stringIndexInfo
                 if (numberIndexInfo == null) numberIndexInfo = baseType.numberIndexInfo
             }
@@ -25741,10 +25794,40 @@ class Checker(
                     }
                     is MethodDeclaration -> {
                         val name = getMemberName(member.name) ?: continue
-                        val methodSymbol = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                        // Call signatures (empty name) and construct signatures ("new") are
+                        // tracked as signatures, not as named properties.
+                        if (name.isEmpty()) {
+                            val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            ownCallSignatures.add(Signature(
+                                declaration = member,
+                                parameters = getParameterSymbols(member.parameters),
+                                resolvedReturnType = returnType,
+                                minArgumentCount = member.parameters.count {
+                                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                                },
+                            ))
+                            continue
+                        }
+                        if (name == "new") {
+                            val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            ownConstructSignatures.add(Signature(
+                                declaration = member,
+                                parameters = getParameterSymbols(member.parameters),
+                                resolvedReturnType = returnType,
+                                minArgumentCount = member.parameters.count {
+                                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                                },
+                            ))
+                            continue
+                        }
+                        // Reuse existing symbol for overloaded methods (same name, multiple declarations)
+                        val methodSymbol = members.getOrPut(name) {
+                            Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                        }
                         methodSymbol.declarations.add(member)
-                        methodSymbol.valueDeclaration = member
-                        members[name] = methodSymbol
+                        if (methodSymbol.valueDeclaration == null) {
+                            methodSymbol.valueDeclaration = member
+                        }
                     }
                     is Constructor -> {
                         val returnType = type as Type
@@ -25756,7 +25839,7 @@ class Checker(
                                 !it.questionToken && !it.dotDotDotToken && it.initializer == null
                             },
                         )
-                        constructSignatures.add(sig)
+                        ownConstructSignatures.add(sig)
                         // Also add parameter properties as members
                         for (param in member.parameters) {
                             if (param.modifiers.isNotEmpty() && param.name is Identifier) {
@@ -25803,12 +25886,21 @@ class Checker(
         }
 
         // Also include exports from the symbol (for namespace merges, etc.)
+        // Also include exports from the symbol (for namespace merges, etc.)
+        // Skip call signature ("") and construct signature ("new") members —
+        // these are already tracked as signatures from the member loop above.
         symbol.members?.forEach { (name, sym) ->
+            if (name.isEmpty() || name == "new") return@forEach // already handled in member loop
             if (name !in members) members[name] = sym
         }
 
         type.members = members
         type.properties = members.values.toList()
+        // Inherited signatures first, then own — matches the implicit ordering before
+        // call signatures were resolved from the member loop. getReturnTypeOfCallExpression
+        // uses sigs[0], so inherited-first preserves backward compatibility.
+        val callSignatures = inheritedCallSignatures + ownCallSignatures
+        val constructSignatures = inheritedConstructSignatures + ownConstructSignatures
         type.callSignatures = callSignatures.ifEmpty { null }
         type.constructSignatures = constructSignatures.ifEmpty { null }
         type.stringIndexInfo = stringIndexInfo
@@ -26204,6 +26296,9 @@ class Checker(
         resolveStructuredTypeMembers(calleeType)
         val sigs = calleeType.callSignatures
         if (sigs.isNullOrEmpty()) return anyType
+        // For named types (interfaces/classes) with multiple call signatures, we can't
+        // properly resolve overloads — return anyType to avoid false positives.
+        if (sigs.size > 1 && calleeType is Type.Interface) return anyType
         // Use the first signature's return type (simple resolution)
         return sigs[0].resolvedReturnType ?: anyType
     }
@@ -27768,6 +27863,11 @@ class Checker(
                 for (baseProp in baseProps) {
                     val propName = baseProp.name
                     val derivedType = derivedProps[propName] ?: continue
+
+                    // Skip method-typed properties — the derived side is just the return type
+                    // from getMemberNameAndType but the base resolves to the full function type.
+                    // Comparing return-type vs function-type produces FPs.
+                    if (baseProp.flags.hasAny(SymbolFlags.Function)) continue
 
                     // Get base property's type
                     val basePropType = getTypeOfSymbol(baseProp)
@@ -30475,6 +30575,8 @@ class Checker(
     /**
      * Structural comparison of two object types.
      * Checks properties, call signatures, and construct signatures.
+     * For class instance types, skip construct signature comparison — those belong
+     * to the static side (typeof Class), not the instance type.
      */
     private fun objectTypeRelatedTo(
         source: Type.Object,
@@ -30487,8 +30589,13 @@ class Checker(
         if (!propertiesRelatedTo(source, target, relation)) return false
         // Check call signatures
         if (!signaturesRelatedTo(source, target, relation, isConstruct = false)) return false
-        // Check construct signatures
-        if (!signaturesRelatedTo(source, target, relation, isConstruct = true)) return false
+        // Check construct signatures — skip for class/interface instance types where
+        // construct signatures come from the class constructor (static side), not the instance.
+        val isClassInstance = target is Type.Interface && target.symbol != null &&
+            target.symbol!!.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+        if (!isClassInstance) {
+            if (!signaturesRelatedTo(source, target, relation, isConstruct = true)) return false
+        }
         return true
     }
 
