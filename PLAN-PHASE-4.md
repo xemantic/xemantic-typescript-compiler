@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-05c):** 7,973 / 10,077 tests passing (79.1%).
+**Status (2026-04-06):** 7,975 / 10,077 tests passing (79.1%).
 
 ## Goal
 
@@ -399,12 +399,31 @@ array→primitive, named→named) fall through to the old string system which do
 - FP-only: 18 tests found, 7 from namespace (FIXED), rest need contextual typing/module resolution
 - Most remaining TS2339 near-miss tests need deeper type resolution (array, union, never)
 
+**Completed session 2026-04-06 (+2 tests, 7,973 → 7,975):**
+- Widened `canUseTypeEngine` guard: Union→Primitive, Intrinsic→Union, Primitive↔Literal,
+  with safety guards for control flow narrowing FPs.
+- Sorted union constituents by TypeFlags value in `getUnionType` (matches TypeScript ordering).
+- Array-of-union display parenthesization: `(A | B)[]` not `A | B[]`.
+- Union TS2322 elaboration: show last failing constituent (matches TypeScript).
+- Negative literal type inference: `-42` → `NumberLiteral(-42)` instead of `numberType`.
+- Number → enum assignability in `isSimpleTypeRelatedTo`.
+- Intersection-to-never reduction for incompatible primitives (number & boolean → never).
+- Tests: conditionalExpression1, errorMessagesIntersectionTypes04.
+- KEY FINDING: Fully opening canUseTypeEngine gives ZERO new passes and 10 regressions.
+  The real bottleneck is `getTypeOfExpression` returning `anyType` for most non-literal
+  expressions (missing lib.d.ts types, no initializer inference, no import resolution).
+- Only 9 pure FP-only tests exist, all requiring deep type system features (contextual
+  typing, exhaustive switch analysis, module augmentation, etc.).
+- Initializer type inference tested → 6 regressions (TS2403 FPs), reverted.
+  Partial inference is worse than no inference.
+
 **Recommended priority for next items:**
 
-1. **Module resolution**: TS2307 would unlock 5 near-miss + many multi-code tests
-2. **Deeper type display / comparison**: TS2322 (8), TS2345 (5) near-miss tests
+1. **Type resolution improvement**: The #1 blocker — `getTypeOfExpression` returns anyType
+   for most identifiers. Needs lib.d.ts synthetic types or full import resolution.
+2. **Module resolution**: TS2307 would unlock 5 near-miss + many multi-code tests
 3. **Chained namespace access**: M.a.b patterns for ~5 more tests
-4. **Relax type engine guards**: Highest ROI but highest risk of FPs
+4. **Control flow narrowing**: Would unlock 9 FP-only tests + many near-miss tests
 
 ---
 

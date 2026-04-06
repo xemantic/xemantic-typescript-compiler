@@ -25546,7 +25546,7 @@ class Checker(
             is VariableDeclaration -> {
                 // Type annotation takes priority
                 decl.type?.let { return getTypeFromTypeNode(it) }
-                // No annotation — return anyType for now (expression type inference is item 3a)
+                // No annotation — return anyType (initializer inference causes FPs in TS2403/TS2322)
                 anyType
             }
             is Parameter -> {
