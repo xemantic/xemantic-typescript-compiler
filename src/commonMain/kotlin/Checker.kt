@@ -14104,8 +14104,26 @@ class Checker(
                 isBlockTerminating(stmt.tryBlock) &&
                     (stmt.catchClause == null || isBlockTerminating(stmt.catchClause!!.block))
             }
+            is ExpressionStatement -> {
+                // A call to a never-returning function terminates (e.g., fail(): never)
+                isNeverReturningExpression(stmt.expression)
+            }
             else -> false
         }
+    }
+
+    /** Check if an expression is a call to a function with return type `never`. */
+    private fun isNeverReturningExpression(expr: Expression): Boolean {
+        if (expr !is CallExpression) return false
+        val callee = expr.expression
+        if (callee !is Identifier) return false
+        // Look up the function symbol
+        val symbol = globals[callee.text] ?: return false
+        if (!symbol.flags.hasAny(SymbolFlags.Function)) return false
+        // Check if the function's return type is never
+        val decl = symbol.declarations.firstOrNull() as? FunctionDeclaration ?: return false
+        val retType = decl.type ?: return false
+        return retType is KeywordTypeNode && retType.kind == SyntaxKind.NeverKeyword
     }
 
     private fun isBlockTerminating(stmt: Statement): Boolean {
