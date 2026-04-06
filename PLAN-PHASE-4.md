@@ -1392,7 +1392,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 1 test
   **File:** `Checker.kt` — unused declaration checker
 
-- [ ] **9.1. Fix exhaustive switch fallthrough detection (LOW-MEDIUM)**
+- [x] **9.1. Fix exhaustive switch fallthrough detection (LOW-MEDIUM)**
 
   **Problem:** `reachabilityChecks4` — TS7029 fallthrough fires for `case 'SLIDE':` that
   contains a nested switch covering ALL enum values (all cases return). TypeScript recognizes
