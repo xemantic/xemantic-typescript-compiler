@@ -25021,9 +25021,32 @@ class Checker(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
     ) {
-        val typeAnnotation = decl.type ?: return
         val name = decl.name
         if (name !is Identifier) return
+
+        // For unannotated variables with initializers, infer and store the type
+        // in currentLocalTypes so downstream references can resolve it.
+        // Do NOT change getTypeOfVariableOrProperty (causes TS2403 FPs).
+        val typeAnnotation = decl.type
+        if (typeAnnotation == null) {
+            val init = decl.initializer ?: return
+            try {
+                val inferred = getTypeOfExpression(init)
+                if (inferred !== anyType && inferred !== errorType &&
+                    !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                    // Widen literal types: 42 → number, "hello" → string
+                    val widened = when (inferred) {
+                        is Type.StringLiteral -> stringType
+                        is Type.NumberLiteral -> numberType
+                        is Type.BigIntLiteral -> bigintType
+                        trueType, falseType -> booleanType
+                        else -> inferred
+                    }
+                    currentLocalTypes[name.text] = widened
+                }
+            } catch (_: StackOverflowError) {}
+            return
+        }
 
         // Maintain old varTypes tracking for checkAssignmentExpression/checkReturnAssignability
         val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
@@ -25408,7 +25431,10 @@ class Checker(
                 val typeArgs = node.typeArguments
                 if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
-                    return Type.Reference(declaredType, resolvedTypeArguments = resolvedArgs)
+                    // Only create Reference if all args resolved (no errorType)
+                    if (resolvedArgs.none { it === errorType }) {
+                        return Type.Reference(declaredType, resolvedTypeArguments = resolvedArgs)
+                    }
                 }
             }
             return declaredType
@@ -30712,9 +30738,8 @@ class Checker(
                     "NaN", "Infinity" -> return numberType
                     "true", "false" -> return booleanType
                 }
-                // Check local scope first
-                currentLocalTypes[exprName.text]?.let { return it }
-                // Look up in globals
+                // Look up in globals only — currentLocalTypes contains function-scoped
+                // variables that shouldn't be visible in type annotation positions
                 val symbol = globals[exprName.text] ?: return anyType
                 return getTypeOfSymbolForTypeQuery(symbol)
             }

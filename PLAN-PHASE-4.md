@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-06):** 7,975 / 10,077 tests passing (79.1%).
+**Status (2026-04-06):** 7,981 / 10,077 tests passing (79.2%).
 
 ## Goal
 
@@ -447,6 +447,16 @@ array→primitive, named→named) fall through to the old string system which do
     parameter symbols with mapped types), not just return types.
   - Infrastructure only — 0 direct test gains. Most generic tests also need namespace
     property resolution (6.4) or import resolution (6.6) for the value side.
+  - Guard: skip Reference creation when type args contain errorType (prevents
+    `C2<error>` display for unresolved type parameters like `C2<T>`).
+- 6.3: Variable type inference from initializers (scoped):
+  - `checkVarDeclAssignability` populates `currentLocalTypes` from initializers
+    for unannotated variables (`var x = 42` → `x: number`).
+  - Widens literal types (42→number, "hello"→string, true→boolean).
+  - Skips null/undefined/void initializers (avoid FPs for "declare then assign" pattern).
+  - `getTypeFromTypeQuery` uses globals only (not currentLocalTypes) to avoid
+    resolving function-scoped variables in type annotation positions.
+  - +4 tests: `checkJsFiles`, `checkJsFiles2`, `checkJsFiles3`, `checkJsFiles4`
 
 ---
 
@@ -542,7 +552,7 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
   **File:** `Checker.kt` — `resolveReferenceMembers`, `getTypeFromTypeReference`, `instantiateSignature`
   **Estimated gain:** 30-60 tests (the single highest-ROI item)
 
-- [ ] **6.3. Variable type inference from initializers (scoped)**
+- [x] **6.3. Variable type inference from initializers (scoped)**
 
   `var x = 42` should infer `numberType` for x. Previous attempt caused TS2403 FPs
   from partial inference. Fix: only use in TS2322 context, not globally.
