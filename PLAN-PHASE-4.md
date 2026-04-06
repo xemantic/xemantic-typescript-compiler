@@ -430,6 +430,14 @@ array→primitive, named→named) fall through to the old string system which do
 - +1 test: `assigningFunctionToTupleIssuesError`
 - 15 other tuple tests improved from "none produced" to "has diff" (need deeper
   tuple-specific checking: element count, positional assignability, TS2493)
+- 6.1: TypeQuery (typeof) resolution — `getTypeFromTypeQuery` resolves:
+  - Built-in names: `typeof undefined` → undefinedType, `typeof NaN` → numberType
+  - Variables/functions: via currentLocalTypes then globals → getTypeOfSymbol
+  - Classes: constructor type (Object with construct signature + static members)
+  - Import aliases: follows alias chain
+  - Qualified names: `typeof A.B.C` via resolveQualifiedName
+- `formatTypeForDisplay` extended for TypeQuery → `typeof X` display
+- +1 test: `typeofUndefined`
 
 ---
 
@@ -479,7 +487,7 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
   **File:** `Checker.kt` — `getTupleType`
   **Estimated gain:** 3-5 tests
 
-- [ ] **6.1. TypeQuery (typeof) resolution**
+- [x] **6.1. TypeQuery (typeof) resolution**
 
   `typeof X` in type annotation position returns `anyType`. Implement resolution
   to the type of value `X`.
