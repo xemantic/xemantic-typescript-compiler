@@ -30884,7 +30884,10 @@ class Checker(
             TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
         )) return true
         // Allow union types where all members are checkable (e.g., string | number)
-        if (type is Type.Union) return type.types.all { isSimpleCheckableType(it) }
+        if (type is Type.Union) {
+            if (type.types.any { it === anyType || it === errorType }) return false
+            return type.types.all { isSimpleCheckableType(it) }
+        }
         return false
     }
 

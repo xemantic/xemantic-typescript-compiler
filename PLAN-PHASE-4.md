@@ -1280,7 +1280,7 @@ relaxes guards and activates features to harvest test gains.
   **Estimated gain:** ~50-100 tests
   **File:** `Checker.kt` — `canUseTypeEngine`
 
-- [ ] **8.2. Expand isSimpleCheckableType for TS2345 argument checking**
+- [x] **8.2. Expand isSimpleCheckableType for TS2345 argument checking** (safety guard only — Object types cause FPs without control flow narrowing)
 
   **Problem:** `isSimpleCheckableType` rejects unions containing non-primitive types.
   With Object↔Object comparison now working, union arguments containing object types
