@@ -61,6 +61,9 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Type system gotchas
 
+- **Tuple types use `Type.Object` with `tupleElementTypes` field**: `getTupleType` creates a `Type.Object` with numbered properties ("0", "1", ...), a `length` property with `NumberLiteral(n)` type, and `tupleElementTypes: List<Type>?` for display and identification. `typeToString` checks `tupleElementTypes` to display as `[T1, T2, ...]`.
+- **`getTypeFromTypeReference` errorType guard**: When creating `Type.Reference` from a TypeReference with type arguments, skip Reference creation if any resolved type argument is `errorType` (unresolved type parameter). Otherwise `C2<T>` displays as `C2<error>` instead of falling back to `C2<T>` display.
+- **Variable initializer inference scope**: `currentLocalTypes` is populated from unannotated variable initializers (widened) during the TS2322 walk. Must skip `null`/`undefined`/`void` initializers to avoid FPs in "declare then assign" patterns. `getTypeFromTypeQuery` (typeof) must NOT use `currentLocalTypes` — function-scoped variables shouldn't be visible in type annotation positions.
 - **Type subclasses are nested inside `sealed class Type`**: To avoid name conflicts with AST TypeNode subclasses (`UnionType`, `IntersectionType`, `TypeReference`, `TypeParameter` in Ast.kt), the checker's semantic type classes are nested: `Type.Intrinsic`, `Type.Union`, `Type.Intersection`, `Type.Object`, `Type.Interface`, `Type.Reference`, `Type.TypeParam`. Use `when (type) { is Type.Union -> ... }` etc.
 - **`TypeFlags` companion shadows Kotlin type names**: `TypeFlags.String`, `TypeFlags.Number`, `TypeFlags.Boolean`, `TypeFlags.Object` shadow Kotlin types inside the `TypeFlags` companion. Outside the companion, `String` refers to `kotlin.String` as normal. Inside the companion, use `kotlin.String` if you need the Kotlin type.
 
@@ -200,7 +203,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 4: Structural type checker.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,973 / 10,077 tests passing (~79.1%). Current work: replace string-based type representation with Type sealed class hierarchy, implement structural typing engine (TS2322/TS2339/TS2345), prepare for parallel checking via Kotlin coroutines (inspired by tsgo's N-checker goroutine model).
+**Phase 4/6: Type Resolution Queue.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,981 / 10,077 tests passing (~79.2%). Current work: deepen type resolution (typeof, generics, namespaces, variable inference), implement structural typing engine (TS2322/TS2339/TS2345), prepare for parallel checking via Kotlin coroutines (inspired by tsgo's N-checker goroutine model).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
