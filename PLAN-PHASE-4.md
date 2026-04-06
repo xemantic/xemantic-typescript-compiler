@@ -1310,7 +1310,7 @@ relaxes guards and activates features to harvest test gains.
   **Estimated gain:** ~20-40 tests
   **File:** `Checker.kt` — `checkPropertyAccessInStatement`, `checkCallTypesInStatement`
 
-- [ ] **8.4. Implement binary operator type checking (TS2365/TS2362/TS2363)**
+- [x] **8.4. Implement binary operator type checking (TS2365/TS2362/TS2363)** (implemented — no direct test gains due to other missing errors in same tests)
 
   **Problem:** Arithmetic operators (`+`, `-`, `*`, `/`, `%`) don't validate operand types.
   Tests expect TS2365 ("Operator cannot be applied to types"), TS2362 ("Left-hand side
