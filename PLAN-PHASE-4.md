@@ -627,21 +627,21 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
 
   **File:** `Checker.kt` — `objectTypeRelatedTo`, `resolveInterfaceMembers`
 
-- [ ] **6.6. Import/cross-file type resolution**
+- [x] **6.6. Import/cross-file type resolution**
 
   Imported names should resolve to their target types across files.
-  `resolveAliasTarget` follows alias chains but module specifier resolution is incomplete.
 
-  **Implementation:**
-  - `resolveModuleSpecifier(specifier, fromFile)` → target BinderResult
-  - For relative specifiers: find matching file in binderResults
-  - For `export =` / `export default`: resolve the exported symbol
-  - For named exports: look up in target file's locals/exports
-  - Connect to `getTypeOfIdentifier`: when symbol is Alias, follow to target type
+  **Implementation (completed):**
+  - Connected `resolveAliasTarget` → `resolveAlias` for on-demand cross-file resolution
+  - Added `SymbolFlags.Alias` handling in `getDeclaredTypeOfSymbolWorker` — follows alias
+    chain to get target's declared type (for type references to imported names)
+  - `resolveModuleSpecifier`, `resolveAlias`, and cross-file infrastructure already existed
 
-  **Unlocks:** ~24 multi-file tests, ~16 import tests
-  **File:** `Checker.kt` — module resolution
-  **Estimated gain:** 10-20 tests
+  **Result:** 0 direct test gains — multi-file tests require additional features
+  (cross-file diagnostic emission, full checker integration) beyond type resolution.
+  Infrastructure is correct and regression-free.
+
+  **File:** `Checker.kt` — `resolveAliasTarget`, `getDeclaredTypeOfSymbolWorker`
 
 - [ ] **6.7. Basic contextual typing**
 
