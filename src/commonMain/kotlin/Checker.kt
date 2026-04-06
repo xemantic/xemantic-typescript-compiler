@@ -25666,7 +25666,7 @@ class Checker(
             is TypeLiteral -> getTypeFromTypeLiteral(node)
             is TypeOperator -> getTypeFromTypeOperator(node)
             is IndexedAccessType -> getTypeFromIndexedAccess(node)
-            is ConditionalType -> anyType // TODO: conditional types
+            is ConditionalType -> getTypeFromConditionalType(node)
             is MappedType -> anyType // TODO: mapped types
             is TemplateLiteralType -> stringType // template literal types are string-like
             is InferType -> anyType // only valid inside conditional types
@@ -31548,6 +31548,44 @@ class Checker(
             SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
             SyntaxKind.ReadonlyKeyword -> getTypeFromTypeNode(node.type) // readonly just adds modifier
             else -> anyType
+        }
+    }
+
+    /**
+     * Resolve a ConditionalType: T extends U ? X : Y
+     * - If T and U are concrete: evaluate isTypeRelatedTo(T, U) and return X or Y
+     * - If T is a union: distribute — (A | B) extends U ? X : Y → (A extends U ? X : Y) | (B extends U ? X : Y)
+     * - If T is an unresolved type parameter: return anyType (can't evaluate)
+     */
+    private fun getTypeFromConditionalType(node: ConditionalType): Type {
+        val checkType = try { getTypeFromTypeNode(node.checkType) } catch (_: StackOverflowError) { return anyType }
+        val extendsType = try { getTypeFromTypeNode(node.extendsType) } catch (_: StackOverflowError) { return anyType }
+        if (checkType === anyType || checkType === errorType) return anyType
+        if (extendsType === anyType || extendsType === errorType) return anyType
+        // Unresolved type parameter — can't evaluate
+        if (checkType is Type.TypeParam) return anyType
+        // Distribution over unions
+        if (checkType is Type.Union) {
+            val results = checkType.types.map { constituent ->
+                evaluateConditional(constituent, extendsType, node)
+            }
+            return getUnionType(results)
+        }
+        return evaluateConditional(checkType, extendsType, node)
+    }
+
+    private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
+        // Check if checkType extends extendsType
+        val related = try {
+            isSimpleTypeRelatedTo(checkType, extendsType) ||
+                checkTypeRelatedTo(checkType, extendsType, assignableRelation)
+        } catch (_: StackOverflowError) {
+            return anyType
+        }
+        return if (related) {
+            getTypeFromTypeNode(node.trueType)
+        } else {
+            getTypeFromTypeNode(node.falseType)
         }
     }
 

@@ -1153,7 +1153,7 @@ infrastructure that makes future test gains cascade naturally.
 
   **File:** `Checker.kt` — `extractNullNarrowing` → `extractNarrowing` (generalized)
 
-- [ ] **7.8. Conditional types (basic)**
+- [x] **7.8. Conditional types (basic)**
 
   **Problem:** `ConditionalType` returns `anyType`. Conditional types are the foundation
   of TypeScript's utility types (`Extract`, `Exclude`, `NonNullable`, `ReturnType`, etc.).
