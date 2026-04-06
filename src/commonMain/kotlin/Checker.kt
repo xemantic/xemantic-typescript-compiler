@@ -26231,9 +26231,41 @@ class Checker(
     private fun getTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         val objectType = getTypeOfExpression(expr.expression)
         val propName = expr.name.text
-        val apparentType = getApparentType(objectType)
-        val prop = getPropertyOfType(apparentType, propName)
-        return if (prop != null) getTypeOfSymbol(prop) else anyType
+        // If object resolved, check its apparent type for the property
+        if (objectType !== anyType && objectType !== errorType) {
+            val apparentType = getApparentType(objectType)
+            val prop = getPropertyOfType(apparentType, propName)
+            if (prop != null) return getTypeOfSymbol(prop)
+        }
+        // Fallback: try namespace/module lookup for property access
+        val objExpr = expr.expression
+        val nsSymbol = when (objExpr) {
+            is Identifier -> globals[objExpr.text]
+            is PropertyAccessExpression -> {
+                // Chained access: resolve the intermediate namespace symbol
+                resolvePropertyAccessToSymbol(objExpr)
+            }
+            else -> null
+        }
+        if (nsSymbol != null && nsSymbol.flags.hasAny(SymbolFlags.Module)) {
+            val exportSym = nsSymbol.exports?.get(propName)
+            if (exportSym != null) return getTypeOfSymbol(exportSym)
+        }
+        // For resolved non-anyType objects, the property wasn't found — return anyType
+        return anyType
+    }
+
+    /** Resolve a property access expression to its symbol (for namespace chaining). */
+    private fun resolvePropertyAccessToSymbol(expr: PropertyAccessExpression): Symbol? {
+        val baseSymbol = when (val base = expr.expression) {
+            is Identifier -> globals[base.text]
+            is PropertyAccessExpression -> resolvePropertyAccessToSymbol(base)
+            else -> null
+        }
+        if (baseSymbol != null && baseSymbol.flags.hasAny(SymbolFlags.Module)) {
+            return baseSymbol.exports?.get(expr.name.text)
+        }
+        return null
     }
 
     /** Get the type of a binary expression. */

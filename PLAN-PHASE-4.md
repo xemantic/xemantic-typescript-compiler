@@ -457,6 +457,12 @@ array→primitive, named→named) fall through to the old string system which do
   - `getTypeFromTypeQuery` uses globals only (not currentLocalTypes) to avoid
     resolving function-scoped variables in type annotation positions.
   - +4 tests: `checkJsFiles`, `checkJsFiles2`, `checkJsFiles3`, `checkJsFiles4`
+- 6.4: Namespace property type resolution:
+  - `getTypeOfPropertyAccess` now falls back to namespace/module exports when
+    object type is anyType. Handles chained access `ns.sub.member` via
+    `resolvePropertyAccessToSymbol` recursive helper.
+  - Infrastructure only — 0 direct gains. Namespace assignment tests need
+    deeper variable inference chains and Object→Object comparison in canUseTypeEngine.
 
 ---
 
@@ -570,7 +576,7 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
   **File:** `Checker.kt` — `checkVarDeclAssignability`, `checkFunctionBody`
   **Estimated gain:** 5-15 tests
 
-- [ ] **6.4. Namespace property type resolution**
+- [x] **6.4. Namespace property type resolution**
 
   `ns.member` in expression position should resolve the type of the namespace export.
   `getTypeOfPropertyAccess` works but relies on `getApparentType` which doesn't resolve
