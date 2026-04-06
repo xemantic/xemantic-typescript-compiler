@@ -1294,7 +1294,7 @@ relaxes guards and activates features to harvest test gains.
   **Estimated gain:** ~30-60 tests
   **File:** `Checker.kt` — `isSimpleCheckableType`
 
-- [ ] **8.3. Propagate parameter types to all checker passes**
+- [x] **8.3. Propagate parameter types to all checker passes** (infrastructure — no direct test gains)
 
   **Problem:** `currentLocalTypes` is only populated during the TS2322 walk.
   TS2339/TS2345 checker passes don't have access to function parameter types, so

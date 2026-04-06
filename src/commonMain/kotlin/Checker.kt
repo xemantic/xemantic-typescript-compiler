@@ -29628,8 +29628,12 @@ class Checker(
             }
             is InterfaceDeclaration -> { /* No runtime property access in interfaces */ }
             is FunctionDeclaration -> {
-                stmt.body?.let {
-                    checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null)
+                stmt.body?.let { body ->
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    populateParameterLocalTypes(stmt.parameters)
+                    checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
+                    currentLocalTypes = savedLocalTypes
                 }
             }
             is VariableStatement -> {
@@ -29722,13 +29726,21 @@ class Checker(
         if (isStatic && !hasExplicitThisParam) inStaticClassMethod = true
         when (member) {
             is MethodDeclaration -> {
-                member.body?.let {
-                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                member.body?.let { body ->
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    populateParameterLocalTypes(member.parameters)
+                    checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                    currentLocalTypes = savedLocalTypes
                 }
             }
             is Constructor -> {
-                member.body?.let {
-                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                member.body?.let { body ->
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    populateParameterLocalTypes(member.parameters)
+                    checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                    currentLocalTypes = savedLocalTypes
                 }
             }
             is GetAccessor -> {
@@ -29737,8 +29749,12 @@ class Checker(
                 }
             }
             is SetAccessor -> {
-                member.body?.let {
-                    checkPropertyAccessInStatements(it.statements, source, fileName, classType)
+                member.body?.let { body ->
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    populateParameterLocalTypes(member.parameters)
+                    checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                    currentLocalTypes = savedLocalTypes
                 }
             }
             is PropertyDeclaration -> {
@@ -29777,6 +29793,9 @@ class Checker(
             }
             is ParenthesizedExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
             is ArrowFunction -> {
+                val savedLocalTypes = currentLocalTypes
+                currentLocalTypes = currentLocalTypes.toMutableMap()
+                populateParameterLocalTypes(expr.parameters)
                 expr.body.let { body ->
                     when (body) {
                         is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
@@ -29784,6 +29803,7 @@ class Checker(
                         else -> {}
                     }
                 }
+                currentLocalTypes = savedLocalTypes
             }
             is NewExpression -> {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
@@ -30126,6 +30146,22 @@ class Checker(
      * Check a single property access expression for TS2341 and TS2339.
      * TS2341 is checked first (private member accessibility).
      */
+    /** Populate currentLocalTypes with resolved parameter types for TS2339/TS2345 checking. */
+    private fun populateParameterLocalTypes(parameters: List<Parameter>) {
+        for (param in parameters) {
+            val paramName = param.name
+            val paramType = param.type
+            if (paramType != null && paramName is Identifier) {
+                try {
+                    val resolvedType = getTypeFromTypeNode(paramType)
+                    if (resolvedType !== anyType && resolvedType !== errorType) {
+                        currentLocalTypes[paramName.text] = resolvedType
+                    }
+                } catch (_: StackOverflowError) { /* circular type */ }
+            }
+        }
+    }
+
     private fun checkSinglePropertyAccess(
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
@@ -30169,44 +30205,58 @@ class Checker(
         } else {
             if (expr.expression !is Identifier) return
             val identName = (expr.expression as Identifier).text
-            val identSymbol = globals[identName] ?: return
+            val identSymbol = globals[identName]
 
-            // === Namespace/Module property access ===
-            // Skip import aliases — can't reliably resolve imported module exports
-            if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
-            if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class)) {
-                val exports = identSymbol.exports
-                if (exports != null) {
-                    if (isNameExportedFromNamespace(identSymbol, propName)) return
-                    // Enum members are always accessible on the enum type
-                    if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return
-                    if (propName in RUNTIME_PROPERTIES) return
-                    val typeName = "typeof $identName"
-                    val start = expr.name.pos
-                    val length = expr.name.text.length
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type '$typeName'.",
-                        category = DiagnosticCategory.Error, code = 2339,
-                        fileName = fileName, line = line, character = character,
-                        start = start, length = length,
-                    ))
+            if (identSymbol != null) {
+                // === Namespace/Module property access ===
+                // Skip import aliases — can't reliably resolve imported module exports
+                if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
+                if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class)) {
+                    val exports = identSymbol.exports
+                    if (exports != null) {
+                        if (isNameExportedFromNamespace(identSymbol, propName)) return
+                        // Enum members are always accessible on the enum type
+                        if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return
+                        if (propName in RUNTIME_PROPERTIES) return
+                        val typeName = "typeof $identName"
+                        val start = expr.name.pos
+                        val length = expr.name.text.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '$typeName'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                        return
+                    }
                     return
                 }
-                return
-            }
 
-            val exprType = getTypeOfSymbol(identSymbol)
-            if (exprType === anyType || exprType === errorType || exprType === unknownType) return
-            if (exprType !is Type.Object) return
-            // For variables, only check property access when the type is an interface
-            // (not a class) — class-typed variables may be narrowed via instanceof,
-            // causing FPs without control flow analysis.
-            if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
+                val exprType = getTypeOfSymbol(identSymbol)
+                if (exprType === anyType || exprType === errorType || exprType === unknownType) return
+                if (exprType !is Type.Object) return
+                // For variables, only check property access when the type is an interface
+                // (not a class) — class-typed variables may be narrowed via instanceof,
+                // causing FPs without control flow analysis.
+                if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
+                    val typeSym = exprType.symbol
+                    if (typeSym == null || typeSym.flags.hasAny(SymbolFlags.Class)) return
+                }
+                exprType
+            } else {
+                // Fallback: try resolving from currentLocalTypes (function params, local vars)
+                val exprType = getTypeOfIdentifier(expr.expression as Identifier)
+                if (exprType === anyType || exprType === errorType || exprType === unknownType) return
+                if (exprType !is Type.Object) return
+                // For local variables, skip class-typed (may be narrowed)
                 val typeSym = exprType.symbol
-                if (typeSym == null || typeSym.flags.hasAny(SymbolFlags.Class)) return
+                if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) return
+                // Skip malformed types (e.g., unresolved mapped types with empty property names)
+                resolveStructuredTypeMembers(exprType)
+                if (exprType.properties != null && exprType.properties!!.any { it.name.isEmpty() }) return
+                exprType
             }
-            exprType
         }
         // Check Interface and Object types (anonymous object literals, type literals, etc.)
         if (objectType !is Type.Object) return
@@ -30473,7 +30523,13 @@ class Checker(
                 for (param in stmt.parameters) {
                     param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
                 }
-                stmt.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                stmt.body?.let { body ->
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    populateParameterLocalTypes(stmt.parameters)
+                    checkCallTypesInStatements(body.statements, source, fileName)
+                    currentLocalTypes = savedLocalTypes
+                }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
@@ -30482,13 +30538,25 @@ class Checker(
                             for (param in member.parameters) {
                                 param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
                             }
-                            member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                            member.body?.let { body ->
+                                val savedLocalTypes = currentLocalTypes
+                                currentLocalTypes = currentLocalTypes.toMutableMap()
+                                populateParameterLocalTypes(member.parameters)
+                                checkCallTypesInStatements(body.statements, source, fileName)
+                                currentLocalTypes = savedLocalTypes
+                            }
                         }
                         is Constructor -> {
                             for (param in member.parameters) {
                                 param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
                             }
-                            member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                            member.body?.let { body ->
+                                val savedLocalTypes = currentLocalTypes
+                                currentLocalTypes = currentLocalTypes.toMutableMap()
+                                populateParameterLocalTypes(member.parameters)
+                                checkCallTypesInStatements(body.statements, source, fileName)
+                                currentLocalTypes = savedLocalTypes
+                            }
                         }
                         is GetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
                         is SetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
