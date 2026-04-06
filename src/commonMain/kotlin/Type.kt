@@ -170,6 +170,8 @@ sealed class Type {
         var constructSignatures: List<Signature>? = null
         var stringIndexInfo: IndexInfo? = null
         var numberIndexInfo: IndexInfo? = null
+        /** Non-null for tuple types — stores element types for display and length checking. */
+        var tupleElementTypes: List<Type>? = null
         override fun toString(): kotlin.String = symbol?.name ?: "Object#$id"
     }
 

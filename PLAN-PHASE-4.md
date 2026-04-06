@@ -417,6 +417,20 @@ array→primitive, named→named) fall through to the old string system which do
 - Initializer type inference tested → 6 regressions (TS2403 FPs), reverted.
   Partial inference is worse than no inference.
 
+**Completed session 2026-04-06b (+1 test, 7,975 → 7,976):**
+- 6.0: Tuple type resolution — `getTupleType` now creates `Type.Object` with:
+  - Numbered property symbols ("0", "1", ...) with resolved element types
+  - `length` property with `NumberLiteral(n)` type
+  - `numberIndexInfo` with union of element types
+  - `tupleElementTypes` field on `Type.Object` for display and identification
+  - Handles `NamedTupleMember`, `OptionalType`, `RestType` elements
+- `typeToString` displays tuples as `[T1, T2, ...]`
+- `canUseTypeEngine` guard extended for tuple targets (function/primitive→tuple only;
+  array→tuple skipped to avoid FPs from missing contextual typing)
+- +1 test: `assigningFunctionToTupleIssuesError`
+- 15 other tuple tests improved from "none produced" to "has diff" (need deeper
+  tuple-specific checking: element count, positional assignability, TS2493)
+
 ---
 
 ## Phase 6 — Type Resolution Queue
@@ -449,7 +463,7 @@ The `canUseTypeEngine` guard is NOT the bottleneck — `getTypeOfExpression` ret
 
 ### QUEUE
 
-- [ ] **6.0. Tuple type resolution**
+- [x] **6.0. Tuple type resolution**
 
   `getTupleType` currently returns bare `Type.Object()`. Create proper tuple types
   with indexed members (`0: T1, 1: T2, ...`) and `length` property.
