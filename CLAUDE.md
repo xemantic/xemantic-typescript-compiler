@@ -208,7 +208,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 7: Infrastructure Unblocking.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,981 / 10,077 tests passing (~79.2%). Current work: build foundational type system infrastructure in dependency order — recursive type cycle detection, scope-chain identifier resolution, Object↔Object structural comparison, overload resolution, indexed access/conditional/mapped types. Focus on features that unblock other features, not individual test gains.
+**Phase 8: Harvest Test Gains.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,981 / 10,077 tests passing (~79.2%). Phase 7 built all foundational infrastructure (cycle detection, structural comparison, overloads, indexed access, conditional/mapped types, typeof narrowing). Phase 8 relaxes conservative guards and activates features to harvest test gains from that infrastructure.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
