@@ -1679,17 +1679,20 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Actual gain:** 1 test (privateFieldAssignabilityFromUnknown)
   **File:** `Transformer.kt` — `transformClassBody`
 
-- [ ] **10.10. Fix computed property Symbol() temp variable emission (LOW-MEDIUM)**
+- [x] **10.10. Fix computed property temp variable emission (LOW-MEDIUM)** — DONE (+1 test, 8005 passing)
 
-  **Problem:** ~15 JS emit tests expect computed property names using `Symbol()` to be
-  extracted to temp variables (`var _a; _a = Symbol("key")`). Our emitter outputs the
-  `Symbol()` call inline.
+  **Problem:** ~15 JS emit tests expect computed property names using non-literal
+  expressions to be extracted to temp variables (`var _a; _a = expr`). Our emitter
+  outputs the expression inline in the constructor.
 
-  **Fix:** In the Transformer, when a computed property name is a `Symbol()` call or
-  other non-trivial expression, extract to a temp variable declared before the class.
+  **Fix:** In `transformClassBody`, when `!useDefineForClassFields`, scan instance
+  properties with initializers for non-literal `ComputedPropertyName` expressions.
+  Extract to temp vars: `var _a, _b;` before class, `_a = x, _b = y;` after class,
+  `this[_a]` in constructor. Only applies to instance properties with initializers,
+  not methods/accessors or type-annotation-only properties.
 
-  **Estimated gain:** 5-10 tests
-  **File:** `Transformer.kt` — class transforms
+  **Actual gain:** 1 test (declarationEmitMultipleComputedNamesSameDomain)
+  **File:** `Transformer.kt` — `transformClassBody`
 
 ---
 
