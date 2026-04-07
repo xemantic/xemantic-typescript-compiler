@@ -208,7 +208,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 9: Targeted FP Suppression.** Pipeline: Scanner → Parser → **Binder → Checker** → Transformer → Emitter. ~7,983 / 10,077 tests passing (79.2%). Phase 8 relaxed guards and added infrastructure with minimal test gains (+2). Phase 9 targets false positive suppression (22 pure-FP tests), JS emit fixes (237 failures), and common FP patterns in mixed-diff tests. 56% of failures produce zero diagnostics (blocked on lib.d.ts types) — Phase 9 focuses on the other 44%.
+**Phase 10: High-ROI Targeted Fixes.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. ~7,986 / 10,077 tests passing (79.3%). Phase 9 fixed 3 FP tests (+3). Of 2,091 remaining failures: 1,185 (57%) produce zero diagnostics (blocked on lib.d.ts types), 236 (11%) are JS emit, 334 (16%) are mixed diffs, 312 (15%) partial match. Phase 10 targets test output formatting (10 source-echo ordering), small targeted diagnostics (TS2366, TS1042, TS2708), and JS emit fixes (multi-file ordering, type-only elision, private field transforms).
 
 ### Execution protocol (MANDATORY — follow exactly)
 

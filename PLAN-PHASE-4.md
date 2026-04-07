@@ -1533,6 +1533,163 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
 
 ---
 
+## Phase 10 queue — High-ROI Targeted Fixes
+
+**Failure landscape (2,091 remaining):**
+- 1,185 (56.7%) produce zero diagnostics — blocked on lib.d.ts/anyType resolution
+- 312 (14.9%) partial match — some correct diagnostics, missing others
+- 334 (16.0%) mixed — both extra and missing diagnostics
+- 236 (11.3%) JS emit failures — module transforms, ordering, private fields
+- 12 (0.6%) pure FP — only extra diagnostics
+- ~12 position/message diffs, ~119 source echo ordering, ~128 other format
+
+**Strategy:** Target tests fixable without deep type system infrastructure.
+Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit ordering.
+
+- [ ] **10.0. Fix multi-file error baseline source echo ordering (HIGH)**
+
+  **Problem:** 10 error tests fail ONLY because source file sections appear in
+  wrong order. Content and diagnostics are identical — just `==== file.ts ====`
+  sections reordered. Tests: `moduleResolutionPackageIdWithRelativeAndAbsolutePath`,
+  `moduleResolutionWithExtensions_withPaths`, `moduleResolutionWithSuffixes_one_*` (4),
+  `pathMappingBasedModuleResolution7_classic`, `pathMappingBasedModuleResolution7_node`,
+  `pathMappingBasedModuleResolution_withExtension_MapedToNodeModules`,
+  `requireOfJsonFile_PathMapping`.
+
+  **Fix:** In `toErrorBaseline()` in `BaselineFormatter.kt`, sort `allSourceFiles`
+  so user source `.ts` files (non-node_modules, non-library) appear before dependency
+  files (`.d.ts`, `node_modules/**`). The existing "last to front" reordering for
+  `require()`/`reference path` files is correct but insufficient — these 10 tests
+  need a broader sort: user sources first, then library/node_modules `.d.ts` files.
+
+  **Estimated gain:** 10 tests
+  **File:** `BaselineFormatter.kt` — `toErrorBaseline`
+
+- [ ] **10.1. Fix TS2366 FP for exhaustive typeof switch on any/unknown (LOW)**
+
+  **Problem:** `unreachableSwitchTypeofAny` and `unreachableSwitchTypeofUnknown` have
+  FP TS2366 ("Function lacks ending return statement") for functions with switch on
+  `typeof x` covering all possible typeof string values. TypeScript recognizes these
+  as exhaustive.
+
+  **Fix:** In the TS7030/TS2355/TS2366 implicit return checker, recognize a switch on
+  `typeof expr` as exhaustive when all typeof string values are covered by case clauses
+  ("string", "number", "bigint", "boolean", "symbol", "undefined", "object", "function").
+
+  **Estimated gain:** 2 tests
+  **File:** `Checker.kt` — `isDefinitelyTerminating` or `checkImplicitReturns`
+
+- [ ] **10.2. Fix parser TS1109→TS1005 for unparsed token (LOW)**
+
+  **Problem:** `parserUnparsedTokenCrash1` emits TS1109 ("Expression expected") where
+  TypeScript emits TS1005 ("';' expected"). Parser error recovery picks different
+  fallback diagnostic.
+
+  **Fix:** Check the specific parse context where the divergence occurs and adjust
+  to match TypeScript's error recovery.
+
+  **Estimated gain:** 1 test
+  **File:** `Parser.kt`
+
+- [ ] **10.3. Fix TS7019→TS7006 for contextually typed rest param (LOW)**
+
+  **Problem:** `contextuallyTypedParametersWithInitializers1` emits TS7019 (rest param
+  implicit any[]) for a parameter that should get TS7006 (regular param implicit any).
+
+  **Fix:** Check the specific parameter and adjust the diagnostic code selection logic.
+
+  **Estimated gain:** 1 test
+  **File:** `Checker.kt` — `checkParamsForImplicitAny`
+
+- [ ] **10.4. Investigate and fix multi-file JS emit ordering (HIGH)**
+
+  **Problem:** ~36 JS emit tests fail because output file sections appear in wrong
+  order. The emitted JS content is correct but file sections are reordered vs baseline.
+  This is distinct from the error baseline ordering issue.
+
+  **Fix:** Investigate the compilation ordering in `TypeScriptCompiler.kt` for multi-file
+  tests. TypeScript processes files in a specific dependency order. Determine if this is
+  a test harness issue (formatMultiFileBaseline) or compiler issue (file processing order).
+
+  **Estimated gain:** 10-36 tests
+  **File:** `TypeScriptCompiler.kt`, `BaselineFormatter.kt`
+
+- [ ] **10.5. Fix type-only import elision — top patterns (MEDIUM-HIGH)**
+
+  **Problem:** ~25-35 JS emit tests fail because type-only imports/exports are not
+  properly elided. Common patterns: `require("./type")` emitted for type-only imports,
+  `exports.default = type_1.T` for type re-exports, extra imports inflating `_1`/`_2`
+  suffix numbering.
+
+  **Fix:** Audit `isTypeOnlyImportRequire` and `isValueExport` in the Transformer.
+  Focus on the most common pattern: skipping `require()` for specifiers that only
+  re-export types.
+
+  **Estimated gain:** 5-15 tests
+  **File:** `Transformer.kt` — `transformToCommonJS`, pre-scan passes
+
+- [ ] **10.6. Add TS1042 for modifiers on object literal members (LOW)**
+
+  **Problem:** `objectLiteralMemberWithModifiers2` expects TS1042 ("'public' modifier
+  cannot be used here") for access modifiers on object literal properties. Our parser
+  doesn't emit this diagnostic.
+
+  **Fix:** In the parser or checker, detect access modifiers (public/private/protected)
+  on object literal property/method declarations and emit TS1042.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Checker.kt` or `Parser.kt`
+
+- [ ] **10.7. Fix this-parameter display in function typeToString (LOW)**
+
+  **Problem:** `contextualTyping24` shows function type without `this: void` parameter
+  in the display. TypeScript includes `this` parameter in function type display when
+  present.
+
+  **Fix:** In `typeToString`, when emitting function types with a `this` parameter,
+  include it in the display.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Checker.kt` — `typeToString`
+
+- [ ] **10.8. Add TS2708 "Cannot use namespace as value" (LOW-MEDIUM)**
+
+  **Problem:** Several tests expect TS2708 when a namespace/module is used in a value
+  position (e.g., `let x = MyNamespace`). We don't emit this diagnostic.
+
+  **Fix:** In the checker, when an identifier resolves to a namespace-only symbol
+  (Module flag without Value flag) in a value position, emit TS2708.
+
+  **Estimated gain:** 2-4 tests
+  **File:** `Checker.kt`
+
+- [ ] **10.9. Fix private field WeakMap downlevel — basic pattern (MEDIUM-HIGH)**
+
+  **Problem:** ~18 JS emit tests expect `#field` to be downleveled to WeakMap pattern
+  (`_ClassName_field = new WeakMap()`, `__classPrivateFieldGet/Set`). Our Transformer
+  emits native `#field` syntax regardless of target.
+
+  **Fix:** In the Transformer, when target < ES2022 (or when useDefineForClassFields
+  is false), transform `#field` declarations to WeakMap and `this.#field` accesses to
+  `__classPrivateFieldGet/Set` calls. This is a significant transform pass.
+
+  **Estimated gain:** 5-10 tests (basic pattern only)
+  **File:** `Transformer.kt` — class transforms
+
+- [ ] **10.10. Fix computed property Symbol() temp variable emission (LOW-MEDIUM)**
+
+  **Problem:** ~15 JS emit tests expect computed property names using `Symbol()` to be
+  extracted to temp variables (`var _a; _a = Symbol("key")`). Our emitter outputs the
+  `Symbol()` call inline.
+
+  **Fix:** In the Transformer, when a computed property name is a `Symbol()` call or
+  other non-trivial expression, extract to a temp variable declared before the class.
+
+  **Estimated gain:** 5-10 tests
+  **File:** `Transformer.kt` — class transforms
+
+---
+
 ## Previously deferred items (from Phase 4b)
 
 These remain deferred until their blockers are resolved:
