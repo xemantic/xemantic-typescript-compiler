@@ -356,6 +356,10 @@ class Checker(
         if (options.target < ScriptTarget.ES2015) {
             checkBlockScopedFunctionDeclarations()
         }
+        // 35b. Check private identifiers targeting ES5 (TS18028)
+        if (options.target <= ScriptTarget.ES5) {
+            checkPrivateIdentifiersTarget()
+        }
         // 36. Check import declarations with modifiers (TS1191)
         checkImportModifiers()
         // 37. Check block-scoped variable use before declaration (TS2448)
@@ -18019,6 +18023,65 @@ class Checker(
                     }
                 }
             }
+        }
+    }
+
+    // TS18028: Private identifiers are only available when targeting ES2015+
+    private fun checkPrivateIdentifiersTarget() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkPrivateIdentifiersInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkPrivateIdentifiersInStatements(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> checkPrivateIdentifiersInClass(stmt.members, source, fileName)
+                is ExpressionStatement -> {
+                    val expr = stmt.expression
+                    if (expr is ClassExpression) checkPrivateIdentifiersInClass(expr.members, source, fileName)
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val init = decl.initializer
+                        if (init is ClassExpression) checkPrivateIdentifiersInClass(init.members, source, fileName)
+                    }
+                }
+                is Block -> checkPrivateIdentifiersInStatements(stmt.statements, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) checkPrivateIdentifiersInStatements(body.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkPrivateIdentifiersInClass(members: List<ClassElement>, source: String, fileName: String) {
+        for (member in members) {
+            val name = when (member) {
+                is PropertyDeclaration -> member.name as? Identifier
+                is MethodDeclaration -> member.name as? Identifier
+                is GetAccessor -> member.name as? Identifier
+                is SetAccessor -> member.name as? Identifier
+                else -> null
+            } ?: continue
+            if (!name.text.startsWith("#")) continue
+            val start = name.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Private identifiers are only available when targeting ECMAScript 2015 and higher.",
+                category = DiagnosticCategory.Error,
+                code = 18028,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = name.text.length,
+            ))
         }
     }
 
