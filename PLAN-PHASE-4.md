@@ -1451,7 +1451,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 1 pure-FP test + 3-5 mixed tests with namespace FP TS2339
   **File:** `Checker.kt` — `mergeModuleAugmentations`
 
-- [ ] **9.5. Suppress TS2322 for `as unknown` type assertions (LOW)**
+- [x] **9.5. Suppress TS2322 for `as unknown` type assertions (LOW)**
 
   **Problem:** `privateFieldAssignabilityFromUnknown` has FP TS2322 for `{} as unknown`
   assigned to a class type. The `as unknown` assertion should suppress assignability
