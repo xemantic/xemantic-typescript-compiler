@@ -13941,6 +13941,7 @@ class Checker(
                     else -> {}
                 }
             }
+            val namespaceOnlyNames = mutableSetOf<String>()
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
                     is InterfaceDeclaration -> {
@@ -13951,10 +13952,26 @@ class Checker(
                         val n = stmt.name.text
                         if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
                     }
+                    is ModuleDeclaration -> {
+                        val n = (stmt.name as? Identifier)?.text ?: continue
+                        // A namespace is "namespace-only" if it has no value exports
+                        if (n !in valueNames) {
+                            val body = stmt.body
+                            val hasValues = when (body) {
+                                is ModuleBlock -> body.statements.any { s ->
+                                    s is FunctionDeclaration || s is ClassDeclaration ||
+                                        s is VariableStatement || s is EnumDeclaration ||
+                                        s is ModuleDeclaration // nested namespace may have value exports
+                                }
+                                else -> false
+                            }
+                            if (!hasValues) namespaceOnlyNames.add(n)
+                        }
+                    }
                     else -> {}
                 }
             }
-            checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames, valueNames)
+            checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
         }
     }
 
@@ -13964,9 +13981,10 @@ class Checker(
         fileName: String,
         typeOnlyNames: Set<String>,
         valueNames: Set<String> = emptySet(),
+        namespaceOnlyNames: Set<String> = emptySet(),
     ) {
         for (stmt in statements) {
-            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames, valueNames)
+            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
         }
     }
 
@@ -13976,21 +13994,22 @@ class Checker(
         fileName: String,
         typeOnlyNames: Set<String>,
         valueNames: Set<String> = emptySet(),
+        namespaceOnlyNames: Set<String> = emptySet(),
     ) {
         when (stmt) {
-            is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames)
-            is LabeledStatement -> checkTypeAsValueInStatement(stmt.statement, source, fileName, typeOnlyNames, valueNames)
+            is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is LabeledStatement -> checkTypeAsValueInStatement(stmt.statement, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
+                    decl.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
                 }
             }
-            is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
-            is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames, valueNames)
+            is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
+            is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             is IfStatement -> {
-                checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames)
-                checkTypeAsValueInStatement(stmt.thenStatement, source, fileName, typeOnlyNames, valueNames)
-                stmt.elseStatement?.let { checkTypeAsValueInStatement(it, source, fileName, typeOnlyNames, valueNames) }
+                checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                checkTypeAsValueInStatement(stmt.thenStatement, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                stmt.elseStatement?.let { checkTypeAsValueInStatement(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
             }
             is FunctionDeclaration -> {
                 // Collect type parameters as type-only within this function
@@ -14036,6 +14055,7 @@ class Checker(
         fileName: String,
         typeOnlyNames: Set<String>,
         valueNames: Set<String> = emptySet(),
+        namespaceOnlyNames: Set<String> = emptySet(),
     ) {
         when (expr) {
             is Identifier -> {
@@ -14043,6 +14063,20 @@ class Checker(
                 // Skip if the name is declared as a value (variable/parameter shadows type keyword)
                 if (name !in valueNames && (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames)) {
                     emitTS2693(name, expr, source, fileName)
+                } else if (name !in valueNames && name in namespaceOnlyNames) {
+                    // TS2708: Cannot use namespace 'X' as a value.
+                    val start = expr.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot use namespace '$name' as a value.",
+                        category = DiagnosticCategory.Error,
+                        code = 2708,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = name.length,
+                    ))
                 }
             }
             is NewExpression -> {
@@ -14055,20 +14089,26 @@ class Checker(
                     }
                 }
                 // Recurse into arguments
-                expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
+                expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
             }
             is CallExpression -> {
-                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
-                expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames) }
+                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
             }
             is BinaryExpression -> {
                 // Iteratively walk binary chains to avoid StackOverflow on deep trees
+                // For `=` assignment, skip left side for TS2708 (checkConstAssignment handles it)
                 var current: Expression = expr
                 while (current is BinaryExpression) {
-                    checkTypeAsValueInExpr(current.right, source, fileName, typeOnlyNames, valueNames)
+                    checkTypeAsValueInExpr(current.right, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                    if (current.operator == SyntaxKind.Equals) {
+                        // Assignment: check left side for TS2693 only, not TS2708 (avoid duplicate with checkConstAssignment)
+                        checkTypeAsValueInExpr(current.left, source, fileName, typeOnlyNames, valueNames)
+                        return
+                    }
                     current = current.left
                 }
-                checkTypeAsValueInExpr(current, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInExpr(current, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             }
             is TypeOfExpression -> {
                 // typeof T where T is a type param → TS2693
@@ -14080,16 +14120,16 @@ class Checker(
                     }
                 }
             }
-            is ParenthesizedExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
+            is ParenthesizedExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             is ConditionalExpression -> {
-                checkTypeAsValueInExpr(expr.condition, source, fileName, typeOnlyNames, valueNames)
-                checkTypeAsValueInExpr(expr.whenTrue, source, fileName, typeOnlyNames, valueNames)
-                checkTypeAsValueInExpr(expr.whenFalse, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInExpr(expr.condition, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                checkTypeAsValueInExpr(expr.whenTrue, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                checkTypeAsValueInExpr(expr.whenFalse, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             }
-            is PropertyAccessExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
+            is PropertyAccessExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             is ElementAccessExpression -> {
-                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames)
-                checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames, valueNames)
+                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             }
             else -> {}
         }
