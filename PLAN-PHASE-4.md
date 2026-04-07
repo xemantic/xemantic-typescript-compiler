@@ -1640,7 +1640,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 1-2 tests
   **File:** `Checker.kt` or `Parser.kt`
 
-- [ ] **10.7. Fix this-parameter display in function typeToString (LOW)**
+- [ ] **10.7. Fix this-parameter display in function typeToString (LOW)** — SKIPPED (test has many deeper type resolution issues beyond this)
 
   **Problem:** `contextualTyping24` shows function type without `this: void` parameter
   in the display. TypeScript includes `this` parameter in function type display when
@@ -1652,7 +1652,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 1-2 tests
   **File:** `Checker.kt` — `typeToString`
 
-- [ ] **10.8. Add TS2708 "Cannot use namespace as value" (LOW-MEDIUM)**
+- [x] **10.8. Add TS2708 "Cannot use namespace as value" (LOW-MEDIUM)** — DONE (+1 test, 8001 passing)
 
   **Problem:** Several tests expect TS2708 when a namespace/module is used in a value
   position (e.g., `let x = MyNamespace`). We don't emit this diagnostic.
