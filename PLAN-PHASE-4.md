@@ -1579,7 +1579,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 2 tests
   **File:** `Checker.kt` — `isDefinitelyTerminating` or `checkImplicitReturns`
 
-- [ ] **10.2. Fix parser TS1109→TS1005 for unparsed token (LOW)**
+- [ ] **10.2. Fix parser TS1109→TS1005 for unparsed token (LOW)** — SKIPPED (parseSemicolon error reporting causes 7 regressions)
 
   **Problem:** `parserUnparsedTokenCrash1` emits TS1109 ("Expression expected") where
   TypeScript emits TS1005 ("';' expected"). Parser error recovery picks different
@@ -1591,7 +1591,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 1 test
   **File:** `Parser.kt`
 
-- [ ] **10.3. Fix TS7019→TS7006 for contextually typed rest param (LOW)**
+- [ ] **10.3. Fix TS7019→TS7006 for contextually typed rest param (LOW)** — SKIPPED (needs advanced contextual typing for both FP suppression and missing diagnostic)
 
   **Problem:** `contextuallyTypedParametersWithInitializers1` emits TS7019 (rest param
   implicit any[]) for a parameter that should get TS7006 (regular param implicit any).
@@ -1601,7 +1601,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 1 test
   **File:** `Checker.kt` — `checkParamsForImplicitAny`
 
-- [ ] **10.4. Investigate and fix multi-file JS emit ordering (HIGH)**
+- [ ] **10.4. Investigate and fix multi-file JS emit ordering (HIGH)** — INVESTIGATED: topo sort needed for most tests; naive removal causes 59 regressions
 
   **Problem:** ~36 JS emit tests fail because output file sections appear in wrong
   order. The emitted JS content is correct but file sections are reordered vs baseline.
@@ -1628,7 +1628,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 5-15 tests
   **File:** `Transformer.kt` — `transformToCommonJS`, pre-scan passes
 
-- [ ] **10.6. Add TS1042 for modifiers on object literal members (LOW)**
+- [x] **10.6. Add TS1042 for modifiers on object literal members (LOW)** — DONE (+1 test, 8000 passing)
 
   **Problem:** `objectLiteralMemberWithModifiers2` expects TS1042 ("'public' modifier
   cannot be used here") for access modifiers on object literal properties. Our parser
