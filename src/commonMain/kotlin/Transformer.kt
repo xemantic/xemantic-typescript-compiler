@@ -8467,14 +8467,14 @@ class Transformer(
                 modifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract,
                 decorators = null,
             )
-            return listOf(transformedClass) + result.trailingStatements
+            return result.leadingStatements + listOf(transformedClass) + result.trailingStatements
         }
 
         // --- Legacy decorator transform ---
         val isDefault = ModifierFlag.Default in decl.modifiers
         val className = decl.name?.text
             ?: if (isDefault) "default_${++anonDefaultCounter}" else null
-        if (className == null) return listOf(decl.copy(
+        if (className == null) return result.leadingStatements + listOf(decl.copy(
             typeParameters = null,
             heritageClauses = result.heritageClauses,
             members = result.members,
@@ -9346,6 +9346,7 @@ class Transformer(
         val heritageClauses: List<HeritageClause>?,
         val members: List<ClassElement>,
         val trailingStatements: List<Statement>,
+        val leadingStatements: List<Statement> = emptyList(),
     )
 
     private fun transformClassBody(
@@ -9430,6 +9431,54 @@ class Transformer(
             }
         }
 
+        // Private field WeakMap downlevel: when target < ES2022, transform #field to WeakMap pattern
+        data class PrivateFieldInfo(val fieldName: String, val weakMapVar: String, val initializer: Expression?)
+        val privateFieldInfos = mutableListOf<PrivateFieldInfo>()
+        val privateFieldLeadingStatements = mutableListOf<Statement>()
+        val privateFieldTrailingStatements = mutableListOf<Statement>()
+        val needsPrivateFieldDownlevel = options.effectiveTarget < ScriptTarget.ES2022
+
+        if (needsPrivateFieldDownlevel) {
+            val className = name?.text ?: "_anonymous"
+            for (prop in instanceProperties) {
+                val nm = prop.name
+                if (nm is Identifier && nm.text.startsWith("#")) {
+                    val fieldName = nm.text.removePrefix("#")
+                    val weakMapVar = "_${className}_$fieldName"
+                    val initExpr = prop.initializer?.let { transformExpression(it) }
+                    privateFieldInfos.add(PrivateFieldInfo(fieldName, weakMapVar, initExpr))
+
+                    // var _ClassName_field; (before the class)
+                    privateFieldLeadingStatements.add(VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = listOf(VariableDeclaration(
+                                name = syntheticId(weakMapVar),
+                                pos = -1, end = -1,
+                            )),
+                            flags = VarKeyword,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+
+                    // _ClassName_field = new WeakMap(); (after the class)
+                    privateFieldTrailingStatements.add(ExpressionStatement(
+                        expression = BinaryExpression(
+                            left = syntheticId(weakMapVar),
+                            operator = Equals,
+                            right = NewExpression(
+                                expression = syntheticId("WeakMap"),
+                                arguments = emptyList(),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                }
+            }
+        }
+
         // Determine constructor parameter properties
         val paramProperties = existingConstructor?.parameters
             ?.filter { p -> p.modifiers.any { it in parameterPropertyModifiers } }
@@ -9457,6 +9506,27 @@ class Transformer(
                     pos = -1, end = -1,
                 )
             )
+        }
+
+        // Private field WeakMap initialization: _ClassName_field.set(this, void 0)
+        // These go after parameter properties but before regular instance property initializers.
+        for (info in privateFieldInfos) {
+            val initValue = info.initializer ?: VoidExpression(
+                expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+            propInitStatements.add(ExpressionStatement(
+                expression = CallExpression(
+                    expression = PropertyAccessExpression(
+                        expression = syntheticId(info.weakMapVar),
+                        name = syntheticId("set"),
+                        pos = -1, end = -1,
+                    ),
+                    arguments = listOf(syntheticId("this"), initValue),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ))
         }
 
         // Instance property initializers (only when not using define semantics)
@@ -9618,7 +9688,9 @@ class Transformer(
                 }
                 member is PropertyDeclaration && !useDefineForClassFields -> {
                     val nm = member.name
-                    if (nm is Identifier && nm.text.startsWith("#")) {
+                    if (nm is Identifier && nm.text.startsWith("#") && needsPrivateFieldDownlevel) {
+                        // Private field downleveled to WeakMap — skip from class body
+                    } else if (nm is Identifier && nm.text.startsWith("#")) {
                         // Private JS fields (#field) need explicit class body declaration even when
                         // useDefineForClassFields=false — they can't be assigned in the constructor
                         outputMembers.add(member.copy(
@@ -9859,7 +9931,8 @@ class Transformer(
         return ClassTransformResult(
             heritageClauses = transformedHeritage,
             members = outputMembers,
-            trailingStatements = trailingStatements,
+            trailingStatements = privateFieldTrailingStatements + trailingStatements,
+            leadingStatements = privateFieldLeadingStatements,
         )
     }
 

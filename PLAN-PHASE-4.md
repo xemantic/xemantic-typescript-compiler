@@ -1665,18 +1665,19 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 2-4 tests
   **File:** `Checker.kt`
 
-- [ ] **10.9. Fix private field WeakMap downlevel — basic pattern (MEDIUM-HIGH)**
+- [x] **10.9. Fix private field WeakMap downlevel — basic pattern (MEDIUM-HIGH)** — DONE (+1 test, 8004 passing)
 
   **Problem:** ~18 JS emit tests expect `#field` to be downleveled to WeakMap pattern
   (`_ClassName_field = new WeakMap()`, `__classPrivateFieldGet/Set`). Our Transformer
   emits native `#field` syntax regardless of target.
 
-  **Fix:** In the Transformer, when target < ES2022 (or when useDefineForClassFields
-  is false), transform `#field` declarations to WeakMap and `this.#field` accesses to
-  `__classPrivateFieldGet/Set` calls. This is a significant transform pass.
+  **Fix:** In the Transformer, when target < ES2022, transform `#field` declarations
+  to WeakMap pattern: `var _ClassName_field;` before class, `_ClassName_field.set(this, ...)`
+  in constructor, `_ClassName_field = new WeakMap();` after class. Private field read/write
+  transforms (`__classPrivateFieldGet/Set`) not yet implemented — needed for more tests.
 
-  **Estimated gain:** 5-10 tests (basic pattern only)
-  **File:** `Transformer.kt` — class transforms
+  **Actual gain:** 1 test (privateFieldAssignabilityFromUnknown)
+  **File:** `Transformer.kt` — `transformClassBody`
 
 - [ ] **10.10. Fix computed property Symbol() temp variable emission (LOW-MEDIUM)**
 
