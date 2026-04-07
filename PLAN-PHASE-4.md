@@ -1546,7 +1546,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
 **Strategy:** Target tests fixable without deep type system infrastructure.
 Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit ordering.
 
-- [ ] **10.0. Fix multi-file error baseline source echo ordering (HIGH)**
+- [x] **10.0. Fix multi-file error baseline source echo ordering (HIGH)** — DONE (+12 tests, 7998 passing)
 
   **Problem:** 10 error tests fail ONLY because source file sections appear in
   wrong order. Content and diagnostics are identical — just `==== file.ts ====`

@@ -269,18 +269,37 @@ fun CompilationResult.toErrorBaseline(): String? {
     if (diagnostics.isEmpty()) return null
     // Use allSourceFiles (includes tsconfig.json) if available, otherwise fall back to sourceEchoes
     val baseFiles = if (allSourceFiles.isNotEmpty()) allSourceFiles else sourceEchoes
-    // Apply TypeScript test harness file ordering for error baselines:
-    // If the last file has require() or reference path, or noImplicitReferences is set,
-    // move the last file to the front (it's the "root" file in the harness).
+    // Apply TypeScript test harness file ordering for error baselines.
+    // Two paths mirror the harness logic:
+    // 1. When tsconfig.json is present: tsconfig first, then files resolved by tsconfig
+    //    (non-node_modules .ts/.d.ts under tsconfig directory, in original @filename order),
+    //    then remaining files in original @filename order.
+    // 2. Otherwise: if the last file has require()/reference path/noImplicitReferences,
+    //    move it to front; else preserve @filename order.
     val orderedEchoes = if (isMultiFile && baseFiles.size > 1) {
-        val lastContent = baseFiles.last().second
-        val shouldReorder = options.noImplicitReferences
-            || "require(" in lastContent
-            || Regex("reference\\s+path").containsMatchIn(lastContent)
-        if (shouldReorder) {
-            listOf(baseFiles.last()) + baseFiles.dropLast(1)
+        val tsconfigEntry = baseFiles.firstOrNull { it.first.endsWith("/tsconfig.json") || it.first == "tsconfig.json" }
+        if (tsconfigEntry != null) {
+            val tsconfigDir = tsconfigEntry.first.substringBeforeLast('/').let { if (it == tsconfigEntry.first) "" else "$it/" }
+            val otherFiles = baseFiles.filter { it !== tsconfigEntry }
+            // Root files: .ts/.d.ts (and .js/.jsx with allowJs) under the tsconfig directory,
+            // not in node_modules — mirrors TypeScript's default include pattern
+            val allowJs = options.allowJs
+            val (rootFiles, remainingFiles) = otherFiles.partition { (name, _) ->
+                val isIncludedExt = name.endsWith(".ts") || name.endsWith(".d.ts") ||
+                    (allowJs && (name.endsWith(".js") || name.endsWith(".jsx")))
+                isIncludedExt && name.startsWith(tsconfigDir) && "/node_modules/" !in name
+            }
+            listOf(tsconfigEntry) + rootFiles + remainingFiles
         } else {
-            baseFiles
+            val lastContent = baseFiles.last().second
+            val shouldReorder = options.noImplicitReferences
+                || "require(" in lastContent
+                || Regex("reference\\s+path").containsMatchIn(lastContent)
+            if (shouldReorder) {
+                listOf(baseFiles.last()) + baseFiles.dropLast(1)
+            } else {
+                baseFiles
+            }
         }
     } else {
         baseFiles
