@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-06):** 7,981 / 10,077 tests passing (79.2%). Active queue: Phase 8.
+**Status (2026-04-07):** 8,003 / 10,077 tests passing (79.4%). Active queue: Phase 10.
 
 ## Goal
 
@@ -1614,19 +1614,21 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 10-36 tests
   **File:** `TypeScriptCompiler.kt`, `BaselineFormatter.kt`
 
-- [ ] **10.5. Fix type-only import elision — top patterns (MEDIUM-HIGH)**
+- [x] **10.5. Fix type-only import elision — top patterns (MEDIUM-HIGH)** — DONE (+2 tests, 8003 passing)
 
   **Problem:** ~25-35 JS emit tests fail because type-only imports/exports are not
   properly elided. Common patterns: `require("./type")` emitted for type-only imports,
   `exports.default = type_1.T` for type re-exports, extra imports inflating `_1`/`_2`
   suffix numbering.
 
-  **Fix:** Audit `isTypeOnlyImportRequire` and `isValueExport` in the Transformer.
-  Focus on the most common pattern: skipping `require()` for specifiers that only
-  re-export types.
+  **Fix:** Two changes: (1) Extended `isTypeOnlyImportRequire` check to also apply for
+  exported `import = require()` (removed `!isExported` guard). (2) Added ambient external
+  module resolution — when file-based resolution fails, search all script-mode files for
+  `declare module "X"` blocks and check if their exports are type-only. Distinguishes
+  module definitions (in script files) from module augmentations (in module files).
 
-  **Estimated gain:** 5-15 tests
-  **File:** `Transformer.kt` — `transformToCommonJS`, pre-scan passes
+  **Actual gain:** 2 tests (aliasOnMergedModuleInterface, exportImportNonInstantiatedModule2)
+  **Files:** `Checker.kt` — `isTypeOnlyImportRequire`, `isAmbientModuleTypeOnly`; `Transformer.kt` — guard removal
 
 - [x] **10.6. Add TS1042 for modifiers on object literal members (LOW)** — DONE (+1 test, 8000 passing)
 
