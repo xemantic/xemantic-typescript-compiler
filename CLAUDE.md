@@ -58,6 +58,8 @@ Both developers and AI agents are expected to add entries as they encounter surp
 ### Binder gotchas
 
 - **`canMerge` must include Variable+Module**: `declare const b: T; declare namespace b {}` is valid TypeScript. The binder's `canMerge` must allow `Variable + Module` and `Module + Variable` merging, otherwise the second declaration silently overwrites the first symbol. This matters for `isTypeOnlyImportRequire` which then sees only the namespace and incorrectly elides the `require()`.
+- **Ambient module symbol overwritten by import alias**: `import x = require("X")` in the same file as `declare module "X"` creates an Alias symbol that overwrites the NamespaceModule in `locals["X"]` (Alias doesn't canMerge with Module). `isAmbientModuleTypeOnly` must analyze the ModuleBlock AST directly instead of looking up `locals[name]`.
+- **Module augmentation vs definition**: `declare module "X"` in a module file (has imports/exports) is an augmentation. In a script file, it's a definition. `isAmbientModuleTypeOnly` must skip module files to avoid treating augmentations (which only add types) as the full module definition.
 
 ### Type system gotchas
 

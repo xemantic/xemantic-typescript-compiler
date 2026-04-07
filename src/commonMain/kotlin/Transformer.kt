@@ -8251,11 +8251,11 @@ class Transformer(
         }
 
         // Elide import=require() when the target module only exports types.
-        // Exception: if the checker marks this import as explicitly referenced AND the module
-        // has value exports (e.g. JSX factory namespace imports like React), keep it.
+        // Applies to both exported and non-exported imports — if the target module is type-only,
+        // neither `import x = require("mod")` nor `export import x = require("mod")` produce JS.
         // If the module itself is type-only (no value exports at all), always erase — even if
         // the imported name appears in value positions (those are type errors, not value uses).
-        if (isRequire && !isExported && ref is ExternalModuleReference) {
+        if (isRequire && ref is ExternalModuleReference) {
             val specText = (ref.expression as? StringLiteralNode)?.text
             if (specText != null && checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
                 return emptyList()

@@ -668,30 +668,147 @@ class Checker(
     }
 
     fun isTypeOnlyImportRequire(moduleSpecifier: String, sourceFileName: String): Boolean {
-        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
-        val targetResult = fileResults[targetFile] ?: return false
-        // Check all exports from the target file
-        for (stmt in targetResult.sourceFile.statements) {
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null)
+        if (targetFile != null) {
+            val targetResult = fileResults[targetFile] ?: return false
+            // Check all exports from the target file
+            for (stmt in targetResult.sourceFile.statements) {
+                when (stmt) {
+                    is ExportAssignment -> {
+                        if (stmt.isExportEquals) {
+                            val expr = stmt.expression
+                            if (expr is Identifier) {
+                                val symbol = targetResult.locals[expr.text]
+                                if (symbol != null) {
+                                    // Note: symbol.flags may have been polluted by cross-file merging
+                                    // (e.g. Interface|Alias when another file imports this name).
+                                    // Use the node-level declaration kind to determine the original type.
+                                    return isSymbolTypeOnly(symbol)
+                                }
+                            }
+                            return false // expression export = always value
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            return false
+        }
+        // File-based resolution failed — check ambient external modules (declare module "X").
+        // Look through all files for `declare module "specifier"` blocks whose exports are type-only.
+        return isAmbientModuleTypeOnly(moduleSpecifier)
+    }
+
+    /**
+     * Check if an ambient external module (declare module "X") exports only types.
+     * Searches all files for matching `declare module` blocks and checks their exports.
+     */
+    private fun isAmbientModuleTypeOnly(moduleName: String): Boolean {
+        for (result in binderResults) {
+            // Skip files that are themselves modules (have imports/exports).
+            // In module files, `declare module "X"` is an augmentation, not a definition.
+            // Only script files can define ambient external modules.
+            if (isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode
+                    && (stmt.name as StringLiteralNode).text == moduleName) {
+                    // Found the ambient module definition. Analyze the body AST directly.
+                    // Cannot rely on result.locals[moduleName] because an import alias
+                    // with the same name (import x = require("x")) may overwrite the symbol.
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        return isModuleBlockTypeOnly(body)
+                    }
+                    // No body — treat as type-only (empty ambient module)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * Check if a ModuleBlock contains only type declarations (interfaces, type aliases,
+     * non-instantiated namespaces). Analyzes AST directly without symbol lookup.
+     */
+    private fun isModuleBlockTypeOnly(block: ModuleBlock): Boolean {
+        for (stmt in block.statements) {
             when (stmt) {
                 is ExportAssignment -> {
                     if (stmt.isExportEquals) {
                         val expr = stmt.expression
                         if (expr is Identifier) {
-                            val symbol = targetResult.locals[expr.text]
-                            if (symbol != null) {
-                                // Note: symbol.flags may have been polluted by cross-file merging
-                                // (e.g. Interface|Alias when another file imports this name).
-                                // Use the node-level declaration kind to determine the original type.
-                                return isSymbolTypeOnly(symbol)
-                            }
+                            // Look for the exported name among the block's own declarations
+                            return isNameTypeOnlyInBlock(expr.text, block)
                         }
                         return false // expression export = always value
+                    }
+                    // export default — check expression type
+                }
+                is VariableStatement -> return false // variables are values
+                is FunctionDeclaration -> return false
+                is ClassDeclaration -> return false
+                is EnumDeclaration -> return false
+                is InterfaceDeclaration -> { /* type-only, continue */ }
+                is TypeAliasDeclaration -> { /* type-only, continue */ }
+                is ModuleDeclaration -> {
+                    // Nested namespace — check if instantiated
+                    val br = binderResults.firstOrNull() ?: return false
+                    val state = br.moduleInstanceStates[nodeKey(stmt)]
+                    if (state == ModuleInstanceState.Instantiated) return false
+                }
+                is ExportDeclaration -> { /* re-export — skip for now */ }
+                is ImportDeclaration -> { /* import — skip */ }
+                is ImportEqualsDeclaration -> { /* import — skip */ }
+                else -> { /* other statements */ }
+            }
+        }
+        return true // all statements are type-only
+    }
+
+    /**
+     * Check if a name declared within a ModuleBlock is type-only.
+     * Used for `export = Name` resolution in ambient modules.
+     */
+    private fun isNameTypeOnlyInBlock(name: String, block: ModuleBlock): Boolean {
+        var hasValueDecl = false
+        var hasTypeOnlyDecl = false
+        for (stmt in block.statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> if (stmt.name.text == name) hasTypeOnlyDecl = true
+                is TypeAliasDeclaration -> if (stmt.name.text == name) hasTypeOnlyDecl = true
+                is ClassDeclaration -> if (stmt.name?.text == name) hasValueDecl = true
+                is FunctionDeclaration -> if (stmt.name?.text == name) hasValueDecl = true
+                is EnumDeclaration -> if (stmt.name.text == name) hasValueDecl = true
+                is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        if (d.name is Identifier && (d.name as Identifier).text == name) {
+                            hasValueDecl = true
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val modName = when (val n = stmt.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> null
+                    }
+                    if (modName == name) {
+                        // Check if the namespace has value exports
+                        val br = binderResults.firstOrNull() ?: continue
+                        val state = br.moduleInstanceStates[nodeKey(stmt)]
+                        if (state == ModuleInstanceState.Instantiated) {
+                            hasValueDecl = true
+                        } else {
+                            hasTypeOnlyDecl = true
+                        }
                     }
                 }
                 else -> {}
             }
         }
-        return false
+        if (hasValueDecl) return false
+        return hasTypeOnlyDecl
     }
 
     /**
