@@ -14153,11 +14153,18 @@ class Checker(
                     clauseStmts.isEmpty() || clauseStmts.any { isDefinitelyTerminating(it) }
                 }
                 if (hasDefault) return allTerminate
-                // No default: treat as exhaustive if all case clauses have statements and terminate
-                // (heuristic — we can't verify exhaustiveness without full type info)
+                // No default: check for exhaustive typeof switch
                 if (!allTerminate) return false
                 val caseClauses = clauses.filterIsInstance<CaseClause>()
-                caseClauses.isNotEmpty() && caseClauses.all { it.statements.isNotEmpty() }
+                if (caseClauses.isEmpty()) return false
+                // switch(typeof x) covering all 8 typeof values is exhaustive
+                if (stmt.expression is TypeOfExpression) {
+                    val typeofValues = setOf("string", "number", "bigint", "boolean", "symbol", "undefined", "object", "function")
+                    val coveredValues = caseClauses.mapNotNull { (it.expression as? StringLiteralNode)?.text }.toSet()
+                    if (coveredValues.containsAll(typeofValues)) return true
+                }
+                // Heuristic — treat as exhaustive if all case clauses have statements and terminate
+                caseClauses.all { it.statements.isNotEmpty() }
             }
             is TryStatement -> {
                 // Try block terminates and there's no catch that doesn't terminate
@@ -24375,7 +24382,16 @@ class Checker(
             is SwitchStatement -> {
                 // Switch always returns if it has a default clause and all clauses return
                 val hasDefault = stmt.caseBlock.any { it is DefaultClause }
-                if (!hasDefault) return false
+                if (!hasDefault) {
+                    // No default: check for exhaustive typeof switch covering all 8 values
+                    if (stmt.expression is TypeOfExpression && switchAlwaysReturns(stmt.caseBlock)) {
+                        val typeofValues = setOf("string", "number", "bigint", "boolean", "symbol", "undefined", "object", "function")
+                        val caseClauses = stmt.caseBlock.filterIsInstance<CaseClause>()
+                        val coveredValues = caseClauses.mapNotNull { (it.expression as? StringLiteralNode)?.text }.toSet()
+                        if (coveredValues.containsAll(typeofValues)) return true
+                    }
+                    return false
+                }
                 // Check that every clause either falls through to one that returns or returns itself
                 switchAlwaysReturns(stmt.caseBlock)
             }

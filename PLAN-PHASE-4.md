@@ -1565,7 +1565,7 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
   **Estimated gain:** 10 tests
   **File:** `BaselineFormatter.kt` — `toErrorBaseline`
 
-- [ ] **10.1. Fix TS2366 FP for exhaustive typeof switch on any/unknown (LOW)**
+- [x] **10.1. Fix TS2366 FP for exhaustive typeof switch on any/unknown (LOW)** — DONE (+2 tests, 8000 passing)
 
   **Problem:** `unreachableSwitchTypeofAny` and `unreachableSwitchTypeofUnknown` have
   FP TS2366 ("Function lacks ending return statement") for functions with switch on
