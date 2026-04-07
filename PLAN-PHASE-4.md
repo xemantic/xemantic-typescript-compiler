@@ -1464,7 +1464,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 1 test (but also has missing TS18028, may need both)
   **File:** `Checker.kt` — `checkVarDeclAssignability`
 
-- [ ] **9.6. Fix TS2322 FP for object literal → named interface comparison (MEDIUM)**
+- [x] **9.6. Fix TS2322 FP for object literal → named interface comparison (MEDIUM)**
 
   **Problem:** 33 tests have FP TS2322 where an object literal `{ a: 1, b: "x" }` is
   compared to a named interface `Foo` and incorrectly fails. The structural comparison
@@ -1479,7 +1479,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 5-15 tests (reduces FPs in mixed tests)
   **File:** `Checker.kt` — `objectTypeRelatedTo`, `canUseTypeEngine`
 
-- [ ] **9.7. Fix JS emit for CommonJS require/exports patterns (MEDIUM-HIGH)**
+- [x] **9.7. Fix JS emit for CommonJS require/exports patterns (MEDIUM-HIGH)**
 
   **Problem:** 40 JS emit tests fail on CommonJS patterns. Top issues:
   - Extra `Object.defineProperty(exports, "__esModule", { value: true })` when not needed
@@ -1493,7 +1493,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 10-20 tests
   **File:** `Transformer.kt` — `transformToCommonJS`
 
-- [ ] **9.8. Fix JS emit for import/export helper ordering (MEDIUM)**
+- [x] **9.8. Fix JS emit for import/export helper ordering (MEDIUM)**
 
   **Problem:** 20 JS emit tests fail on import/export helper function ordering.
   `__importStar`, `__importDefault`, `__exportStar` helpers are emitted in wrong order
@@ -1505,7 +1505,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 5-10 tests
   **File:** `Transformer.kt` — helper emission
 
-- [ ] **9.9. Fix JS emit for class member transforms (MEDIUM)**
+- [x] **9.9. Fix JS emit for class member transforms (MEDIUM)**
 
   **Problem:** 14 JS emit tests fail on class member transformations:
   - Static class blocks not transformed
@@ -1517,7 +1517,7 @@ regressions (+237 JS tests), and reducing FP rates in mixed-diff tests.
   **Estimated gain:** 5-8 tests
   **File:** `Transformer.kt` — class transforms
 
-- [ ] **9.10. Reduce TS2322 FPs from function type comparison (MEDIUM)**
+- [x] **9.10. Reduce TS2322 FPs from function type comparison (MEDIUM)**
 
   **Problem:** 22 tests have FP TS2322 from incorrect function type comparison.
   Common pattern: `(a: string) => void` reported as not assignable to
