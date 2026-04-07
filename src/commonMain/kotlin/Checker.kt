@@ -278,7 +278,9 @@ class Checker(
         checkStrictModeIdentifiers()
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
         checkClassStrictModeIdentifiers()
-        // 12c. Check 'arguments' in class field initializers / static blocks (TS2815)
+        // 12c. Check access modifiers on object literal members (TS1042)
+        checkObjectLiteralModifiers()
+        // 12d. Check 'arguments' in class field initializers / static blocks (TS2815)
         checkArgumentsInClassFieldInitializers()
         // 13. Check export= in ES module files (TS1203)
         checkExportAssignmentInEsModule()
@@ -11949,6 +11951,109 @@ class Checker(
             stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
                 (stmt.expression as StringLiteralNode).text == "use strict"
         } == true
+
+    // -----------------------------------------------------------------------
+    // TS1042: modifier cannot be used here (object literal members)
+    // -----------------------------------------------------------------------
+
+    private fun checkObjectLiteralModifiers() {
+        val accessModifiers = setOf(ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected)
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForObjectLiteralModifiers(result.sourceFile.statements, source, fileName, accessModifiers)
+        }
+    }
+
+    private fun walkForObjectLiteralModifiers(stmts: List<Statement>, source: String, fileName: String, accessModifiers: Set<ModifierFlag>) {
+        for (stmt in stmts) walkExprForObjectLiteralModifiers(stmt, source, fileName, accessModifiers)
+    }
+
+    private fun walkExprForObjectLiteralModifiers(node: Node, source: String, fileName: String, accessModifiers: Set<ModifierFlag>) {
+        when (node) {
+            is ObjectLiteralExpression -> {
+                for (prop in node.properties) {
+                    val modifiers = when (prop) {
+                        is MethodDeclaration -> prop.modifiers
+                        is GetAccessor -> prop.modifiers
+                        is SetAccessor -> prop.modifiers
+                        is PropertyAssignment -> emptySet()
+                        else -> emptySet()
+                    }
+                    for (mod in accessModifiers) {
+                        if (mod in modifiers) {
+                            val modName = when (mod) {
+                                ModifierFlag.Public -> "public"
+                                ModifierFlag.Private -> "private"
+                                ModifierFlag.Protected -> "protected"
+                                else -> continue
+                            }
+                            // Find the modifier keyword position in source
+                            val memberPos = prop.pos
+                            val modIdx = source.indexOf(modName, memberPos)
+                            if (modIdx >= 0 && modIdx < (prop.end.coerceAtMost(source.length))) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, modIdx)
+                                diagnostics.add(Diagnostic(
+                                    message = "'$modName' modifier cannot be used here.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 1042,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = modIdx,
+                                    length = modName.length,
+                                ))
+                            }
+                        }
+                    }
+                    // Recurse into method/accessor bodies for nested object literals
+                    when (prop) {
+                        is MethodDeclaration -> prop.body?.statements?.let { walkForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
+                        is GetAccessor -> prop.body?.statements?.let { walkForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
+                        is SetAccessor -> prop.body?.statements?.let { walkForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
+                        is PropertyAssignment -> walkExprForObjectLiteralModifiers(prop.initializer, source, fileName, accessModifiers)
+                        else -> {}
+                    }
+                }
+            }
+            // Recurse into all statement/expression children
+            is VariableStatement -> for (decl in node.declarationList.declarations) {
+                decl.initializer?.let { walkExprForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
+            }
+            is ExpressionStatement -> walkExprForObjectLiteralModifiers(node.expression, source, fileName, accessModifiers)
+            is ReturnStatement -> node.expression?.let { walkExprForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
+            is Block -> walkForObjectLiteralModifiers(node.statements, source, fileName, accessModifiers)
+            is FunctionDeclaration -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
+            is ClassDeclaration -> for (m in node.members) walkExprForObjectLiteralModifiers(m, source, fileName, accessModifiers)
+            is MethodDeclaration -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
+            is GetAccessor -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
+            is SetAccessor -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
+            is Constructor -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
+            is IfStatement -> {
+                walkExprForObjectLiteralModifiers(node.thenStatement, source, fileName, accessModifiers)
+                node.elseStatement?.let { walkExprForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
+            }
+            is ForStatement -> walkExprForObjectLiteralModifiers(node.statement, source, fileName, accessModifiers)
+            is WhileStatement -> walkExprForObjectLiteralModifiers(node.statement, source, fileName, accessModifiers)
+            is ArrowFunction -> {
+                val body = node.body
+                if (body is Block) walkForObjectLiteralModifiers(body.statements, source, fileName, accessModifiers)
+                else walkExprForObjectLiteralModifiers(body, source, fileName, accessModifiers)
+            }
+            is FunctionExpression -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
+            is ParenthesizedExpression -> walkExprForObjectLiteralModifiers(node.expression, source, fileName, accessModifiers)
+            is BinaryExpression -> {
+                walkExprForObjectLiteralModifiers(node.left, source, fileName, accessModifiers)
+                walkExprForObjectLiteralModifiers(node.right, source, fileName, accessModifiers)
+            }
+            is CallExpression -> {
+                walkExprForObjectLiteralModifiers(node.expression, source, fileName, accessModifiers)
+                for (arg in node.arguments) walkExprForObjectLiteralModifiers(arg, source, fileName, accessModifiers)
+            }
+            else -> {}
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Class body strict mode checking (TS1210)

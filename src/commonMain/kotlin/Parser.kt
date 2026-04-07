@@ -4025,6 +4025,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     parameters = params,
                     type = type,
                     body = body,
+                    modifiers = modifiers,
                     pos = pos,
                     end = getEnd(),
                     leadingComments = comments,
@@ -4043,7 +4044,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
                     else { reportErrorAtPrevTokenEnd("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
                 val trailing = trailingComments()
-                return SetAccessor(name = name, parameters = params, body = body, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
+                return SetAccessor(name = name, parameters = params, body = body, modifiers = modifiers, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
             }
         }
 
