@@ -98,6 +98,13 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`signatureRelatedTo` parameter count**: Must check `source.minArgumentCount > target.parameters.size` — if the source function requires more args than the target provides, they're incompatible. Without this, `(a, b) => void` would be incorrectly assignable to `() => any`.
 - **Binder namespace merge gap**: `interface A {}` + `declare var A: { ... }` in the same file may not merge correctly — the binder may only keep the variable symbol, losing the interface. This blocks TS2416 for `class B extends A` where A is both interface and constructor var (e.g., `staticMismatchBecauseOfPrototype` test).
 
+### Inline source map gotchas
+
+- **Inline source map uses output-to-source line matching**: `SourceMap.kt` generates VLQ mappings by matching output JS lines to source lines (not fixed offset). This handles cases where the emitter drops empty lines between statements. The Scanner tokenizes each matched line to find mapping positions.
+- **VLQ mapping positions**: TypeScript maps every token start + identifier ends (pos + text.length). The `=` in variable declarations is NOT mapped. Semicolon-end (statement end) positions ARE mapped for all statement types. Keywords do NOT get end positions (only `SyntaxKind.Identifier`).
+- **`mapRoot` adjusts source paths**: When `mapRoot` is a relative path (not containing `://`), source file names in the source map get `../` prefix (relative to the hypothetical map file location).
+- **`sourceRoot` gets trailing `/`**: The `sourceRoot` field in the source map JSON has `/` appended: `sourceRoot?.let { "$it/" }`.
+
 ### Multi-file baseline gotchas
 
 - **`tsconfig.json` not echoed**: The TypeScript test harness treats `tsconfig.json` as project configuration, not a source file. Never include it in the `sourceEchoes` list in `formatMultiFileBaseline`. Other JSON files (e.g. `tsconfig1.json`) ARE echoed.
