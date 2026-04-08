@@ -199,6 +199,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`ExportAssignment` is a use site**: `export = Foo` must be checked in `checkUsesOfUninitialized`.
 - **Abstract classes still need TS2564**: Only `declare` classes are exempt, NOT `abstract`.
 - **TS7030 guard**: Requires `strictNullChecks || noImplicitReturns`. TS2355 fires regardless.
+- **TS2366 requires strictNullChecks**: TS2366 ("Function lacks ending return statement and return type does not include 'undefined'") fires ONLY under `strictNullChecks`. Without it, use TS7030 ("Not all code paths return a value"). Do NOT gate TS2366 on `noImplicitReturns` alone.
 - **`NumericLiteralNode` in method names**: All method-name extraction functions must handle it, not just `Identifier` and `StringLiteralNode`.
 - **Bare specifier TS2882**: Always emit for bare (non-relative) specifiers except in AMD/System/UMD modules.
 

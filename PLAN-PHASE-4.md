@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-08):** 8,010 / 10,077 tests passing (79.5%). Active queue: Phase 12.
+**Status (2026-04-08):** 8,025 / 10,077 tests passing (79.6%). Active queue: Phase 13.
 
 ## Goal
 
@@ -1947,6 +1947,81 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
 
   **Estimated gain:** 2 tests
   **File:** `Emitter.kt` or `TypeScriptCompiler.kt`
+
+---
+
+## Phase 13 queue — Diagnostic Precision + JS Emit Polish
+
+**Failure landscape (2,052 remaining):**
+- ~1,170 (57%) produce zero diagnostics — blocked on type resolution (anyType)
+- ~650 (32%) diff-based — partial diagnostics (extra + missing)
+- ~230 (11%) JS emit — comments, source maps, multi-file, private fields
+
+**Strategy:** Fix diagnostic code confusion (TS2366/TS7030), internal comment emission,
+parser error recovery leaks, enum initializer handling.
+
+- [x] **13.0. TS2366 vs TS7030 gate fix (LOW — 6+ tests)** — done, +6 tests
+
+  **Problem:** TS2366 fires when `noImplicitReturns` is true even without `strictNullChecks`.
+  TS2366 should only fire under `strictNullChecks`. Without it, TS7030 is the correct code.
+
+  **Fix:** Remove `(options.noImplicitReturns && !hasAnyReturnOutsideTry(...))` from the
+  TS2366 condition gate. TS2366 = strictNullChecks only.
+
+  **Tests:** 6 tests fixed (various functions with non-nullable return types under noImplicitReturns).
+  **File:** `Checker.kt` — checkReturnStatements TS2366 condition
+
+- [ ] **13.1. Internal comments in element access expressions (LOW — 1-2 tests)**
+
+  **Problem:** `elementAccessExpressionInternalComments` fails because comments inside `[...]`
+  are dropped. Expected: `Array /*1*/[ /*2*/"toString" /*3*/]` but we emit `Array["toString"]`.
+
+  **Fix:** In Emitter, when emitting ElementAccessExpression, preserve comments between `[`
+  and the argument expression, and between the expression and `]`.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Emitter.kt` — emitElementAccessExpression
+
+- [ ] **13.2. Numeric literal comment preservation in property access (LOW — 1-2 tests)**
+
+  **Problem:** `numericLiteralsWithTrailingDecimalPoints01` — comments between numeric literal
+  and `.toString()` are dropped. `0 /* comment */.toString()` → `0..toString()` loses comment.
+
+  **Fix:** Preserve inline comments before `.` in property access chains on numeric literals.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Emitter.kt` — emitPropertyAccessExpression
+
+- [ ] **13.3. String enum non-literal initializer detection (LOW — 2 tests)**
+
+  **Problem:** `enumWithNonLiteralStringInitializer` — string enums with non-literal initializers
+  treated as numeric. `A["a"] = helpers_1.bar` instead of `A["a"] = "bar"`.
+
+  **Fix:** Transformer enum handling must detect string-valued initializers from imports.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Transformer.kt` — enum transform
+
+- [ ] **13.4. Parser error recovery — type annotation leaking as expression (LOW — 2 tests)**
+
+  **Problem:** `parseErrorIncorrectReturnToken` emits stray `number;` from leaked return type
+  annotation. `destructuringControlFlowNoCrash` emits `any;` from leaked type annotation.
+
+  **Fix:** Investigate parser error recovery for malformed arrow/function return types.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Parser.kt` — arrow function / return type parsing
+
+- [ ] **13.5. TS7030 for `unknown` return type functions (LOW — 1-3 tests)**
+
+  **Problem:** `noImplicitReturnsExclusions` is missing TS7030 for functions returning `unknown`.
+  The return type classification treats `unknown` as exempt but TypeScript still reports TS7030.
+
+  **Fix:** In `classifyReturnType`, `unknown` should be classified as triggering TS7030 when
+  there are mixed return paths.
+
+  **Estimated gain:** 1-2 tests
+  **File:** `Checker.kt` — classifyReturnType, checkReturnStatements
 
 ---
 
