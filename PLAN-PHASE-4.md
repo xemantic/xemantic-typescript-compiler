@@ -1762,7 +1762,7 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Estimated gain:** 3-5 tests
   **Files:** `Transformer.kt` — expression transform + helper templates
 
-- [ ] **11.3. CJS helper function bodies: __createBinding, __setModuleDefault (MEDIUM)** — INVESTIGATED: helpers already exist; issue is detection gaps (dynamic import → __importStar, etc.)
+- [x] **11.3. CJS helper function bodies: __createBinding, __setModuleDefault (MEDIUM)** — DONE (+1 test, 8007 passing): fixed `exprContainsDynamicImport` missing PropertyAccessExpression (broke `import("./foo").then()` detection)
 
   **Problem:** CJS helper function bodies (`__createBinding`, `__setModuleDefault`,
   `__importStar`, `__exportStar`) already exist as string constants. The issue is that
