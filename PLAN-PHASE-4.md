@@ -1871,7 +1871,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 3-8 tests
   **File:** `Checker.kt` — checkCallExpressionTypes, checkExcessProperties
 
-- [ ] **12.2. typeToString for callable types with properties (LOW — 2-3 tests)**
+- [x] **12.2. typeToString for callable types with properties (LOW — 2-3 tests)** — done, +1 test
 
   **Problem:** `functionToFunctionWithPropError` fails because `typeToString` displays
   `{ (): string; prop: number; }` as `() => string` — dropping the `prop` property.
