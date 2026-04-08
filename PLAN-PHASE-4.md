@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-07):** 8,003 / 10,077 tests passing (79.4%). Active queue: Phase 10.
+**Status (2026-04-08):** 8,005 / 10,077 tests passing (79.4%). Active queue: Phase 11.
 
 ## Goal
 
@@ -1693,6 +1693,149 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
 
   **Actual gain:** 1 test (declarationEmitMultipleComputedNamesSameDomain)
   **File:** `Transformer.kt` — `transformClassBody`
+
+---
+
+## Phase 11 queue — Unblocker Infrastructure + Targeted Fixes
+
+**Failure landscape (2,072 remaining):**
+- 1,184 (57%) produce zero diagnostics — blocked on type resolution (anyType)
+- 655 (32%) diff-based — partial diagnostics (extra + missing)
+- 233 (11%) JS emit — CJS helpers, private field transforms, file ordering
+- Of 655 diff-based: 98 single-FP TS2322, 13 single-FP TS7006
+
+**Strategy:** Focus on infrastructure that UNBLOCKS other tests, not just direct gains.
+Layer 1 (unblockers): built-in type stubs, TS2741, private field transforms.
+Layer 2 (direct gains): TS2322 FP patterns, CJS helpers, parser FP fixes.
+
+- [ ] **11.0. Built-in type stubs for core globals (LARGE — UNBLOCKER)**
+
+  **Problem:** `getTypeOfExpression` returns `anyType` for most built-in identifiers because
+  lib.d.ts types are not loaded. KNOWN_GLOBALS only suppresses TS2304, it does NOT create
+  Symbol/Type entries in `globals`. This cascades: `"hello".length` → anyType, `document.x`
+  → anyType, `new Error()` → anyType. Blocks 100-200 tests.
+
+  **Fix:** In checker `init`, create synthetic `Type.Interface` entries for the top ~15
+  global types (Object, Function, String, Number, Boolean, Array, Error, RegExp, Date,
+  Promise, Map, Set, Symbol, etc.) with their key members. Insert corresponding `Symbol`
+  entries into `globals` so `getTypeFromTypeReference("Object")` resolves correctly.
+  Also wire `getApparentType` so `StringLike` → `String` wrapper interface (with `length`,
+  `charAt`, etc.), `NumberLike` → `Number` wrapper.
+
+  Start minimal: just the type names with empty/minimal members. Even empty interfaces
+  enable `canUseTypeEngine` to proceed (currently rejects errorType from unresolved names).
+  Progressively add members as needed.
+
+  **Estimated gain:** 20-50 tests (type names resolvable), 100-200 with members
+  **File:** `Checker.kt` — init, getApparentType, synthetic type creation
+
+- [ ] **11.1. TS2741 "Property missing in type" diagnostic (MEDIUM)**
+
+  **Problem:** 46+ tests expect TS2741 ("Property 'X' is missing in type 'Y' but required
+  in type 'Z'"). `propertiesRelatedTo` already detects missing properties (returns false at
+  line 31567) but only produces generic TS2322. TypeScript emits TS2741 as elaboration.
+
+  **Fix:** When `propertiesRelatedTo` finds a missing required property, collect the first
+  missing property name. In the TS2322 diagnostic emission site, when the structural
+  comparison failed due to missing property, emit TS2741 instead of (or as elaboration
+  after) TS2322. The message is: "Property '{0}' is missing in type '{1}' but required
+  in type '{2}'."
+
+  **Estimated gain:** 5-15 tests (those where TS2741 is the primary/only expected error)
+  **File:** `Checker.kt` — propertiesRelatedTo, TS2322 emission
+
+- [ ] **11.2. Private field read/write expression transforms (MEDIUM)**
+
+  **Problem:** 10.9 added WeakMap allocation but `this.#field` reads/writes still emit
+  native syntax. Need `__classPrivateFieldGet(this, _C_field, "f")` for reads and
+  `__classPrivateFieldSet(this, _C_field, value, "f")` for writes. Also need the
+  `__classPrivateFieldGet`/`__classPrivateFieldSet` helper function bodies.
+
+  **Fix:** In Transformer, when `effectiveTarget < ES2022`, walk class method bodies and
+  replace `PropertyAccessExpression` where `name` starts with `#`:
+  - Read: `this.#field` → `__classPrivateFieldGet(this, _C_field, "f")`
+  - Write: `this.#field = value` → `__classPrivateFieldSet(this, _C_field, value, "f")`
+  Add helper function templates for `__classPrivateFieldGet`/`__classPrivateFieldSet`.
+
+  **Estimated gain:** 3-5 tests
+  **Files:** `Transformer.kt` — expression transform + helper templates
+
+- [ ] **11.3. CJS helper function bodies: __createBinding, __setModuleDefault (MEDIUM)**
+
+  **Problem:** ~27 JS emit tests expect `__createBinding` and `__setModuleDefault` helper
+  functions in the output (used for `export * from` and default re-exports with
+  esModuleInterop). Our transformer emits the helper calls but not the function definitions.
+
+  **Fix:** Add the `__createBinding` and `__setModuleDefault` helper function bodies to
+  the CJS transform helper emission. These are the same across all TypeScript versions.
+  Also ensure `__importStar` has its full body (currently may be incomplete).
+
+  **Estimated gain:** 10-20 tests
+  **File:** `Transformer.kt` — CJS helper templates
+
+- [ ] **11.4. TS7006 contextual typing suppression (LOW-MEDIUM)**
+
+  **Problem:** 13 single-FP tests emit TS7006 ("Parameter implicitly has 'any' type")
+  for callback parameters that should get types from contextual typing. E.g., in
+  `arr.forEach(item => ...)`, `item` should infer its type from `Array<T>.forEach`.
+
+  **Fix:** In `checkParamsForImplicitAny`, skip parameters that have a contextual type.
+  Check if the containing function is a callback argument to a function call where the
+  parameter position has a known function type. This requires checking the parent node
+  context — if the function expression is an argument to a call, and the called function's
+  parameter has a function type, the callback params are contextually typed.
+
+  **Estimated gain:** 3-8 tests
+  **File:** `Checker.kt` — checkImplicitAnyParameters
+
+- [ ] **11.5. TS2322 FP: suppress for anyType source/target (LOW-MEDIUM)**
+
+  **Problem:** Many TS2322 FP errors fire when either the source or target type is anyType
+  (unresolved). TypeScript's `isTypeRelatedTo` returns true for any→T and T→any. Our
+  `canUseTypeEngine` guards block some of these, but gaps remain for specific patterns
+  (assignment in property initializers, return statements, function arguments).
+
+  **Fix:** Audit the TS2322 emission sites. When the source or target type is anyType or
+  errorType, suppress the diagnostic. This is already partially done but needs to cover
+  all emission paths (variable declarations, return statements, property assignments).
+
+  **Estimated gain:** 10-30 tests (cascading — suppressing FPs reveals correct output)
+  **File:** `Checker.kt` — TS2322 emission guards
+
+- [ ] **11.6. Multi-file JS emit topological sort (MEDIUM-HIGH)**
+
+  **Problem:** ~5-15 JS emit tests fail because output file sections appear in wrong order.
+  Previous investigation (10.4) found that naive removal of existing ordering causes 59
+  regressions, and proper fix needs dependency-based topological sort.
+
+  **Fix:** In `TypeScriptCompiler.kt` or `BaselineFormatter.kt`, implement topological
+  sort of output files based on import/reference dependencies. Files that are depended
+  upon should appear before files that depend on them.
+
+  **Estimated gain:** 5-15 tests
+  **File:** `TypeScriptCompiler.kt` or `BaselineFormatter.kt`
+
+- [ ] **11.7. __rest helper function (LOW)**
+
+  **Problem:** ~2-5 tests expect `__rest` helper for object rest spread destructuring.
+  `const { a, ...rest } = obj` → `var rest = __rest(obj, ["a"])`.
+
+  **Fix:** Add `__rest` helper template and emit when object rest patterns are used in
+  binding patterns with exported bindings (CJS context).
+
+  **Estimated gain:** 2-5 tests
+  **File:** `Transformer.kt` — destructuring transform + helper template
+
+- [ ] **11.8. Parser TS1005/TS1109 FP reduction (LOW)**
+
+  **Problem:** 15 single-FP TS1005 and 9 single-FP TS1109 tests. Parser error recovery
+  produces different fallback diagnostics than TypeScript in edge cases.
+
+  **Fix:** Investigate the specific error recovery divergences for the highest-impact
+  patterns. Focus on cases where a single parser FP is the ONLY difference from baseline.
+
+  **Estimated gain:** 3-8 tests
+  **File:** `Parser.kt`
 
 ---
 
