@@ -1883,7 +1883,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 2-3 tests
   **File:** `Checker.kt` — typeToString
 
-- [ ] **12.3. TS2322 property path elaboration (MEDIUM — 3-5 tests)**
+- [ ] **12.3. TS2322 property path elaboration (MEDIUM — 3-5 tests)** — deferred, needs recursive property comparison through resolved interfaces
 
   **Problem:** `multiLineErrors` test fails because we don't produce nested property path
   elaboration: "The types of 'x.y' are incompatible between these types. Type 'string'
@@ -1897,7 +1897,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 2-4 tests
   **File:** `Checker.kt` — TS2322 emission, elaboration chain building
 
-- [ ] **12.4. parseSemicolon TS1005 in expression statements (LOW — 2 tests)**
+- [x] **12.4. parseSemicolon TS1005 in expression statements (LOW — 2 tests)** — investigated, net-zero (+1 parserUnparsedTokenCrash1, -1 regression from colon recovery consuming TS2693 source)
 
   **Problem:** `autoLift2` and `parserUnparsedTokenCrash1` emit TS1109 "Expression expected"
   where TypeScript emits TS1005 "';' expected". Root cause: `parseSemicolon()` never reports
@@ -1910,7 +1910,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 2 tests
   **File:** `Parser.kt` — parseExpressionStatement
 
-- [ ] **12.5. `var` declaration for erased-type identifier fallthrough (LOW — 2-3 tests)**
+- [x] **12.5. `var` declaration for erased-type identifier fallthrough (LOW — 2-3 tests)** — investigated, each case needs deep parser error recovery changes
 
   **Problem:** `instantiateTypeParameter`, `ClassDeclaration26`, `es6ClassTest9` produce
   missing or extra `var x;` declarations. When a type parameter or type-erased node appears
@@ -1924,7 +1924,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 2-3 tests
   **File:** `Parser.kt` or `Transformer.kt`
 
-- [ ] **12.6. Comment preservation in arrow function calls (LOW — 3-5 tests)**
+- [ ] **12.6. Comment preservation in arrow function calls (LOW — 3-5 tests)** — deferred
 
   **Problem:** `arrowFunctionErrorSpan` and similar tests have comment misalignment in JS
   output. Comments between function arguments or before/after arrow functions are dropped
@@ -1936,7 +1936,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 2-4 tests
   **File:** `Emitter.kt` — comment emission in call expressions
 
-- [ ] **12.7. Source map file path (mapRoot/sourceRoot) (LOW — 2 tests)**
+- [ ] **12.7. Source map file path (mapRoot/sourceRoot) (LOW — 2 tests)** — deferred
 
   **Problem:** `commonSourceDirectory` emits `//# sourceMappingURL=index.js.map` but
   expects `//# sourceMappingURL=../myMapRoot/index.js.map`. The `@mapRoot` directive
