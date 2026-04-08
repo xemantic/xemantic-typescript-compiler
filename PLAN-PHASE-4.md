@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-08):** 8,010 / 10,077 tests passing (79.5%). Active queue: Phase 11.
+**Status (2026-04-08):** 8,010 / 10,077 tests passing (79.5%). Active queue: Phase 12.
 
 ## Goal
 
@@ -1822,6 +1822,131 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   
   **Estimated gain:** 2-4 tests (targeted fixes only)
   **File:** `Parser.kt`
+
+---
+
+## Phase 12 queue — Emit Polish + Diagnostic Coverage
+
+**Failure landscape (2,067 remaining):**
+- 1,176 (57%) produce zero diagnostics — blocked on type resolution (anyType)
+- 659 (32%) diff-based — partial diagnostics (extra + missing)
+- 232 (11%) JS emit — comments, source maps, multi-file, private fields, parser errors
+- Of 232 JS emit: 74 have small diffs (≤6 lines), 8 just need inline source map, 160 multi-file
+
+**Strategy:** Harvest remaining JS emit wins (inline source maps, comment fixes, parser-AST
+issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS2322.
+
+- [ ] **12.0. Inline source map generation (LOW — 8+ JS tests)**
+
+  **Problem:** 8 JS emit tests fail only because the `//# sourceMappingURL=data:...` inline
+  source map comment is missing. When `@inlineSourceMap: true`, TypeScript appends a base64-
+  encoded source map as a data URL at the end of the JS output.
+
+  **Fix:** In Emitter or TypeScriptCompiler, when `options.inlineSourceMap` is true, generate
+  a basic source map JSON and append it as `//# sourceMappingURL=data:application/json;base64,...`.
+  The source map needs: version 3, file name, source file name, empty mappings (or basic
+  line-level mappings). Even a minimal/empty source map would fix the format.
+
+  **Tests:** `inlineSourceMap`, `inlineSources2`, `jsFileCompilationWithMapFileAsJsWithInlineSourceMap`,
+  `optionsInlineSourceMapMapRoot`, `optionsInlineSourceMapSourceRoot`, `inlineSourceMap2`,
+  `optionsInlineSourceMapSourcemap`, plus `commonSourceDirectory` (path diff)
+
+  **Estimated gain:** 5-8 tests
+  **File:** `Emitter.kt` or `TypeScriptCompiler.kt`
+
+- [ ] **12.1. TS2353 excess property in more contexts (MEDIUM — 14+ tests)**
+
+  **Problem:** 14 tests still expect TS2353 but don't get it. Current implementation covers
+  variable declarations and assignment expressions. Missing contexts: function arguments
+  (TS2345 + TS2353), return statements, spread in arrays, nested objects, union/intersection
+  target types. Most important: function call arguments with object literal excess properties.
+
+  **Fix:** Add excess property checking in `checkCallExpressionTypes` (when arg is object
+  literal) and in return statement checking. For union targets, check excess against ALL
+  constituents (property is excess only if it doesn't exist in ANY constituent).
+
+  **Tests:** `excessPropertyCheckWithEmptyObject`, `objectLiteralExcessProperties`,
+  `excessPropertyChecksWithNestedIntersections`, `excessPropertyCheckWithUnions`, etc.
+
+  **Estimated gain:** 3-8 tests
+  **File:** `Checker.kt` — checkCallExpressionTypes, checkExcessProperties
+
+- [ ] **12.2. typeToString for callable types with properties (LOW — 2-3 tests)**
+
+  **Problem:** `functionToFunctionWithPropError` fails because `typeToString` displays
+  `{ (): string; prop: number; }` as `() => string` — dropping the `prop` property.
+  Similar issue in several tests where call signatures + properties should show both.
+
+  **Fix:** In `typeToString`, when a Type.Object has BOTH callSignatures AND properties,
+  use `{ (): RetType; prop: Type; }` format instead of just `() => RetType`.
+
+  **Estimated gain:** 2-3 tests
+  **File:** `Checker.kt` — typeToString
+
+- [ ] **12.3. TS2322 property path elaboration (MEDIUM — 3-5 tests)**
+
+  **Problem:** `multiLineErrors` test fails because we don't produce nested property path
+  elaboration: "The types of 'x.y' are incompatible between these types. Type 'string'
+  is not assignable to type 'number'." TypeScript walks nested object properties to find
+  the first mismatching leaf and builds an elaboration chain.
+
+  **Fix:** In the TS2322 emission site, when source and target are both Object types and
+  comparison fails, recursively find the first mismatching property and build the chain:
+  "The types of '{path}' are incompatible..." → "Type '{source}' is not assignable to type '{target}'."
+
+  **Estimated gain:** 2-4 tests
+  **File:** `Checker.kt` — TS2322 emission, elaboration chain building
+
+- [ ] **12.4. parseSemicolon TS1005 in expression statements (LOW — 2 tests)**
+
+  **Problem:** `autoLift2` and `parserUnparsedTokenCrash1` emit TS1109 "Expression expected"
+  where TypeScript emits TS1005 "';' expected". Root cause: `parseSemicolon()` never reports
+  TS1005. Global fix causes 5 regressions. Need per-site approach.
+
+  **Fix:** In `parseExpressionStatement()`, after `parseSemicolon()`, if the current token
+  is `:` (the specific case for `this.foo: any;`), emit TS1005 "';' expected" at the token
+  position. This is targeted enough to avoid regressions.
+
+  **Estimated gain:** 2 tests
+  **File:** `Parser.kt` — parseExpressionStatement
+
+- [ ] **12.5. `var` declaration for erased-type identifier fallthrough (LOW — 2-3 tests)**
+
+  **Problem:** `instantiateTypeParameter`, `ClassDeclaration26`, `es6ClassTest9` produce
+  missing or extra `var x;` declarations. When a type parameter or type-erased node appears
+  in a position where the parser falls through to expression parsing, the emitter may
+  produce a spurious `var` declaration or miss one.
+
+  **Fix:** Investigate each case individually. `instantiateTypeParameter` likely needs the
+  emitter to not produce `var x;` for type-only declarations. `ClassDeclaration26` has
+  `var constructor; () => {};` leaking from parser error recovery after a malformed class.
+
+  **Estimated gain:** 2-3 tests
+  **File:** `Parser.kt` or `Transformer.kt`
+
+- [ ] **12.6. Comment preservation in arrow function calls (LOW — 3-5 tests)**
+
+  **Problem:** `arrowFunctionErrorSpan` and similar tests have comment misalignment in JS
+  output. Comments between function arguments or before/after arrow functions are dropped
+  or misplaced.
+
+  **Fix:** Investigate specific comment attachment in the Emitter for CallExpression
+  arguments and ArrowFunction expressions.
+
+  **Estimated gain:** 2-4 tests
+  **File:** `Emitter.kt` — comment emission in call expressions
+
+- [ ] **12.7. Source map file path (mapRoot/sourceRoot) (LOW — 2 tests)**
+
+  **Problem:** `commonSourceDirectory` emits `//# sourceMappingURL=index.js.map` but
+  expects `//# sourceMappingURL=../myMapRoot/index.js.map`. The `@mapRoot` directive
+  affects the source map comment path.
+
+  **Fix:** When `options.mapRoot` is set, prefix the source map file reference with it.
+  Similarly for `@sourceRoot`.
+
+  **Estimated gain:** 2 tests
+  **File:** `Emitter.kt` or `TypeScriptCompiler.kt`
 
 ---
 

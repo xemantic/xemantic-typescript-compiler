@@ -211,7 +211,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 11: Unblocker Infrastructure + Targeted Fixes.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. 8,005 / 10,077 tests passing (79.4%). Of 2,072 remaining: 1,184 (57%) zero diagnostics (anyType bottleneck), 655 (32%) mixed diffs, 233 (11%) JS emit. Phase 11 prioritizes infrastructure unblockers: built-in type stubs for core globals (11.0), TS2741 missing-property diagnostic (11.1), private field read/write transforms (11.2), CJS helper bodies (11.3).
+**Phase 12: Emit Polish + Diagnostic Coverage.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. 8,010 / 10,077 tests passing (79.5%). Of 2,067 remaining: 1,176 (57%) zero diagnostics (anyType bottleneck), 659 (32%) mixed diffs, 232 (11%) JS emit. Phase 12 harvests remaining JS emit wins (inline source maps, comment fixes), extends TS2353 excess property checking, and fixes type display issues.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
