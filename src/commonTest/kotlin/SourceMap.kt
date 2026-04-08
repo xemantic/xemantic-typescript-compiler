@@ -233,8 +233,12 @@ private fun collectLineMappingPositions(
                 positions.add(start)
                 if (inVarDecl) state = 1 // next var name
             }
-            SyntaxKind.OpenBrace, SyntaxKind.CloseBrace -> {
-                // Don't map braces for class/function declarations
+            SyntaxKind.OpenBrace -> {
+                // Don't map open braces for class/function declarations
+            }
+            SyntaxKind.CloseBrace -> {
+                // Map the end position of the closing brace (block end marker)
+                positions.add(end)
             }
             else -> {
                 if (state == 1 && (token == SyntaxKind.Identifier || token.ordinal >= SyntaxKind.BreakKeyword.ordinal)) {

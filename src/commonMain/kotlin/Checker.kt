@@ -158,6 +158,10 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** Current function's parameters — set during implicit-return checking to enable exhaustive
+     *  switch detection for literal-type parameters (e.g., `bar: "a" | "b"`). */
+    private var currentFunctionParams: List<Parameter> = emptyList()
+
     /** File-level symbol table for the file currently being checked. Set by checker passes
      *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
      *  variables) without going through globals (which may have merge conflicts). */
@@ -12093,88 +12097,96 @@ class Checker(
         for (stmt in stmts) walkExprForObjectLiteralModifiers(stmt, source, fileName, accessModifiers)
     }
 
-    private fun walkExprForObjectLiteralModifiers(node: Node, source: String, fileName: String, accessModifiers: Set<ModifierFlag>) {
-        when (node) {
-            is ObjectLiteralExpression -> {
-                for (prop in node.properties) {
-                    val modifiers = when (prop) {
-                        is MethodDeclaration -> prop.modifiers
-                        is GetAccessor -> prop.modifiers
-                        is SetAccessor -> prop.modifiers
-                        is PropertyAssignment -> emptySet()
-                        else -> emptySet()
-                    }
-                    for (mod in accessModifiers) {
-                        if (mod in modifiers) {
-                            val modName = when (mod) {
-                                ModifierFlag.Public -> "public"
-                                ModifierFlag.Private -> "private"
-                                ModifierFlag.Protected -> "protected"
-                                else -> continue
-                            }
-                            // Find the modifier keyword position in source
-                            val memberPos = prop.pos
-                            val modIdx = source.indexOf(modName, memberPos)
-                            if (modIdx >= 0 && modIdx < (prop.end.coerceAtMost(source.length))) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, modIdx)
-                                diagnostics.add(Diagnostic(
-                                    message = "'$modName' modifier cannot be used here.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 1042,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = modIdx,
-                                    length = modName.length,
-                                ))
+    private fun walkExprForObjectLiteralModifiers(startNode: Node, source: String, fileName: String, accessModifiers: Set<ModifierFlag>) {
+        // Iterative traversal using an explicit stack to avoid StackOverflow on deeply nested
+        // BinaryExpression trees (e.g. binderBinaryExpressionStress.ts with 4971-level nesting).
+        val stack = ArrayDeque<Node>()
+        stack.addLast(startNode)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            when (node) {
+                is ObjectLiteralExpression -> {
+                    for (prop in node.properties) {
+                        val modifiers = when (prop) {
+                            is MethodDeclaration -> prop.modifiers
+                            is GetAccessor -> prop.modifiers
+                            is SetAccessor -> prop.modifiers
+                            is PropertyAssignment -> emptySet()
+                            else -> emptySet()
+                        }
+                        for (mod in accessModifiers) {
+                            if (mod in modifiers) {
+                                val modName = when (mod) {
+                                    ModifierFlag.Public -> "public"
+                                    ModifierFlag.Private -> "private"
+                                    ModifierFlag.Protected -> "protected"
+                                    else -> continue
+                                }
+                                // Find the modifier keyword position in source
+                                val memberPos = prop.pos
+                                val modIdx = source.indexOf(modName, memberPos)
+                                if (modIdx >= 0 && modIdx < (prop.end.coerceAtMost(source.length))) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, modIdx)
+                                    diagnostics.add(Diagnostic(
+                                        message = "'$modName' modifier cannot be used here.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 1042,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = modIdx,
+                                        length = modName.length,
+                                    ))
+                                }
                             }
                         }
-                    }
-                    // Recurse into method/accessor bodies for nested object literals
-                    when (prop) {
-                        is MethodDeclaration -> prop.body?.statements?.let { walkForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
-                        is GetAccessor -> prop.body?.statements?.let { walkForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
-                        is SetAccessor -> prop.body?.statements?.let { walkForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
-                        is PropertyAssignment -> walkExprForObjectLiteralModifiers(prop.initializer, source, fileName, accessModifiers)
-                        else -> {}
+                        // Push children for continued traversal
+                        when (prop) {
+                            is MethodDeclaration -> prop.body?.statements?.let { stmts -> stmts.forEach { stack.addLast(it) } }
+                            is GetAccessor -> prop.body?.statements?.let { stmts -> stmts.forEach { stack.addLast(it) } }
+                            is SetAccessor -> prop.body?.statements?.let { stmts -> stmts.forEach { stack.addLast(it) } }
+                            is PropertyAssignment -> stack.addLast(prop.initializer)
+                            else -> {}
+                        }
                     }
                 }
+                // Push children onto stack instead of recursing
+                is VariableStatement -> for (decl in node.declarationList.declarations) {
+                    decl.initializer?.let { stack.addLast(it) }
+                }
+                is ExpressionStatement -> stack.addLast(node.expression)
+                is ReturnStatement -> node.expression?.let { stack.addLast(it) }
+                is Block -> node.statements.forEach { stack.addLast(it) }
+                is FunctionDeclaration -> node.body?.statements?.forEach { stack.addLast(it) }
+                is ClassDeclaration -> node.members.forEach { stack.addLast(it) }
+                is MethodDeclaration -> node.body?.statements?.forEach { stack.addLast(it) }
+                is GetAccessor -> node.body?.statements?.forEach { stack.addLast(it) }
+                is SetAccessor -> node.body?.statements?.forEach { stack.addLast(it) }
+                is Constructor -> node.body?.statements?.forEach { stack.addLast(it) }
+                is IfStatement -> {
+                    stack.addLast(node.thenStatement)
+                    node.elseStatement?.let { stack.addLast(it) }
+                }
+                is ForStatement -> stack.addLast(node.statement)
+                is WhileStatement -> stack.addLast(node.statement)
+                is ArrowFunction -> {
+                    val body = node.body
+                    if (body is Block) body.statements.forEach { stack.addLast(it) }
+                    else stack.addLast(body)
+                }
+                is FunctionExpression -> node.body?.statements?.forEach { stack.addLast(it) }
+                is ParenthesizedExpression -> stack.addLast(node.expression)
+                is BinaryExpression -> {
+                    // Push both sides — iterative instead of recursive to handle deep nesting
+                    stack.addLast(node.left)
+                    stack.addLast(node.right)
+                }
+                is CallExpression -> {
+                    stack.addLast(node.expression)
+                    node.arguments.forEach { stack.addLast(it) }
+                }
+                else -> {}
             }
-            // Recurse into all statement/expression children
-            is VariableStatement -> for (decl in node.declarationList.declarations) {
-                decl.initializer?.let { walkExprForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
-            }
-            is ExpressionStatement -> walkExprForObjectLiteralModifiers(node.expression, source, fileName, accessModifiers)
-            is ReturnStatement -> node.expression?.let { walkExprForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
-            is Block -> walkForObjectLiteralModifiers(node.statements, source, fileName, accessModifiers)
-            is FunctionDeclaration -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
-            is ClassDeclaration -> for (m in node.members) walkExprForObjectLiteralModifiers(m, source, fileName, accessModifiers)
-            is MethodDeclaration -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
-            is GetAccessor -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
-            is SetAccessor -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
-            is Constructor -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
-            is IfStatement -> {
-                walkExprForObjectLiteralModifiers(node.thenStatement, source, fileName, accessModifiers)
-                node.elseStatement?.let { walkExprForObjectLiteralModifiers(it, source, fileName, accessModifiers) }
-            }
-            is ForStatement -> walkExprForObjectLiteralModifiers(node.statement, source, fileName, accessModifiers)
-            is WhileStatement -> walkExprForObjectLiteralModifiers(node.statement, source, fileName, accessModifiers)
-            is ArrowFunction -> {
-                val body = node.body
-                if (body is Block) walkForObjectLiteralModifiers(body.statements, source, fileName, accessModifiers)
-                else walkExprForObjectLiteralModifiers(body, source, fileName, accessModifiers)
-            }
-            is FunctionExpression -> node.body?.let { walkForObjectLiteralModifiers(it.statements, source, fileName, accessModifiers) }
-            is ParenthesizedExpression -> walkExprForObjectLiteralModifiers(node.expression, source, fileName, accessModifiers)
-            is BinaryExpression -> {
-                walkExprForObjectLiteralModifiers(node.left, source, fileName, accessModifiers)
-                walkExprForObjectLiteralModifiers(node.right, source, fileName, accessModifiers)
-            }
-            is CallExpression -> {
-                walkExprForObjectLiteralModifiers(node.expression, source, fileName, accessModifiers)
-                for (arg in node.arguments) walkExprForObjectLiteralModifiers(arg, source, fileName, accessModifiers)
-            }
-            else -> {}
         }
     }
 
@@ -24024,8 +24036,14 @@ class Checker(
         if (decl.asteriskToken) return // generators always return an iterator — no implicit-return check
         val retType = decl.type
         val isAsync = ModifierFlag.Async in decl.modifiers
-        // Only check if there's an explicit return type annotation (for TS2355) or for TS7030
-        checkBodyForImplicitReturn(body, retType, isAsync, decl.name?.let { FuncRef(it.pos, it.text.length) }, source, fileName)
+        // Set current function params for exhaustive switch detection
+        val savedParams = currentFunctionParams
+        currentFunctionParams = decl.parameters
+        try {
+            checkBodyForImplicitReturn(body, retType, isAsync, decl.name?.let { FuncRef(it.pos, it.text.length) }, source, fileName)
+        } finally {
+            currentFunctionParams = savedParams
+        }
         // Recurse into body for nested functions
         walkForImplicitReturns(body.statements, source, fileName)
     }
@@ -24040,7 +24058,13 @@ class Checker(
             is Identifier -> FuncRef(nameNode.pos, nameNode.text.length)
             else -> null
         }
-        checkBodyForImplicitReturn(body, retType, isAsync, nameRef, source, fileName)
+        val savedParams = currentFunctionParams
+        currentFunctionParams = decl.parameters
+        try {
+            checkBodyForImplicitReturn(body, retType, isAsync, nameRef, source, fileName)
+        } finally {
+            currentFunctionParams = savedParams
+        }
         walkForImplicitReturns(body.statements, source, fileName)
     }
 
@@ -24102,7 +24126,13 @@ class Checker(
         val retType = expr.type
         val isAsync = ModifierFlag.Async in expr.modifiers
         val nameRef = expr.name?.let { FuncRef(it.pos, it.text.length) }
-        checkBodyForImplicitReturn(body, retType, isAsync, nameRef, source, fileName)
+        val savedParams = currentFunctionParams
+        currentFunctionParams = expr.parameters
+        try {
+            checkBodyForImplicitReturn(body, retType, isAsync, nameRef, source, fileName)
+        } finally {
+            currentFunctionParams = savedParams
+        }
         walkForImplicitReturns(body.statements, source, fileName)
     }
 
@@ -24111,7 +24141,13 @@ class Checker(
         if (bodyNode !is Block) return // expression body always returns
         val retType = expr.type
         val isAsync = ModifierFlag.Async in expr.modifiers
-        checkBodyForImplicitReturn(bodyNode, retType, isAsync, null, source, fileName)
+        val savedParams = currentFunctionParams
+        currentFunctionParams = expr.parameters
+        try {
+            checkBodyForImplicitReturn(bodyNode, retType, isAsync, null, source, fileName)
+        } finally {
+            currentFunctionParams = savedParams
+        }
         walkForImplicitReturns(bodyNode.statements, source, fileName)
     }
 
@@ -24658,6 +24694,8 @@ class Checker(
                         val coveredValues = caseClauses.mapNotNull { (it.expression as? StringLiteralNode)?.text }.toSet()
                         if (coveredValues.containsAll(typeofValues)) return true
                     }
+                    // No default: check for exhaustive switch on a string/boolean literal type parameter
+                    if (isExhaustiveLiteralSwitch(stmt)) return true
                     return false
                 }
                 // Check that every clause either falls through to one that returns or returns itself
@@ -24694,6 +24732,103 @@ class Checker(
                 }
             }
             else -> false
+        }
+    }
+
+    /**
+     * Check if a switch statement without a default clause is exhaustive given the current
+     * function's literal-type parameters. E.g., `switch(bar) { case "a": return 1; }` where
+     * `bar: "a"` is exhaustive (all values covered).
+     *
+     * Uses `currentFunctionParams` to look up parameter types.
+     */
+    private fun isExhaustiveLiteralSwitch(stmt: SwitchStatement): Boolean {
+        // The switch expression must be a simple identifier
+        val exprIdent = stmt.expression as? Identifier ?: return false
+        val paramName = exprIdent.text
+
+        // Find a matching parameter in currentFunctionParams
+        val param = currentFunctionParams.firstOrNull { p ->
+            (p.name as? Identifier)?.text == paramName
+        } ?: return false
+
+        // The parameter must have a type annotation
+        val typeNode = param.type ?: return false
+
+        // Collect all literal values from the parameter type annotation
+        val requiredValues = collectLiteralTypeValues(typeNode)
+        if (requiredValues.isEmpty()) return false
+
+        // Collect all case clause literal values using same representation as collectLiteralTypeValues
+        val caseClauses = stmt.caseBlock.filterIsInstance<CaseClause>()
+        val coveredValues = mutableSetOf<String>()
+        for (clause in caseClauses) {
+            val literal = when (val e = clause.expression) {
+                is StringLiteralNode -> "\"${e.text}\""
+                is NumericLiteralNode -> e.text
+                is Identifier -> when (e.text) {
+                    "true" -> "true"
+                    "false" -> "false"
+                    else -> null
+                }
+                is PrefixUnaryExpression -> {
+                    val operand = e.operand
+                    if (e.operator == SyntaxKind.Minus && operand is NumericLiteralNode) {
+                        "-${operand.text}"
+                    } else null
+                }
+                else -> null
+            } ?: continue
+            coveredValues.add(literal)
+        }
+
+        // The switch is exhaustive if all required values are covered AND all clauses return
+        if (!coveredValues.containsAll(requiredValues)) return false
+        return switchAlwaysReturns(stmt.caseBlock)
+    }
+
+    /**
+     * Collect literal type values from a type annotation node.
+     * Returns a set of string representations (e.g., `"\"a\""`, `"1"`, `"true"`, `"false"`).
+     * Returns empty if the type is not a literal or union of literals.
+     */
+    private fun collectLiteralTypeValues(typeNode: TypeNode): Set<String> {
+        return when (typeNode) {
+            is KeywordTypeNode -> when (typeNode.kind) {
+                // `boolean` has exactly two literal values: true and false
+                SyntaxKind.BooleanKeyword -> setOf("true", "false")
+                else -> emptySet()
+            }
+            is LiteralType -> {
+                // LiteralType wraps string/number/boolean literals and keyword true/false
+                when (val lit = typeNode.literal) {
+                    is Identifier -> when (lit.text) {
+                        "true" -> setOf("true")
+                        "false" -> setOf("false")
+                        else -> emptySet()
+                    }
+                    is StringLiteralNode -> setOf("\"${lit.text}\"")
+                    is NumericLiteralNode -> setOf(lit.text)
+                    is PrefixUnaryExpression -> {
+                        // Negative number literals like -1
+                        val operand = lit.operand
+                        if (lit.operator == SyntaxKind.Minus && operand is NumericLiteralNode) {
+                            setOf("-${operand.text}")
+                        } else emptySet()
+                    }
+                    else -> emptySet()
+                }
+            }
+            is UnionType -> {
+                val result = mutableSetOf<String>()
+                for (t in typeNode.types) {
+                    val vals = collectLiteralTypeValues(t)
+                    if (vals.isEmpty()) return emptySet() // non-literal constituent → not exhaustive
+                    result.addAll(vals)
+                }
+                result
+            }
+            else -> emptySet()
         }
     }
 
@@ -31686,12 +31821,22 @@ class Checker(
      */
     private fun collectTargetPropertyNames(type: Type): Set<String>? {
         return when (type) {
-            is Type.Object -> type.members?.keys?.toSet()
-            is Type.Interface -> type.members?.keys?.toSet()
+            is Type.Object -> {
+                // If the target has a string index signature, any string-keyed property is valid
+                if (type.stringIndexInfo != null) return null
+                type.members?.keys?.toSet()
+            }
+            is Type.Interface -> {
+                // If the target has a declared string index signature, any string-keyed property is valid
+                if (type.declaredStringIndexInfo != null || type.stringIndexInfo != null) return null
+                type.members?.keys?.toSet()
+            }
             is Type.Intersection -> {
                 val names = mutableSetOf<String>()
                 for (constituent in type.types) {
-                    val constituentNames = collectTargetPropertyNames(constituent) ?: continue
+                    // If any constituent has a string index signature, all properties are valid
+                    val constituentNames = collectTargetPropertyNames(constituent)
+                    if (constituentNames == null) return null
                     names.addAll(constituentNames)
                 }
                 if (names.isEmpty()) null else names

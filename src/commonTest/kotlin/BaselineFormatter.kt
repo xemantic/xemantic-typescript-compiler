@@ -42,7 +42,7 @@ fun CompilationResult.toBaseline(): String {
     return formatMultiFileBaseline(
         fileName, sourceEchoes, jsOutputs, options.sourceMap,
         options.inlineSourceMap, options.sourceRoot, options.outFile,
-        options.inlineSources,
+        options.inlineSources, options.mapRoot, options.outDir,
     )
 }
 
@@ -137,6 +137,8 @@ fun formatMultiFileBaseline(
     sourceRoot: String? = null,
     outFile: String? = null,
     inlineSources: Boolean = false,
+    mapRoot: String? = null,
+    outDir: String? = null,
 ): String = text {
     val baseName = testFileName.substringAfterLast('/')
 
@@ -187,11 +189,66 @@ fun formatMultiFileBaseline(
                 +"\r\n"
             }
         } else if (sourceMap && isJsOutput) {
-            +"//# sourceMappingURL=${percentEncodeSourceMapUrl(jsName.substringAfterLast('/'))}.map"
+            val mapUrl = computeMapUrl(jsName, mapRoot, outDir)
+            +"//# sourceMappingURL=${percentEncodeSourceMapUrl(mapUrl)}"
             if (index < jsOutputs.size - 1) {
                 +"\r\n"
             }
         }
+    }
+}
+
+/**
+ * Computes the source map URL for a JS output file.
+ *
+ * When mapRoot is a relative path and outDir is set, TypeScript places map files under
+ * mapRoot (relative to the tsconfig directory), and the URL in the JS file is relative
+ * from the JS file's directory to the map file.
+ */
+private fun computeMapUrl(jsName: String, mapRoot: String?, outDir: String?): String {
+    val jsBaseName = jsName.substringAfterLast('/')
+    val mapFileName = "$jsBaseName.map"
+    if (mapRoot == null) {
+        return mapFileName
+    }
+    // Absolute mapRoot URL — prefix directly
+    if (mapRoot.contains("://")) {
+        return "${mapRoot.trimEnd('/')}/$mapFileName"
+    }
+    if (outDir == null) {
+        return "${mapRoot.trimEnd('/')}/$mapFileName"
+    }
+    // Relative mapRoot: TypeScript resolves mapRoot relative to tsconfig dir.
+    // The JS file is inside outDir (also resolved relative to tsconfig dir).
+    // Strategy: find the tsconfig root by stripping the outDir suffix from the JS file's dir,
+    // then compute the relative path from the JS dir back to tsconfig root + mapRoot + subpath.
+    val jsDir = if (jsName.contains('/')) jsName.substringBeforeLast('/') else ""
+    val outDirNorm = outDir.trimEnd('/')
+
+    // Find the tsconfig root: jsDir should end with outDir (plus any subdir inside outDir)
+    // Split jsDir by the outDir suffix to find the root and the subpath within outDir.
+    val outDirSuffix = "/$outDirNorm"
+    val outDirIdx = jsDir.indexOf(outDirSuffix)
+    val subDirInOutDir = if (outDirIdx >= 0) {
+        jsDir.substring(outDirIdx + outDirSuffix.length).trimStart('/') // e.g. "src" or ""
+    } else {
+        // Fallback: can't find outDir in jsDir, use simple basename
+        return mapFileName
+    }
+
+    // How many levels up from jsDir to tsconfigRoot?
+    // jsDir = tsconfigRoot/outDir/subDirInOutDir
+    val outDirParts = outDirNorm.split('/').filter { it.isNotEmpty() }
+    val subDirParts = subDirInOutDir.split('/').filter { it.isNotEmpty() }
+    val upCount = outDirParts.size + subDirParts.size
+    val prefix = "../".repeat(upCount)
+
+    // Map file location: tsconfigRoot/mapRoot/subDirInOutDir/mapFileName
+    val mapRootNorm = mapRoot.trimEnd('/')
+    return if (subDirInOutDir.isEmpty()) {
+        "${prefix}${mapRootNorm}/$mapFileName"
+    } else {
+        "${prefix}${mapRootNorm}/${subDirInOutDir}/$mapFileName"
     }
 }
 
