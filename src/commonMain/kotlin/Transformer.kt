@@ -685,10 +685,16 @@ class Transformer(
             it.initializer?.let { init -> exprContainsDynamicImport(init) } == true
         }
         is ReturnStatement -> stmt.expression?.let { exprContainsDynamicImport(it) } == true
+        is ThrowStatement -> stmt.expression?.let { exprContainsDynamicImport(it) } == true
         is Block -> stmt.statements.any { stmtContainsDynamicImport(it) }
         is IfStatement -> exprContainsDynamicImport(stmt.expression) ||
                 stmtContainsDynamicImport(stmt.thenStatement) ||
                 (stmt.elseStatement?.let { stmtContainsDynamicImport(it) } == true)
+        is WhileStatement -> stmtContainsDynamicImport(stmt.statement)
+        is DoStatement -> stmtContainsDynamicImport(stmt.statement)
+        is ForStatement -> stmtContainsDynamicImport(stmt.statement)
+        is ForOfStatement -> stmtContainsDynamicImport(stmt.statement)
+        is ForInStatement -> stmtContainsDynamicImport(stmt.statement)
         is FunctionDeclaration -> stmt.body?.statements?.any { stmtContainsDynamicImport(it) } == true
         else -> false
     }
@@ -697,6 +703,9 @@ class Transformer(
         isDynamicImportCall(expr) -> true
         expr is CallExpression -> exprContainsDynamicImport(expr.expression) ||
                 expr.arguments.any { exprContainsDynamicImport(it) }
+        expr is PropertyAccessExpression -> exprContainsDynamicImport(expr.expression)
+        expr is ElementAccessExpression -> exprContainsDynamicImport(expr.expression) ||
+                exprContainsDynamicImport(expr.argumentExpression)
         expr is ArrowFunction -> when (val body = expr.body) {
             is Expression -> exprContainsDynamicImport(body)
             is Block -> body.statements.any { stmtContainsDynamicImport(it) }
@@ -711,7 +720,16 @@ class Transformer(
             }
         }
         expr is AwaitExpression -> exprContainsDynamicImport(expr.expression)
+        expr is YieldExpression -> expr.expression?.let { exprContainsDynamicImport(it) } == true
         expr is ParenthesizedExpression -> exprContainsDynamicImport(expr.expression)
+        expr is ConditionalExpression -> exprContainsDynamicImport(expr.condition) ||
+                exprContainsDynamicImport(expr.whenTrue) || exprContainsDynamicImport(expr.whenFalse)
+        expr is NewExpression -> exprContainsDynamicImport(expr.expression) ||
+                (expr.arguments?.any { exprContainsDynamicImport(it) } == true)
+        expr is SpreadElement -> exprContainsDynamicImport(expr.expression)
+        expr is ArrayLiteralExpression -> expr.elements.any { exprContainsDynamicImport(it) }
+        expr is PrefixUnaryExpression -> exprContainsDynamicImport(expr.operand)
+        expr is PostfixUnaryExpression -> exprContainsDynamicImport(expr.operand)
         expr is BinaryExpression -> {
             // Iterative traversal to avoid StackOverflow on deeply nested binaries
             var current: Expression = expr

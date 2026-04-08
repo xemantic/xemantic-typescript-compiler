@@ -54,6 +54,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`__importStar`/`__importDefault` conditional on `esModuleInterop`**: These helpers wrap `require()` only when `esModuleInterop: true`. Without it, use plain `require()`. `__exportStar`/`__createBinding` are ALWAYS used for `export * from` regardless of `esModuleInterop`.
 - **Helper ordering depends on first usage**: When both `__importStar` and `__exportStar` are needed, TypeScript emits the one used first in the output before the other. Track `importStarUsedFirst` by checking which `needsXxx = true` is set first.
 - **`importHelpers: true` uses tslib**: When set, don't emit inline helper functions. Instead add `const tslib_1 = require("tslib")` (CJS) or `"tslib"` dep + `tslib_1` param (AMD), and use `tslib_1.__helperName(...)` instead of bare `__helperName(...)`. The `helperExpr()` method handles this.
+- **`exprContainsDynamicImport` must mirror `rewriteCjsDynExpr`**: The detection function (used by `isModuleFile`) must handle ALL expression types that the rewriting function handles. Missing `PropertyAccessExpression` caused `import("./foo").then(...)` to not be detected as a module file, so `transformToCommonJS` was never called. Both functions must handle: PropertyAccessExpression, ElementAccessExpression, ConditionalExpression, YieldExpression, NewExpression, SpreadElement, ArrayLiteralExpression, PrefixUnaryExpression, PostfixUnaryExpression.
 
 ### Binder gotchas
 
