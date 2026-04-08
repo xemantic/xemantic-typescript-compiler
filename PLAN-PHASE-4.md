@@ -1702,11 +1702,13 @@ Focus on (a) test output formatting, (b) small targeted diagnostics, (c) JS emit
 - 1,184 (57%) produce zero diagnostics — blocked on type resolution (anyType)
 - 655 (32%) diff-based — partial diagnostics (extra + missing)
 - 233 (11%) JS emit — CJS helpers, private field transforms, file ordering
-- Of 655 diff-based: 98 single-FP TS2322, 13 single-FP TS7006
+- Of 655 diff-based: 119 tests have EXTRA TS2322, but ZERO are pure-FP (all also miss other codes)
 
 **Strategy:** Focus on infrastructure that UNBLOCKS other tests, not just direct gains.
-Layer 1 (unblockers): built-in type stubs, TS2741, private field transforms.
-Layer 2 (direct gains): TS2322 FP patterns, CJS helpers, parser FP fixes.
+Layer 1 (unblockers): built-in type stubs, TS2741/TS2353 (fix wrong TS2322s), private fields.
+Layer 2 (direct gains): CJS helpers, TS7006 suppression, parser FP fixes.
+KEY FINDING: TS2322 FP suppression has ZERO value alone — every test with extra TS2322
+also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLACE TS2322.
 
 - [ ] **11.0. Built-in type stubs for core globals (LARGE — UNBLOCKER)**
 
@@ -1788,19 +1790,19 @@ Layer 2 (direct gains): TS2322 FP patterns, CJS helpers, parser FP fixes.
   **Estimated gain:** 3-8 tests
   **File:** `Checker.kt` — checkImplicitAnyParameters
 
-- [ ] **11.5. TS2322 FP: suppress for anyType source/target (LOW-MEDIUM)**
+- [ ] **11.5. TS2353 excess property checking (MEDIUM — UNBLOCKER)**
 
-  **Problem:** Many TS2322 FP errors fire when either the source or target type is anyType
-  (unresolved). TypeScript's `isTypeRelatedTo` returns true for any→T and T→any. Our
-  `canUseTypeEngine` guards block some of these, but gaps remain for specific patterns
-  (assignment in property initializers, return statements, function arguments).
+  **Problem:** ~26 TS2322 FPs are actually excess property violations. E.g.,
+  `var b: { b: number } = { a: 0 }` emits TS2322 ("not assignable") when TypeScript
+  emits TS2353 ("Object literal may only specify known properties, and 'a' does not
+  exist in type '{ b: number }'"). 24+ tests need TS2353 as their primary expected code.
 
-  **Fix:** Audit the TS2322 emission sites. When the source or target type is anyType or
-  errorType, suppress the diagnostic. This is already partially done but needs to cover
-  all emission paths (variable declarations, return statements, property assignments).
+  **Fix:** In `propertiesRelatedTo` or a new `checkExcessProperties` pass, when assigning
+  an object literal to a target type, check if the source has properties NOT in the target.
+  Emit TS2353 for each excess property instead of generic TS2322.
 
-  **Estimated gain:** 10-30 tests (cascading — suppressing FPs reveals correct output)
-  **File:** `Checker.kt` — TS2322 emission guards
+  **Estimated gain:** 5-15 tests
+  **File:** `Checker.kt` — structural comparison, excess property checking
 
 - [ ] **11.6. Multi-file JS emit topological sort (MEDIUM-HIGH)**
 
