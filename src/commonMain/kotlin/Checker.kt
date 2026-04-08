@@ -186,6 +186,12 @@ class Checker(
     private val maxCheckDepth = 200
     private val maxRelationDepth = 100
 
+    /** Tracks the first missing required property found during structural comparison.
+     *  Set by propertiesRelatedTo, consumed by TS2322 emission to produce TS2741 instead.
+     *  Reset before each top-level comparison. */
+    private var lastMissingPropertyName: String? = null
+    private var lastMissingPropertySymbol: Symbol? = null
+
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
     private fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
@@ -25775,11 +25781,30 @@ class Checker(
             }
             val sourceType = getTypeOfExpression(init)
             contextualType = savedContextual
+            lastMissingPropertyName = null // reset before comparison
             if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                val missingProp = lastMissingPropertyName
+                val missingPropSym = lastMissingPropertySymbol
+                if (missingProp != null) {
+                    // TS2741: Property 'X' is missing in type 'Y' but required in type 'Z'.
+                    val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'."
+                    val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                    diagnostics.add(Diagnostic(
+                        message = message,
+                        category = DiagnosticCategory.Error,
+                        code = 2741,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = name.pos,
+                        length = name.text.length,
+                        relatedInformation = listOfNotNull(relatedInfo),
+                    ))
+                } else {
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
                 // Function→function: add specific elaboration (return/param mismatch)
@@ -25828,6 +25853,7 @@ class Checker(
                     length = name.text.length,
                     messageChain = chain,
                 ))
+                } // end else (not missing property)
                 return // Type engine handled it — skip old system
             }
         } catch (_: StackOverflowError) {
@@ -25851,17 +25877,33 @@ class Checker(
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
             val sourceType = getTypeOfExpression(init)
+            lastMissingPropertyName = null
             if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                 val (line, character) = getLineAndCharacterOfPosition(source, propName.pos)
+                val missingProp = lastMissingPropertyName
+                val missingPropSym = lastMissingPropertySymbol
+                if (missingProp != null) {
+                    val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2741,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = propName.pos,
+                        length = propName.text.length,
+                        relatedInformation = listOfNotNull(relatedInfo),
+                    ))
+                } else {
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
                 if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
                     chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
                 } else if (sourceType is Type.Union) {
-                    // Union source: find the last failing constituent for elaboration (matches TypeScript)
                     var lastFailing: Type? = null
                     for (constituent in sourceType.types) {
                         if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
@@ -25884,6 +25926,7 @@ class Checker(
                     length = propName.text.length,
                     messageChain = chain,
                 ))
+                }
             }
         } catch (_: StackOverflowError) {
             // Circular type resolution — skip
@@ -25983,10 +26026,28 @@ class Checker(
                         }
                         val sourceType = getTypeOfExpression(expr.right)
                         contextualType = savedContextual
+                        lastMissingPropertyName = null
                         if (canUseTypeEngine(sourceType, tt) && !checkTypeRelatedTo(sourceType, tt, assignableRelation)) {
                             val displaySource = typeToString(sourceType)
                             val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
                             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                            val missingProp = lastMissingPropertyName
+                            val missingPropSym = lastMissingPropertySymbol
+                            if (missingProp != null) {
+                                val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2741,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = target.pos,
+                                    length = target.text.length,
+                                    relatedInformation = listOfNotNull(relatedInfo),
+                                ))
+                                return
+                            }
                             val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                             val chain = mutableListOf<String>()
                             // Function→function: add specific elaboration
@@ -31564,7 +31625,11 @@ class Checker(
                     if (!checkTypeRelatedTo(indexInfo.type, targetPropType, relation)) return false
                     continue
                 }
-                if (!isOptional) return false // missing required property
+                if (!isOptional) {
+                    lastMissingPropertyName = targetName
+                    lastMissingPropertySymbol = targetProp
+                    return false // missing required property
+                }
                 continue
             }
             // Compare property types
@@ -32600,6 +32665,39 @@ class Checker(
             length = length,
             messageChain = chain,
         ))
+    }
+
+    /**
+     * Create TS2728 related diagnostic ("'name' is declared here.") for a property symbol.
+     * Used as related info for TS2741 (missing property) diagnostics.
+     */
+    private fun createPropertyDeclaredHereRelatedInfo(propSymbol: Symbol): Diagnostic? {
+        val decl = propSymbol.declarations.firstOrNull() ?: return null
+        val declPos = when (decl) {
+            is PropertyDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+            is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+            else -> decl.pos
+        }
+        if (declPos < 0) return null
+        // Find the source file containing this declaration
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            if (declPos in 0 until sf.text.length) {
+                val (declLine, declChar) = getLineAndCharacterOfPosition(sf.text, declPos)
+                val declLength = propSymbol.name.length
+                return Diagnostic(
+                    message = "'${propSymbol.name}' is declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 2728,
+                    fileName = sf.fileName,
+                    line = declLine,
+                    character = declChar,
+                    start = declPos,
+                    length = declLength,
+                )
+            }
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------
