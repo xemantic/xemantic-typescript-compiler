@@ -1836,7 +1836,7 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
 **Strategy:** Harvest remaining JS emit wins (inline source maps, comment fixes, parser-AST
 issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS2322.
 
-- [ ] **12.0. Inline source map generation (LOW — 8+ JS tests)**
+- [x] **12.0. Inline source map generation (LOW — 8+ JS tests)** — done, +6 tests
 
   **Problem:** 8 JS emit tests fail only because the `//# sourceMappingURL=data:...` inline
   source map comment is missing. When `@inlineSourceMap: true`, TypeScript appends a base64-
