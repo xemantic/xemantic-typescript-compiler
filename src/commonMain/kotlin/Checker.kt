@@ -25888,7 +25888,15 @@ class Checker(
             val targetType = getTypeFromTypeNode(typeAnnotation)
             val sourceType = getTypeOfExpression(init)
             lastMissingPropertyName = null
-            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+            val canUse = canUseTypeEngine(sourceType, targetType)
+            // Excess property check for fresh object literals (TS2353)
+            if (canUse && init is ObjectLiteralExpression) {
+                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                if (checkExcessProperties(init, sourceType, targetType, displayTarget, source, fileName)) {
+                    return // TS2353 emitted
+                }
+            }
+            if (canUse && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                 val (line, character) = getLineAndCharacterOfPosition(source, propName.pos)
@@ -31660,6 +31668,26 @@ class Checker(
     }
 
     /**
+     * Collects all property names from a target type, flattening intersections and interfaces.
+     * Returns null if the type cannot be used for excess property checking.
+     */
+    private fun collectTargetPropertyNames(type: Type): Set<String>? {
+        return when (type) {
+            is Type.Object -> type.members?.keys?.toSet()
+            is Type.Interface -> type.members?.keys?.toSet()
+            is Type.Intersection -> {
+                val names = mutableSetOf<String>()
+                for (constituent in type.types) {
+                    val constituentNames = collectTargetPropertyNames(constituent) ?: continue
+                    names.addAll(constituentNames)
+                }
+                if (names.isEmpty()) null else names
+            }
+            else -> null
+        }
+    }
+
+    /**
      * Excess property check for fresh object literals (TS2353).
      * When an object literal is assigned to a typed target, any properties
      * in the source that don't exist in the target are excess properties.
@@ -31673,13 +31701,14 @@ class Checker(
         source: String,
         fileName: String,
     ): Boolean {
-        if (sourceType !is Type.Object || targetType !is Type.Object) return false
+        if (sourceType !is Type.Object) return false
         val sourceProps = sourceType.properties ?: return false
-        val targetMembers = targetType.members ?: return false
+        // Collect all target property names, flattening intersections
+        val targetPropNames = collectTargetPropertyNames(targetType) ?: return false
         val excessProps = mutableListOf<Pair<String, Int>>() // (propName, position)
         for (sourceProp in sourceProps) {
             val name = sourceProp.name
-            if (targetMembers[name] == null) {
+            if (name !in targetPropNames) {
                 // Find the position of this property in the object literal
                 val propNode = objLiteral.properties.firstOrNull { prop ->
                     when (prop) {
