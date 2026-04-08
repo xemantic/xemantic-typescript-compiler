@@ -1710,7 +1710,7 @@ Layer 2 (direct gains): CJS helpers, TS7006 suppression, parser FP fixes.
 KEY FINDING: TS2322 FP suppression has ZERO value alone — every test with extra TS2322
 also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLACE TS2322.
 
-- [ ] **11.0. Built-in type stubs for core globals (LARGE — UNBLOCKER)**
+- [ ] **11.0. Built-in type stubs for core globals (LARGE — UNBLOCKER)** — DEFERRED (naive empty stubs cause 1040 regressions; needs members or targeted approach)
 
   **Problem:** `getTypeOfExpression` returns `anyType` for most built-in identifiers because
   lib.d.ts types are not loaded. KNOWN_GLOBALS only suppresses TS2304, it does NOT create
@@ -1731,7 +1731,7 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Estimated gain:** 20-50 tests (type names resolvable), 100-200 with members
   **File:** `Checker.kt` — init, getApparentType, synthetic type creation
 
-- [ ] **11.1. TS2741 "Property missing in type" diagnostic (MEDIUM)**
+- [x] **11.1. TS2741 "Property missing in type" diagnostic (MEDIUM)** — DONE (+2 tests, 8007 passing)
 
   **Problem:** 46+ tests expect TS2741 ("Property 'X' is missing in type 'Y' but required
   in type 'Z'"). `propertiesRelatedTo` already detects missing properties (returns false at
