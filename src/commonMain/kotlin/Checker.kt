@@ -27423,8 +27423,21 @@ class Checker(
                 }
                 val callSigs = type.callSignatures
                 val ctorSigs = type.constructSignatures
-                // Function type: show signatures
-                if (!callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()) {
+                val hasSignatures = !callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()
+                val hasProperties = !type.properties.isNullOrEmpty()
+                // When type has BOTH signatures AND properties, use object literal format
+                // e.g. { (): string; prop: number; }
+                if (hasSignatures && hasProperties) {
+                    val parts = mutableListOf<String>()
+                    callSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = false)) }
+                    ctorSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = true)) }
+                    val props = type.properties!!
+                    for (p in props) {
+                        val propType = symbolTypes[p.id]
+                        parts.add("${p.name}: ${if (propType != null) typeToString(propType) else "any"}")
+                    }
+                    "{ ${parts.joinToString("; ")}; }"
+                } else if (hasSignatures) {
                     val totalSigs = (callSigs?.size ?: 0) + (ctorSigs?.size ?: 0)
                     if (totalSigs == 1) {
                         // Single signature: arrow format
