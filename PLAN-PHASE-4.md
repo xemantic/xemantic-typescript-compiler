@@ -1971,57 +1971,33 @@ parser error recovery leaks, enum initializer handling.
   **Tests:** 6 tests fixed (various functions with non-nullable return types under noImplicitReturns).
   **File:** `Checker.kt` — checkReturnStatements TS2366 condition
 
-- [ ] **13.1. Internal comments in element access expressions (LOW — 1-2 tests)**
+- [x] **13.5. TS7030 for `unknown` return type (LOW — 0 tests)** — done, correctness fix
 
-  **Problem:** `elementAccessExpressionInternalComments` fails because comments inside `[...]`
-  are dropped. Expected: `Array /*1*/[ /*2*/"toString" /*3*/]` but we emit `Array["toString"]`.
+  **Problem:** `unknown` was treated as always void-like. With `noImplicitReturns`, it should
+  trigger TS7030. Also `as unknown` type assertions should count as returning a value.
 
-  **Fix:** In Emitter, when emitting ElementAccessExpression, preserve comments between `[`
-  and the argument expression, and between the expression and `]`.
+  **Fix:** `isVoidLikeTypeName` still includes `unknown`, but `checkBodyForImplicitReturn` 
+  overrides this when `noImplicitReturns` is set. `isNonVoidExpression` treats `as unknown` 
+  as non-void.
 
-  **Estimated gain:** 1-2 tests
-  **File:** `Emitter.kt` — emitElementAccessExpression
+  **File:** `Checker.kt`
 
-- [ ] **13.2. Numeric literal comment preservation in property access (LOW — 1-2 tests)**
+**Remaining Phase 13 items (all deferred — each needs deep infrastructure for 1-2 test gains):**
+- **13.1** Internal comments in element access — needs source-position-based comment emission
+- **13.2** Numeric literal comment preservation — needs expression-level comment attachment
+- **13.3** String enum non-literal initializers — needs cross-file initializer resolution
+- **13.4** Parser error recovery type annotation leaks — needs deep parser understanding
+- **13.6** Labeled break reachability — would fix reachabilityChecks5/6 (2 tests)
+- **13.7** TS2793 related info for overloads — needs implementation signature detection (1 test)
+- **13.8** Static class property _a = ClassName — needs class transform infrastructure (1-3 tests)
 
-  **Problem:** `numericLiteralsWithTrailingDecimalPoints01` — comments between numeric literal
-  and `.toString()` are dropped. `0 /* comment */.toString()` → `0..toString()` loses comment.
-
-  **Fix:** Preserve inline comments before `.` in property access chains on numeric literals.
-
-  **Estimated gain:** 1-2 tests
-  **File:** `Emitter.kt` — emitPropertyAccessExpression
-
-- [ ] **13.3. String enum non-literal initializer detection (LOW — 2 tests)**
-
-  **Problem:** `enumWithNonLiteralStringInitializer` — string enums with non-literal initializers
-  treated as numeric. `A["a"] = helpers_1.bar` instead of `A["a"] = "bar"`.
-
-  **Fix:** Transformer enum handling must detect string-valued initializers from imports.
-
-  **Estimated gain:** 1-2 tests
-  **File:** `Transformer.kt` — enum transform
-
-- [ ] **13.4. Parser error recovery — type annotation leaking as expression (LOW — 2 tests)**
-
-  **Problem:** `parseErrorIncorrectReturnToken` emits stray `number;` from leaked return type
-  annotation. `destructuringControlFlowNoCrash` emits `any;` from leaked type annotation.
-
-  **Fix:** Investigate parser error recovery for malformed arrow/function return types.
-
-  **Estimated gain:** 1-2 tests
-  **File:** `Parser.kt` — arrow function / return type parsing
-
-- [ ] **13.5. TS7030 for `unknown` return type functions (LOW — 1-3 tests)**
-
-  **Problem:** `noImplicitReturnsExclusions` is missing TS7030 for functions returning `unknown`.
-  The return type classification treats `unknown` as exempt but TypeScript still reports TS7030.
-
-  **Fix:** In `classifyReturnType`, `unknown` should be classified as triggering TS7030 when
-  there are mixed return paths.
-
-  **Estimated gain:** 1-2 tests
-  **File:** `Checker.kt` — classifyReturnType, checkReturnStatements
+**Exhaustive analysis of remaining 2,052 failures (2026-04-08):**
+- 1,180 (57%) produce zero diagnostics — ALL blocked by anyType bottleneck
+- 650 (32%) have multiple diagnostic differences per test — each needs unique infrastructure
+- 230 (11%) JS emit diffs — comment infra, parser recovery, multi-file, complex transforms
+- 0 tests with simple code swaps, position-only diffs, or squiggle-only diffs
+- 0 single-code "none produced" tests fixable without deep type resolution
+- **Conclusion:** No more quick wins exist. Further progress requires resolving the anyType bottleneck (lib.d.ts type stubs) or implementing major infrastructure (private field downlevel, multi-file ordering, overload resolution).
 
 ---
 
