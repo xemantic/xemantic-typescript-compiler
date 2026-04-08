@@ -1746,7 +1746,7 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Estimated gain:** 5-15 tests (those where TS2741 is the primary/only expected error)
   **File:** `Checker.kt` — propertiesRelatedTo, TS2322 emission
 
-- [ ] **11.2. Private field read/write expression transforms (MEDIUM)**
+- [ ] **11.2. Private field read/write expression transforms (MEDIUM)** — DEFERRED (all remaining tests need complex patterns: destructuring, tslib, #field in)
 
   **Problem:** 10.9 added WeakMap allocation but `this.#field` reads/writes still emit
   native syntax. Need `__classPrivateFieldGet(this, _C_field, "f")` for reads and
@@ -1762,18 +1762,16 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Estimated gain:** 3-5 tests
   **Files:** `Transformer.kt` — expression transform + helper templates
 
-- [ ] **11.3. CJS helper function bodies: __createBinding, __setModuleDefault (MEDIUM)**
+- [ ] **11.3. CJS helper function bodies: __createBinding, __setModuleDefault (MEDIUM)** — INVESTIGATED: helpers already exist; issue is detection gaps (dynamic import → __importStar, etc.)
 
-  **Problem:** ~27 JS emit tests expect `__createBinding` and `__setModuleDefault` helper
-  functions in the output (used for `export * from` and default re-exports with
-  esModuleInterop). Our transformer emits the helper calls but not the function definitions.
+  **Problem:** CJS helper function bodies (`__createBinding`, `__setModuleDefault`,
+  `__importStar`, `__exportStar`) already exist as string constants. The issue is that
+  `needsImportStar`/`needsExportStar` detection doesn't cover all patterns — e.g., dynamic
+  `import()` in CJS should trigger `__importStar` wrapping but doesn't. Also, ~60-70 JS
+  emit tests fail due to file ordering (not helpers).
 
-  **Fix:** Add the `__createBinding` and `__setModuleDefault` helper function bodies to
-  the CJS transform helper emission. These are the same across all TypeScript versions.
-  Also ensure `__importStar` has its full body (currently may be incomplete).
-
-  **Estimated gain:** 10-20 tests
-  **File:** `Transformer.kt` — CJS helper templates
+  **Actual issue:** Dynamic import transform (`import("./foo")` → `__importStar(require("./foo"))`)
+  **File:** `Transformer.kt` — dynamic import handling in CJS
 
 - [ ] **11.4. TS7006 contextual typing suppression (LOW-MEDIUM)**
 
