@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-08):** 8,005 / 10,077 tests passing (79.4%). Active queue: Phase 11.
+**Status (2026-04-08):** 8,010 / 10,077 tests passing (79.5%). Active queue: Phase 11.
 
 ## Goal
 
@@ -1773,7 +1773,7 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Actual issue:** Dynamic import transform (`import("./foo")` → `__importStar(require("./foo"))`)
   **File:** `Transformer.kt` — dynamic import handling in CJS
 
-- [ ] **11.4. TS7006 contextual typing suppression (LOW-MEDIUM)**
+- [ ] **11.4. TS7006 contextual typing suppression (LOW-MEDIUM)** — INVESTIGATED: blocked on test runner defaults. Many tests without `@noImplicitAny`/`@strict` expect TS7006, suggesting TypeScript test runner defaults `noImplicitAny: true`. Our defaults differ. Additionally, we suppress TS7006 for ALL callback args (`contextuallyTyped=true`) which is too aggressive — TypeScript only suppresses when contextual type provides param types.
 
   **Problem:** 13 single-FP tests emit TS7006 ("Parameter implicitly has 'any' type")
   for callback parameters that should get types from contextual typing. E.g., in
@@ -1788,19 +1788,12 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Estimated gain:** 3-8 tests
   **File:** `Checker.kt` — checkImplicitAnyParameters
 
-- [ ] **11.5. TS2353 excess property checking (MEDIUM — UNBLOCKER)**
+- [x] **11.5. TS2353 excess property checking (MEDIUM — UNBLOCKER)** — DONE (+3 tests, 8010 passing)
 
-  **Problem:** ~26 TS2322 FPs are actually excess property violations. E.g.,
-  `var b: { b: number } = { a: 0 }` emits TS2322 ("not assignable") when TypeScript
-  emits TS2353 ("Object literal may only specify known properties, and 'a' does not
-  exist in type '{ b: number }'"). 24+ tests need TS2353 as their primary expected code.
-
-  **Fix:** In `propertiesRelatedTo` or a new `checkExcessProperties` pass, when assigning
-  an object literal to a target type, check if the source has properties NOT in the target.
-  Emit TS2353 for each excess property instead of generic TS2322.
-
-  **Estimated gain:** 5-15 tests
-  **File:** `Checker.kt` — structural comparison, excess property checking
+  Implemented `checkExcessProperties` helper that detects source object literal properties
+  not present in target type. Integrated into var decl and assignment expression sites.
+  TS2353 fires even when assignability passes (e.g., `{b:0, a:0}` → `{b: number}`)
+  and takes priority over TS2741/TS2322 when excess properties are found.
 
 - [ ] **11.6. Multi-file JS emit topological sort (MEDIUM-HIGH)**
 
