@@ -1795,18 +1795,13 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   TS2353 fires even when assignability passes (e.g., `{b:0, a:0}` → `{b: number}`)
   and takes priority over TS2741/TS2322 when excess properties are found.
 
-- [ ] **11.6. Multi-file JS emit topological sort (MEDIUM-HIGH)**
+- [ ] **11.6. Multi-file JS emit topological sort (MEDIUM-HIGH)** — INVESTIGATED: topological sort already exists for JS outputs but sourceEchoes aren't reordered. However, most failing multi-file tests have other issues beyond ordering (module path resolution for AMD, missing diagnostics, etc.). Likely low net gain.
 
-  **Problem:** ~5-15 JS emit tests fail because output file sections appear in wrong order.
-  Previous investigation (10.4) found that naive removal of existing ordering causes 59
-  regressions, and proper fix needs dependency-based topological sort.
+  **Fix:** In `TypeScriptCompiler.kt`, reorder sourceEchoes to match `sortedTsFiles`.
+  But most failing tests also have AMD module specifier resolution issues.
 
-  **Fix:** In `TypeScriptCompiler.kt` or `BaselineFormatter.kt`, implement topological
-  sort of output files based on import/reference dependencies. Files that are depended
-  upon should appear before files that depend on them.
-
-  **Estimated gain:** 5-15 tests
-  **File:** `TypeScriptCompiler.kt` or `BaselineFormatter.kt`
+  **Estimated gain:** 2-5 tests (many multi-file failures have other root causes)
+  **File:** `TypeScriptCompiler.kt`
 
 - [ ] **11.7. __rest helper function (LOW)**
 
@@ -1819,15 +1814,13 @@ also misses other diagnostics. The fix is implementing TS2741/TS2353 which REPLA
   **Estimated gain:** 2-5 tests
   **File:** `Transformer.kt` — destructuring transform + helper template
 
-- [ ] **11.8. Parser TS1005/TS1109 FP reduction (LOW)**
+- [ ] **11.8. Parser TS1005/TS1109 FP reduction (LOW)** — INVESTIGATED: root cause is `parseSemicolon()` silently returns without TS1005 when ASI doesn't apply. Adding TS1005 globally causes 5 net regressions (parser error recovery depends on lenient behavior). Need per-site fixes.
 
-  **Problem:** 15 single-FP TS1005 and 9 single-FP TS1109 tests. Parser error recovery
-  produces different fallback diagnostics than TypeScript in edge cases.
-
-  **Fix:** Investigate the specific error recovery divergences for the highest-impact
-  patterns. Focus on cases where a single parser FP is the ONLY difference from baseline.
-
-  **Estimated gain:** 3-8 tests
+  **Root cause:** `parseSemicolon()` never emits TS1005 "';' expected" — it only checks for `;` token.
+  TypeScript's version also reports TS1005 when ASI doesn't apply. But global fix causes regressions.
+  **Possible approach:** Add TS1005 only in specific contexts (expression statement, class member).
+  
+  **Estimated gain:** 2-4 tests (targeted fixes only)
   **File:** `Parser.kt`
 
 ---
