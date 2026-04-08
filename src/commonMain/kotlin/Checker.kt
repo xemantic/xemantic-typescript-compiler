@@ -24229,10 +24229,7 @@ class Checker(
                 // "Function lacks ending return statement and return type does not include 'undefined'."
                 // Under strictNullChecks, undefined is NOT assignable to non-nullable types,
                 // so implicit return (returning undefined) is a type error.
-                isDefinitelyNonNullable && hasAnyReturn && (
-                    strictNullChecks ||
-                    (options.noImplicitReturns && !hasAnyReturnOutsideTry(body.statements))
-                ) -> {
+                isDefinitelyNonNullable && hasAnyReturn && strictNullChecks -> {
                     diagnostics.add(Diagnostic(
                         message = "Function lacks ending return statement and return type does not include 'undefined'.",
                         category = DiagnosticCategory.Error,
