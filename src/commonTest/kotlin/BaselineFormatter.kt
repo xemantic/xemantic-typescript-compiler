@@ -35,10 +35,15 @@ fun CompilationResult.toBaseline(): String {
             fileName,
             sourceEchoes.first().second,
             jsOutputs.first().second,
-            options.sourceMap, options.newLine, options.jsx, options.mapRoot, options.outFile
+            options.sourceMap, options.newLine, options.jsx, options.mapRoot, options.outFile,
+            options.inlineSourceMap, options.sourceRoot,
         )
     }
-    return formatMultiFileBaseline(fileName, sourceEchoes, jsOutputs, options.sourceMap)
+    return formatMultiFileBaseline(
+        fileName, sourceEchoes, jsOutputs, options.sourceMap,
+        options.inlineSourceMap, options.sourceRoot, options.outFile,
+        options.inlineSources,
+    )
 }
 
 /**
@@ -81,6 +86,8 @@ fun formatBaseline(
     jsx: String? = null,
     mapRoot: String? = null,
     outFile: String? = null,
+    inlineSourceMap: Boolean = false,
+    sourceRoot: String? = null,
 ): String = text {
     val baseName = fileName.substringAfterLast('/')
     val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
@@ -99,7 +106,20 @@ fun formatBaseline(
     +"]\r\n"
     +if (useLF) toLF(javascript) else toCRLF(javascript)
     +if (useLF) "\n" else "\r\n"
-    if (sourceMap) {
+    if (inlineSourceMap) {
+        // Inline source map takes precedence over file-based source map
+        val effectiveSourceRoot = sourceRoot?.let { "$it/" } ?: ""
+        // When mapRoot is a relative path, source paths are adjusted relative to the map directory
+        val isRelativeMapRoot = mapRoot != null && !mapRoot.contains("://")
+        val sourceFileName = if (isRelativeMapRoot) "../$baseName" else baseName
+        +generateInlineSourceMapComment(
+            sourceTexts = listOf(cleanedSource),
+            sourceFileNames = listOf(sourceFileName),
+            jsFileName = jsName,
+            jsOutput = javascript,
+            sourceRoot = effectiveSourceRoot,
+        )
+    } else if (sourceMap) {
         val mapPrefix = if (mapRoot != null) "${mapRoot.trimEnd('/')}/" else ""
         +"//# sourceMappingURL=$mapPrefix${percentEncodeSourceMapUrl(jsName)}.map"
     }
@@ -113,6 +133,10 @@ fun formatMultiFileBaseline(
     sourceEchoes: List<Pair<String, String>>,
     jsOutputs: List<Pair<String, String>>,
     sourceMap: Boolean = false,
+    inlineSourceMap: Boolean = false,
+    sourceRoot: String? = null,
+    outFile: String? = null,
+    inlineSources: Boolean = false,
 ): String = text {
     val baseName = testFileName.substringAfterLast('/')
 
@@ -145,7 +169,24 @@ fun formatMultiFileBaseline(
         }
         val isJsOutput = jsName.endsWith(".js") || jsName.endsWith(".jsx") ||
                 jsName.endsWith(".mjs") || jsName.endsWith(".cjs")
-        if (sourceMap && isJsOutput) {
+        if (inlineSourceMap && isJsOutput) {
+            val effectiveSourceRoot = sourceRoot?.let { "$it/" } ?: ""
+            val tsSourceEchoes = sourceEchoes.filter {
+                val fn = it.first
+                fn.endsWith(".ts") || fn.endsWith(".tsx") || fn.endsWith(".mts") || fn.endsWith(".cts")
+            }
+            +generateInlineSourceMapComment(
+                sourceTexts = tsSourceEchoes.map { it.second },
+                sourceFileNames = tsSourceEchoes.map { it.first.substringAfterLast('/') },
+                jsFileName = jsName.substringAfterLast('/'),
+                jsOutput = javascript,
+                sourceRoot = effectiveSourceRoot,
+                includeSourcesContent = inlineSources,
+            )
+            if (index < jsOutputs.size - 1) {
+                +"\r\n"
+            }
+        } else if (sourceMap && isJsOutput) {
             +"//# sourceMappingURL=${percentEncodeSourceMapUrl(jsName.substringAfterLast('/'))}.map"
             if (index < jsOutputs.size - 1) {
                 +"\r\n"

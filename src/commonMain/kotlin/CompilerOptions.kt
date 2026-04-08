@@ -168,6 +168,8 @@ data class CompilerOptions(
     val resolveJsonModule: Boolean = false,
     val noLib: Boolean = false,
     val inlineSourceMap: Boolean = false,
+    val inlineSources: Boolean = false,
+    val sourceRoot: String? = null,
     val composite: Boolean = false,
     val incremental: Boolean? = null,
     val isolatedDeclarations: Boolean = false,
@@ -466,6 +468,8 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "resolvejsonmodule" -> options.copy(resolveJsonModule = boolValue)
         "nolib" -> options.copy(noLib = boolValue)
         "inlinesourcemap" -> options.copy(inlineSourceMap = boolValue)
+        "inlinesources" -> options.copy(inlineSources = boolValue)
+        "sourceroot" -> options.copy(sourceRoot = value.trim())
         "composite" -> options.copy(composite = boolValue)
         "incremental" -> options.copy(incremental = boolValue)
         "isolateddeclarations" -> options.copy(isolatedDeclarations = boolValue)
