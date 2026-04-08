@@ -1854,7 +1854,7 @@ issues), extend TS2353 coverage, fix specific type display issues in TS2741/TS23
   **Estimated gain:** 5-8 tests
   **File:** `Emitter.kt` or `TypeScriptCompiler.kt`
 
-- [ ] **12.1. TS2353 excess property in more contexts (MEDIUM — 14+ tests)**
+- [x] **12.1. TS2353 excess property in more contexts (MEDIUM — 14+ tests)** — done, +1 test (most blocked by anyType)
 
   **Problem:** 14 tests still expect TS2353 but don't get it. Current implementation covers
   variable declarations and assignment expressions. Missing contexts: function arguments
