@@ -24179,7 +24179,7 @@ class Checker(
         val retTypeClass = when {
             retType == null -> null
             retTypeName == null -> "non-void"  // unknown type (complex type we can't parse) → treat as non-void
-            isVoidLikeTypeName(retTypeName) && retTypeName != "undefined" -> "truly-void"  // void/any/never
+            isVoidLikeTypeName(retTypeName) && retTypeName != "undefined" && !(retTypeName == "unknown" && options.noImplicitReturns) -> "truly-void"  // void/any/never/unknown (unknown only when !noImplicitReturns)
             retTypeName == "undefined" -> if (retType is KeywordTypeNode) "pure-undefined" else "nullable"
             else -> "non-void"  // number, string, unknown, union, function-type, etc.
         }
@@ -24441,12 +24441,13 @@ class Checker(
             // TypeAssertionExpression (<T>expr): count unless cast type is any/void/undefined
             is TypeAssertionExpression -> {
                 val typeName = getTypeNodeName(expr.type, false)
-                typeName != null && !isVoidLikeTypeName(typeName)
+                // unknown is non-void here — `as unknown` is an explicit cast producing a value
+                typeName != null && (typeName == "unknown" || !isVoidLikeTypeName(typeName))
             }
             // AsExpression (expr as T): count unless asserted type is any/void/undefined
             is AsExpression -> {
                 val typeName = getTypeNodeName(expr.type, false)
-                typeName != null && !isVoidLikeTypeName(typeName)
+                typeName != null && (typeName == "unknown" || !isVoidLikeTypeName(typeName))
             }
             else -> false  // conservative
         }
