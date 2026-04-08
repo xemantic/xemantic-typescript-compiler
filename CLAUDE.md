@@ -210,7 +210,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 10: High-ROI Targeted Fixes.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. ~7,986 / 10,077 tests passing (79.3%). Phase 9 fixed 3 FP tests (+3). Of 2,091 remaining failures: 1,185 (57%) produce zero diagnostics (blocked on lib.d.ts types), 236 (11%) are JS emit, 334 (16%) are mixed diffs, 312 (15%) partial match. Phase 10 targets test output formatting (10 source-echo ordering), small targeted diagnostics (TS2366, TS1042, TS2708), and JS emit fixes (multi-file ordering, type-only elision, private field transforms).
+**Phase 11: Unblocker Infrastructure + Targeted Fixes.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. 8,005 / 10,077 tests passing (79.4%). Of 2,072 remaining: 1,184 (57%) zero diagnostics (anyType bottleneck), 655 (32%) mixed diffs, 233 (11%) JS emit. Phase 11 prioritizes infrastructure unblockers: built-in type stubs for core globals (11.0), TS2741 missing-property diagnostic (11.1), private field read/write transforms (11.2), CJS helper bodies (11.3).
 
 ### Execution protocol (MANDATORY — follow exactly)
 
