@@ -25782,7 +25782,17 @@ class Checker(
             val sourceType = getTypeOfExpression(init)
             contextualType = savedContextual
             lastMissingPropertyName = null // reset before comparison
-            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+            val canUse = canUseTypeEngine(sourceType, targetType)
+            val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            // Excess property check for fresh object literals (TS2353).
+            // Fires even when assignability passes (e.g., {b: 0, a: 0} → {b: number}).
+            if (canUse && init is ObjectLiteralExpression) {
+                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                if (checkExcessProperties(init, sourceType, targetType, displayTarget, source, fileName)) {
+                    return // TS2353 emitted — skip TS2741/TS2322
+                }
+            }
+            if (canUse && !isAssignable) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -26027,7 +26037,16 @@ class Checker(
                         val sourceType = getTypeOfExpression(expr.right)
                         contextualType = savedContextual
                         lastMissingPropertyName = null
-                        if (canUseTypeEngine(sourceType, tt) && !checkTypeRelatedTo(sourceType, tt, assignableRelation)) {
+                        val canUse = canUseTypeEngine(sourceType, tt)
+                        val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
+                        // Excess property check for object literal assignments (TS2353)
+                        if (canUse && expr.right is ObjectLiteralExpression) {
+                            val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                            if (checkExcessProperties(expr.right as ObjectLiteralExpression, sourceType, tt, displayTarget, source, fileName)) {
+                                return // TS2353 emitted
+                            }
+                        }
+                        if (canUse && !isAssignable) {
                             val displaySource = typeToString(sourceType)
                             val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
                             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
@@ -31636,6 +31655,65 @@ class Checker(
             val sourcePropType = getTypeOfSymbol(sourceProp)
             val targetPropType = getTypeOfSymbol(targetProp)
             if (!checkTypeRelatedTo(sourcePropType, targetPropType, relation)) return false
+        }
+        return true
+    }
+
+    /**
+     * Excess property check for fresh object literals (TS2353).
+     * When an object literal is assigned to a typed target, any properties
+     * in the source that don't exist in the target are excess properties.
+     * Returns true if TS2353 diagnostics were emitted (caller should skip TS2741/TS2322).
+     */
+    private fun checkExcessProperties(
+        objLiteral: ObjectLiteralExpression,
+        sourceType: Type,
+        targetType: Type,
+        displayTarget: String,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        if (sourceType !is Type.Object || targetType !is Type.Object) return false
+        val sourceProps = sourceType.properties ?: return false
+        val targetMembers = targetType.members ?: return false
+        val excessProps = mutableListOf<Pair<String, Int>>() // (propName, position)
+        for (sourceProp in sourceProps) {
+            val name = sourceProp.name
+            if (targetMembers[name] == null) {
+                // Find the position of this property in the object literal
+                val propNode = objLiteral.properties.firstOrNull { prop ->
+                    when (prop) {
+                        is PropertyAssignment -> (prop.name as? Identifier)?.text == name
+                                || (prop.name as? StringLiteralNode)?.text == name
+                        is ShorthandPropertyAssignment -> prop.name.text == name
+                        is MethodDeclaration -> (prop.name as? Identifier)?.text == name
+                        else -> false
+                    }
+                }
+                if (propNode != null) {
+                    val propPos = when (propNode) {
+                        is PropertyAssignment -> propNode.name.pos
+                        is ShorthandPropertyAssignment -> propNode.name.pos
+                        is MethodDeclaration -> propNode.name.pos
+                        else -> propNode.pos
+                    }
+                    excessProps.add(name to propPos)
+                }
+            }
+        }
+        if (excessProps.isEmpty()) return false
+        for ((propName, propPos) in excessProps) {
+            val (line, character) = getLineAndCharacterOfPosition(source, propPos)
+            diagnostics.add(Diagnostic(
+                message = "Object literal may only specify known properties, and '$propName' does not exist in type '$displayTarget'.",
+                category = DiagnosticCategory.Error,
+                code = 2353,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = propPos,
+                length = propName.length,
+            ))
         }
         return true
     }
