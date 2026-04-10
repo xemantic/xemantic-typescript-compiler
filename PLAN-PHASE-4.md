@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-10):** 8,026 / 10,077 tests passing (79.7%). Active queue: Phase 15.
+**Status (2026-04-10):** 8,027 / 10,077 tests passing (79.7%). Active queue: Phase 15.
 
 ## Goal
 
@@ -2382,35 +2382,13 @@ These remain deferred until their blockers are resolved:
 
 ---
 
-- [ ] **15.1. Parser FP reduction: TS1127 "Invalid character" (HIGH — ~50+ tests)**
-
-  We produce 104 TS1127 but only 20 are expected (net -84). Similar to 15.0 — these
-  cascade into broken ASTs and wrong JS emit.
-
-  **Likely patterns:**
-  - Unicode characters not handled by Scanner (BOM, zero-width chars, Unicode identifiers)
-  - Backtick in non-template contexts
-  - Hash (`#`) in non-private-field contexts
-  - Shebang lines (`#!/usr/bin/env node`)
-
-  **Approach:** Same as 15.0 — sample, categorize, fix by root cause.
-
-  **Files:** `Scanner.kt`, `Parser.kt`
-  **Expected gain:** ~50+ tests affected
+- [ ] **15.1. Parser FP reduction: TS1127 "Invalid character" (HIGH — ~50+ tests)** — INVESTIGATED: only 3 tests affected (not 50+), 0 would pass. All from binary/corrupted content (TransportStream.ts, corrupted.ts) where scanner reports each invalid byte individually vs TypeScript consolidating. Low ROI, SKIPPED.
 
 ---
 
-- [ ] **15.2. CJS destructuring assignment rewrite (MEDIUM — ~25 JS emit tests)**
+- [ ] **15.2. CJS destructuring assignment rewrite (MEDIUM — ~25 JS emit tests)** — INVESTIGATED: complex feature. Requires compound `exports.foo = exports.bar = val` chains, destructuring flattening with temp vars, and CJS-specific var hoisting before `Object.defineProperty`. Only 1 test found with simple diff (destructuringAssignmentWithExportedName); most need full rewrite infrastructure. DEFERRED.
 
-  In CJS module output, destructuring patterns like `let [a, b] = [1, 2]` with exported
-  bindings need to be rewritten to `var _a; _a = [1, 2], exports.a = _a[0], exports.b = _a[1]`.
-  Currently we emit `let [bar1] = [1]; exports.bar1 = bar1;` instead of the destructured form.
-
-  Also: `exports.foo = exports.exportedFoo = null` compound assignment patterns.
-
-  **Files:** `Transformer.kt` — `transformToCommonJS`
-  **Expected gain:** ~25 JS emit tests
-  **Unblocks:** CJS module correctness for downstream error baseline tests
+  **Side fix (15.2a):** Private field WeakMap var hoisting to function scope top — DONE (+1 test: privateNameWeakMapCollision)
 
 ---
 
