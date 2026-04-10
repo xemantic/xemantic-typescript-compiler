@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-10):** 8,025 / 10,077 tests passing (79.6%). Active queue: Phase 15.
+**Status (2026-04-10):** 8,026 / 10,077 tests passing (79.7%). Active queue: Phase 15.
 
 ## Goal
 
@@ -2362,30 +2362,23 @@ These remain deferred until their blockers are resolved:
 
 ---
 
-- [ ] **15.0. Parser FP reduction: TS1109 "Expression expected" (HIGH — ~100+ tests)**
+- [x] **15.0. Parser FP reduction: TS1109 "Expression expected" (HIGH — ~100+ tests)** — DONE (partial: +1 test, TS1109 FPs 223→171)
 
-  We produce 223 TS1109 but only 42 are expected (net -181). This is the single largest
-  source of false positive diagnostics. Every extra TS1109 pollutes the error baseline
-  and often cascades into wrong JS emit (parser produces broken AST → wrong output).
-
-  **Root cause analysis needed:** Sample 20+ tests where we produce TS1109 but shouldn't.
-  Likely patterns:
-  - Private fields (`#x`) at statement level misparse as hash → expression expected
-  - Decorator syntax (`@expr`) at class/member level
-  - Template literal tags
-  - `satisfies` / `as const` / newer syntax the parser doesn't handle
-  - Error recovery after missing tokens produces cascading TS1109
-
-  **Approach:**
-  1. Collect all positions where we emit TS1109 that TypeScript doesn't
-  2. Group by root cause (parser production rule)
-  3. Fix each category, testing for regressions between each fix
-  4. Each fix may also fix JS emit tests (broken AST → wrong output)
-
-  **Files:** `Parser.kt`, `Scanner.kt`
-  **Expected gain:** Reducing TS1109 FPs by even 50% would affect 90+ error baseline tests.
-  Many of these tests also have "correct" expected errors that we DO produce — the FP just
-  makes the overall baseline mismatch. So each FP removed is potentially a test fixed.
+  **Root cause analysis:**
+  - 52 FPs from JSDoc nullable types (`?string`, `string?`, `<?>`) — FIXED
+  - 46 FPs from arrow function error recovery cascading — remaining (risky to change)
+  - 73 FPs from various cascading errors (multi-file, property annotations, etc.) — remaining
+  - Only 35 tests had TS1109 FPs; 0 tests had ONLY TS1109 as the diff (all had other errors too)
+  
+  **Fix:** Added `?` error recovery in `parseNonUnionType()`:
+  - Leading `?`: consumed before primary type (JSDoc nullable prefix, e.g. `?string`)
+  - Bare `?` with no following type: returns `any` (JSDoc unknown, e.g. `<?>`)
+  - Trailing `?`: consumed with lookahead guard — only when next token is NOT a type-start
+    (prevents consuming conditional type `?`). Uses `isStartOfType(scanner.getToken())`
+    inside `lookAhead` to check scanner's token (NOT parser's cached `token` field).
+  
+  **Remaining patterns require:** parseSemicolon TS1005 improvements (global TS1005
+  causes 5 regressions per item 11.8), arrow function error recovery (delicate).
 
 ---
 
