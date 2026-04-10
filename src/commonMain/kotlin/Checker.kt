@@ -180,9 +180,9 @@ class Checker(
      *  Used by getTypeOfArrowFunction/getTypeOfFunctionExpression to infer parameter types. */
     private var contextualType: Type? = null
 
-    /** Synthetic global Array interface — used as target for `Type.Reference` in array types.
-     *  Avoids returning `anyType` for `T[]` / `Array<T>` type annotations. */
-    private val globalArrayType = Type.Interface().also {
+    /** Global Array interface — used as target for `Type.Reference` in array types.
+     *  Initialized from built-in lib during init; falls back to empty interface if not found. */
+    private var globalArrayType: Type.Interface = Type.Interface().also {
         it.symbol = Symbol(SymbolFlags.Interface, "Array")
     }
 
@@ -238,6 +238,13 @@ class Checker(
     init {
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, parseBuiltinLib())
+        // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
+        globals["Array"]?.let { arraySym ->
+            if (arraySym.flags.hasAny(SymbolFlags.Interface)) {
+                val arrayType = getDeclaredTypeOfClassOrInterface(arraySym)
+                globalArrayType = arrayType
+            }
+        }
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
             mergeSymbolTable(globals, result.locals)
@@ -13109,6 +13116,71 @@ interface Number {
 interface Boolean {
     valueOf(): boolean;
     toString(): string;
+}
+interface Array<T> {
+    length: number;
+    toString(): string;
+    toLocaleString(): string;
+    pop(): T | undefined;
+    push(...items: T[]): number;
+    concat(...items: T[]): T[];
+    join(separator?: string): string;
+    reverse(): T[];
+    shift(): T | undefined;
+    unshift(...items: T[]): number;
+    slice(start?: number, end?: number): T[];
+    sort(compareFn?: (a: T, b: T) => number): T[];
+    splice(start: number, deleteCount?: number): T[];
+    indexOf(searchElement: T, fromIndex?: number): number;
+    lastIndexOf(searchElement: T, fromIndex?: number): number;
+    every(predicate: (value: T, index: number, array: T[]) => unknown): boolean;
+    some(predicate: (value: T, index: number, array: T[]) => boolean): boolean;
+    forEach(callbackfn: (value: T, index: number, array: T[]) => void): void;
+    map(callbackfn: (value: T, index: number, array: T[]) => any): any[];
+    filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
+    reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    find(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
+    findIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
+    fill(value: T, start?: number, end?: number): T[];
+    copyWithin(target: number, start: number, end?: number): T[];
+    includes(searchElement: T, fromIndex?: number): boolean;
+    flat(): any[];
+    flatMap(callback: (value: T, index: number, array: T[]) => any): any[];
+    at(index: number): T | undefined;
+    findLast(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
+    findLastIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
+    keys(): any;
+    values(): any;
+    entries(): any;
+    [n: number]: T;
+}
+interface ReadonlyArray<T> {
+    readonly length: number;
+    toString(): string;
+    toLocaleString(): string;
+    concat(...items: T[]): T[];
+    join(separator?: string): string;
+    slice(start?: number, end?: number): T[];
+    indexOf(searchElement: T, fromIndex?: number): number;
+    lastIndexOf(searchElement: T, fromIndex?: number): number;
+    every(predicate: (value: T, index: number, array: T[]) => unknown): boolean;
+    some(predicate: (value: T, index: number, array: T[]) => boolean): boolean;
+    forEach(callbackfn: (value: T, index: number, array: T[]) => void): void;
+    map(callbackfn: (value: T, index: number, array: T[]) => any): any[];
+    filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
+    reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    find(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
+    findIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
+    includes(searchElement: T, fromIndex?: number): boolean;
+    flat(): any[];
+    flatMap(callback: (value: T, index: number, array: T[]) => any): any[];
+    at(index: number): T | undefined;
+    keys(): any;
+    values(): any;
+    entries(): any;
+    readonly [n: number]: T;
 }
 """.trimIndent()
     }
