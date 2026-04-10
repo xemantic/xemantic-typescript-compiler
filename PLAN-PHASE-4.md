@@ -2264,7 +2264,13 @@ getTypeOfPropertyAccess("hello".length):
 
   **Files:** embedded lib string
 
-- [ ] **14.10. Re-enable error baseline tests + measure impact**
+- [x] **14.10. Re-enable error baseline tests + measure impact** — ALREADY DONE (error tests already generated)
+
+  Error baseline tests were re-enabled in a previous session. They're part of the 10,077 total
+  test count. The built-in type declarations (14.0-14.9) produced zero direct test gains because
+  they only affect expression type inference via `getApparentType`, which is called by
+  `getTypeOfPropertyAccess`/`getTypeOfElementAccess` — not by the TS2339 diagnostic path
+  (which checks `objectType !is Type.Object` and returns early for primitives).
 
   Uncomment `.errors.txt` test generation in `build.gradle.kts` (search for
   "TODO: Re-enable when type checker is implemented").
