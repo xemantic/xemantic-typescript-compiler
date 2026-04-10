@@ -13360,6 +13360,103 @@ interface DateConstructor {
     now(): number;
 }
 declare var Date: DateConstructor;
+interface Math {
+    readonly E: number;
+    readonly LN10: number;
+    readonly LN2: number;
+    readonly LOG2E: number;
+    readonly LOG10E: number;
+    readonly PI: number;
+    readonly SQRT1_2: number;
+    readonly SQRT2: number;
+    abs(x: number): number;
+    acos(x: number): number;
+    asin(x: number): number;
+    atan(x: number): number;
+    atan2(y: number, x: number): number;
+    ceil(x: number): number;
+    cos(x: number): number;
+    exp(x: number): number;
+    floor(x: number): number;
+    log(x: number): number;
+    max(...values: number[]): number;
+    min(...values: number[]): number;
+    pow(x: number, y: number): number;
+    random(): number;
+    round(x: number): number;
+    sin(x: number): number;
+    sqrt(x: number): number;
+    tan(x: number): number;
+    clz32(x: number): number;
+    imul(x: number, y: number): number;
+    sign(x: number): number;
+    log10(x: number): number;
+    log2(x: number): number;
+    log1p(x: number): number;
+    expm1(x: number): number;
+    cosh(x: number): number;
+    sinh(x: number): number;
+    tanh(x: number): number;
+    acosh(x: number): number;
+    asinh(x: number): number;
+    atanh(x: number): number;
+    hypot(...values: number[]): number;
+    trunc(x: number): number;
+    fround(x: number): number;
+    cbrt(x: number): number;
+}
+declare var Math: Math;
+interface JSON {
+    parse(text: string, reviver?: any): any;
+    stringify(value: any, replacer?: any, space?: any): string;
+}
+declare var JSON: JSON;
+interface Console {
+    assert(condition?: boolean, ...data: any[]): void;
+    clear(): void;
+    count(label?: string): void;
+    countReset(label?: string): void;
+    debug(...data: any[]): void;
+    dir(item?: any, options?: any): void;
+    dirxml(...data: any[]): void;
+    error(...data: any[]): void;
+    group(...data: any[]): void;
+    groupCollapsed(...data: any[]): void;
+    groupEnd(): void;
+    info(...data: any[]): void;
+    log(...data: any[]): void;
+    table(tabularData?: any, properties?: string[]): void;
+    time(label?: string): void;
+    timeEnd(label?: string): void;
+    timeLog(label?: string, ...data: any[]): void;
+    trace(...data: any[]): void;
+    warn(...data: any[]): void;
+}
+declare var console: Console;
+interface Symbol {
+    toString(): string;
+    valueOf(): symbol;
+    readonly description: string;
+}
+interface SymbolConstructor {
+    readonly prototype: Symbol;
+    (description?: string): symbol;
+    for(key: string): symbol;
+    keyFor(sym: symbol): string;
+    readonly iterator: symbol;
+    readonly asyncIterator: symbol;
+    readonly hasInstance: symbol;
+    readonly isConcatSpreadable: symbol;
+    readonly match: symbol;
+    readonly replace: symbol;
+    readonly search: symbol;
+    readonly species: symbol;
+    readonly split: symbol;
+    readonly toPrimitive: symbol;
+    readonly toStringTag: symbol;
+    readonly unscopables: symbol;
+}
+declare var Symbol: SymbolConstructor;
 """.trimIndent()
     }
 
