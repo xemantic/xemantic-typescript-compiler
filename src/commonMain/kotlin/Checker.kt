@@ -13457,6 +13457,87 @@ interface SymbolConstructor {
     readonly unscopables: symbol;
 }
 declare var Symbol: SymbolConstructor;
+interface PromiseLike<T> {
+    then(onfulfilled?: (value: T) => any, onrejected?: (reason: any) => any): any;
+}
+interface Promise<T> {
+    then(onfulfilled?: (value: T) => any, onrejected?: (reason: any) => any): any;
+    catch(onrejected?: (reason: any) => any): any;
+    finally(onfinally?: () => void): any;
+}
+interface PromiseConstructor {
+    new(executor: (resolve: (value: any) => void, reject: (reason?: any) => void) => void): Promise<any>;
+    readonly prototype: Promise<any>;
+    all(values: any): any;
+    allSettled(values: any): any;
+    any(values: any): any;
+    race(values: any): any;
+    reject(reason?: any): any;
+    resolve(value?: any): any;
+}
+declare var Promise: PromiseConstructor;
+interface Map<K, V> {
+    clear(): void;
+    delete(key: K): boolean;
+    forEach(callbackfn: (value: V, key: K, map: Map<K, V>) => void): void;
+    get(key: K): V | undefined;
+    has(key: K): boolean;
+    set(key: K, value: V): Map<K, V>;
+    readonly size: number;
+    entries(): any;
+    keys(): any;
+    values(): any;
+}
+interface MapConstructor {
+    new(): Map<any, any>;
+    readonly prototype: Map<any, any>;
+}
+declare var Map: MapConstructor;
+interface Set<T> {
+    add(value: T): Set<T>;
+    clear(): void;
+    delete(value: T): boolean;
+    forEach(callbackfn: (value: T, value2: T, set: Set<T>) => void): void;
+    has(value: T): boolean;
+    readonly size: number;
+    entries(): any;
+    keys(): any;
+    values(): any;
+}
+interface SetConstructor {
+    new(): Set<any>;
+    readonly prototype: Set<any>;
+}
+declare var Set: SetConstructor;
+interface WeakMap<K extends object, V> {
+    delete(key: K): boolean;
+    get(key: K): V | undefined;
+    has(key: K): boolean;
+    set(key: K, value: V): WeakMap<K, V>;
+}
+interface WeakMapConstructor {
+    new(): WeakMap<object, any>;
+    readonly prototype: WeakMap<object, any>;
+}
+declare var WeakMap: WeakMapConstructor;
+interface WeakSet<T extends object> {
+    add(value: T): WeakSet<T>;
+    delete(value: T): boolean;
+    has(value: T): boolean;
+}
+interface WeakSetConstructor {
+    new(): WeakSet<object>;
+    readonly prototype: WeakSet<object>;
+}
+declare var WeakSet: WeakSetConstructor;
+interface WeakRef<T extends object> {
+    deref(): T | undefined;
+}
+interface WeakRefConstructor {
+    new(target: object): WeakRef<object>;
+    readonly prototype: WeakRef<object>;
+}
+declare var WeakRef: WeakRefConstructor;
 """.trimIndent()
     }
 
