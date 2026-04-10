@@ -2001,6 +2001,325 @@ parser error recovery leaks, enum initializer handling.
 
 ---
 
+## Phase 14 queue — Built-in Type Resolution (anyType Bottleneck)
+
+**Failure landscape:** Of 2,052 remaining failures, ~1,170 (57%) produce zero diagnostics because
+`getTypeOfExpression` returns `anyType` for most identifiers/expressions. The root causes:
+1. `getApparentType()` returns `anyType` for primitives (no String/Number/Boolean wrapper types)
+2. `globalArrayType` is an empty `Type.Interface` with no members
+3. No global namespace types (Math, JSON, console) are typed
+4. Built-in types only exist as names in `KNOWN_GLOBALS` (suppresses TS2304) with no type info
+
+**Strategy:** Embed a minimal lib declaration as a string constant, parse/bind during Checker init,
+merge symbols into globals. Wire `getApparentType()` to return wrapper types for primitives.
+This leverages ALL existing infrastructure (Parser, Binder, `resolveInterfaceMembers`, generic
+`resolveReferenceMembers`). Regression risk is low because `getApparentType` is only called
+from property/element access contexts (lines 27355, 27411), not from assignability comparisons.
+
+**Previous regression analysis:** Session 2026-04-08 attempted empty `Type.Interface` stubs for
+globals — caused 1040 regressions because empty interfaces activated `canUseTypeEngine`
+comparisons that failed structurally. The fix: **populate interfaces with actual members** so
+structural comparison succeeds for valid code. Also: wire through `getApparentType` only (not
+`getTypeOfIdentifier`), limiting the blast radius to property access paths.
+
+**Architecture:**
+```
+Checker init:
+  1. Parse embedded lib string → AST (InterfaceDeclaration nodes)
+  2. Bind AST → BinderResult with symbols (String, Number, Array<T>, etc.)
+  3. Merge symbols into globals BEFORE user file merge
+  4. Lazy cache: getGlobalType("String") → getDeclaredTypeOfClassOrInterface(sym)
+
+getApparentType(stringType):
+  → getGlobalType("String") → Type.Interface with populated members
+  → resolveInterfaceMembers() finds members from InterfaceDeclaration AST
+  → getPropertyOfType() returns real property symbols
+
+getTypeOfPropertyAccess("hello".length):
+  → getApparentType(stringType) → String interface
+  → getPropertyOfType(stringInterface, "length") → Symbol(Property, "length")
+  → getTypeOfSymbol(lengthSym) → numberType ✓
+```
+
+- [x] **14.0. Spike: regression characterization (ANALYSIS)** — DONE (0 regressions, 0 new passes)
+
+  **Results:**
+  - Regression count: **0** (8,025 passing before and after)
+  - New test passes: **0** (expected — minimal String stub only has `length`)
+  - Root cause: `getApparentType` only affects `getTypeOfPropertyAccess` and `getTypeOfElementAccess`.
+    The TS2339 diagnostic path resolves types from symbol tables, not via `getApparentType`.
+    So wiring apparent types is safe infrastructure that doesn't trigger new FPs.
+  - Guard strategy: **No guards needed** — merging built-in lib BEFORE user files is safe because
+    `mergeSymbolTable` additively merges (user `interface String {}` augments the built-in, not replaces).
+    The `getBuiltinWrapperType` helper lazily resolves and caches from globals.
+
+  **Implementation:**
+  - `parseBuiltinLib()`: parses `interface String { readonly length: number; }` via Parser+Binder
+  - Merged into globals before user file merge in `init {}`
+  - `getApparentType(stringType)` → resolves via `getBuiltinWrapperType("String")` → `getDeclaredTypeOfSymbol`
+  - Lazy caching in `stringWrapperType`/`numberWrapperType`/`booleanWrapperType` fields
+
+- [ ] **14.1. Full String wrapper type**
+
+  Expand the embedded lib String interface with ALL commonly-used members to avoid TS2339 FPs.
+  Apply any guards identified in 14.0.
+
+  Members (from lib.es5.d.ts + lib.es2015-2022):
+  `length`, `charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`,
+  `slice`, `substring`, `toLowerCase`, `toUpperCase`, `toLocaleLowerCase`,
+  `toLocaleUpperCase`, `trim`, `trimStart`, `trimEnd`, `padStart`, `padEnd`,
+  `repeat`, `split`, `replace`, `replaceAll`, `match`, `matchAll`, `search`,
+  `concat`, `includes`, `startsWith`, `endsWith`, `normalize`, `at`,
+  `toString`, `valueOf`, `localeCompare`, `[index: number]: string`
+
+  **Files:** embedded lib string in `Checker.kt`
+  **Expected gain:** TS2339 fires for non-existent properties on string values
+
+- [ ] **14.2. Number + Boolean wrapper types**
+
+  Add to embedded lib:
+  - `interface Number`: `toString`, `toFixed`, `toPrecision`, `valueOf`, `toLocaleString`
+  - `interface Boolean`: `valueOf`, `toString`
+
+  Wire `getApparentType(numberType)` → Number, `getApparentType(booleanType)` → Boolean.
+
+  **Files:** embedded lib string + `getApparentType`
+  **Expected gain:** property access on number/boolean resolves correctly
+
+- [ ] **14.3. Array\<T\> interface population**
+
+  This is the highest-complexity item. Replace empty `globalArrayType` with the resolved
+  type from the embedded lib. The `interface Array<T>` declaration must use a type parameter
+  that the existing `resolveReferenceMembers` + `createTypeMapper` infrastructure can instantiate.
+
+  Members: `length: number`, `toString(): string`, `toLocaleString(): string`,
+  `push(...items: T[]): number`, `pop(): T | undefined`, `concat(...items: T[][]): T[]`,
+  `join(separator?: string): string`, `reverse(): T[]`, `shift(): T | undefined`,
+  `unshift(...items: T[]): number`, `slice(start?: number, end?: number): T[]`,
+  `splice(start: number, deleteCount?: number, ...items: T[]): T[]`,
+  `indexOf(searchElement: T, fromIndex?: number): number`,
+  `lastIndexOf(searchElement: T, fromIndex?: number): number`,
+  `every(predicate: (value: T, index: number, array: T[]) => unknown): boolean`,
+  `some(predicate: (value: T, index: number, array: T[]) => boolean): boolean`,
+  `forEach(callbackfn: (value: T, index: number, array: T[]) => void): void`,
+  `map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[]`,
+  `filter(predicate: (value: T, index: number, array: T[]) => unknown): T[]`,
+  `reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T`,
+  `reduceRight(...)`, `find(...)`, `findIndex(...)`, `includes(searchElement: T): boolean`,
+  `sort(compareFn?: (a: T, b: T) => number): T[]`, `fill(value: T): T[]`,
+  `flat()`, `flatMap()`, `copyWithin(...)`, `entries()`, `keys()`, `values()`,
+  `at(index: number): T | undefined`, `findLast(...)`, `findLastIndex(...)`,
+  `[n: number]: T` (number index signature)
+
+  Also add `interface ReadonlyArray<T>` (same but without mutating methods: no push/pop/shift/
+  unshift/splice/sort/reverse/fill/copyWithin).
+
+  **Implementation notes:**
+  - Wire `globalArrayType` to use the resolved Array interface from globals
+  - Ensure `Type.Reference(globalArrayType, [stringType])` still instantiates correctly
+  - The existing `resolveReferenceMembers` creates type mapper from typeParameters→typeArguments
+  - Test: `[1,2,3].length` resolves to `number`, `[1,2,3].push("x")` checks arg type
+
+  **Files:** embedded lib string, `Checker.kt` globalArrayType wiring
+  **Risk:** MEDIUM — generics add complexity; verify instantiation works
+
+- [ ] **14.4. Object + Function types**
+
+  Object prototype (apparent type for all objects):
+  `interface Object`: `constructor`, `toString(): string`, `valueOf(): Object`,
+  `hasOwnProperty(v: string): boolean`, `isPrototypeOf(v: Object): boolean`,
+  `propertyIsEnumerable(v: string): boolean`, `toLocaleString(): string`
+
+  Static Object (constructor type):
+  `interface ObjectConstructor`: `new(value?: any): Object`,
+  `keys(o: object): string[]`, `values(o: any): any[]`, `entries(o: any): [string, any][]`,
+  `assign(target: any, ...sources: any[]): any`, `create(o: object | null): any`,
+  `defineProperty(o: any, p: string, attributes: any): any`,
+  `freeze<T>(o: T): Readonly<T>`, `getOwnPropertyNames(o: any): string[]`,
+  `getPrototypeOf(o: any): any`, `is(value1: any, value2: any): boolean`,
+  `fromEntries(entries: Iterable<readonly [string, any]>): any`
+  + `declare var Object: ObjectConstructor`
+
+  `interface Function`: `apply(thisArg: any, argArray?: any): any`,
+  `call(thisArg: any, ...argArray: any[]): any`,
+  `bind(thisArg: any, ...argArray: any[]): any`,
+  `length: number`, `name: string`, `prototype: any`, `toString(): string`
+  + `interface FunctionConstructor` + `declare var Function: FunctionConstructor`
+
+  **Files:** embedded lib string
+  **Risk:** LOW — straightforward interface definitions
+
+- [ ] **14.5. Error + RegExp + Date types**
+
+  `interface Error`: `name: string`, `message: string`, `stack?: string`
+  + `interface ErrorConstructor` + subclasses: `TypeError`, `RangeError`, `ReferenceError`,
+  `SyntaxError`, `URIError`, `EvalError` (all extend Error)
+
+  `interface RegExp`: `exec(string: string): RegExpExecArray | null`,
+  `test(string: string): boolean`, `source: string`, `flags: string`,
+  `global: boolean`, `ignoreCase: boolean`, `multiline: boolean`,
+  `lastIndex: number`, `toString(): string`, `dotAll: boolean`, `sticky: boolean`
+  + `interface RegExpConstructor` + `declare var RegExp: RegExpConstructor`
+
+  `interface Date`: `getTime(): number`, `getFullYear(): number`, `getMonth(): number`,
+  `getDate(): number`, `getDay(): number`, `getHours(): number`, `getMinutes(): number`,
+  `getSeconds(): number`, `getMilliseconds(): number`, `toISOString(): string`,
+  `toJSON(): string`, `toString(): string`, `valueOf(): number`,
+  `toLocaleDateString(): string`, `toLocaleTimeString(): string`,
+  `toLocaleString(): string`, `toUTCString(): string`
+  + `interface DateConstructor` with `now(): number`, `parse(s: string): number`
+  + `declare var Date: DateConstructor`
+
+  `interface RegExpExecArray extends Array<string>`: `index: number`, `input: string`
+
+  **Files:** embedded lib string
+
+- [ ] **14.6. Math + JSON + console + Symbol globals**
+
+  `interface Math` (not a constructor — singleton namespace):
+  `abs`, `ceil`, `floor`, `round`, `min`, `max`, `pow`, `sqrt`, `log`, `log2`, `log10`,
+  `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `sign`, `trunc`,
+  `hypot`, `cbrt`, `fround`, `clz32`, `imul`, `random`,
+  `PI`, `E`, `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT2`, `SQRT1_2`
+  + `declare var Math: Math`
+
+  `interface JSON`: `parse(text: string, reviver?: any): any`,
+  `stringify(value: any, replacer?: any, space?: any): string`
+  + `declare var JSON: JSON`
+
+  `interface Console`: `log`, `error`, `warn`, `info`, `debug`, `dir`, `trace`,
+  `assert`, `time`, `timeEnd`, `timeLog`, `clear`, `count`, `countReset`,
+  `group`, `groupEnd`, `groupCollapsed`, `table`
+  + `declare var console: Console`
+
+  `interface Symbol`: `toString(): string`, `valueOf(): symbol`, `description?: string`
+  + `interface SymbolConstructor`: `(description?: string): symbol`,
+  `for(key: string): symbol`, `keyFor(sym: symbol): string | undefined`,
+  `iterator: symbol`, `asyncIterator: symbol`, `hasInstance: symbol`,
+  `toPrimitive: symbol`, `toStringTag: symbol`
+  + `declare var Symbol: SymbolConstructor`
+
+  **Files:** embedded lib string
+
+- [ ] **14.7. Promise\<T\> + Collection types**
+
+  `interface Promise<T>`:
+  `then<TResult1, TResult2>(onfulfilled?: (value: T) => TResult1, onrejected?: (reason: any) => TResult2): Promise<TResult1 | TResult2>`,
+  `catch<TResult>(onrejected?: (reason: any) => TResult): Promise<T | TResult>`,
+  `finally(onfinally?: () => void): Promise<T>`
+  + `interface PromiseConstructor`:
+  `new <T>(executor: (resolve: (value: T) => void, reject: (reason?: any) => void) => void): Promise<T>`,
+  `resolve<T>(value: T): Promise<T>`, `reject<T>(reason?: any): Promise<T>`,
+  `all<T>(values: Iterable<T | PromiseLike<T>>): Promise<T[]>`,
+  `race<T>(values: Iterable<T | PromiseLike<T>>): Promise<T>`,
+  `allSettled<T>(values: Iterable<T | PromiseLike<T>>): Promise<PromiseSettledResult<T>[]>`,
+  `any<T>(values: Iterable<T | PromiseLike<T>>): Promise<T>`
+  + `declare var Promise: PromiseConstructor`
+  + `interface PromiseLike<T>`: `then(...)`
+
+  `interface Map<K, V>`: `get`, `set`, `has`, `delete`, `clear`, `size`,
+  `forEach`, `keys`, `values`, `entries`
+  + `interface MapConstructor` + `declare var Map: MapConstructor`
+
+  `interface Set<T>`: `add`, `has`, `delete`, `clear`, `size`,
+  `forEach`, `keys`, `values`, `entries`
+  + `interface SetConstructor` + `declare var Set: SetConstructor`
+
+  `interface WeakMap<K extends object, V>`: `get`, `set`, `has`, `delete`
+  + `interface WeakSet<T extends object>`: `add`, `has`, `delete`
+  + constructors + `declare var` for each
+
+  **Files:** embedded lib string
+
+- [ ] **14.8. Iterator/Iterable protocol + ArrayLike + IArguments**
+
+  `interface Iterable<T>`: `[Symbol.iterator](): Iterator<T>`
+  `interface Iterator<T, TReturn = any, TNext = any>`: `next(value?: TNext): IteratorResult<T, TReturn>`, `return?(value?: TReturn): IteratorResult<T, TReturn>`, `throw?(e?: any): IteratorResult<T, TReturn>`
+  `interface IteratorYieldResult<TYield>`: `done: false`, `value: TYield`
+  `interface IteratorReturnResult<TReturn>`: `done: true`, `value: TReturn`
+  `type IteratorResult<T, TReturn = any> = IteratorYieldResult<T> | IteratorReturnResult<TReturn>`
+  `interface IterableIterator<T> extends Iterator<T>`: `[Symbol.iterator](): IterableIterator<T>`
+
+  `interface ArrayLike<T>`: `readonly length: number`, `readonly [n: number]: T`
+  `interface IArguments`: `[index: number]: any`, `length: number`, `callee: Function`
+
+  `interface AsyncIterable<T>`: `[Symbol.asyncIterator](): AsyncIterator<T>`
+  `interface AsyncIterator<T>`: `next(value?: any): Promise<IteratorResult<T>>`
+  `interface AsyncIterableIterator<T>`: extends both
+
+  `interface Generator<T, TReturn, TNext> extends IterableIterator<T>`: `next`, `return`, `throw`
+  `interface AsyncGenerator<T, TReturn, TNext>`: same for async
+
+  **Files:** embedded lib string
+  **Note:** `[Symbol.iterator]` syntax may need parser support for computed property names
+  with well-known symbols. If problematic, use `"@@iterator"` internal convention.
+
+- [ ] **14.9. Utility types (type aliases) + TypedArrays**
+
+  Utility types — these are type aliases requiring conditional/mapped type evaluation.
+  If the type alias infrastructure is not ready, register them as `any` to suppress TS2304:
+  `Partial<T>`, `Required<T>`, `Readonly<T>`, `Record<K, V>`, `Pick<T, K>`,
+  `Omit<T, K>`, `Exclude<T, U>`, `Extract<T, U>`, `NonNullable<T>`,
+  `ReturnType<T>`, `InstanceType<T>`, `Parameters<T>`, `ConstructorParameters<T>`,
+  `ThisParameterType<T>`, `OmitThisParameter<T>`, `ThisType<T>`
+
+  TypedArray interfaces (all share same shape):
+  `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
+  `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`,
+  `BigInt64Array`, `BigUint64Array`
+  Each with: `length`, `[index: number]`, `buffer`, `byteLength`, `byteOffset`,
+  `set`, `subarray`, `slice`, `copyWithin`, `every`, `some`, `forEach`, `map`,
+  `filter`, `reduce`, `find`, `findIndex`, `indexOf`, `includes`, `sort`, `fill`,
+  `join`, `reverse`, `entries`, `keys`, `values`, `at`
+
+  **Files:** embedded lib string
+
+- [ ] **14.10. Re-enable error baseline tests + measure impact**
+
+  Uncomment `.errors.txt` test generation in `build.gradle.kts` (search for
+  "TODO: Re-enable when type checker is implemented").
+
+  Run full suite. Measure:
+  - Total test count increase (expected: +~9,055 tests)
+  - How many new tests pass with built-in types
+  - Most common missing error codes
+  - Gap analysis: what infrastructure is still needed
+
+  **Deliverable:** Updated test counts, categorized gap analysis, updated PLAN section.
+  **File:** `build.gradle.kts`
+
+- [ ] **14.11. canUseTypeEngine expansion for built-in interfaces**
+
+  Based on 14.10 analysis, carefully expand `canUseTypeEngine` to allow comparisons
+  involving built-in types:
+  1. Built-in interface → primitive (String not assignable to number)
+  2. Primitive → built-in interface (string vs String wrapper)
+  3. `Type.Reference(Array)` → `Type.Reference(Array)` (element type comparison)
+  4. Any type → built-in interface target (structural comparison with known members)
+
+  Each expansion tested individually for regressions. Use a flag like
+  `isPopulatedBuiltinInterface(type)` to distinguish fully-populated built-in
+  interfaces from user-defined or empty interfaces.
+
+  **File:** `Checker.kt` — canUseTypeEngine
+  **Risk:** HIGH — this is where the 1040-regression attempt failed. Must be incremental.
+
+- [ ] **14.12. Expression type inference improvements**
+
+  Improve `getTypeOfExpression` beyond identifier resolution:
+  - Array literals `[1, 2, 3]` → `number[]` (widened union of element types)
+  - Object literals `{ a: 1, b: "x" }` → `{ a: number; b: string }` (anonymous Type.Object)
+  - Template literals `` `hello ${x}` `` → `string`
+  - Conditional expressions `cond ? a : b` → union of branch types
+  - `typeof x` in value position → `string` (the typeof operator always returns string)
+  - `new Foo()` → instance type of Foo's construct signatures
+  - `fn()` return type from resolved call signatures (already partially implemented)
+
+  **File:** `Checker.kt` — getTypeOfExpression
+  **Expected gain:** enables TS2322 for more source expressions
+
+---
+
 ## Previously deferred items (from Phase 4b)
 
 These remain deferred until their blockers are resolved:
