@@ -13231,6 +13231,135 @@ interface FunctionConstructor {
     readonly prototype: Function;
 }
 declare var Function: FunctionConstructor;
+interface Error {
+    name: string;
+    message: string;
+    stack?: string;
+}
+interface ErrorConstructor {
+    new(message?: string): Error;
+    (message?: string): Error;
+    readonly prototype: Error;
+}
+declare var Error: ErrorConstructor;
+interface EvalError extends Error { }
+interface EvalErrorConstructor extends ErrorConstructor {
+    new(message?: string): EvalError;
+    (message?: string): EvalError;
+    readonly prototype: EvalError;
+}
+declare var EvalError: EvalErrorConstructor;
+interface RangeError extends Error { }
+interface RangeErrorConstructor extends ErrorConstructor {
+    new(message?: string): RangeError;
+    (message?: string): RangeError;
+    readonly prototype: RangeError;
+}
+declare var RangeError: RangeErrorConstructor;
+interface ReferenceError extends Error { }
+interface ReferenceErrorConstructor extends ErrorConstructor {
+    new(message?: string): ReferenceError;
+    (message?: string): ReferenceError;
+    readonly prototype: ReferenceError;
+}
+declare var ReferenceError: ReferenceErrorConstructor;
+interface SyntaxError extends Error { }
+interface SyntaxErrorConstructor extends ErrorConstructor {
+    new(message?: string): SyntaxError;
+    (message?: string): SyntaxError;
+    readonly prototype: SyntaxError;
+}
+declare var SyntaxError: SyntaxErrorConstructor;
+interface TypeError extends Error { }
+interface TypeErrorConstructor extends ErrorConstructor {
+    new(message?: string): TypeError;
+    (message?: string): TypeError;
+    readonly prototype: TypeError;
+}
+declare var TypeError: TypeErrorConstructor;
+interface URIError extends Error { }
+interface URIErrorConstructor extends ErrorConstructor {
+    new(message?: string): URIError;
+    (message?: string): URIError;
+    readonly prototype: URIError;
+}
+declare var URIError: URIErrorConstructor;
+interface RegExp {
+    exec(string: string): any;
+    test(string: string): boolean;
+    source: string;
+    global: boolean;
+    ignoreCase: boolean;
+    multiline: boolean;
+    lastIndex: number;
+    flags: string;
+    dotAll: boolean;
+    sticky: boolean;
+    unicode: boolean;
+    toString(): string;
+}
+interface RegExpConstructor {
+    new(pattern: string, flags?: string): RegExp;
+    (pattern: string, flags?: string): RegExp;
+    readonly prototype: RegExp;
+}
+declare var RegExp: RegExpConstructor;
+interface Date {
+    toString(): string;
+    toDateString(): string;
+    toTimeString(): string;
+    toLocaleString(): string;
+    toLocaleDateString(): string;
+    toLocaleTimeString(): string;
+    valueOf(): number;
+    getTime(): number;
+    getFullYear(): number;
+    getUTCFullYear(): number;
+    getMonth(): number;
+    getUTCMonth(): number;
+    getDate(): number;
+    getUTCDate(): number;
+    getDay(): number;
+    getUTCDay(): number;
+    getHours(): number;
+    getUTCHours(): number;
+    getMinutes(): number;
+    getUTCMinutes(): number;
+    getSeconds(): number;
+    getUTCSeconds(): number;
+    getMilliseconds(): number;
+    getUTCMilliseconds(): number;
+    getTimezoneOffset(): number;
+    setTime(time: number): number;
+    setMilliseconds(ms: number): number;
+    setUTCMilliseconds(ms: number): number;
+    setSeconds(sec: number, ms?: number): number;
+    setUTCSeconds(sec: number, ms?: number): number;
+    setMinutes(min: number, sec?: number, ms?: number): number;
+    setUTCMinutes(min: number, sec?: number, ms?: number): number;
+    setHours(hour: number, min?: number, sec?: number, ms?: number): number;
+    setUTCHours(hour: number, min?: number, sec?: number, ms?: number): number;
+    setDate(date: number): number;
+    setUTCDate(date: number): number;
+    setMonth(month: number, date?: number): number;
+    setUTCMonth(month: number, date?: number): number;
+    setFullYear(year: number, month?: number, date?: number): number;
+    setUTCFullYear(year: number, month?: number, date?: number): number;
+    toUTCString(): string;
+    toISOString(): string;
+    toJSON(key?: any): string;
+}
+interface DateConstructor {
+    new(): Date;
+    new(value: number): Date;
+    new(value: string): Date;
+    (): string;
+    readonly prototype: Date;
+    parse(s: string): number;
+    UTC(year: number, month: number, date?: number, hours?: number, minutes?: number, seconds?: number, ms?: number): number;
+    now(): number;
+}
+declare var Date: DateConstructor;
 """.trimIndent()
     }
 
