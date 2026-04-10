@@ -230,11 +230,7 @@ class Checker(
      * can augment/override them (matching TypeScript's behavior).
      */
     private fun parseBuiltinLib(): SymbolTable {
-        val source = """
-interface String {
-    readonly length: number;
-}
-""".trimIndent()
+        val source = BUILTIN_LIB_SOURCE
         val ast = Parser(source, "lib.builtin.d.ts").parse()
         return Binder(options).bind(ast).locals
     }
@@ -13057,6 +13053,64 @@ interface String {
             "ProxyHandler" to (1 to "ProxyHandler<T>"),
             "FinalizationRegistry" to (1 to "FinalizationRegistry<T>"),
         )
+
+        /**
+         * Embedded minimal lib.d.ts declarations for primitive wrapper types.
+         * Parsed and bound at Checker init, merged into globals before user files.
+         * Provides apparent types so that property access on primitives resolves correctly
+         * (e.g., `"foo".length` → number, `(42).toFixed()` → string).
+         */
+        private val BUILTIN_LIB_SOURCE = """
+interface String {
+    toString(): string;
+    charAt(pos: number): string;
+    charCodeAt(index: number): number;
+    concat(...strings: string[]): string;
+    indexOf(searchString: string, position?: number): number;
+    lastIndexOf(searchString: string, position?: number): number;
+    localeCompare(that: string): number;
+    match(regexp: string): any;
+    replace(searchValue: string, replaceValue: string): string;
+    search(regexp: string): number;
+    slice(start?: number, end?: number): string;
+    split(separator: string, limit?: number): string[];
+    substring(start: number, end?: number): string;
+    toLowerCase(): string;
+    toLocaleLowerCase(): string;
+    toUpperCase(): string;
+    toLocaleUpperCase(): string;
+    trim(): string;
+    readonly length: number;
+    substr(from: number, length?: number): string;
+    valueOf(): string;
+    codePointAt(pos: number): number;
+    includes(searchString: string, position?: number): boolean;
+    endsWith(searchString: string, endPosition?: number): boolean;
+    normalize(form?: string): string;
+    repeat(count: number): string;
+    startsWith(searchString: string, position?: number): boolean;
+    at(index: number): string;
+    padStart(maxLength: number, fillString?: string): string;
+    padEnd(maxLength: number, fillString?: string): string;
+    trimStart(): string;
+    trimEnd(): string;
+    matchAll(regexp: any): any;
+    replaceAll(searchValue: string, replaceValue: string): string;
+    [index: number]: string;
+}
+interface Number {
+    toString(radix?: number): string;
+    toFixed(fractionDigits?: number): string;
+    toExponential(fractionDigits?: number): string;
+    toPrecision(precision?: number): string;
+    valueOf(): number;
+    toLocaleString(): string;
+}
+interface Boolean {
+    valueOf(): boolean;
+    toString(): string;
+}
+""".trimIndent()
     }
 
     // -----------------------------------------------------------------------
@@ -27517,8 +27571,8 @@ interface String {
         return when {
             type is Type.TypeParam -> type.constraint?.let { getApparentType(it) } ?: anyType
             type.flags.hasAny(TypeFlags.StringLike) -> getBuiltinWrapperType("String") { stringWrapperType } ?.also { stringWrapperType = it } ?: anyType
-            type.flags.hasAny(TypeFlags.NumberLike) -> anyType // TODO: Number wrapper type
-            type.flags.hasAny(TypeFlags.BooleanLike) -> anyType // TODO: Boolean wrapper type
+            type.flags.hasAny(TypeFlags.NumberLike) -> getBuiltinWrapperType("Number") { numberWrapperType } ?.also { numberWrapperType = it } ?: anyType
+            type.flags.hasAny(TypeFlags.BooleanLike) -> getBuiltinWrapperType("Boolean") { booleanWrapperType } ?.also { booleanWrapperType = it } ?: anyType
             else -> type
         }
     }
