@@ -13182,6 +13182,55 @@ interface ReadonlyArray<T> {
     entries(): any;
     readonly [n: number]: T;
 }
+interface Object {
+    constructor: Function;
+    toString(): string;
+    toLocaleString(): string;
+    valueOf(): Object;
+    hasOwnProperty(v: string): boolean;
+    isPrototypeOf(v: Object): boolean;
+    propertyIsEnumerable(v: string): boolean;
+}
+interface ObjectConstructor {
+    new(value?: any): Object;
+    (value?: any): any;
+    readonly prototype: Object;
+    getPrototypeOf(o: any): any;
+    getOwnPropertyNames(o: any): string[];
+    create(o: any, properties?: any): any;
+    defineProperty(o: any, p: string, attributes: any): any;
+    defineProperties(o: any, properties: any): any;
+    seal(o: any): any;
+    freeze(o: any): any;
+    preventExtensions(o: any): any;
+    isSealed(o: any): boolean;
+    isFrozen(o: any): boolean;
+    isExtensible(o: any): boolean;
+    keys(o: any): string[];
+    assign(target: any, source: any): any;
+    values(o: any): any[];
+    entries(o: any): any[];
+    fromEntries(entries: any): any;
+    is(value1: any, value2: any): boolean;
+}
+declare var Object: ObjectConstructor;
+interface Function {
+    apply(thisArg: any, argArray?: any): any;
+    call(thisArg: any, ...argArray: any[]): any;
+    bind(thisArg: any, ...argArray: any[]): any;
+    toString(): string;
+    prototype: any;
+    readonly length: number;
+    arguments: any;
+    caller: Function;
+    readonly name: string;
+}
+interface FunctionConstructor {
+    new(...args: string[]): Function;
+    (...args: string[]): Function;
+    readonly prototype: Function;
+}
+declare var Function: FunctionConstructor;
 """.trimIndent()
     }
 
