@@ -489,10 +489,10 @@ fun formatErrorBaseline(
                 +lineContent
                 +"\r\n"
 
-                // Find diagnostics starting on this line, sorted by column then code
+                // Find diagnostics starting on this line, sorted by column, then length (shorter first), then code
                 val lineDiags = fileDiags
                     .filter { it.line == lineNum }
-                    .sortedWith(compareBy({ it.character ?: 0 }, { it.code }))
+                    .sortedWith(compareBy({ it.character ?: 0 }, { it.length ?: 0 }, { it.code }))
 
                 for (diag in lineDiags) {
                     val col = ((diag.character ?: 1) - 1).coerceAtLeast(0) // convert to 0-based
