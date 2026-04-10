@@ -2059,34 +2059,24 @@ getTypeOfPropertyAccess("hello".length):
   - `getApparentType(stringType)` → resolves via `getBuiltinWrapperType("String")` → `getDeclaredTypeOfSymbol`
   - Lazy caching in `stringWrapperType`/`numberWrapperType`/`booleanWrapperType` fields
 
-- [ ] **14.1. Full String wrapper type**
+- [x] **14.1. Full String wrapper type** — DONE (0 regressions, infrastructure)
 
-  Expand the embedded lib String interface with ALL commonly-used members to avoid TS2339 FPs.
-  Apply any guards identified in 14.0.
+  Added 40+ String methods (ES5+ES2015-2022): charAt, charCodeAt, concat, indexOf, lastIndexOf,
+  slice, substring, toLowerCase, toUpperCase, trim, trimStart, trimEnd, padStart, padEnd,
+  repeat, split, replace, replaceAll, match, matchAll, search, includes, startsWith, endsWith,
+  normalize, at, codePointAt, localeCompare, substr, valueOf, toString, `[index: number]: string`
 
-  Members (from lib.es5.d.ts + lib.es2015-2022):
-  `length`, `charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`,
-  `slice`, `substring`, `toLowerCase`, `toUpperCase`, `toLocaleLowerCase`,
-  `toLocaleUpperCase`, `trim`, `trimStart`, `trimEnd`, `padStart`, `padEnd`,
-  `repeat`, `split`, `replace`, `replaceAll`, `match`, `matchAll`, `search`,
-  `concat`, `includes`, `startsWith`, `endsWith`, `normalize`, `at`,
-  `toString`, `valueOf`, `localeCompare`, `[index: number]: string`
+- [x] **14.2. Number + Boolean wrapper types** — DONE (0 regressions, infrastructure)
 
-  **Files:** embedded lib string in `Checker.kt`
-  **Expected gain:** TS2339 fires for non-existent properties on string values
-
-- [ ] **14.2. Number + Boolean wrapper types**
-
-  Add to embedded lib:
-  - `interface Number`: `toString`, `toFixed`, `toPrecision`, `valueOf`, `toLocaleString`
-  - `interface Boolean`: `valueOf`, `toString`
+  Added Number (toString, toFixed, toExponential, toPrecision, valueOf, toLocaleString)
+  and Boolean (valueOf, toString). Wired getApparentType for all three primitives.
 
   Wire `getApparentType(numberType)` → Number, `getApparentType(booleanType)` → Boolean.
 
   **Files:** embedded lib string + `getApparentType`
   **Expected gain:** property access on number/boolean resolves correctly
 
-- [ ] **14.3. Array\<T\> interface population**
+- [x] **14.3. Array\<T\> interface population** — DONE (0 regressions, infrastructure)
 
   This is the highest-complexity item. Replace empty `globalArrayType` with the resolved
   type from the embedded lib. The `interface Array<T>` declaration must use a type parameter
@@ -2123,7 +2113,7 @@ getTypeOfPropertyAccess("hello".length):
   **Files:** embedded lib string, `Checker.kt` globalArrayType wiring
   **Risk:** MEDIUM — generics add complexity; verify instantiation works
 
-- [ ] **14.4. Object + Function types**
+- [x] **14.4. Object + Function types** — DONE (0 regressions, infrastructure)
 
   Object prototype (apparent type for all objects):
   `interface Object`: `constructor`, `toString(): string`, `valueOf(): Object`,
@@ -2149,7 +2139,7 @@ getTypeOfPropertyAccess("hello".length):
   **Files:** embedded lib string
   **Risk:** LOW — straightforward interface definitions
 
-- [ ] **14.5. Error + RegExp + Date types**
+- [x] **14.5. Error + RegExp + Date types** — DONE (0 regressions, infrastructure)
 
   `interface Error`: `name: string`, `message: string`, `stack?: string`
   + `interface ErrorConstructor` + subclasses: `TypeError`, `RangeError`, `ReferenceError`,
@@ -2174,7 +2164,7 @@ getTypeOfPropertyAccess("hello".length):
 
   **Files:** embedded lib string
 
-- [ ] **14.6. Math + JSON + console + Symbol globals**
+- [x] **14.6. Math + JSON + console + Symbol globals** — DONE (0 regressions, infrastructure)
 
   `interface Math` (not a constructor — singleton namespace):
   `abs`, `ceil`, `floor`, `round`, `min`, `max`, `pow`, `sqrt`, `log`, `log2`, `log10`,
@@ -2201,7 +2191,7 @@ getTypeOfPropertyAccess("hello".length):
 
   **Files:** embedded lib string
 
-- [ ] **14.7. Promise\<T\> + Collection types**
+- [x] **14.7. Promise\<T\> + Collection types** — DONE (0 regressions, infrastructure)
 
   `interface Promise<T>`:
   `then<TResult1, TResult2>(onfulfilled?: (value: T) => TResult1, onrejected?: (reason: any) => TResult2): Promise<TResult1 | TResult2>`,
@@ -2231,7 +2221,7 @@ getTypeOfPropertyAccess("hello".length):
 
   **Files:** embedded lib string
 
-- [ ] **14.8. Iterator/Iterable protocol + ArrayLike + IArguments**
+- [x] **14.8. Iterator/Iterable protocol + ArrayLike** — DONE (0 regressions; IArguments omitted — causes TS2552 regression)
 
   `interface Iterable<T>`: `[Symbol.iterator](): Iterator<T>`
   `interface Iterator<T, TReturn = any, TNext = any>`: `next(value?: TNext): IteratorResult<T, TReturn>`, `return?(value?: TReturn): IteratorResult<T, TReturn>`, `throw?(e?: any): IteratorResult<T, TReturn>`
@@ -2254,7 +2244,7 @@ getTypeOfPropertyAccess("hello".length):
   **Note:** `[Symbol.iterator]` syntax may need parser support for computed property names
   with well-known symbols. If problematic, use `"@@iterator"` internal convention.
 
-- [ ] **14.9. Utility types (type aliases) + TypedArrays**
+- [x] **14.9. TypedArrays + ArrayBuffer + DataView** — DONE (0 regressions; utility type aliases skipped — already in KNOWN_GLOBALS/BUILTIN_GENERICS)
 
   Utility types — these are type aliases requiring conditional/mapped type evaluation.
   If the type alias infrastructure is not ready, register them as `any` to suppress TS2304:
