@@ -13566,6 +13566,169 @@ interface AsyncGenerator<T, TReturn, TNext> {
     return(value?: any): any;
     throw(e?: any): any;
 }
+interface Int8Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    copyWithin(target: number, start: number, end?: number): Int8Array;
+    every(predicate: (value: number, index: number, array: Int8Array) => unknown): boolean;
+    fill(value: number, start?: number, end?: number): Int8Array;
+    filter(predicate: (value: number, index: number, array: Int8Array) => any): Int8Array;
+    find(predicate: (value: number, index: number, obj: Int8Array) => boolean): number;
+    findIndex(predicate: (value: number, index: number, obj: Int8Array) => boolean): number;
+    forEach(callbackfn: (value: number, index: number, array: Int8Array) => void): void;
+    includes(searchElement: number, fromIndex?: number): boolean;
+    indexOf(searchElement: number, fromIndex?: number): number;
+    join(separator?: string): string;
+    lastIndexOf(searchElement: number, fromIndex?: number): number;
+    map(callbackfn: (value: number, index: number, array: Int8Array) => number): Int8Array;
+    reduce(callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: Int8Array) => number): number;
+    reverse(): Int8Array;
+    set(array: any, offset?: number): void;
+    slice(start?: number, end?: number): Int8Array;
+    some(predicate: (value: number, index: number, array: Int8Array) => unknown): boolean;
+    sort(compareFn?: (a: number, b: number) => number): Int8Array;
+    subarray(begin?: number, end?: number): Int8Array;
+    toLocaleString(): string;
+    toString(): string;
+    valueOf(): Int8Array;
+    at(index: number): number;
+    [index: number]: number;
+}
+interface Uint8Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+    copyWithin(target: number, start: number, end?: number): Uint8Array;
+    every(predicate: (value: number, index: number, array: Uint8Array) => unknown): boolean;
+    fill(value: number, start?: number, end?: number): Uint8Array;
+    filter(predicate: (value: number, index: number, array: Uint8Array) => any): Uint8Array;
+    find(predicate: (value: number, index: number, obj: Uint8Array) => boolean): number;
+    findIndex(predicate: (value: number, index: number, obj: Uint8Array) => boolean): number;
+    forEach(callbackfn: (value: number, index: number, array: Uint8Array) => void): void;
+    includes(searchElement: number, fromIndex?: number): boolean;
+    indexOf(searchElement: number, fromIndex?: number): number;
+    join(separator?: string): string;
+    lastIndexOf(searchElement: number, fromIndex?: number): number;
+    map(callbackfn: (value: number, index: number, array: Uint8Array) => number): Uint8Array;
+    reduce(callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: Uint8Array) => number): number;
+    reverse(): Uint8Array;
+    set(array: any, offset?: number): void;
+    slice(start?: number, end?: number): Uint8Array;
+    some(predicate: (value: number, index: number, array: Uint8Array) => unknown): boolean;
+    sort(compareFn?: (a: number, b: number) => number): Uint8Array;
+    subarray(begin?: number, end?: number): Uint8Array;
+    toLocaleString(): string;
+    toString(): string;
+    valueOf(): Uint8Array;
+}
+interface Uint8ClampedArray {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface Int16Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface Uint16Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface Int32Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface Uint32Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface Float32Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface Float64Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: number;
+    at(index: number): number;
+}
+interface BigInt64Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: bigint;
+    at(index: number): bigint;
+}
+interface BigUint64Array {
+    readonly length: number;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    readonly buffer: ArrayBuffer;
+    [index: number]: bigint;
+    at(index: number): bigint;
+}
+interface ArrayBuffer {
+    readonly byteLength: number;
+    slice(begin: number, end?: number): ArrayBuffer;
+}
+interface ArrayBufferConstructor {
+    new(byteLength: number): ArrayBuffer;
+    readonly prototype: ArrayBuffer;
+    isView(arg: any): boolean;
+}
+declare var ArrayBuffer: ArrayBufferConstructor;
+interface DataView {
+    readonly buffer: ArrayBuffer;
+    readonly byteLength: number;
+    readonly byteOffset: number;
+    getFloat32(byteOffset: number, littleEndian?: boolean): number;
+    getFloat64(byteOffset: number, littleEndian?: boolean): number;
+    getInt8(byteOffset: number): number;
+    getInt16(byteOffset: number, littleEndian?: boolean): number;
+    getInt32(byteOffset: number, littleEndian?: boolean): number;
+    getUint8(byteOffset: number): number;
+    getUint16(byteOffset: number, littleEndian?: boolean): number;
+    getUint32(byteOffset: number, littleEndian?: boolean): number;
+    setFloat32(byteOffset: number, value: number, littleEndian?: boolean): void;
+    setFloat64(byteOffset: number, value: number, littleEndian?: boolean): void;
+    setInt8(byteOffset: number, value: number): void;
+    setInt16(byteOffset: number, value: number, littleEndian?: boolean): void;
+    setInt32(byteOffset: number, value: number, littleEndian?: boolean): void;
+    setUint8(byteOffset: number, value: number): void;
+    setUint16(byteOffset: number, value: number, littleEndian?: boolean): void;
+    setUint32(byteOffset: number, value: number, littleEndian?: boolean): void;
+}
 """.trimIndent()
     }
 
