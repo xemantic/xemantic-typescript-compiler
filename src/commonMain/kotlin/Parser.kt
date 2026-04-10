@@ -4668,6 +4668,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         if (token == SyntaxKind.Exclamation) {
             nextToken()
         }
+        // Error recovery: leading ? in type position (JSDoc nullable, e.g. ?string) — skip it.
+        // Bare ? with no following type (e.g. <?>) is treated as JSDoc unknown → any.
+        if (token == SyntaxKind.Question) {
+            nextToken()
+            if (!isStartOfType(token)) {
+                return KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = pos, end = getEnd())
+            }
+        }
         // Type operators
         if (token == SyntaxKind.KeyOfKeyword) {
             nextToken()
@@ -4748,7 +4756,30 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             nextToken()
         }
 
+        // Error recovery: trailing ? in type position (JSDoc nullable, e.g. string?) — skip it.
+        // Must NOT consume ? when followed by a type-start token, as that indicates a
+        // conditional type (T extends U ? X : Y) where ? belongs to the outer context.
+        if (token == SyntaxKind.Question
+            && !scanner.lookAhead { scanner.scan(); isStartOfType(scanner.getToken()) }
+        ) {
+            nextToken()
+        }
+
         return type
+    }
+
+    /** Returns true if the given token kind can start a type. Safe to use inside scanner.lookAhead. */
+    private fun isStartOfType(tok: SyntaxKind = token): Boolean = when (tok) {
+        AnyKeyword, StringKeyword, NumberKeyword, BooleanKeyword,
+        BigIntKeyword, SymbolKeyword, VoidKeyword, NeverKeyword,
+        ObjectKeyword, UnknownKeyword, UndefinedKeyword, NullKeyword,
+        ThisKeyword, NewKeyword, ImportKeyword,
+        OpenParen, OpenBracket, OpenBrace, LessThan,
+        StringLiteral, NumericLiteral, TrueKeyword, FalseKeyword,
+        Minus, DotDotDot,
+        Backtick, NoSubstitutionTemplateLiteral, TemplateHead,
+        TypeOfKeyword, KeyOfKeyword, UniqueKeyword, ReadonlyKeyword, InferKeyword -> true
+        else -> isIdentifierToken(tok)
     }
 
     private fun parsePrimaryType(): TypeNode {
