@@ -13538,6 +13538,34 @@ interface WeakRefConstructor {
     readonly prototype: WeakRef<object>;
 }
 declare var WeakRef: WeakRefConstructor;
+interface ArrayLike<T> {
+    readonly length: number;
+    readonly [n: number]: T;
+}
+interface Iterable<T> { }
+interface Iterator<T> {
+    next(value?: any): any;
+    return?(value?: any): any;
+    throw?(e?: any): any;
+}
+interface IterableIterator<T> { }
+interface AsyncIterable<T> { }
+interface AsyncIterator<T> {
+    next(value?: any): any;
+    return?(value?: any): any;
+    throw?(e?: any): any;
+}
+interface AsyncIterableIterator<T> { }
+interface Generator<T, TReturn, TNext> {
+    next(value?: any): any;
+    return(value?: any): any;
+    throw(e?: any): any;
+}
+interface AsyncGenerator<T, TReturn, TNext> {
+    next(value?: any): any;
+    return(value?: any): any;
+    throw(e?: any): any;
+}
 """.trimIndent()
     }
 
