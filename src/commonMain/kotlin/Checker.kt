@@ -212,7 +212,36 @@ class Checker(
         "InstanceType", "ConstructorParameters", "Parameters", "ThisParameterType",
         "OmitThisParameter", "ThisType", "Awaited")
 
+    // -----------------------------------------------------------------------
+    // Built-in type declarations (minimal lib.d.ts stubs)
+    // Parsed and bound once at Checker init, merged into globals before user files.
+    // This provides apparent types for primitives (String, Number, Boolean)
+    // so that property access on primitives resolves correctly.
+    // -----------------------------------------------------------------------
+
+    /** Cached apparent types for primitive wrappers — resolved lazily from globals. */
+    private var stringWrapperType: Type? = null
+    private var numberWrapperType: Type? = null
+    private var booleanWrapperType: Type? = null
+
+    /**
+     * Parse and bind the built-in type declarations, returning the symbol table.
+     * These are merged into globals BEFORE user files so that user declarations
+     * can augment/override them (matching TypeScript's behavior).
+     */
+    private fun parseBuiltinLib(): SymbolTable {
+        val source = """
+interface String {
+    readonly length: number;
+}
+""".trimIndent()
+        val ast = Parser(source, "lib.builtin.d.ts").parse()
+        return Binder(options).bind(ast).locals
+    }
+
     init {
+        // 0. Merge built-in type declarations into globals (before user files)
+        mergeSymbolTable(globals, parseBuiltinLib())
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
             mergeSymbolTable(globals, result.locals)
@@ -27487,11 +27516,23 @@ class Checker(
     private fun getApparentType(type: Type): Type {
         return when {
             type is Type.TypeParam -> type.constraint?.let { getApparentType(it) } ?: anyType
-            type.flags.hasAny(TypeFlags.StringLike) -> anyType // TODO: String wrapper type
+            type.flags.hasAny(TypeFlags.StringLike) -> getBuiltinWrapperType("String") { stringWrapperType } ?.also { stringWrapperType = it } ?: anyType
             type.flags.hasAny(TypeFlags.NumberLike) -> anyType // TODO: Number wrapper type
             type.flags.hasAny(TypeFlags.BooleanLike) -> anyType // TODO: Boolean wrapper type
             else -> type
         }
+    }
+
+    /** Resolve a built-in wrapper type from globals, caching the result. */
+    private inline fun getBuiltinWrapperType(name: String, cached: () -> Type?): Type? {
+        cached()?.let { return it }
+        val symbol = globals[name] ?: return null
+        if (!symbol.flags.hasAny(SymbolFlags.Interface)) return null
+        val type = getDeclaredTypeOfSymbol(symbol)
+        if (type === errorType) return null
+        // Ensure members are resolved
+        if (type is Type.Object) resolveStructuredTypeMembers(type)
+        return type
     }
 
     /**
