@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-08):** 8,025 / 10,077 tests passing (79.6%). Active queue: Phase 13.
+**Status (2026-04-10):** 8,025 / 10,077 tests passing (79.6%). Active queue: Phase 15.
 
 ## Goal
 
@@ -2335,6 +2335,260 @@ These remain deferred until their blockers are resolved:
 - **Excess property checking**: fresh object literal extra properties
 - **Type inference from complex expressions**: spread, destructuring, generators
 - **`.types` / `.symbols` baselines**: requires full type display infrastructure
+
+---
+
+## Phase 15 — Hard Problems Queue (2026-04-10)
+
+**Failure landscape (2,052 tests):**
+- Error baselines: **1,826 tests** (674 diff mismatch + 1,169 "none produced" = 89%)
+- JS emit: **226 tests** (11%)
+
+**Error baseline breakdown:**
+- 1,169 "none produced" (56.9%) — zero diagnostics when expected
+- 674 diff mismatch (32.8%) — some diagnostics but wrong code/position/count
+- Biggest FP sources: TS1109 (-181 net), TS1127 (-84 net), TS2741 (-44 net)
+- Biggest deficits: TS2322 (+475), TS2345 (+254), TS2769 (+142), TS2416 (+109)
+
+**JS emit breakdown (226 tests):**
+- Multi-file ordering: 96 (43%)
+- Parser error recovery: 40 (18%)
+- CJS/ESM module: 46 (20%)
+- Private field downlevel: 10 (4%)
+- Decorator transforms: 12 (5%)
+- Other (class fields, destructuring, helpers, comments): 22 (10%)
+
+### QUEUE — prioritized by unblocking potential
+
+---
+
+- [ ] **15.0. Parser FP reduction: TS1109 "Expression expected" (HIGH — ~100+ tests)**
+
+  We produce 223 TS1109 but only 42 are expected (net -181). This is the single largest
+  source of false positive diagnostics. Every extra TS1109 pollutes the error baseline
+  and often cascades into wrong JS emit (parser produces broken AST → wrong output).
+
+  **Root cause analysis needed:** Sample 20+ tests where we produce TS1109 but shouldn't.
+  Likely patterns:
+  - Private fields (`#x`) at statement level misparse as hash → expression expected
+  - Decorator syntax (`@expr`) at class/member level
+  - Template literal tags
+  - `satisfies` / `as const` / newer syntax the parser doesn't handle
+  - Error recovery after missing tokens produces cascading TS1109
+
+  **Approach:**
+  1. Collect all positions where we emit TS1109 that TypeScript doesn't
+  2. Group by root cause (parser production rule)
+  3. Fix each category, testing for regressions between each fix
+  4. Each fix may also fix JS emit tests (broken AST → wrong output)
+
+  **Files:** `Parser.kt`, `Scanner.kt`
+  **Expected gain:** Reducing TS1109 FPs by even 50% would affect 90+ error baseline tests.
+  Many of these tests also have "correct" expected errors that we DO produce — the FP just
+  makes the overall baseline mismatch. So each FP removed is potentially a test fixed.
+
+---
+
+- [ ] **15.1. Parser FP reduction: TS1127 "Invalid character" (HIGH — ~50+ tests)**
+
+  We produce 104 TS1127 but only 20 are expected (net -84). Similar to 15.0 — these
+  cascade into broken ASTs and wrong JS emit.
+
+  **Likely patterns:**
+  - Unicode characters not handled by Scanner (BOM, zero-width chars, Unicode identifiers)
+  - Backtick in non-template contexts
+  - Hash (`#`) in non-private-field contexts
+  - Shebang lines (`#!/usr/bin/env node`)
+
+  **Approach:** Same as 15.0 — sample, categorize, fix by root cause.
+
+  **Files:** `Scanner.kt`, `Parser.kt`
+  **Expected gain:** ~50+ tests affected
+
+---
+
+- [ ] **15.2. CJS destructuring assignment rewrite (MEDIUM — ~25 JS emit tests)**
+
+  In CJS module output, destructuring patterns like `let [a, b] = [1, 2]` with exported
+  bindings need to be rewritten to `var _a; _a = [1, 2], exports.a = _a[0], exports.b = _a[1]`.
+  Currently we emit `let [bar1] = [1]; exports.bar1 = bar1;` instead of the destructured form.
+
+  Also: `exports.foo = exports.exportedFoo = null` compound assignment patterns.
+
+  **Files:** `Transformer.kt` — `transformToCommonJS`
+  **Expected gain:** ~25 JS emit tests
+  **Unblocks:** CJS module correctness for downstream error baseline tests
+
+---
+
+- [ ] **15.3. Private field downlevel WeakMap transform (MEDIUM — ~10 JS emit tests)**
+
+  Tests targeting ES2015-ES2021 with `#field` need full WeakMap downlevel:
+  - `__classPrivateFieldGet`/`__classPrivateFieldSet` helpers
+  - `_Foo_instances` WeakSet for private methods
+  - `_Foo_x` WeakMap for private fields
+  - Static private fields via function closures
+
+  Item 10.9 added basic WeakMap for simple cases. Remaining tests need:
+  - Private methods (WeakSet + `_instances.add(this)`)
+  - Private accessors (getter/setter split)
+  - Static private fields
+
+  **Files:** `Transformer.kt` — `transformClassDeclaration`, helper emission
+  **Expected gain:** ~10 JS emit tests
+  **Unblocks:** All remaining private field error baseline tests
+
+---
+
+- [ ] **15.4. getTypeOfIdentifier: resolve from globals with built-in types (HIGH — unblocks TS2322/TS2345)**
+
+  The 1,169 "none produced" tests are blocked because `getTypeOfExpression` returns `anyType`
+  for most identifiers. Phase 14 added built-in types to globals, but `getTypeOfIdentifier`
+  only returns `anyType` when it can't find a type in local/file scopes and the global symbol
+  has no type annotation.
+
+  **The key insight:** For `declare var Object: ObjectConstructor` in globals, `getTypeOfSymbol`
+  should resolve to the ObjectConstructor interface. For `declare var Math: Math`, it should
+  resolve to the Math interface. This is already wired — the `declare var` creates a Variable
+  symbol with a type annotation pointing to the interface.
+
+  **Verification needed:** Check that `getTypeOfSymbol` for the `Object` global returns
+  `ObjectConstructor` type (not `anyType`). If it does, then `Math.floor(1.5)` should resolve
+  the `Math` identifier → Math interface → `floor` property → `(x: number): number` → `number`.
+
+  If `getTypeOfSymbol` already works for globals, then the real bottleneck is that checker
+  passes (TS2322, TS2345) bail out when source/target types are `anyType`. With built-in types
+  properly resolving, more expressions should get concrete types, enabling more checks.
+
+  **Action items:**
+  1. Add test instrumentation: log how many `getTypeOfIdentifier` calls return `anyType`
+  2. Verify built-in `declare var` types resolve correctly
+  3. If they don't, fix `getTypeOfSymbol` for Variable symbols with type annotations
+  4. Measure how many "none produced" tests now produce diagnostics
+
+  **Files:** `Checker.kt` — `getTypeOfIdentifier`, `getTypeOfSymbol`
+  **Expected gain:** Hard to predict — could be 50+ if the pipeline works end-to-end
+  **Risk:** HIGH — more resolved types means more assignability checks which could cause FPs
+
+---
+
+- [ ] **15.5. Multi-file JS emit ordering (LARGE — ~96 JS emit tests)**
+
+  The single largest category of JS emit failures. Files appear in wrong order in output.
+  TypeScript sorts multi-file output by dependency graph (imports/references).
+
+  **Sub-problems:**
+  - Topological sort of file dependencies (import/require/reference directives)
+  - AMD module name → path resolution (outDir stripping, rootDir handling)
+  - Source echo ordering in error baselines (different from JS emit ordering)
+
+  **Previous investigation (11.6):** Topological sort exists for JS outputs but sourceEchoes
+  aren't reordered. Most failing multi-file tests have other issues beyond ordering.
+
+  **Approach:**
+  1. Implement dependency graph from import/reference analysis
+  2. Sort output files topologically
+  3. Handle AMD define() module name paths
+  4. Test incrementally — some tests have multiple issues
+
+  **Files:** `TypeScriptCompiler.kt`, `Emitter.kt`
+  **Expected gain:** ~40-50 tests (many have other issues too)
+  **Risk:** MEDIUM — may cause regressions in currently-passing multi-file tests
+
+---
+
+- [ ] **15.6. TS2741 FP reduction (MEDIUM — ~44 over-produced)**
+
+  We produce 112 TS2741 ("Property X is missing in type Y") but only 68 are expected
+  (net -44). These are FPs from the structural comparison producing wrong results.
+
+  **Likely causes:**
+  - Comparing against `anyType` target (should skip)
+  - Missing property from base class (inheritance not resolved)
+  - Generic types not instantiated before comparison
+
+  **Approach:** Sample 15+ FP TS2741 tests, categorize, add guards.
+
+  **Files:** `Checker.kt` — `propertiesRelatedTo`, TS2741 emission
+  **Expected gain:** ~44 tests where extra TS2741 makes baseline mismatch
+
+---
+
+- [ ] **15.7. TS2300 FP reduction (MEDIUM — ~38 over-produced)**
+
+  We produce 115 TS2300 ("Duplicate identifier") but only 77 are expected (net -38).
+
+  **Likely causes:**
+  - Declaration merging not recognized (interface+namespace, class+namespace)
+  - Overloaded function declarations counted as duplicates
+  - Ambient declarations merging with implementations
+
+  **Files:** `Checker.kt` — `checkDuplicateIdentifiers`
+  **Expected gain:** ~38 tests
+
+---
+
+- [ ] **15.8. Decorator transform (__decorate/__metadata) (LARGE — ~12 JS emit tests)**
+
+  Legacy decorator transform requires:
+  - `__decorate` helper with metadata arrays
+  - `__metadata("design:type", ...)` serialization
+  - `__param` for parameter decorators
+  - Proper ordering of decorator application (bottom-up)
+
+  ES decorators (`__esDecorate`/`__runInitializers`) are even more complex (3 tests).
+
+  **Files:** `Transformer.kt`
+  **Expected gain:** ~12 JS emit tests
+  **Prerequisite:** Decorator metadata type serialization gotchas in CLAUDE.md
+
+---
+
+- [ ] **15.9. TS2454 FP reduction (+103 deficit, but 3 over-produced)**
+
+  We only produce 3 TS2454 ("Variable used before being assigned") but 106 are expected.
+  This is a big deficit. The checker has `checkDefiniteAssignment` but it's likely too
+  conservative.
+
+  **Root cause:** The checker probably only checks the simplest case (uninitialized `let`
+  at function scope) but misses:
+  - Variables declared in one branch, used in another
+  - Variables inside loops
+  - Destructured variables
+
+  **Files:** `Checker.kt` — `checkDefiniteAssignment`
+  **Expected gain:** Hard to estimate — most tests have multiple missing codes
+  **Unblocks:** TS2454 is often paired with other codes in test baselines
+
+---
+
+- [ ] **15.10. TS2583/TS2550 "Cannot find name, suggest --lib" (MEDIUM — ~97 each)**
+
+  TS2583: "Cannot find name 'X'. Do you need to change your target library?"
+  TS2550: "Cannot find name 'X'. Do you need to install type definitions?"
+
+  These fire when a global name exists in a higher ES target's lib but not the current one.
+  For example, `Map` with `--target ES5` → TS2583.
+
+  **Implementation:** Check if the missing name is in KNOWN_GLOBALS but the target is too
+  low for that name. Requires a mapping: global name → minimum ES target.
+
+  **Files:** `Checker.kt` — `checkUnresolvedNames`
+  **Expected gain:** ~50+ tests (TS2583 appears 97 times expected, TS2550 97 times)
+  **Unblocks:** Many tests that have TS2583 as their only missing code
+
+---
+
+### Queue execution notes
+
+- Items 15.0 and 15.1 (parser FPs) should be done first — they have the widest blast
+  radius and affect both error baselines AND JS emit (broken AST → wrong output).
+- Item 15.4 (getTypeOfIdentifier) is the strategic unblocker — if built-in types
+  resolve through the expression pipeline, it enables TS2322/TS2345/TS2769 for many tests.
+- Items 15.2, 15.3 are independent JS emit fixes (touch Transformer.kt).
+- Items 15.5 is large but high-count — defer if other items yield more.
+- Items 15.6, 15.7 are FP reduction (lower risk, medium reward).
+- Item 15.10 is a good "quick win" if the target-level mapping is straightforward.
 
 ---
 
