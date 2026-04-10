@@ -116,6 +116,11 @@ class Transformer(
     // When the scope exits, the collected vars are prepended as `var _a;` declarations.
     private val hoistedVarScopes = mutableListOf<MutableList<String>>()
 
+    // Private field WeakMap var declarations to be hoisted to the top of the function scope.
+    // `var _C_x;` is hoisted before all user statements (TypeScript behavior).
+    // Each entry is a complete VariableStatement to prepend.
+    private val hoistedPrivateFieldScopes = mutableListOf<MutableList<Statement>>()
+
     // Depth of function scopes entered. Used to decide whether enum/namespace var declarations
     // should be `var` (module level, depth=0) or `let` (inside a function body, depth>0).
     private var functionScopeDepth = 0
@@ -5973,6 +5978,10 @@ class Transformer(
         val scopeVars = if (isFunctionScope || atTopLevel) {
             mutableListOf<String>().also { hoistedVarScopes.add(it) }
         } else null
+        // Push a new private field hoist scope for function-level scopes
+        val privateFieldScope = if (isFunctionScope || atTopLevel) {
+            mutableListOf<Statement>().also { hoistedPrivateFieldScopes.add(it) }
+        } else null
 
         val result = mutableListOf<Statement>()
         for (stmt in statements) {
@@ -5993,6 +6002,17 @@ class Transformer(
                     is FunctionDeclaration -> stmt.name?.text?.let { declaredNames.add(it) }
                     else -> {}
                 }
+            }
+        }
+
+        // Pop private field hoist scope and prepend collected WeakMap var declarations at the top.
+        // TypeScript always hoists `var _C_x;` to the start of the function/module scope,
+        // before any user code (including user let/const declarations).
+        if (privateFieldScope != null) {
+            hoistedPrivateFieldScopes.removeLast()
+            if (privateFieldScope.isNotEmpty()) {
+                val insertAt = result.indexOfFirst { it !is NotEmittedStatement }.takeIf { it >= 0 } ?: 0
+                result.addAll(insertAt, privateFieldScope)
             }
         }
 
@@ -9498,8 +9518,8 @@ class Transformer(
                     val initExpr = prop.initializer?.let { transformExpression(it) }
                     privateFieldInfos.add(PrivateFieldInfo(fieldName, weakMapVar, initExpr))
 
-                    // var _ClassName_field; (before the class)
-                    privateFieldLeadingStatements.add(VariableStatement(
+                    // var _ClassName_field; (hoisted to function/module scope top)
+                    val varStmt = VariableStatement(
                         declarationList = VariableDeclarationList(
                             declarations = listOf(VariableDeclaration(
                                 name = syntheticId(weakMapVar),
@@ -9509,7 +9529,12 @@ class Transformer(
                             pos = -1, end = -1,
                         ),
                         pos = -1, end = -1,
-                    ))
+                    )
+                    if (hoistedPrivateFieldScopes.isNotEmpty()) {
+                        hoistedPrivateFieldScopes.last().add(varStmt)
+                    } else {
+                        privateFieldLeadingStatements.add(varStmt)
+                    }
 
                     // _ClassName_field = new WeakMap(); (after the class)
                     privateFieldTrailingStatements.add(ExpressionStatement(
