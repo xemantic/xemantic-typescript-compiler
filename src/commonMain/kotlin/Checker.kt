@@ -26622,7 +26622,7 @@ interface DataView {
             // Excess property check for fresh object literals (TS2353).
             // Fires even when assignability passes (e.g., {b: 0, a: 0} → {b: number}).
             if (canUse && init is ObjectLiteralExpression) {
-                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val displayTarget = excessPropDisplayTarget(targetType, typeAnnotation)
                 if (checkExcessProperties(init, sourceType, targetType, displayTarget, source, fileName)) {
                     return // TS2353 emitted — skip TS2741/TS2322
                 }
@@ -26729,7 +26729,7 @@ interface DataView {
             val canUse = canUseTypeEngine(sourceType, targetType)
             // Excess property check for fresh object literals (TS2353)
             if (canUse && init is ObjectLiteralExpression) {
-                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val displayTarget = excessPropDisplayTarget(targetType, typeAnnotation)
                 if (checkExcessProperties(init, sourceType, targetType, displayTarget, source, fileName)) {
                     return // TS2353 emitted
                 }
@@ -26898,7 +26898,7 @@ interface DataView {
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
                         // Excess property check for object literal assignments (TS2353)
                         if (canUse && expr.right is ObjectLiteralExpression) {
-                            val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                            val displayTarget = excessPropDisplayTarget(tt, typeAnnotation)
                             if (checkExcessProperties(expr.right as ObjectLiteralExpression, sourceType, tt, displayTarget, source, fileName)) {
                                 return // TS2353 emitted
                             }
@@ -32595,8 +32595,60 @@ interface DataView {
                 }
                 if (names.isEmpty()) null else names
             }
+            is Type.Union -> {
+                // 16.0: Union target — a source property is excess only if it's in NONE
+                // of the union constituents. Take the union of all object/interface constituent
+                // property names. Non-shape constituents (primitives, function-only object
+                // types) don't contribute property names and are skipped. If any shape
+                // constituent has a string index signature, all keys are valid → bail.
+                val names = mutableSetOf<String>()
+                var hasShapeConstituent = false
+                for (constituent in type.types) {
+                    if (constituent !is Type.Object && constituent !is Type.Interface) continue
+                    resolveStructuredTypeMembers(constituent)
+                    val cObj = constituent as Type.Object
+                    // Skip function-only types (call sigs but no members)
+                    if (cObj.members == null) continue
+                    val constituentNames = collectTargetPropertyNames(constituent)
+                    if (constituentNames == null) return null // string index sig → bail
+                    names.addAll(constituentNames)
+                    hasShapeConstituent = true
+                }
+                if (!hasShapeConstituent) null
+                else if (names.isEmpty()) null
+                else names
+            }
             else -> null
         }
+    }
+
+    /**
+     * For union target display in TS2353, pick the first Object/Interface constituent
+     * that contains none of the excess source property names (i.e., the constituent
+     * whose shape the source was "meant" to match). Fallback: first object constituent.
+     */
+    private fun pickUnionDisplayTarget(unionType: Type.Union): Type? {
+        for (c in unionType.types) {
+            if (c is Type.Object || c is Type.Interface) return c
+        }
+        return null
+    }
+
+    /**
+     * 16.0: Compute the display target string for a TS2353 diagnostic.
+     * For inline union annotations (e.g. `const x: IProps | number = {...}`), pick
+     * a representative object constituent so we display "IProps" instead of
+     * "IProps | number". For type alias references that resolve to a union
+     * (e.g. `type DoesntWork = A | B; const x: DoesntWork = {...}`), preserve
+     * the alias name from the annotation text.
+     */
+    private fun excessPropDisplayTarget(targetType: Type, typeAnnotation: TypeNode?): String {
+        // Only narrow when the annotation itself is a UnionType (not a reference to one)
+        if (targetType is Type.Union && typeAnnotation is UnionType) {
+            val pick = pickUnionDisplayTarget(targetType)
+            if (pick != null) return typeToString(pick)
+        }
+        return typeAnnotation?.let { formatTypeForDisplay(it) } ?: typeToString(targetType)
     }
 
     /**
