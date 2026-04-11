@@ -28333,7 +28333,14 @@ interface DataView {
                         if (props != null) {
                             for (p in props) {
                                 val propType = symbolTypes[p.id]
-                                parts.add("${p.name}: ${if (propType != null) typeToString(propType) else "any"}")
+                                val typeStr = if (propType != null) typeToString(propType) else "any"
+                                // 16.0: Optional properties render as `name?: type | undefined`
+                                // matching TypeScript's display convention.
+                                if (isOptionalProperty(p)) {
+                                    parts.add("${p.name}?: $typeStr | undefined")
+                                } else {
+                                    parts.add("${p.name}: $typeStr")
+                                }
                             }
                         }
                         if (parts.isNotEmpty()) "{ ${parts.joinToString("; ")}; }" else "{}"
