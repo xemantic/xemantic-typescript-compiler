@@ -32908,7 +32908,8 @@ interface DataView {
 
     /**
      * 16.0: TS2353 check for each object literal element in an array literal
-     * whose target is an array type with a resolvable element type.
+     * whose target is an array type with a resolvable element type. Also emits
+     * TS2322 for primitive elements that aren't assignable to an Object element type.
      */
     private fun checkArrayLiteralElementExcessProps(
         init: Expression,
@@ -32926,10 +32927,41 @@ interface DataView {
             if (elementType.properties.isNullOrEmpty()) return
             val elementDisplay = typeToString(elementType)
             for (elem in init.elements) {
-                if (elem is ObjectLiteralExpression) {
-                    val elemType = getTypeOfExpression(elem)
-                    if (elemType is Type.Object && canUseTypeEngine(elemType, elementType)) {
-                        checkExcessProperties(elem, elemType, elementType, elementDisplay, source, fileName)
+                if (elem is SpreadElement) continue
+                when (elem) {
+                    is ObjectLiteralExpression -> {
+                        val elemType = getTypeOfExpression(elem)
+                        if (elemType is Type.Object && canUseTypeEngine(elemType, elementType)) {
+                            checkExcessProperties(elem, elemType, elementType, elementDisplay, source, fileName)
+                        }
+                    }
+                    else -> {
+                        // 16.0: Primitive element vs Object element type — emit TS2322.
+                        val elemType = getTypeOfExpression(elem)
+                        if (elemType === anyType || elemType === errorType) continue
+                        // Only flag clear primitive mismatches (not unions/objects)
+                        val elemIsPrimitive = elemType is Type.Intrinsic ||
+                            elemType is Type.StringLiteral || elemType is Type.NumberLiteral ||
+                            elemType is Type.BigIntLiteral
+                        if (!elemIsPrimitive) continue
+                        // null/undefined/void → skip (strictNullChecks variance)
+                        if (elemType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or TypeFlags.Any)) continue
+                        // Primitive can never be assignable to a non-empty object type
+                        val displaySource = typeToString(elemType)
+                        val start = elem.pos
+                        val length = expressionTrueEnd(elem) - start
+                        if (length <= 0) continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$displaySource' is not assignable to type '$elementDisplay'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
                     }
                 }
             }
