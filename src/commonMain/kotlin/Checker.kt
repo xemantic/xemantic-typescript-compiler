@@ -32724,7 +32724,7 @@ interface DataView {
                 }
             }
         }
-        if (excessProps.isEmpty()) return false
+        var emitted = false
         for ((propName, propPos) in excessProps) {
             val (line, character) = getLineAndCharacterOfPosition(source, propPos)
             diagnostics.add(Diagnostic(
@@ -32737,8 +32737,63 @@ interface DataView {
                 start = propPos,
                 length = propName.length,
             ))
+            emitted = true
         }
-        return true
+        // 16.0: Recurse into non-excess properties whose source value is itself
+        // an object literal and whose target type is a resolvable object. This
+        // catches nested excess properties like
+        //   `{ nestedProp: { asdfasdf: 1 } }` vs `{ nestedProp?: { testBool?: boolean } }`.
+        try {
+            for (propNode in objLiteral.properties) {
+                if (propNode !is PropertyAssignment) continue
+                val propName = when (val n = propNode.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> continue
+                }
+                if (propName !in targetPropNames) continue // already flagged
+                val nestedInit = propNode.initializer
+                if (nestedInit !is ObjectLiteralExpression) continue
+                val nestedTargetType = getTargetPropertyType(targetType, propName) ?: continue
+                if (nestedTargetType !is Type.Object) continue
+                resolveStructuredTypeMembers(nestedTargetType)
+                if (nestedTargetType.properties.isNullOrEmpty()) continue
+                val nestedSourceType = getTypeOfExpression(nestedInit)
+                if (nestedSourceType !is Type.Object) continue
+                if (!canUseTypeEngine(nestedSourceType, nestedTargetType)) continue
+                val nestedDisplay = typeToString(nestedTargetType)
+                if (checkExcessProperties(nestedInit, nestedSourceType, nestedTargetType, nestedDisplay, source, fileName)) {
+                    emitted = true
+                }
+            }
+        } catch (_: StackOverflowError) { /* circular */ }
+        return emitted
+    }
+
+    /**
+     * 16.0: Resolve the declared type of a property on a target type, flattening
+     * intersections and unions (takes the first object constituent that has the prop).
+     */
+    private fun getTargetPropertyType(targetType: Type, propName: String): Type? {
+        when (targetType) {
+            is Type.Object -> {
+                val sym = targetType.members?.get(propName) ?: return null
+                return getTypeOfSymbol(sym)
+            }
+            is Type.Intersection -> {
+                for (c in targetType.types) {
+                    getTargetPropertyType(c, propName)?.let { return it }
+                }
+                return null
+            }
+            is Type.Union -> {
+                for (c in targetType.types) {
+                    getTargetPropertyType(c, propName)?.let { return it }
+                }
+                return null
+            }
+            else -> return null
+        }
     }
 
     /**
