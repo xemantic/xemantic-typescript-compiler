@@ -2491,20 +2491,22 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+5 tests, 8033 passing)**
+- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+6 tests, 8034 passing)**
 
   **Session 2026-04-11 progress:**
   - 16.0a: TS2353 excess property check for object literal call args (infra, 0 gains — guards too tight for most cases)
   - 16.0b: Contextual type propagation to arrow/function call args + return statements (infra, 0 gains — downstream identifier resolution doesn't consult param symbolTypes)
   - 16.0c: Array literal element TS2353 in var decl + class property init + assignment target → +4 tests (contextualTyping9, contextualTyping12, contextualTyping20, arrayLiteralTypeInference)
   - 16.0d: TS2353 union target constituent handling with display narrowing (inline union → pick constituent; type alias → preserve alias name) → +1 test (excessPropertyErrorForFunctionTypes)
-  - 16.0e: Nested object literal recursion in checkExcessProperties (infra, 0 gains — affected tests blocked on typeToString optional `?` display)
+  - 16.0e: Nested object literal recursion in checkExcessProperties (+0 standalone, but enables 16.0f gain)
+  - 16.0f: typeToString optional property display for anonymous Object types (`name?: type | undefined`) → +1 test (nonObjectUnionNestedExcessPropertyCheck)
 
   **Remaining sub-steps for next session:**
   - Downstream arrow param type propagation: populate `currentLocalTypes` with contextually-typed arrow params when recursing into the body (unlocks 16.0a+b latent gains)
   - TS2353 call args: loosen guards (currently requires `hasTargetProps`, maybe allow interfaces)
-  - typeToString improvement: render optional props with `?:` and `| undefined` for anonymous Object types (unlocks nonObjectUnionNestedExcessPropertyCheck and others)
-  - Discriminant narrowing for union targets (unlocks discriminatedUnionErrorMessage)
+  - Chained assignment TS2353: `obj1 = obj2 = { excess }` only flags against the innermost `=` target
+  - Discriminant narrowing for union targets (unlocks discriminatedUnionErrorMessage, missingDiscriminants)
+  - TS2304 FP: type parameters used in conditional types (`T extends [infer Head, ...infer Rest]`) flagged as missing names
 
   **Problem:** When checking `foo([1, "a"])` where `foo` takes `number[]`, the checker must propagate the *expected* element type `number` down into each array literal element so `"a"` can be checked as `string` against `number` target. Currently, `getTypeOfExpression` is purely bottom-up — it computes the type of an expression in isolation without knowing what's expected.
 
