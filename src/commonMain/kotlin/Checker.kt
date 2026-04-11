@@ -26903,6 +26903,21 @@ interface DataView {
                                 return // TS2353 emitted
                             }
                         }
+                        // 16.0: Chained assignment fresh-literal excess check.
+                        // `obj1 = obj2 = { excess }` — the fresh object literal flows
+                        // through the chain; check excess against OUR target too.
+                        if (expr.right is BinaryExpression) {
+                            val chainedLit = findChainedObjectLiteral(expr.right)
+                            if (chainedLit != null) {
+                                try {
+                                    val litType = getTypeOfExpression(chainedLit)
+                                    if (canUseTypeEngine(litType, tt)) {
+                                        val displayTarget = excessPropDisplayTarget(tt, typeAnnotation)
+                                        checkExcessProperties(chainedLit, litType, tt, displayTarget, source, fileName)
+                                    }
+                                } catch (_: StackOverflowError) { /* circular */ }
+                            }
+                        }
                         // 16.0: Array literal assignment — contextual TS2353 for each object element
                         checkArrayLiteralElementExcessProps(expr.right, tt, source, fileName)
                         if (canUse && !isAssignable) {
@@ -32639,6 +32654,19 @@ interface DataView {
             if (c is Type.Object || c is Type.Interface) return c
         }
         return null
+    }
+
+    /**
+     * 16.0: Traverse a chained assignment right-hand side to find the innermost
+     * ObjectLiteralExpression. Returns null if the chain doesn't end in a literal.
+     * E.g. for `obj2 = obj3 = { a: 1 }`, returns the `{a: 1}` node.
+     */
+    private fun findChainedObjectLiteral(expr: Expression): ObjectLiteralExpression? {
+        var cur: Expression = expr
+        while (cur is BinaryExpression && cur.operator == SyntaxKind.Equals) {
+            cur = cur.right
+        }
+        return cur as? ObjectLiteralExpression
     }
 
     /**
