@@ -180,6 +180,12 @@ class Checker(
      *  Used by getTypeOfArrowFunction/getTypeOfFunctionExpression to infer parameter types. */
     private var contextualType: Type? = null
 
+    /** 16.0: Class/interface type parameter scope for member type resolution.
+     *  Set by resolveReferenceMembers / getTypeOfVariableOrProperty when resolving member
+     *  types that reference enclosing class type parameters (e.g. `get foo(): T` inside
+     *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
+    private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
+
     /** Global Array interface — used as target for `Type.Reference` in array types.
      *  Initialized from built-in lib during init; falls back to empty interface if not found. */
     private var globalArrayType: Type.Interface = Type.Interface().also {
@@ -27174,6 +27180,46 @@ interface DataView {
     }
 
     /**
+     * 16.0: For a generic class instance (Type.Reference with Interface target that has
+     * type parameters), resolve the property's declared type with the class's type
+     * parameters installed in scope, then apply the type mapper to produce the
+     * instantiated prop type. Returns null if the object type isn't a generic instance
+     * or if resolution fails.
+     */
+    private fun resolveGenericPropertyType(objType: Type.Object, propSym: Symbol): Type? {
+        val ref = objType as? Type.Reference ?: return null
+        val target = ref.target as? Type.Interface ?: return null
+        val typeParams = target.typeParameters ?: return null
+        val typeArgs = ref.resolvedTypeArguments ?: return null
+        if (typeParams.size != typeArgs.size || typeParams.isEmpty()) return null
+        val decl = propSym.valueDeclaration ?: propSym.declarations.firstOrNull() ?: return null
+        val declType = when (decl) {
+            is PropertyDeclaration -> decl.type ?: return null
+            is GetAccessor -> decl.type ?: return null
+            is Parameter -> decl.type ?: return null
+            else -> return null
+        }
+        val scope = mutableMapOf<String, Type.TypeParam>()
+        currentTypeParamScope?.let { scope.putAll(it) }
+        for (tp in typeParams) {
+            val name = tp.symbol?.name ?: continue
+            scope[name] = tp
+        }
+        val saved = currentTypeParamScope
+        currentTypeParamScope = scope
+        return try {
+            val rawType = getTypeFromTypeNode(declType)
+            if (rawType === errorType || rawType === anyType) return null
+            val mapper = createTypeMapper(typeParams, typeArgs)
+            instantiateType(rawType, mapper)
+        } catch (_: StackOverflowError) {
+            null
+        } finally {
+            currentTypeParamScope = saved
+        }
+    }
+
+    /**
      * 16.0: Check assignability of value to a property access target like `x.prop = value`.
      * Resolves x's type, looks up the property symbol, gets its declared type, and emits
      * TS2322 if value type isn't assignable.
@@ -27188,7 +27234,11 @@ interface DataView {
             resolveStructuredTypeMembers(objType)
             val propName = target.name.text
             val propSym = objType.members?.get(propName) ?: return
-            val propType = getTypeOfSymbol(propSym)
+            // 16.0: For generic class instance types (Type.Reference with type args),
+            // resolve the property's declared type with the class's type parameters in
+            // scope, then apply the type mapper. This produces the correctly instantiated
+            // prop type (e.g. `T → string` for `new Test1<string>()`).
+            val propType = resolveGenericPropertyType(objType, propSym) ?: getTypeOfSymbol(propSym)
             if (propType === anyType || propType === errorType) return
             val valueType = getTypeOfExpression(value)
             if (valueType === anyType || valueType === errorType) return
@@ -27202,9 +27252,9 @@ interface DataView {
             }
             val displaySource = typeToString(valueType)
             val displayTarget = typeToString(propType)
-            // Squiggle spans the property name only
-            val start = target.name.pos
-            val length = target.name.text.length
+            // Squiggle spans the whole property access `obj.prop`
+            val start = target.expression.pos
+            val length = target.name.pos + target.name.text.length - start
             val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
                 message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
@@ -27226,11 +27276,19 @@ interface DataView {
     /**
      * Convert an AST TypeNode into a semantic [Type] object.
      * Results are cached in [nodeTypes].
+     *
+     * 16.0: When [currentTypeParamScope] is active, bypass the cache — the same node
+     * may resolve differently depending on the enclosing class/interface's type
+     * parameters in scope (e.g. `T` means different things in different classes).
      */
     private fun getTypeFromTypeNode(node: TypeNode): Type {
-        nodeTypes[node]?.let { return it }
+        if (currentTypeParamScope == null) {
+            nodeTypes[node]?.let { return it }
+        }
         val type = getTypeFromTypeNodeWorker(node)
-        nodeTypes[node] = type
+        if (currentTypeParamScope == null) {
+            nodeTypes[node] = type
+        }
         return type
     }
 
@@ -27297,6 +27355,8 @@ interface DataView {
                 }
             }
         }
+        // 16.0: Check enclosing class/interface type parameter scope before globals
+        currentTypeParamScope?.get(name)?.let { return it }
         // Look up the symbol in globals
         val symbol = globals[name]
         if (symbol != null) {
@@ -28278,8 +28338,23 @@ interface DataView {
             else -> return anyType
         }
         if (calleeType === anyType || calleeType === errorType) return anyType
-        // For new expressions, the return type is the class type itself
-        if (calleeType is Type.Interface) return calleeType
+        // For new expressions, the return type is the class type itself.
+        // 16.0: honor explicit type arguments (e.g. `new Test1<string>()`) by
+        // creating a Type.Reference with the resolved type arguments so property
+        // accesses on the instance see instantiated types.
+        if (calleeType is Type.Interface) {
+            val typeParams = calleeType.typeParameters
+            val typeArgs = expr.typeArguments
+            if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
+                try {
+                    val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                    if (resolvedArgs.none { it === errorType }) {
+                        return Type.Reference(calleeType, resolvedTypeArguments = resolvedArgs)
+                    }
+                } catch (_: StackOverflowError) { /* circular */ }
+            }
+            return calleeType
+        }
         if (calleeType !is Type.Object) return anyType
         resolveStructuredTypeMembers(calleeType)
         val sigs = calleeType.constructSignatures

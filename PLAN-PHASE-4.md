@@ -2491,7 +2491,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+11 tests, 8039 passing)**
+- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+12 tests, 8048 passing)**
 
   **Session 2026-04-11 progress:**
   - 16.0a: TS2353 excess property check for object literal call args (infra, 0 gains — guards too tight for most cases)
@@ -2500,12 +2500,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   - 16.0d: TS2353 union target constituent handling with display narrowing (inline union → pick constituent; type alias → preserve alias name) → +1 test (excessPropertyErrorForFunctionTypes)
   - 16.0e: Nested object literal recursion in checkExcessProperties (+0 standalone, but enables 16.0f gain)
   - 16.0f: typeToString optional property display for anonymous Object types (`name?: type | undefined`) → +1 test (nonObjectUnionNestedExcessPropertyCheck)
+  - 16.0m: Generic class instance type param resolution for property-access assignments. NewExpression honors type arguments → Type.Reference. New `currentTypeParamScope` field + cache bypass in getTypeFromTypeNode. Narrow fix: resolveGenericPropertyType helper only fires in checkPropertyAccessAssignment (avoids FPs in recursive types like infinitelyExpandingTypeAssignability). → +1 test (divergentAccessorsTypes2).
 
   **Remaining sub-steps for next session:**
   - Downstream arrow param type propagation: populate `currentLocalTypes` with contextually-typed arrow params when recursing into the body (unlocks 16.0a+b latent gains)
   - TS2353 call args: loosen guards (currently requires `hasTargetProps`, maybe allow interfaces)
-  - Discriminant narrowing for union targets (unlocks discriminatedUnionErrorMessage, missingDiscriminants)
-  - Generic instantiation for class instance method/property types (unlocks divergentAccessorsTypes2, indexIntoArraySubclass, extendGenericArray)
+  - Discriminant narrowing for union targets (unlocks discriminatedUnionErrorMessage, missingDiscriminants) — needs literal preservation in object literal prop types
+  - Generic instantiation for element access (`x2[0]` where `x2: Foo<string>` extends `Array<string>`) unlocks indexIntoArraySubclass, extendGenericArray
   - Namespace-scoped variable resolution in checkPropertyAccessAssignment (unlocks assignToFn-style tests)
   - JSDoc `@type` annotation parsing for .js file checks (unlocks checkJsdocTypeTagOnExportAssignment* family)
 
