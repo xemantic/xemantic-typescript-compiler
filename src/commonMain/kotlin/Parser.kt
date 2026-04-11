@@ -38,6 +38,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private val lineStarts: IntArray = computeLineStarts(source)
 
     fun parse(): SourceFile {
+        // 16.0: Check triple-slash reference path directives for self-reference (TS1006).
+        checkTripleSlashSelfReference()
         nextToken()
         val statements = parseStatements(topLevel = true)
         // Capture any trailing comments at the end of the file (between last statement and EOF)
@@ -189,6 +191,54 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 length = 1,
             )
         )
+    }
+
+    /**
+     * 16.0: Detect `/// <reference path="self.ts" />` self-reference and emit TS1006.
+     * Scans the file's leading triple-slash directives without using the parser/scanner.
+     * Compares the basename portion of the path against the source file's basename.
+     */
+    private fun checkTripleSlashSelfReference() {
+        val ownBaseName = fileName.substringAfterLast('/')
+        val refRegex = Regex("""///\s*<reference\s+path\s*=\s*["']([^"']+)["']""")
+        var pos = 0
+        for (line in source.lineSequence()) {
+            val trimmed = line.trimStart()
+            if (!trimmed.startsWith("///")) {
+                if (trimmed.isNotEmpty()) break // first non-triple-slash, non-blank line stops scan
+                pos += line.length + 1
+                continue
+            }
+            val match = refRegex.find(trimmed)
+            if (match != null) {
+                val refPath = match.groupValues[1]
+                // Only flag exact-name self-reference. Strip leading `./` for the check.
+                // Paths with `..` need full resolution, handled elsewhere.
+                val normalizedRef = if (refPath.startsWith("./")) refPath.substring(2) else refPath
+                if (normalizedRef == ownBaseName && !refPath.contains("..")) {
+                    // Position the error at the path string (excluding the surrounding quotes)
+                    val pathStartInLine = line.indexOf(refPath)
+                    if (pathStartInLine >= 0) {
+                        val absStart = pos + pathStartInLine
+                        val absLen = refPath.length
+                        val (line0, char0) = getLineAndCharacterOfPosition(absStart)
+                        diagnostics.add(
+                            Diagnostic(
+                                message = "A file cannot have a reference to itself.",
+                                category = DiagnosticCategory.Error,
+                                code = 1006,
+                                fileName = fileName,
+                                line = line0,
+                                character = char0,
+                                start = absStart,
+                                length = absLen,
+                            )
+                        )
+                    }
+                }
+            }
+            pos += line.length + 1
+        }
     }
 
     private fun reportError(message: String, code: Int = 1005, overrideLength: Int? = null, overrideStart: Int? = null) {
