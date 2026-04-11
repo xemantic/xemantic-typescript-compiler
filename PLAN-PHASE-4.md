@@ -2504,9 +2504,10 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   **Remaining sub-steps for next session:**
   - Downstream arrow param type propagation: populate `currentLocalTypes` with contextually-typed arrow params when recursing into the body (unlocks 16.0a+b latent gains)
   - TS2353 call args: loosen guards (currently requires `hasTargetProps`, maybe allow interfaces)
-  - Chained assignment TS2353: `obj1 = obj2 = { excess }` only flags against the innermost `=` target
   - Discriminant narrowing for union targets (unlocks discriminatedUnionErrorMessage, missingDiscriminants)
-  - TS2304 FP: type parameters used in conditional types (`T extends [infer Head, ...infer Rest]`) flagged as missing names
+  - Generic instantiation for class instance method/property types (unlocks divergentAccessorsTypes2, indexIntoArraySubclass, extendGenericArray)
+  - Namespace-scoped variable resolution in checkPropertyAccessAssignment (unlocks assignToFn-style tests)
+  - JSDoc `@type` annotation parsing for .js file checks (unlocks checkJsdocTypeTagOnExportAssignment* family)
 
   **Problem:** When checking `foo([1, "a"])` where `foo` takes `number[]`, the checker must propagate the *expected* element type `number` down into each array literal element so `"a"` can be checked as `string` against `number` target. Currently, `getTypeOfExpression` is purely bottom-up — it computes the type of an expression in isolation without knowing what's expected.
 
