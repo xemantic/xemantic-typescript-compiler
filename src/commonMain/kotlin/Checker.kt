@@ -32686,6 +32686,50 @@ interface DataView {
     }
 
     /**
+     * 16.0: Check that the RHS of an `in` expression is an object-like type.
+     * Emits TS2322 "Type 'X' is not assignable to type 'object'." for primitive
+     * RHS types like `'' in 0` or `0 in 'foo'`.
+     */
+    private fun checkInOperatorRhs(rhs: Expression, source: String, fileName: String) {
+        try {
+            val rhsType = getTypeOfExpression(rhs)
+            if (rhsType === anyType || rhsType === errorType) return
+            if (rhsType === unknownType) return
+            // null/undefined are valid (handled separately by strictNullChecks)
+            if (rhsType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+            // Object/Interface/Reference types are valid
+            if (rhsType is Type.Object || rhsType is Type.Interface) return
+            if (rhsType is Type.TypeParam) return // generic — accept conservatively
+            // Primitive types are invalid for `in` RHS
+            val isPrimitive = rhsType.flags.hasAny(
+                TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or
+                TypeFlags.BigInt or TypeFlags.ESSymbol or TypeFlags.Void or
+                TypeFlags.Never or
+                TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral or
+                TypeFlags.Enum
+            )
+            if (!isPrimitive) return
+            val displaySource = typeToString(rhsType)
+            val start = rhs.pos
+            val length = expressionTrueEnd(rhs) - start
+            if (length <= 0) return
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type 'object'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
      * 16.0: Traverse a chained assignment right-hand side to find the innermost
      * ObjectLiteralExpression. Returns null if the chain doesn't end in a literal.
      * E.g. for `obj2 = obj3 = { a: 1 }`, returns the `{a: 1}` node.
@@ -34107,6 +34151,12 @@ interface DataView {
     /** Check a binary expression for arithmetic type errors (TS2362/TS2363/TS2365). */
     private fun checkBinaryOperatorTypes(expr: BinaryExpression, source: String, fileName: String) {
         val op = expr.operator
+        // 16.0: `in` operator — RHS must be an object-like type, not a primitive.
+        // TypeScript emits TS2322 "Type 'X' is not assignable to type 'object'."
+        if (op == SyntaxKind.InKeyword) {
+            checkInOperatorRhs(expr.right, source, fileName)
+            return
+        }
         // Only check arithmetic and comparison operators
         val isArithmetic = op == SyntaxKind.Minus || op == SyntaxKind.Asterisk ||
             op == SyntaxKind.Slash || op == SyntaxKind.Percent ||
