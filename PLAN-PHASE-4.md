@@ -2491,7 +2491,9 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+18 tests, 8051 passing)**
+- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+19 tests, 8055 passing)**
+
+  **Session 2026-04-11 (16.0o, +1 test: 8054→8055):** Contextual typing propagation through `checkPropertyAccessInExpr` so un-annotated arrow function parameters in object literal call arguments are typed from the contextual signature. CallExpression→ObjectLiteralExpression→PropertyAssignment→ArrowFunction chain propagates `contextualType`; at ArrowFunction, contextual sig params populate `currentLocalTypes` for TS2339 checks in the body. Added apparent-type lookup in the local-fallback branch of `checkSinglePropertyAccess` so primitive-typed identifiers (e.g. `s: string`) resolve to the String wrapper interface for property-existence checks, with `displayTypeOverride` preserving the primitive name in the diagnostic. Tightened the number-index-signature bail-out to only skip non-numeric property names when we came through the primitive-apparent path (keeps `Array.isArray` static access working). Shadowed outer params in the FunctionExpression branch to prevent outer `(s: string)` leaking into inner un-annotated `function (s) {}`. → +1 test (contextualTypingOfObjectLiterals2).
 
   **Session 2026-04-11 progress:**
   - 16.0a: TS2353 excess property check for object literal call args (infra, 0 gains — guards too tight for most cases)
