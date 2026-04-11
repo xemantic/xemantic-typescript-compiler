@@ -31601,7 +31601,40 @@ interface DataView {
             }
             is CallExpression -> {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-                expr.arguments?.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                // 16.0: contextual typing for call arguments — propagate param types
+                // into object literals / arrow function params so un-annotated arrow
+                // parameters can be typed from the contextual signature.
+                val argCtxTypes: List<Type?>? = run {
+                    if (expr.arguments.isNullOrEmpty()) return@run null
+                    try {
+                        val callee = expr.expression
+                        val calleeType = when (callee) {
+                            is Identifier -> getTypeOfIdentifier(callee)
+                            is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+                            else -> return@run null
+                        }
+                        if (calleeType !is Type.Object) return@run null
+                        resolveStructuredTypeMembers(calleeType)
+                        val sigs = calleeType.callSignatures
+                        val sig = if (sigs != null && sigs.size == 1) sigs[0] else return@run null
+                        expr.arguments!!.mapIndexed { i, _ ->
+                            if (i < sig.parameters.size) {
+                                val pt = getTypeOfSymbol(sig.parameters[i])
+                                if (pt === anyType || pt === errorType) null else pt
+                            } else null
+                        }
+                    } catch (_: StackOverflowError) { null }
+                }
+                expr.arguments?.forEachIndexed { i, arg ->
+                    val savedCtx = contextualType
+                    val argCtx = argCtxTypes?.getOrNull(i)
+                    if (argCtx != null) contextualType = argCtx else contextualType = null
+                    try {
+                        checkPropertyAccessInExpr(arg, source, fileName, enclosingClassType)
+                    } finally {
+                        contextualType = savedCtx
+                    }
+                }
             }
             is BinaryExpression -> {
                 checkPropertyAccessInExpr(expr.left, source, fileName, enclosingClassType)
@@ -31617,12 +31650,37 @@ interface DataView {
                 val savedLocalTypes = currentLocalTypes
                 currentLocalTypes = currentLocalTypes.toMutableMap()
                 populateParameterLocalTypes(expr.parameters)
-                expr.body.let { body ->
-                    when (body) {
-                        is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
-                        is Expression -> checkPropertyAccessInExpr(body, source, fileName, enclosingClassType)
-                        else -> {}
+                // 16.0: contextual param inference for un-annotated arrow parameters
+                val ctxType = contextualType
+                if (ctxType is Type.Object) {
+                    try {
+                        resolveStructuredTypeMembers(ctxType)
+                        val sigs = ctxType.callSignatures
+                        if (sigs != null && sigs.size == 1) {
+                            val sig = sigs[0]
+                            for ((i, param) in expr.parameters.withIndex()) {
+                                if (param.type != null) continue
+                                if (i >= sig.parameters.size) break
+                                val pName = param.name as? Identifier ?: continue
+                                val pType = try { getTypeOfSymbol(sig.parameters[i]) } catch (_: StackOverflowError) { continue }
+                                if (pType === anyType || pType === errorType) continue
+                                currentLocalTypes[pName.text] = pType
+                            }
+                        }
+                    } catch (_: StackOverflowError) { /* circular */ }
+                }
+                val savedCtx = contextualType
+                contextualType = null
+                try {
+                    expr.body.let { body ->
+                        when (body) {
+                            is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
+                            is Expression -> checkPropertyAccessInExpr(body, source, fileName, enclosingClassType)
+                            else -> {}
+                        }
                     }
+                } finally {
+                    contextualType = savedCtx
                 }
                 currentLocalTypes = savedLocalTypes
             }
@@ -31646,11 +31704,43 @@ interface DataView {
                 expr.elements.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             }
             is ObjectLiteralExpression -> {
+                // 16.0: propagate contextual type into each property value so nested
+                // arrow function params can be typed from the contextual member types.
+                val ctxObj = contextualType as? Type.Object
+                if (ctxObj != null) {
+                    try { resolveStructuredTypeMembers(ctxObj) } catch (_: StackOverflowError) {}
+                }
                 for (prop in expr.properties) {
                     when (prop) {
-                        is PropertyAssignment -> checkPropertyAccessInExpr(prop.initializer, source, fileName, enclosingClassType)
+                        is PropertyAssignment -> {
+                            val propName = when (val n = prop.name) {
+                                is Identifier -> n.text
+                                is StringLiteralNode -> n.text
+                                else -> null
+                            }
+                            val propCtx = if (propName != null && ctxObj != null) {
+                                ctxObj.members?.get(propName)?.let { sym ->
+                                    try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                                }
+                            } else null
+                            val savedCtx = contextualType
+                            contextualType = if (propCtx != null && propCtx !== anyType && propCtx !== errorType) propCtx else null
+                            try {
+                                checkPropertyAccessInExpr(prop.initializer, source, fileName, enclosingClassType)
+                            } finally {
+                                contextualType = savedCtx
+                            }
+                        }
                         is ShorthandPropertyAssignment -> {}
-                        is SpreadAssignment -> checkPropertyAccessInExpr(prop.expression, source, fileName, enclosingClassType)
+                        is SpreadAssignment -> {
+                            val savedCtx = contextualType
+                            contextualType = null
+                            try {
+                                checkPropertyAccessInExpr(prop.expression, source, fileName, enclosingClassType)
+                            } finally {
+                                contextualType = savedCtx
+                            }
+                        }
                         else -> {}
                     }
                 }
@@ -31668,7 +31758,33 @@ interface DataView {
             is SatisfiesExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
             is YieldExpression -> expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             is FunctionExpression -> {
-                expr.body?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null) }
+                val savedLocalTypes = currentLocalTypes
+                currentLocalTypes = currentLocalTypes.toMutableMap()
+                // 16.0: shadow outer vars with unannotated function-expression params
+                // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
+                // type the inner `s` from the outer scope.
+                for (param in expr.parameters) {
+                    val pName = (param.name as? Identifier)?.text ?: continue
+                    if (param.type != null) {
+                        try {
+                            val pt = getTypeFromTypeNode(param.type!!)
+                            if (pt !== anyType && pt !== errorType) {
+                                currentLocalTypes[pName] = pt
+                                continue
+                            }
+                        } catch (_: StackOverflowError) {}
+                    }
+                    // Unannotated param: remove any outer binding so property access falls back to `any`
+                    currentLocalTypes.remove(pName)
+                }
+                val savedCtx = contextualType
+                contextualType = null
+                try {
+                    expr.body?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null) }
+                } finally {
+                    contextualType = savedCtx
+                }
+                currentLocalTypes = savedLocalTypes
             }
             else -> {}
         }
@@ -32020,6 +32136,9 @@ interface DataView {
             return
         }
 
+        // 16.0: track a display-override type for primitives whose apparent (wrapper)
+        // type is used for property lookup — diagnostic must show the primitive name.
+        var displayTypeOverride: Type? = null
         val objectType = if (isThisAccess) {
             if (enclosingClassType == null) return
             enclosingClassType
@@ -32067,8 +32186,14 @@ interface DataView {
                 exprType
             } else {
                 // Fallback: try resolving from currentLocalTypes (function params, local vars)
-                val exprType = getTypeOfIdentifier(expr.expression as Identifier)
-                if (exprType === anyType || exprType === errorType || exprType === unknownType) return
+                val rawType = getTypeOfIdentifier(expr.expression as Identifier)
+                if (rawType === anyType || rawType === errorType || rawType === unknownType) return
+                // 16.0: For primitive types, use the apparent (wrapper) type so that
+                // e.g. `s: string` can detect `s.hmm` as TS2339 via the String wrapper.
+                val exprType = if (rawType !is Type.Object) {
+                    displayTypeOverride = rawType
+                    getApparentType(rawType)
+                } else rawType
                 if (exprType !is Type.Object) return
                 // For local variables, skip class-typed (may be narrowed)
                 val typeSym = exprType.symbol
@@ -32096,8 +32221,14 @@ interface DataView {
         // Check namespace exports (for merged class+namespace symbols like `Observable.someValue`)
         val sym = objectType.symbol
         if (sym != null && sym.flags.hasAny(SymbolFlags.Module) && sym.exports?.containsKey(propName) == true) return
-        // Check index signatures
-        if (objectType.stringIndexInfo != null || objectType.numberIndexInfo != null) return
+        // Check index signatures. For primitive apparent-type checks (16.0),
+        // a number-index only matches numeric-looking names (so `s.hmm` on string
+        // reports TS2339). For other paths, keep the permissive check since
+        // many static-side accesses (e.g. Array.isArray) rely on it to avoid FPs.
+        if (objectType.stringIndexInfo != null) return
+        if (objectType.numberIndexInfo != null) {
+            if (displayTypeOverride == null || propName.toDoubleOrNull() != null) return
+        }
         // Try spelling suggestion from known properties
         val memberNames = (objectType.properties ?: emptyList()).map { it.name }.toSet()
         val suggestion = getSpellingSuggestionFromNames(propName, memberNames)
@@ -32105,7 +32236,7 @@ interface DataView {
         val start = expr.name.pos
         val length = expr.name.text.length
         // For static access on class/namespace identifiers, use "typeof X" format
-        val rawTypeName = typeToString(objectType)
+        val rawTypeName = typeToString(displayTypeOverride ?: objectType)
         val typeName = if (!isThisAccess && objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true) {
             "typeof $rawTypeName"
         } else {
