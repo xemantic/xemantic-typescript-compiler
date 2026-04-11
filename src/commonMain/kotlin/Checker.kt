@@ -27115,8 +27115,57 @@ interface DataView {
                         emitTS2322(squiggleStart, squiggleLength, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
                 }
+            } else if (target is PropertyAccessExpression) {
+                // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
+                checkPropertyAccessAssignment(target, expr.right, source, fileName)
             }
         }
+    }
+
+    /**
+     * 16.0: Check assignability of value to a property access target like `x.prop = value`.
+     * Resolves x's type, looks up the property symbol, gets its declared type, and emits
+     * TS2322 if value type isn't assignable.
+     */
+    private fun checkPropertyAccessAssignment(
+        target: PropertyAccessExpression, value: Expression, source: String, fileName: String
+    ) {
+        try {
+            val objType = getTypeOfExpression(target.expression)
+            if (objType === anyType || objType === errorType) return
+            if (objType !is Type.Object) return
+            resolveStructuredTypeMembers(objType)
+            val propName = target.name.text
+            val propSym = objType.members?.get(propName) ?: return
+            val propType = getTypeOfSymbol(propSym)
+            if (propType === anyType || propType === errorType) return
+            val valueType = getTypeOfExpression(value)
+            if (valueType === anyType || valueType === errorType) return
+            if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            if (!canUseTypeEngine(valueType, propType)) return
+            if (checkTypeRelatedTo(valueType, propType, assignableRelation)) return
+            // Object literal — emit TS2353 for excess instead
+            if (value is ObjectLiteralExpression) {
+                val displayTarget = typeToString(propType)
+                if (checkExcessProperties(value, valueType, propType, displayTarget, source, fileName)) return
+            }
+            val displaySource = typeToString(valueType)
+            val displayTarget = typeToString(propType)
+            // Squiggle spans the property name only
+            val start = target.name.pos
+            val length = target.name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) { /* circular */ }
     }
 
     // -----------------------------------------------------------------------
