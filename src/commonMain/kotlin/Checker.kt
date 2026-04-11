@@ -24725,10 +24725,35 @@ interface DataView {
                         is GetAccessor -> checkGetAccessorForImplicitReturn(prop, source, fileName)
                         is MethodDeclaration -> checkMethodForImplicitReturn(prop, source, fileName)
                         is FunctionExpression -> checkFuncExprForImplicitReturn(prop, source, fileName)
+                        is PropertyAssignment -> walkExprForImplicitReturns(prop.initializer, source, fileName)
                         else -> {}
                     }
                 }
             }
+            // 16.0: Recurse into nested expressions to visit arrows in call args, etc.
+            is CallExpression -> {
+                walkExprForImplicitReturns(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkExprForImplicitReturns(arg, source, fileName)
+            }
+            is NewExpression -> {
+                walkExprForImplicitReturns(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkExprForImplicitReturns(it, source, fileName) }
+            }
+            is ParenthesizedExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                walkExprForImplicitReturns(expr.left, source, fileName)
+                walkExprForImplicitReturns(expr.right, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkExprForImplicitReturns(expr.condition, source, fileName)
+                walkExprForImplicitReturns(expr.whenTrue, source, fileName)
+                walkExprForImplicitReturns(expr.whenFalse, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForImplicitReturns(it, source, fileName) }
+            is SpreadElement -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is AsExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is NonNullExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             else -> {}
         }
     }
@@ -24843,7 +24868,13 @@ interface DataView {
 
     private fun checkArrowForImplicitReturn(expr: ArrowFunction, source: String, fileName: String) {
         val bodyNode = expr.body
-        if (bodyNode !is Block) return // expression body always returns
+        // 16.0: Concise body (single expression) — check it against return type annotation.
+        // E.g., `(arg): number => 'foo'` should emit TS2322 at 'foo'.
+        if (bodyNode is Expression && expr.type != null) {
+            checkArrowConciseBodyReturnType(expr, bodyNode, source, fileName)
+            return
+        }
+        if (bodyNode !is Block) return
         val retType = expr.type
         val isAsync = ModifierFlag.Async in expr.modifiers
         val savedParams = currentFunctionParams
@@ -24854,6 +24885,47 @@ interface DataView {
             currentFunctionParams = savedParams
         }
         walkForImplicitReturns(bodyNode.statements, source, fileName)
+    }
+
+    /**
+     * 16.0: Check arrow function concise body expression against the declared
+     * return type annotation. Catches `(arg): number => 'foo'` style errors.
+     */
+    private fun checkArrowConciseBodyReturnType(
+        arrow: ArrowFunction, body: Expression, source: String, fileName: String
+    ) {
+        val retTypeNode = arrow.type ?: return
+        try {
+            val targetType = getTypeFromTypeNode(retTypeNode)
+            if (targetType === anyType || targetType === errorType) return
+            val bodyType = getTypeOfExpression(body)
+            if (bodyType === anyType || bodyType === errorType) return
+            // Skip null/undefined sources — strictNullChecks mismatch with TypeScript test defaults.
+            if (bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            if (!canUseTypeEngine(bodyType, targetType)) return
+            if (checkTypeRelatedTo(bodyType, targetType, assignableRelation)) return
+            // Object literal — emit TS2353 if excess props instead
+            if (body is ObjectLiteralExpression) {
+                val displayTarget = formatTypeForDisplay(retTypeNode) ?: typeToString(targetType)
+                if (checkExcessProperties(body, bodyType, targetType, displayTarget, source, fileName)) return
+            }
+            val displaySource = typeToString(bodyType)
+            val displayTarget = formatTypeForDisplay(retTypeNode) ?: typeToString(targetType)
+            val start = body.pos
+            val length = expressionTrueEnd(body) - start
+            if (length <= 0) return
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) { /* circular */ }
     }
 
     /**
