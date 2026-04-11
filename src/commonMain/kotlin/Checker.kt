@@ -26658,8 +26658,13 @@ interface DataView {
             val init = decl.initializer ?: return
             try {
                 val inferred = getTypeOfExpression(init)
+                // 16.0: Allow void from explicit super()/CallExpression — for super(...)
+                // returning void, we want `x = 5` later to fire TS2322. Filter void
+                // only when source is null/undefined identifier (already handled).
+                val isFromCall = init is CallExpression
                 if (inferred !== anyType && inferred !== errorType &&
-                    !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                    !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+                    (isFromCall || !inferred.flags.hasAny(TypeFlags.Void))) {
                     // Widen literal types: 42 → number, "hello" → string
                     val widened = when (inferred) {
                         is Type.StringLiteral -> stringType
@@ -28101,6 +28106,8 @@ interface DataView {
 
     /** Get the return type of a call expression by resolving the callee's call signature. */
     private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
+        // 16.0: super(...) call inside a constructor returns void
+        if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") return voidType
         val calleeType = when (val callee = expr.expression) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
