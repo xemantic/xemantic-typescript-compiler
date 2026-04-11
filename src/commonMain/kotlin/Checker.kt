@@ -32328,10 +32328,17 @@ interface DataView {
                 if (useCtx) contextualType = savedContextual
             }
             if (argType === anyType || argType === errorType) continue
+            // 16.0: contextual typing for array literal arguments — check each
+            // element against the parameter's array element type. Catches
+            // `foo([1, "a"])` where foo takes `number[]`.
+            val isRestParam = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
+                paramType.target?.symbol?.name == "Array") {
+                checkArrayLiteralElementsAgainstType(arg, paramType, source, fileName)
+            }
             // 16.0a: excess property check for object literal arguments passed
             // to typed object parameters. Emits TS2353 and stops further arg checks.
             // Skip rest parameters — param type is an array wrapper, not the element type.
-            val isRestParam = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
                 try {
                     resolveStructuredTypeMembers(paramType)
@@ -32765,6 +32772,68 @@ interface DataView {
      * in the source that don't exist in the target are excess properties.
      * Returns true if TS2353 diagnostics were emitted (caller should skip TS2741/TS2322).
      */
+    /**
+     * 16.0: For an array literal call argument with an Array<T> parameter type,
+     * check each element against T using TS2322. Catches `foo([1, "a"])` where
+     * foo takes number[]. Only fires when T is a simple checkable type to avoid
+     * FPs from incomplete structural comparison.
+     */
+    private fun checkArrayLiteralElementsAgainstType(
+        arrLit: ArrayLiteralExpression,
+        arrayParamType: Type.Reference,
+        source: String,
+        fileName: String,
+    ) {
+        val elementType = arrayParamType.resolvedTypeArguments?.firstOrNull() ?: return
+        if (elementType === anyType || elementType === errorType) return
+        if (elementType is Type.TypeParam) return
+        if (!isSimpleCheckableType(elementType)) {
+            // For object element types, fall through to existing object-element TS2353 path
+            if (elementType is Type.Object) {
+                try {
+                    resolveStructuredTypeMembers(elementType)
+                    if (elementType.properties.isNullOrEmpty()) return
+                    val display = typeToString(elementType)
+                    for (elem in arrLit.elements) {
+                        if (elem is ObjectLiteralExpression) {
+                            val elemType = getTypeOfExpression(elem)
+                            if (elemType is Type.Object && canUseTypeEngine(elemType, elementType)) {
+                                checkExcessProperties(elem, elemType, elementType, display, source, fileName)
+                            }
+                        }
+                    }
+                } catch (_: StackOverflowError) {}
+            }
+            return
+        }
+        // Primitive element type — TS2322 per element
+        try {
+            for (elem in arrLit.elements) {
+                if (elem is SpreadElement) continue
+                val elemType = getTypeOfExpression(elem)
+                if (elemType === anyType || elemType === errorType) continue
+                if (!checkTypeRelatedTo(elemType, elementType, assignableRelation)) {
+                    val displaySource = typeToString(elemType)
+                    val displayTarget = typeToString(elementType)
+                    val start = elem.pos
+                    val length = expressionTrueEnd(elem) - start
+                    if (length <= 0) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        } catch (_: StackOverflowError) { /* circular */ }
+    }
+
     /**
      * 16.0: TS2353 check for each object literal element in an array literal
      * whose target is an array type with a resolvable element type.
