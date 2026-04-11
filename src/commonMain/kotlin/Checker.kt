@@ -26797,7 +26797,16 @@ interface DataView {
         if (returnTypeNode != null) {
             try {
                 val targetType = getTypeFromTypeNode(returnTypeNode)
-                val sourceType = if (expr != null) getTypeOfExpression(expr) else undefinedType
+                // 16.0: contextual typing — set return type as context for arrow/function
+                // return expressions so their params get typed from the expected signature.
+                val savedContextual = contextualType
+                val useCtx = targetType is Type.Object && (expr is ArrowFunction || expr is FunctionExpression)
+                if (useCtx) contextualType = targetType
+                val sourceType = try {
+                    if (expr != null) getTypeOfExpression(expr) else undefinedType
+                } finally {
+                    if (useCtx) contextualType = savedContextual
+                }
                 if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                     val displaySource = typeToString(sourceType)
                     val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
@@ -32252,8 +32261,34 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
-            val argType = getTypeOfExpression(arg)
+            // 16.0b: contextual typing — set param type as context so arrow/function
+            // arguments get their parameters typed from the expected signature.
+            val savedContextual = contextualType
+            val useCtx = paramType is Type.Object && (arg is ArrowFunction || arg is FunctionExpression)
+            if (useCtx) contextualType = paramType
+            val argType = try { getTypeOfExpression(arg) } finally {
+                if (useCtx) contextualType = savedContextual
+            }
             if (argType === anyType || argType === errorType) continue
+            // 16.0a: excess property check for object literal arguments passed
+            // to typed object parameters. Emits TS2353 and stops further arg checks.
+            // Skip rest parameters — param type is an array wrapper, not the element type.
+            val isRestParam = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
+                try {
+                    resolveStructuredTypeMembers(paramType)
+                    // Only emit TS2353 if target has known named properties — skip
+                    // empty object types, array types (properties list empty), and
+                    // types with index signatures that accept arbitrary keys.
+                    val hasTargetProps = !paramType.properties.isNullOrEmpty()
+                    if (hasTargetProps && canUseTypeEngine(argType, paramType)) {
+                        val displayTarget = typeToString(paramType)
+                        if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName)) {
+                            break // TS2353 emitted — one error per call
+                        }
+                    }
+                } catch (_: StackOverflowError) { /* circular type */ }
+            }
             // Conservative: only check when parameter type is a well-known type
             // (primitive, void, undefined, null, never). Skip object/interface/union/
             // intersection types which need deeper structural comparison or generics.
