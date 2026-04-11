@@ -19268,6 +19268,22 @@ interface DataView {
                     (stmt.isExportEquals && (ModifierFlag.Declare in stmt.modifiers || ModifierFlag.Export in stmt.modifiers)) ||
                     (!stmt.isExportEquals && ModifierFlag.Declare in stmt.modifiers)
                 )
+                // 16.0: TS1035 — `module 'X' {}` without declare (only ambient modules can use quoted names)
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode &&
+                    ModifierFlag.Declare !in stmt.modifiers) {
+                    val nameNode = stmt.name as StringLiteralNode
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Only ambient modules can use quoted names.",
+                        category = DiagnosticCategory.Error,
+                        code = 1035,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameNode.pos,
+                        length = nameNode.text.length + 2,
+                    ))
+                }
                 if (invalidExportAssignmentMod) {
                     val stmt = stmt as ExportAssignment
                     // Find the FIRST modifier keyword in the source (whichever comes first textually)
