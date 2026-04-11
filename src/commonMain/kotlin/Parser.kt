@@ -3390,11 +3390,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                             Identifier(text = "", pos = afterDotPos, end = afterDotPos)
                         }
                         isIdentifier() || isKeyword() -> parseIdentifierName()
+                        // 16.0: When the next token closes the enclosing context (`}`, EOF, `)`, `]`)
+                        // and there's a newline after the dot, TypeScript reports at the closing
+                        // token's position with length 1 (e.g. `bar.\n}` → at the `}`).
+                        newLineAfterDot && (token == SyntaxKind.CloseBrace || token == SyntaxKind.EndOfFile ||
+                                token == SyntaxKind.CloseParen || token == SyntaxKind.CloseBracket) -> {
+                            val closePos = getPos()
+                            reportError("Identifier expected.", code = 1003, overrideStart = closePos, overrideLength = 1)
+                            Identifier(text = "", pos = afterDotPos, end = afterDotPos)
+                        }
                         else -> {
-                            // Closing token (}, EOF, ), ], etc.) or non-keyword token →
-                            // TypeScript reports at the position right after the dot (afterDotPos),
-                            // not at the current token position. This handles trailing whitespace:
-                            // `window. ` should report at col after `.`, not after the space.
+                            // Closing token or non-keyword token on same line →
+                            // TypeScript reports at the position right after the dot (afterDotPos).
                             reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0)
                             Identifier(text = "", pos = afterDotPos, end = afterDotPos)
                         }
