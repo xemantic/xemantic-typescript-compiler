@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-11):** 8,028 / 10,077 tests passing (79.6%). Active queue: **Phase 16 — Fundamental Type System Features**. Phase 15 exhausted.
+**Status (2026-04-11):** 8,054 / 10,077 tests passing (79.9%). Active queue: **Phase 16 — Fundamental Type System Features**. Phase 15 exhausted.
 
 ## Goal
 
@@ -2503,12 +2503,16 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   - 16.0m: Generic class instance type param resolution for property-access assignments. NewExpression honors type arguments → Type.Reference. New `currentTypeParamScope` field + cache bypass in getTypeFromTypeNode. Narrow fix: resolveGenericPropertyType helper only fires in checkPropertyAccessAssignment (avoids FPs in recursive types like infinitelyExpandingTypeAssignability). → +1 test (divergentAccessorsTypes2).
   - 16.0n: Generic property access READING via resolveGenericPropertyType. Extended to MethodDeclaration (instantiated call signatures with substituted return/param types). Hooked into getTypeOfPropertyAccess for Type.Reference objects. Narrow guard: direct member OR all base-type args are pass-through TypeParams (rejects `class D<T> extends C<string>` which would need full chain walking). `getTypeFromBaseTypeExpression` now honors type arguments → Type.Reference. Heritage resolution iterates ALL declarations (interface merging) via resolveBaseTypesLazy, called eagerly in getDeclaredTypeOfClassOrInterface AND lazily in resolveInterfaceMembers if baseTypes is empty (picks up user's `interface Array<T> extends IFoo<T>` after built-in Array was cached at init). Index signature type resolution scoped to interface type params. PropertyAccessExpression excluded from TS2322 elaboration chain (matches TS behavior). → +6 tests (extendGenericArray, extendGenericArray2, indexIntoArraySubclass, genericGetter, genericGetter3, wrappedRecursiveGenericType).
 
-  **Remaining sub-steps for next session:**
-  - Downstream arrow param type propagation: populate `currentLocalTypes` with contextually-typed arrow params when recursing into the body (unlocks 16.0a+b latent gains)
+  **Session 2026-04-11 continuation (investigation, +0 tests):** Explored remaining sub-steps; each requires substantial infrastructure beyond surgical fixes:
+  - **Arrow param propagation to currentLocalTypes**: Implemented as populateArrowParamLocalTypes helper wrapping getTypeOfArrowFunction body walk. Net-zero — body walking in the TS2322/TS2345 pass doesn't re-enter getTypeOfArrowFunction; the populated scope only affects getTypeOfExpression walks on concise-body expressions whose type only feeds the resolvedReturnType field that's rarely compared. **Reverted** to avoid dead complexity.
+  - **assignToFn / namespace-scoped variable resolution**: Needs a new currentNamespaceScope field threaded through getTypeFromTypeReference + getTypeOfIdentifier. `interface I` inside `namespace M` lives in M's `exports`, not globals or currentFileLocals, so `var x: I` inside M resolves I to errorType and `currentLocalTypes["x"]` is never populated. Significant infrastructure — deferred.
+  - **contextualTyping11/33/39 etc.**: Every failing contextualTyping\* test needs multiple missing features simultaneously (return-type inference from function body, TS2352 on type assertions, TS2741 with related-info elaboration chains). None is a 1-change win.
+  - **checkJsdocTypeTagOnExportAssignment\***: Needs JSDoc `/** @type {Foo} */` comment parsing + type-tag binding. Substantial parser+binder+checker work.
+
+  **Remaining sub-steps deferred to later sessions:**
   - TS2353 call args: loosen guards (currently requires `hasTargetProps`, maybe allow interfaces)
   - Discriminant narrowing for union targets (unlocks discriminatedUnionErrorMessage, missingDiscriminants) — needs literal preservation in object literal prop types
-  - Generic instantiation for element access (`x2[0]` where `x2: Foo<string>` extends `Array<string>`) unlocks indexIntoArraySubclass, extendGenericArray
-  - Namespace-scoped variable resolution in checkPropertyAccessAssignment (unlocks assignToFn-style tests)
+  - Namespace-scoped variable resolution in checkPropertyAccessAssignment (unlocks assignToFn-style tests) — needs currentNamespaceScope field threaded through type resolution
   - JSDoc `@type` annotation parsing for .js file checks (unlocks checkJsdocTypeTagOnExportAssignment* family)
 
   **Problem:** When checking `foo([1, "a"])` where `foo` takes `number[]`, the checker must propagate the *expected* element type `number` down into each array literal element so `"a"` can be checked as `string` against `number` target. Currently, `getTypeOfExpression` is purely bottom-up — it computes the type of an expression in isolation without knowing what's expected.
