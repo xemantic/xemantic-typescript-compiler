@@ -2491,7 +2491,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+12 tests, 8048 passing)**
+- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+18 tests, 8051 passing)**
 
   **Session 2026-04-11 progress:**
   - 16.0a: TS2353 excess property check for object literal call args (infra, 0 gains — guards too tight for most cases)
@@ -2501,6 +2501,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   - 16.0e: Nested object literal recursion in checkExcessProperties (+0 standalone, but enables 16.0f gain)
   - 16.0f: typeToString optional property display for anonymous Object types (`name?: type | undefined`) → +1 test (nonObjectUnionNestedExcessPropertyCheck)
   - 16.0m: Generic class instance type param resolution for property-access assignments. NewExpression honors type arguments → Type.Reference. New `currentTypeParamScope` field + cache bypass in getTypeFromTypeNode. Narrow fix: resolveGenericPropertyType helper only fires in checkPropertyAccessAssignment (avoids FPs in recursive types like infinitelyExpandingTypeAssignability). → +1 test (divergentAccessorsTypes2).
+  - 16.0n: Generic property access READING via resolveGenericPropertyType. Extended to MethodDeclaration (instantiated call signatures with substituted return/param types). Hooked into getTypeOfPropertyAccess for Type.Reference objects. Narrow guard: direct member OR all base-type args are pass-through TypeParams (rejects `class D<T> extends C<string>` which would need full chain walking). `getTypeFromBaseTypeExpression` now honors type arguments → Type.Reference. Heritage resolution iterates ALL declarations (interface merging) via resolveBaseTypesLazy, called eagerly in getDeclaredTypeOfClassOrInterface AND lazily in resolveInterfaceMembers if baseTypes is empty (picks up user's `interface Array<T> extends IFoo<T>` after built-in Array was cached at init). Index signature type resolution scoped to interface type params. PropertyAccessExpression excluded from TS2322 elaboration chain (matches TS behavior). → +6 tests (extendGenericArray, extendGenericArray2, indexIntoArraySubclass, genericGetter, genericGetter3, wrappedRecursiveGenericType).
 
   **Remaining sub-steps for next session:**
   - Downstream arrow param type propagation: populate `currentLocalTypes` with contextually-typed arrow params when recursing into the body (unlocks 16.0a+b latent gains)

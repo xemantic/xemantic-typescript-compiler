@@ -26822,7 +26822,8 @@ interface DataView {
                         init !is DeleteExpression && init !is AwaitExpression &&
                         init !is BinaryExpression && init !is ParenthesizedExpression &&
                         init !is ElementAccessExpression && init !is AsExpression &&
-                        init !is TypeAssertionExpression
+                        init !is TypeAssertionExpression &&
+                        init !is PropertyAccessExpression
                     if (needsElaboration) chain.add("  $message")
                     if (targetType is Type.TypeParam) {
                         val targetName = targetType.symbol?.name ?: "T"
@@ -27193,11 +27194,30 @@ interface DataView {
         val typeArgs = ref.resolvedTypeArguments ?: return null
         if (typeParams.size != typeArgs.size || typeParams.isEmpty()) return null
         val decl = propSym.valueDeclaration ?: propSym.declarations.firstOrNull() ?: return null
-        val declType = when (decl) {
-            is PropertyDeclaration -> decl.type ?: return null
-            is GetAccessor -> decl.type ?: return null
-            is Parameter -> decl.type ?: return null
-            else -> return null
+        // 16.0n: Safe cases — either the property is declared directly on the target,
+        // or all base-type arguments are unspecialized (pass-through T). This avoids
+        // incorrect substitution for `class D<T> extends C<string>` where x on C has
+        // T=string, not D's T.
+        val targetSym = target.symbol ?: return null
+        val isDirectMember = targetSym.declarations.any { tDecl ->
+            val classMembers = when (tDecl) {
+                is ClassDeclaration -> tDecl.members
+                is InterfaceDeclaration -> tDecl.members
+                else -> return@any false
+            }
+            classMembers.any { it === decl }
+        }
+        if (!isDirectMember) {
+            // Inherited: safe only if every base-type's type arguments are type parameters
+            // (not concretized). That way, mapping target's T → typeArg propagates unchanged
+            // through the base chain.
+            val bases = target.baseTypes
+            if (bases.isNullOrEmpty()) return null
+            val allBasesPassthrough = bases.all { b ->
+                if (b !is Type.Reference) return@all false
+                b.resolvedTypeArguments?.all { it is Type.TypeParam } ?: true
+            }
+            if (!allBasesPassthrough) return null
         }
         val scope = mutableMapOf<String, Type.TypeParam>()
         currentTypeParamScope?.let { scope.putAll(it) }
@@ -27208,10 +27228,66 @@ interface DataView {
         val saved = currentTypeParamScope
         currentTypeParamScope = scope
         return try {
-            val rawType = getTypeFromTypeNode(declType)
-            if (rawType === errorType || rawType === anyType) return null
             val mapper = createTypeMapper(typeParams, typeArgs)
-            instantiateType(rawType, mapper)
+            when (decl) {
+                is PropertyDeclaration -> {
+                    val declType = decl.type ?: return null
+                    val rawType = getTypeFromTypeNode(declType)
+                    if (rawType === errorType || rawType === anyType) null
+                    else instantiateType(rawType, mapper)
+                }
+                is GetAccessor -> {
+                    val declType = decl.type ?: return null
+                    val rawType = getTypeFromTypeNode(declType)
+                    if (rawType === errorType || rawType === anyType) null
+                    else instantiateType(rawType, mapper)
+                }
+                is Parameter -> {
+                    val declType = decl.type ?: return null
+                    val rawType = getTypeFromTypeNode(declType)
+                    if (rawType === errorType || rawType === anyType) null
+                    else instantiateType(rawType, mapper)
+                }
+                is MethodDeclaration -> {
+                    // 16.0n: Build an instantiated method type (Type.Object with call signatures)
+                    // with return/param types substituted. Scope is active so T in declarations
+                    // resolves to the target's TypeParam, which the mapper then substitutes.
+                    val methodDecls = propSym.declarations.filterIsInstance<MethodDeclaration>()
+                    val overloadDecls = methodDecls.filter { it.body == null }
+                    val implDecl = methodDecls.find { it.body != null }
+                    val sigDecls = if (overloadDecls.isNotEmpty()) overloadDecls else listOfNotNull(implDecl)
+                    if (sigDecls.isEmpty()) return null
+                    val sigs = sigDecls.map { md ->
+                        val rawReturn = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        val returnType = if (rawReturn === errorType) anyType
+                                         else instantiateType(rawReturn, mapper)
+                        val params = md.parameters.mapNotNull { p ->
+                            val pName = (p.name as? Identifier)?.text ?: return@mapNotNull null
+                            if (pName == "this") return@mapNotNull null
+                            val sym = Symbol(SymbolFlags.FunctionScopedVariable, pName)
+                            sym.declarations.add(p)
+                            sym.valueDeclaration = p
+                            val rawParamType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            val paramType = if (rawParamType === errorType) anyType
+                                            else instantiateType(rawParamType, mapper)
+                            symbolTypes[sym.id] = paramType
+                            sym
+                        }
+                        Signature(
+                            declaration = md, parameters = params,
+                            resolvedReturnType = returnType,
+                            minArgumentCount = md.parameters.count {
+                                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                            },
+                        )
+                    }
+                    val fnType = Type.Object()
+                    fnType.callSignatures = sigs
+                    fnType.properties = emptyList()
+                    fnType
+                }
+                else -> null
+            }
         } catch (_: StackOverflowError) {
             null
         } finally {
@@ -27451,16 +27527,36 @@ interface DataView {
                     param
                 }
             }
-            // Resolve base types from heritage clauses
-            val heritageClauses = when (decl) {
-                is ClassDeclaration -> decl.heritageClauses
-                is InterfaceDeclaration -> decl.heritageClauses
-                else -> null
-            }
-            if (heritageClauses != null) {
-                val baseTypes = mutableListOf<Type>()
+            // 16.0n: Eagerly resolve heritage from all CURRENTLY visible declarations.
+            // For types like Array (where user may add `extends X` via a merged declaration
+            // after this type was first cached), resolveInterfaceMembers will re-resolve if
+            // baseTypes is still empty at member resolution time.
+            resolveBaseTypesLazy(interfaceType)
+        }
+        return interfaceType
+    }
+
+    /** 16.0n: Resolve base types from heritage clauses across ALL declarations.
+     *  Called lazily from resolveInterfaceMembers. */
+    private fun resolveBaseTypesLazy(type: Type.Interface) {
+        val symbol = type.symbol ?: return
+        val savedScope = currentTypeParamScope
+        val tps = type.typeParameters
+        if (!tps.isNullOrEmpty()) {
+            val scope = mutableMapOf<String, Type.TypeParam>()
+            savedScope?.let { scope.putAll(it) }
+            for (tp in tps) tp.symbol?.name?.let { scope[it] = tp }
+            currentTypeParamScope = scope
+        }
+        try {
+            val baseTypes = mutableListOf<Type>()
+            for (d in symbol.declarations) {
+                val heritageClauses = when (d) {
+                    is ClassDeclaration -> d.heritageClauses
+                    is InterfaceDeclaration -> d.heritageClauses
+                    else -> null
+                } ?: continue
                 for (clause in heritageClauses) {
-                    // ExtendsKeyword = base class/interface; ImplementsKeyword = implemented interface
                     for (exprWithArgs in clause.types) {
                         val baseType = getTypeFromBaseTypeExpression(exprWithArgs)
                         if (baseType !== errorType) {
@@ -27468,12 +27564,11 @@ interface DataView {
                         }
                     }
                 }
-                if (baseTypes.isNotEmpty()) {
-                    interfaceType.baseTypes = baseTypes
-                }
             }
+            if (baseTypes.isNotEmpty()) type.baseTypes = baseTypes
+        } finally {
+            currentTypeParamScope = savedScope
         }
-        return interfaceType
     }
 
     /** Resolve a base type expression (e.g., `extends Foo<T>`) to a Type. */
@@ -27485,7 +27580,19 @@ interface DataView {
             else -> return errorType
         }
         val symbol = globals[name] ?: return errorType
-        return getDeclaredTypeOfSymbol(symbol)
+        val declared = getDeclaredTypeOfSymbol(symbol)
+        // 16.0n: Honor type arguments on the base: `extends Foo<X>` → Type.Reference(Foo, [X]).
+        // Type args are resolved with the enclosing interface's type params in scope.
+        if (declared is Type.Interface) {
+            val typeArgs = expr.typeArguments
+            if (!typeArgs.isNullOrEmpty()) {
+                val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                if (resolvedArgs.none { it === errorType }) {
+                    return Type.Reference(declared, resolvedTypeArguments = resolvedArgs)
+                }
+            }
+        }
+        return declared
     }
 
     // -----------------------------------------------------------------------
@@ -27699,6 +27806,10 @@ interface DataView {
             type.properties = emptyList()
             return
         }
+        // 16.0n: Re-resolve baseTypes if empty — declarations may have been merged
+        // after the first eager resolution (e.g. user's `interface Array<T> extends IFoo<T>`
+        // merging with the built-in Array which was cached at init with no heritage).
+        if (type.baseTypes == null) resolveBaseTypesLazy(type)
         val members = symbolTable()
         val ownCallSignatures = mutableListOf<Signature>()
         val ownConstructSignatures = mutableListOf<Signature>()
@@ -27815,9 +27926,25 @@ interface DataView {
                         }
                     }
                     is IndexSignature -> {
-                        val keyParam = member.parameters.firstOrNull()
-                        val keyType = keyParam?.type?.let { getTypeFromTypeNode(it) } ?: stringType
-                        val valueType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        // 16.0n: Push this interface's type parameters into scope so that
+                        // `[n: number]: T` resolves T to our TypeParam (allowing later
+                        // instantiation via the reference mapper).
+                        val savedIdxScope = currentTypeParamScope
+                        val idxTps = type.typeParameters
+                        if (!idxTps.isNullOrEmpty()) {
+                            val scope = mutableMapOf<String, Type.TypeParam>()
+                            savedIdxScope?.let { scope.putAll(it) }
+                            for (tp in idxTps) tp.symbol?.name?.let { scope[it] = tp }
+                            currentTypeParamScope = scope
+                        }
+                        val (keyType, valueType) = try {
+                            val keyParam = member.parameters.firstOrNull()
+                            val kt = keyParam?.type?.let { getTypeFromTypeNode(it) } ?: stringType
+                            val vt = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            kt to vt
+                        } finally {
+                            currentTypeParamScope = savedIdxScope
+                        }
                         val info = IndexInfo(keyType, valueType, member.modifiers.contains(ModifierFlag.Readonly), member)
                         if (keyType === numberType) {
                             numberIndexInfo = info
@@ -28370,7 +28497,15 @@ interface DataView {
         if (objectType !== anyType && objectType !== errorType) {
             val apparentType = getApparentType(objectType)
             val prop = getPropertyOfType(apparentType, propName)
-            if (prop != null) return getTypeOfSymbol(prop)
+            if (prop != null) {
+                // 16.0n: For a generic Type.Reference (e.g. `arr: string[]` = Array<string>),
+                // instantiate the property's type with the target's type params mapped to
+                // the reference's type args. Reuses the helper used by assignment checking.
+                if (apparentType is Type.Reference) {
+                    resolveGenericPropertyType(apparentType, prop)?.let { return it }
+                }
+                return getTypeOfSymbol(prop)
+            }
         }
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
