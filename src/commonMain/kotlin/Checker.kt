@@ -19261,6 +19261,41 @@ interface DataView {
                         length = 7, // "declare"
                     ))
                 }
+                // 16.0: TS1120 — `declare export = X` or `export export = X` (modifiers on export assignment).
+                // For `export = X` (isExportEquals=true), ANY modifier is invalid.
+                // For `export default X` (isExportEquals=false), Export+Default are normal; Declare is invalid.
+                val invalidExportAssignmentMod = stmt is ExportAssignment && (
+                    (stmt.isExportEquals && (ModifierFlag.Declare in stmt.modifiers || ModifierFlag.Export in stmt.modifiers)) ||
+                    (!stmt.isExportEquals && ModifierFlag.Declare in stmt.modifiers)
+                )
+                if (invalidExportAssignmentMod) {
+                    val stmt = stmt as ExportAssignment
+                    // Find the FIRST modifier keyword in the source (whichever comes first textually)
+                    val searchStart3 = maxOf(0, stmt.pos - 20)
+                    val prefix3 = source.substring(searchStart3, stmt.pos + 8)
+                    val declareIdx = if (ModifierFlag.Declare in stmt.modifiers) prefix3.indexOf("declare") else -1
+                    val exportIdx = if (ModifierFlag.Export in stmt.modifiers) prefix3.indexOf("export") else -1
+                    val (kwIdx, kw) = when {
+                        declareIdx >= 0 && exportIdx >= 0 -> if (declareIdx < exportIdx) declareIdx to "declare" else exportIdx to "export"
+                        declareIdx >= 0 -> declareIdx to "declare"
+                        exportIdx >= 0 -> exportIdx to "export"
+                        else -> -1 to ""
+                    }
+                    if (kwIdx >= 0) {
+                        val keywordPos = searchStart3 + kwIdx
+                        val (line, character) = getLineAndCharacterOfPosition(source, keywordPos)
+                        diagnostics.add(Diagnostic(
+                            message = "An export assignment cannot have modifiers.",
+                            category = DiagnosticCategory.Error,
+                            code = 1120,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = keywordPos,
+                            length = kw.length,
+                        ))
+                    }
+                }
             }
         }
     }
