@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-10):** 8,028 / 10,077 tests passing (79.6%). Active queue: Phase 15.
+**Status (2026-04-11):** 8,028 / 10,077 tests passing (79.6%). Active queue: **Phase 16 — Fundamental Type System Features**. Phase 15 exhausted.
 
 ## Goal
 
@@ -2469,6 +2469,173 @@ All remaining items require major infrastructure:
 - Multi-file dependency resolution with AMD module paths (JS emit)
 
 **Bottom line:** All easy/medium wins exhausted at 8,028/10,077 (79.6%). Next gains require deep type system or transform infrastructure.
+
+---
+
+## Phase 16 — Fundamental Type System Features
+
+**Status (2026-04-11):** Phase 15 exhausted. The remaining 2,049 failures are blocked by missing core type system features. Phase 16 prioritizes these by unblocking potential.
+
+### Failure impact analysis (upper bounds — assumes feature fully unblocks tests)
+
+| Feature | Diagnostic codes unblocked | "None produced" test impact |
+|---|---|---|
+| Contextual typing | TS2322 (1267), TS2345 (576), TS2353 (110) | **~600+ tests** |
+| Deep structural comparison | TS2322 elaboration chains, TS2741 | **~300+ tests** |
+| Control flow narrowing | TS2339 (549), TS2454 (103 deficit), TS2774 (118) | **~250+ tests** |
+| Overload resolution | TS2769 (511), TS2349 (161) | **~200+ tests** |
+
+These are UPPER bounds — a test usually needs multiple features. Realistic gain per feature: 30-50% of the upper bound.
+
+### QUEUE — prioritized by unblocking potential, then by implementation cost
+
+---
+
+- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic)**
+
+  **Problem:** When checking `foo([1, "a"])` where `foo` takes `number[]`, the checker must propagate the *expected* element type `number` down into each array literal element so `"a"` can be checked as `string` against `number` target. Currently, `getTypeOfExpression` is purely bottom-up — it computes the type of an expression in isolation without knowing what's expected.
+
+  **TypeScript's model:** `checkExpressionWithContextualType(node, contextualType)`. The contextual type flows down through:
+  - Variable declaration initializers: `let x: T = expr` → expr gets T as context
+  - Function call arguments: `f(expr)` → expr gets param type as context
+  - Return statements: `return expr` in annotated function → expr gets return type
+  - Object literal properties: `{ p: expr }` in object-typed context → expr gets property type
+  - Array literal elements: `[e1, e2]` in array-typed context → each element gets element type
+  - Arrow function parameters: `(a, b) => expr` in function-typed context → a, b get param types
+  - Ternary branches: `cond ? a : b` → both branches get outer context
+  - JSX attribute values
+  - Assignment expressions: `x = expr` → expr gets typeof(x)
+
+  **Scope for initial implementation:**
+  - Add `contextualType: Type?` stack parameter (or thread-local) to `getTypeOfExpression`
+  - Implement contextual typing for: variable initializers, call arguments, return statements, object literal properties, array elements
+  - Defer: JSX, generic argument inference, conditional types
+
+  **Entry points in current code:**
+  - `checkVarDeclAssignability` (line 26568) — already has target type; pass as context to `getTypeOfExpression(init)`
+  - `checkCallExpressionTypes` (needs plumbing) — pass parameter type as context to each argument
+  - `getTypeOfArrayLiteral`, `getTypeOfObjectLiteral` — check against contextual target element/property types
+
+  **Files:** `Checker.kt`
+  **Expected gain:** ~200-400 tests (touches TS2322, TS2345, TS2353, TS7006)
+  **Risk:** HIGH — may cause FPs if target types are wrong or comparison is too eager
+  **Estimated effort:** 2-3 sessions
+
+---
+
+- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic)**
+
+  **Problem:** Current TS2322 emits "Type X is not assignable to type Y" but doesn't emit the elaboration chain: "The types of 'x.y' are incompatible between these types." / "Type 'string' is not assignable to type 'number'." Tests like `multiLineErrors` and many TS2322 tests expect this chain.
+
+  **Requirements:**
+  - Path-tracking during structural comparison (`source.x.y` → error path)
+  - Recursive property-level comparison with accumulated error chain
+  - Message chain construction: top-level → intermediate → innermost cause
+
+  **Entry points:**
+  - `isTypeRelatedTo` / `structuredTypeRelatedTo` — already exists; add path tracking
+  - TS2322 emission in `checkVarDeclAssignability` — accept error chain and emit as `messageChain`
+
+  **Files:** `Checker.kt` — relation engine, TS2322 emission
+  **Expected gain:** ~100-200 tests (many TS2322 tests have elaboration chains in baselines)
+  **Risk:** MEDIUM — adds detail to existing diagnostics, not new checks
+  **Estimated effort:** 1-2 sessions
+  **Unblocks:** When paired with 16.0, most TS2322 "none produced" tests
+
+---
+
+- [ ] **16.2. Overload resolution (HIGH — ~120 tests realistic)**
+
+  **Problem:** 511 TS2769 "No overload matches this call" occurrences in "none produced" tests. Also needed for TS2349 ("This expression is not callable") and proper signature resolution when calling overloaded methods.
+
+  **TypeScript's model:** Given a call `f(a1, a2, ...)` and a function type with multiple call signatures:
+  1. Filter signatures by arity (fixed + rest params)
+  2. For each candidate: check each argument against corresponding parameter type
+  3. If any signature matches → return its return type
+  4. If none match → emit TS2769 with elaborated list of attempted signatures
+
+  **Requirements:**
+  - Multi-signature call checking (`getReturnTypeOfCallExpression` currently uses `sigs[0]` only)
+  - Signature compatibility scoring
+  - TS2769 diagnostic with candidate list elaboration
+
+  **Entry points:**
+  - `getReturnTypeOfCallExpression` (line ~28036) — iterate signatures
+  - `checkCallExpressionTypes` — use resolved signature for argument checks
+  - Function symbols with multiple declarations (body-less overloads + impl)
+
+  **Files:** `Checker.kt`
+  **Expected gain:** ~80-150 tests
+  **Risk:** MEDIUM — new check, requires care to avoid FPs from incomplete argument type resolution
+  **Estimated effort:** 2 sessions
+  **Dependency:** Works best AFTER 16.0 (contextual typing) — so argument types are resolved more often
+
+---
+
+- [ ] **16.3. Control flow narrowing (MEDIUM — ~100 tests realistic)**
+
+  **Problem:** `if (x instanceof B) { x.foo() }` — our TS2339 check skips class-typed variables because without narrowing, we'd report false positives on valid code. Also blocks TS2454 definite assignment analysis and TS2774 ("forgot to use `await`?").
+
+  **Requirements:**
+  - Flow graph construction per function/method body
+  - Per-node narrowed type map
+  - Narrowing operators: `typeof`, `instanceof`, `in`, discriminated unions, truthy/falsy checks, equality
+  - Definite assignment analysis: track which vars are assigned on all paths before use
+
+  **Entry points:**
+  - New flow analysis pass before `checkPropertyAccess`, `checkTypeAssignability`
+  - `getTypeOfExpression` → check if identifier has narrowed type at this position
+  - Relax TS2339 guard (line 31619) once narrowing is implemented
+
+  **Files:** `Checker.kt` (major addition — flow analysis module)
+  **Expected gain:** ~60-120 tests
+  **Risk:** HIGH — narrowing interacts with all type queries; bugs cause wide regressions
+  **Estimated effort:** 3-4 sessions (most complex item)
+  **Dependency:** Independent of 16.0-16.2
+
+---
+
+- [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic)**
+
+  **Problem:** When calling `f<T>(x: T): T` as `f(42)`, T should be inferred to `number`. Currently generic functions return `anyType` for type parameter return types. Blocks TS2345, many TS2322 with generic targets.
+
+  **Requirements:**
+  - Type parameter inference from argument types
+  - Generic function signature instantiation
+  - Constraint checking against inferred types
+  - Proper `Type.Reference` creation with resolved type arguments
+
+  **Entry points:**
+  - `getReturnTypeOfCallExpression` — infer type args from arguments, instantiate return type
+  - `getTypeFromTypeReference` — already handles explicit type args; needs inference path
+  - `signatureRelatedTo` — compare after instantiation
+
+  **Files:** `Checker.kt`
+  **Expected gain:** ~40-100 tests
+  **Risk:** MEDIUM — generic instantiation is orthogonal but pervasive
+  **Estimated effort:** 2-3 sessions
+  **Dependency:** Works best WITH 16.2 (overload resolution)
+
+---
+
+### Queue execution strategy
+
+**Sequence:** 16.0 → 16.1 → 16.2 → 16.3 → 16.4
+
+**Rationale:**
+1. **16.0 first** — highest unblocking potential AND enables 16.1/16.2 to produce concrete types to work with. Without contextual typing, argument/property types remain `anyType` and downstream features have nothing to check.
+2. **16.1 second** — quick follow-up that leverages 16.0's resolved types to produce elaborated TS2322 diagnostics.
+3. **16.2 third** — overload resolution needs resolved argument types (16.0) and the structural comparison from 16.1.
+4. **16.3 fourth** — narrowing is orthogonal but complex; defer to after easier wins.
+5. **16.4 last** — generic inference is a multiplier on 16.2 and benefits from all prior features.
+
+**Hard rules:**
+- Each feature must land behind a feature flag or with conservative guards initially.
+- Run full suite after EACH sub-step to catch regressions early.
+- If a feature causes >20 regressions, add more guards or narrow scope; don't revert without analysis.
+- Document each partial implementation in CLAUDE.md gotchas.
+
+**Realistic total gain:** 500-800 new passing tests → ~85-88% pass rate.
 
 ---
 
