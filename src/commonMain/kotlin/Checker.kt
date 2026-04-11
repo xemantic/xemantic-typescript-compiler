@@ -7943,6 +7943,9 @@ class Checker(
                 collectInferTypeNames(type.type, scope)
             }
             is RestType -> collectInferTypeNames(type.type, scope)
+            is TypeOperator -> collectInferTypeNames(type.type, scope)
+            is NamedTupleMember -> collectInferTypeNames(type.type, scope)
+            is OptionalType -> collectInferTypeNames(type.type, scope)
             is TypeLiteral -> {
                 for (member in type.members) {
                     when (member) {
@@ -26245,6 +26248,13 @@ interface DataView {
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }
+                    // 16.0: Recurse into assignment expressions inside return value
+                    // to catch `return obj = { excess }` TS2353 patterns.
+                    stmt.expression?.let { retExpr ->
+                        if (retExpr is BinaryExpression && retExpr.operator == SyntaxKind.Equals) {
+                            checkAssignmentExpression(retExpr, source, fileName, varTypes, typeParams)
+                        }
+                    }
                 }
                 is FunctionDeclaration -> {
                     checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes)
@@ -26811,6 +26821,25 @@ interface DataView {
                     if (expr != null) getTypeOfExpression(expr) else undefinedType
                 } finally {
                     if (useCtx) contextualType = savedContextual
+                }
+                // 16.0: Fresh-literal excess check for `return X = { excess }` — the
+                // literal flows through the assignment into the return value.
+                if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
+                    val chainedLit = findChainedObjectLiteral(expr)
+                    if (chainedLit != null) {
+                        val litType = getTypeOfExpression(chainedLit)
+                        if (canUseTypeEngine(litType, targetType)) {
+                            val displayTarget = excessPropDisplayTarget(targetType, returnTypeNode)
+                            checkExcessProperties(chainedLit, litType, targetType, displayTarget, source, fileName)
+                        }
+                    }
+                }
+                // Also the case `return { excess }` where expr is directly a literal
+                if (expr is ObjectLiteralExpression && canUseTypeEngine(sourceType, targetType)) {
+                    val displayTarget = excessPropDisplayTarget(targetType, returnTypeNode)
+                    if (checkExcessProperties(expr, sourceType, targetType, displayTarget, source, fileName)) {
+                        return // TS2353 emitted
+                    }
                 }
                 if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                     val displaySource = typeToString(sourceType)
