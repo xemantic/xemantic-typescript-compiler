@@ -2491,7 +2491,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+6 tests, 8034 passing)**
+- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+11 tests, 8039 passing)**
 
   **Session 2026-04-11 progress:**
   - 16.0a: TS2353 excess property check for object literal call args (infra, 0 gains — guards too tight for most cases)
