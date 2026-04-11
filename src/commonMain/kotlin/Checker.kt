@@ -26629,29 +26629,7 @@ interface DataView {
             }
             // 16.0: Array literal initializer — contextual TS2353 for each object element
             // against the declared element type. `let x: { id: number }[] = [{ id: 1, name: "a" }]`.
-            if (init is ArrayLiteralExpression && targetType is Type.Reference &&
-                targetType.target?.symbol?.name == "Array") {
-                val elementType = targetType.resolvedTypeArguments?.firstOrNull()
-                if (elementType is Type.Object) {
-                    try {
-                        resolveStructuredTypeMembers(elementType)
-                        if (!elementType.properties.isNullOrEmpty()) {
-                            val elementDisplay = typeToString(elementType)
-                            for (elem in init.elements) {
-                                if (elem is ObjectLiteralExpression) {
-                                    val elemType = getTypeOfExpression(elem)
-                                    if (elemType is Type.Object &&
-                                        canUseTypeEngine(elemType, elementType)) {
-                                        if (checkExcessProperties(elem, elemType, elementType, elementDisplay, source, fileName)) {
-                                            // keep checking siblings; don't return here
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } catch (_: StackOverflowError) { /* circular */ }
-                }
-            }
+            checkArrayLiteralElementExcessProps(init, targetType, source, fileName)
             if (canUse && !isAssignable) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
@@ -26756,6 +26734,8 @@ interface DataView {
                     return // TS2353 emitted
                 }
             }
+            // 16.0: Array literal class property initializer — TS2353 for each element
+            checkArrayLiteralElementExcessProps(init, targetType, source, fileName)
             if (canUse && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -26923,6 +26903,8 @@ interface DataView {
                                 return // TS2353 emitted
                             }
                         }
+                        // 16.0: Array literal assignment — contextual TS2353 for each object element
+                        checkArrayLiteralElementExcessProps(expr.right, tt, source, fileName)
                         if (canUse && !isAssignable) {
                             val displaySource = typeToString(sourceType)
                             val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
@@ -32623,6 +32605,36 @@ interface DataView {
      * in the source that don't exist in the target are excess properties.
      * Returns true if TS2353 diagnostics were emitted (caller should skip TS2741/TS2322).
      */
+    /**
+     * 16.0: TS2353 check for each object literal element in an array literal
+     * whose target is an array type with a resolvable element type.
+     */
+    private fun checkArrayLiteralElementExcessProps(
+        init: Expression,
+        targetType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        if (init !is ArrayLiteralExpression) return
+        if (targetType !is Type.Reference) return
+        if (targetType.target?.symbol?.name != "Array") return
+        val elementType = targetType.resolvedTypeArguments?.firstOrNull() ?: return
+        if (elementType !is Type.Object) return
+        try {
+            resolveStructuredTypeMembers(elementType)
+            if (elementType.properties.isNullOrEmpty()) return
+            val elementDisplay = typeToString(elementType)
+            for (elem in init.elements) {
+                if (elem is ObjectLiteralExpression) {
+                    val elemType = getTypeOfExpression(elem)
+                    if (elemType is Type.Object && canUseTypeEngine(elemType, elementType)) {
+                        checkExcessProperties(elem, elemType, elementType, elementDisplay, source, fileName)
+                    }
+                }
+            }
+        } catch (_: StackOverflowError) { /* circular */ }
+    }
+
     private fun checkExcessProperties(
         objLiteral: ObjectLiteralExpression,
         sourceType: Type,
