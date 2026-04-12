@@ -2547,7 +2547,15 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+5 tests, 8060 passing)**
+- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+11 tests, 8066 passing)**
+
+  **Session 2026-04-12 (16.1d-e, +6 tests: 8060→8066):**
+  - TS2561: excess property spelling suggestion in `checkExcessProperties` — when excess property name is close to a target property (Damerau-Levenshtein), emit TS2561 "Did you mean to write 'X'?" instead of TS2353. → +1 test: `nestedFreshLiteral`.
+  - TS2793: overload implementation related info — when TS2345 fires on an overloaded function/method call, find the implementation signature (body-having declaration) and add TS2793 "The call would have succeeded against this implementation..." as related info. Uses AST traversal to find sibling method declarations. → +1 test: `overloadErrorMatchesImplementationElaboaration`.
+  - Pretty mode: blank line before related info block in pretty error baseline formatting. → +1 test: `prettyContextNotDebugAssertion`.
+  - Parser: TS1109 "Expression expected" at EOF uses `prevTokenEnd` position instead of virtual next-line start. → +2 tests: `nestedUnaryExpressionHang`, `parseJsxElementInUnaryExpressionNoCrash2`, +1 side-effect fix.
+  - TS1184: emit "Modifiers cannot appear here." alongside TS1042 for access modifiers on object literal members. → +1 test: `objectLiteralMemberWithModifiers1`.
+  - INVESTIGATED but not fixed: TS2740 (multiple missing properties) — needs prototype chain resolution for correct property ordering. TS2552 in type position — scope filtering works but KNOWN_GLOBALS `Parameters` wins over local `Parameter` due to edit distance. TS18050→TS2365 for `3+null` — removing TS18050 leaves zero diagnostics since TS2365 not implemented.
 
   **Session 2026-04-12 (16.1c, +2 tests: 8058→8060):** @pretty error baseline formatting. ANSI-colored diagnostic header with source context (tabs→spaces, squiggle alignment), "Found N error(s)" summary footer. Standard summary omitted in pretty mode. → +2 tests: prettyFileWithErrorsAndTabs, multiLineContextDiagnosticWithPretty. `prettyContextNotDebugAssertion` still needs related info display fix in pretty header.
 
