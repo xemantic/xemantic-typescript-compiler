@@ -26816,7 +26816,13 @@ interface DataView {
                         chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                     }
                 } else {
+                    // Object→Object: property-level elaboration (16.1)
+                    if (sourceType is Type.Object && targetType is Type.Object) {
+                        val propElab = getPropertyElaborationChain(sourceType, targetType)
+                        if (propElab != null) chain.addAll(propElab)
+                    }
                     // For non-literal, non-call expressions, TypeScript duplicates the message as elaboration
+                    if (chain.isEmpty()) {
                     val needsElaboration = !isSimpleLiteral(init) &&
                         init !is CallExpression && init !is NewExpression &&
                         init !is DeleteExpression && init !is AwaitExpression &&
@@ -26825,6 +26831,7 @@ interface DataView {
                         init !is TypeAssertionExpression &&
                         init !is PropertyAccessExpression
                     if (needsElaboration) chain.add("  $message")
+                    }
                     if (targetType is Type.TypeParam) {
                         val targetName = targetType.symbol?.name ?: "T"
                         chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
@@ -26917,6 +26924,10 @@ interface DataView {
                         val constStr = typeToString(lastFailing)
                         chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                     }
+                } else if (sourceType is Type.Object && targetType is Type.Object) {
+                    // Object→Object: property-level elaboration (16.1)
+                    val propElab = getPropertyElaborationChain(sourceType, targetType)
+                    if (propElab != null) chain.addAll(propElab)
                 }
                 diagnostics.add(Diagnostic(
                     message = message,
@@ -26982,6 +26993,16 @@ interface DataView {
                     val returnKeywordLength = 6
                     val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                     val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                    val chain = mutableListOf<String>()
+                    // Object→Object: property-level or function elaboration (16.1)
+                    if (sourceType is Type.Object && targetType is Type.Object) {
+                        if (!sourceType.callSignatures.isNullOrEmpty() && !targetType.callSignatures.isNullOrEmpty()) {
+                            chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                        } else {
+                            val propElab = getPropertyElaborationChain(sourceType, targetType)
+                            if (propElab != null) chain.addAll(propElab)
+                        }
+                    }
                     diagnostics.add(Diagnostic(
                         message = message,
                         category = DiagnosticCategory.Error,
@@ -26991,6 +27012,7 @@ interface DataView {
                         character = character,
                         start = stmt.pos,
                         length = returnKeywordLength,
+                        messageChain = chain,
                     ))
                     return
                 }
@@ -27124,6 +27146,12 @@ interface DataView {
                                     chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                                 }
                             } else {
+                                // Object→Object: property-level elaboration (16.1)
+                                if (sourceType is Type.Object && tt is Type.Object) {
+                                    val propElab = getPropertyElaborationChain(sourceType, tt)
+                                    if (propElab != null) chain.addAll(propElab)
+                                }
+                                if (chain.isEmpty()) {
                                 if (tt is Type.TypeParam) {
                                     val targetName = tt.symbol?.name ?: "T"
                                     chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
@@ -27132,6 +27160,7 @@ interface DataView {
                                     if (targetBaseName in typeParams) {
                                         chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
                                     }
+                                }
                                 }
                             }
                             diagnostics.add(Diagnostic(
@@ -28755,11 +28784,15 @@ interface DataView {
                         // Index signatures first
                         type.stringIndexInfo?.let { info ->
                             val readonly = if (info.isReadonly) "readonly " else ""
-                            parts.add("${readonly}[x: string]: ${typeToString(info.type)}")
+                            val paramName = (info.declaration as? IndexSignature)?.parameters?.firstOrNull()
+                                ?.let { (it.name as? Identifier)?.text } ?: "x"
+                            parts.add("${readonly}[$paramName: string]: ${typeToString(info.type)}")
                         }
                         type.numberIndexInfo?.let { info ->
                             val readonly = if (info.isReadonly) "readonly " else ""
-                            parts.add("${readonly}[x: number]: ${typeToString(info.type)}")
+                            val paramName = (info.declaration as? IndexSignature)?.parameters?.firstOrNull()
+                                ?.let { (it.name as? Identifier)?.text } ?: "x"
+                            parts.add("${readonly}[$paramName: number]: ${typeToString(info.type)}")
                         }
                         // Properties
                         val props = type.properties
@@ -33614,6 +33647,59 @@ interface DataView {
             }
         }
         return emptyList()
+    }
+
+    /**
+     * Generate elaboration chain for an Object→Object type mismatch by
+     * recursively comparing properties to find the deepest incompatible path.
+     *
+     * Returns lines like:
+     *   "  Types of property 'x' are incompatible."
+     *   "    Type 'number' is not assignable to type 'string'."
+     * or for nested paths:
+     *   "  The types of 'x.y' are incompatible between these types."
+     *   "    Type 'string' is not assignable to type 'number'."
+     */
+    private fun getPropertyElaborationChain(
+        source: Type,
+        target: Type,
+        path: String = "",
+    ): List<String>? {
+        if (source !is Type.Object || target !is Type.Object) return null
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        val targetProps = target.properties ?: return null
+        val sourceMembers = source.members ?: return null
+
+        for (targetProp in targetProps) {
+            val targetName = targetProp.name
+            val sourceProp = sourceMembers[targetName] ?: continue
+            val sourcePropType = getTypeOfSymbol(sourceProp)
+            val targetPropType = getTypeOfSymbol(targetProp)
+            if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
+                val propPath = if (path.isEmpty()) targetName else "$path.$targetName"
+                // Try to go deeper into nested object properties
+                val deeper = getPropertyElaborationChain(sourcePropType, targetPropType, propPath)
+                if (deeper != null) return deeper
+                // Leaf mismatch: report at this level
+                val sourcePropStr = typeToString(sourcePropType)
+                val targetPropStr = typeToString(targetPropType)
+                return if (path.isEmpty()) {
+                    // Single-level: "Types of property 'x' are incompatible."
+                    listOf(
+                        "  Types of property '$targetName' are incompatible.",
+                        "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
+                    )
+                } else {
+                    // Nested path: "The types of 'x.y' are incompatible between these types."
+                    listOf(
+                        "  The types of '$propPath' are incompatible between these types.",
+                        "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
+                    )
+                }
+            }
+        }
+        return null
     }
 
     /** Check if a property symbol is optional (has questionToken in its declaration). */
