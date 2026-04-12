@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-12):** 8,057 / 10,077 tests passing (79.9%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 in progress.
+**Status (2026-04-12):** 8,058 / 10,077 tests passing (79.9%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 in progress.
 
 ## Goal
 
@@ -2547,7 +2547,9 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+2 tests, 8057 passing)**
+- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+3 tests, 8058 passing)**
+
+  **Session 2026-04-12 (16.1b, +1 test: 8057→8058):** Relation cache cycle-break invalidation — `relationUsedCycleBreak` flag tracks whether a comparison used any cycle assumptions. Speculative `true` results from cycle breaks are NOT cached (only `false` results and non-cyclic `true` results are cached). Prevents incorrect assignability in mutually recursive types (A↔C, B↔D). Leaf-preference elaboration: `getPropertyElaborationChain` collects all incompatible properties first, then prefers leaf mismatches (non-Object types) over recursive ones. Cycle detection via `state.elaborationStack` prevents infinite recursion in elaboration. → +1 test: `typeComparisonCaching`.
 
   **Session 2026-04-12 (16.1a, +2 tests: 8055→8057):**
   - `getPropertyElaborationChain(source, target, path)` — recursively compares Object→Object properties to find the deepest incompatible property path. Single-level uses "Types of property 'x' are incompatible." Nested uses "The types of 'x.y' are incompatible between these types."
