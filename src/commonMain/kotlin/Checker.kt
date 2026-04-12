@@ -8563,7 +8563,7 @@ class Checker(
         for (candidate in candidates) {
             if (candidate == name) continue  // exact match already handled by scope.has()
             if (candidate.isEmpty()) continue  // skip empty candidates
-            // Don't suggest type-only declarations (type aliases, interfaces) in value position
+                // Don't suggest type-only declarations (type aliases, interfaces) in value position
             if (candidate in typeOnlyNames) continue
             // Don't suggest type parameters as replacements for value-position names
             if (scope.isTypeParam(candidate)) continue
@@ -12179,6 +12179,17 @@ class Checker(
                                         message = "'$modName' modifier cannot be used here.",
                                         category = DiagnosticCategory.Error,
                                         code = 1042,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = modIdx,
+                                        length = modName.length,
+                                    ))
+                                    // TS1184: Modifiers cannot appear here. (TypeScript emits both)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Modifiers cannot appear here.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 1184,
                                         fileName = fileName,
                                         line = line,
                                         character = character,
