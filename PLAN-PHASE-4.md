@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-12):** 8,058 / 10,077 tests passing (79.9%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 in progress.
+**Status (2026-04-12):** 8,060 / 10,077 tests passing (80.0%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 in progress.
 
 ## Goal
 
@@ -2547,7 +2547,9 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+3 tests, 8058 passing)**
+- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+5 tests, 8060 passing)**
+
+  **Session 2026-04-12 (16.1c, +2 tests: 8058→8060):** @pretty error baseline formatting. ANSI-colored diagnostic header with source context (tabs→spaces, squiggle alignment), "Found N error(s)" summary footer. Standard summary omitted in pretty mode. → +2 tests: prettyFileWithErrorsAndTabs, multiLineContextDiagnosticWithPretty. `prettyContextNotDebugAssertion` still needs related info display fix in pretty header.
 
   **Session 2026-04-12 (16.1b, +1 test: 8057→8058):** Relation cache cycle-break invalidation — `relationUsedCycleBreak` flag tracks whether a comparison used any cycle assumptions. Speculative `true` results from cycle breaks are NOT cached (only `false` results and non-cyclic `true` results are cached). Prevents incorrect assignability in mutually recursive types (A↔C, B↔D). Leaf-preference elaboration: `getPropertyElaborationChain` collects all incompatible properties first, then prefers leaf mismatches (non-Object types) over recursive ones. Cycle detection via `state.elaborationStack` prevents infinite recursion in elaboration. → +1 test: `typeComparisonCaching`.
 
