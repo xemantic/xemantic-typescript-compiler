@@ -32665,11 +32665,102 @@ interface DataView {
         val signatures = getCallSignaturesOfType(calleeType)
         if (signatures.isEmpty()) return
         if (signatures.size == 1) {
-            checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName)
+            // Check if this is an overload with an implementation signature (TS2793)
+            val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
+            checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
             // Overload resolution: try each signature in order
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName)
         }
+    }
+
+    /**
+     * Check if a signature belongs to an overloaded function/method with an implementation.
+     * Returns a TS2793 related diagnostic pointing to the implementation, or null.
+     * Uses the signature's declaration to find the implementation among sibling declarations.
+     */
+    private fun getOverloadImplementationRelated(sig: Signature, source: String, fileName: String): Diagnostic? {
+        val overloadDecl = sig.declaration ?: return null
+        // For functions, look up the symbol by name
+        if (overloadDecl is FunctionDeclaration) {
+            val name = overloadDecl.name?.text ?: return null
+            val symbol = globals[name] ?: currentFileLocals?.get(name) ?: return null
+            return getImplRelatedFromDecls(symbol.declarations, source, fileName)
+        }
+        // For methods, find the containing class and search for sibling methods with same name
+        if (overloadDecl is MethodDeclaration) {
+            val methodName = (overloadDecl.name as? Identifier)?.text ?: return null
+            // Search source files for a class containing this method declaration
+            for (result in binderResults) {
+                if (result.sourceFile.fileName != fileName) continue
+                val implDecl = findImplementationInStatements(result.sourceFile.statements, methodName, overloadDecl)
+                if (implDecl != null) {
+                    return makeTs2793Diagnostic(implDecl, source, fileName)
+                }
+            }
+        }
+        return null
+    }
+
+    /** Search statements for a class/interface containing the given overload and its implementation. */
+    private fun findImplementationInStatements(stmts: List<Statement>, methodName: String, overloadDecl: Node): MethodDeclaration? {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    var foundOverload = false
+                    var impl: MethodDeclaration? = null
+                    for (member in stmt.members) {
+                        if (member !is MethodDeclaration) continue
+                        val name = (member.name as? Identifier)?.text ?: continue
+                        if (name != methodName) continue
+                        if (member === overloadDecl) foundOverload = true
+                        if (member.body != null) impl = member
+                    }
+                    if (foundOverload && impl != null) return impl
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        val result = findImplementationInStatements(body.statements, methodName, overloadDecl)
+                        if (result != null) return result
+                    }
+                }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    private fun getImplRelatedFromDecls(decls: List<Node>, source: String, fileName: String): Diagnostic? {
+        val hasOverload = decls.any { d ->
+            (d is MethodDeclaration && d.body == null) || (d is FunctionDeclaration && d.body == null)
+        }
+        val implDecl = decls.firstOrNull { d ->
+            (d is MethodDeclaration && d.body != null) || (d is FunctionDeclaration && d.body != null)
+        }
+        if (!hasOverload || implDecl == null) return null
+        return makeTs2793Diagnostic(implDecl, source, fileName)
+    }
+
+    private fun makeTs2793Diagnostic(implDecl: Node, source: String, fileName: String): Diagnostic {
+        val implPos = implDecl.pos
+        val implEnd = when (implDecl) {
+            is MethodDeclaration -> implDecl.body?.pos ?: implDecl.end
+            is FunctionDeclaration -> implDecl.body?.pos ?: implDecl.end
+            else -> implDecl.end
+        }
+        val implLength = implEnd - implPos
+        val (implLine, implChar) = getLineAndCharacterOfPosition(source, implPos)
+        return Diagnostic(
+            message = "The call would have succeeded against this implementation, but implementation signatures of overloads are not externally visible.",
+            category = DiagnosticCategory.Message,
+            code = 2793,
+            fileName = fileName,
+            line = implLine,
+            character = implChar,
+            start = implPos,
+            length = implLength,
+        )
     }
 
     /**
@@ -32871,6 +32962,7 @@ interface DataView {
         sig: Signature,
         source: String,
         fileName: String,
+        implementationRelated: Diagnostic? = null,
     ) {
         val params = sig.parameters
         for ((i, arg) in args.withIndex()) {
@@ -32928,11 +33020,12 @@ interface DataView {
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 // TS6213: If the argument type has construct signatures but no call signatures,
                 // suggest "Did you mean to use 'new' with this expression?"
-                val relatedInfo: List<Diagnostic> = if (argType is Type.Object) {
+                val relatedInfo: MutableList<Diagnostic> = mutableListOf()
+                if (argType is Type.Object) {
                     val constructSigs = getConstructSignaturesOfType(argType)
                     val callSigs = getCallSignaturesOfType(argType)
                     if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
-                        listOf(Diagnostic(
+                        relatedInfo.add(Diagnostic(
                             message = "Did you mean to use 'new' with this expression?",
                             category = DiagnosticCategory.Message,
                             code = 6213,
@@ -32942,8 +33035,12 @@ interface DataView {
                             start = start,
                             length = length,
                         ))
-                    } else emptyList()
-                } else emptyList()
+                    }
+                }
+                // TS2793: overload implementation would have matched
+                if (implementationRelated != null) {
+                    relatedInfo.add(implementationRelated)
+                }
                 diagnostics.add(Diagnostic(
                     message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
                     category = DiagnosticCategory.Error,
@@ -33510,16 +33607,31 @@ interface DataView {
         var emitted = false
         for ((propName, propPos) in excessProps) {
             val (line, character) = getLineAndCharacterOfPosition(source, propPos)
-            diagnostics.add(Diagnostic(
-                message = "Object literal may only specify known properties, and '$propName' does not exist in type '$displayTarget'.",
-                category = DiagnosticCategory.Error,
-                code = 2353,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = propPos,
-                length = propName.length,
-            ))
+            // Check for spelling suggestion (TS2561) vs plain excess (TS2353)
+            val suggestion = getSpellingSuggestionFromNames(propName, targetPropNames)
+            if (suggestion != null) {
+                diagnostics.add(Diagnostic(
+                    message = "Object literal may only specify known properties, but '$propName' does not exist in type '$displayTarget'. Did you mean to write '$suggestion'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2561,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = propPos,
+                    length = propName.length,
+                ))
+            } else {
+                diagnostics.add(Diagnostic(
+                    message = "Object literal may only specify known properties, and '$propName' does not exist in type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2353,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = propPos,
+                    length = propName.length,
+                ))
+            }
             emitted = true
         }
         // 16.0: Recurse into non-excess properties whose source value is itself

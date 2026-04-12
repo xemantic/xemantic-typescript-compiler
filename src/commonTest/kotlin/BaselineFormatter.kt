@@ -455,7 +455,10 @@ fun formatErrorBaseline(
                         val squiggle = "~".repeat(squiggleLen)
                         +"\u001b[7m$gutterSpaces\u001b[0m \u001b[91m$indent$squiggle\u001b[0m\r\n"
                     }
-                    // Related info in pretty section
+                    // Related info in pretty section — blank line before related info block
+                    if (diag.relatedInformation.isNotEmpty()) {
+                        +"\r\n"
+                    }
                     for (related in diag.relatedInformation) {
                         if (related.fileName != null && related.line != null && related.character != null) {
                             +"  \u001b[96m${related.fileName}\u001b[0m:\u001b[93m${related.line}\u001b[0m:\u001b[93m${related.character}\u001b[0m\r\n"

@@ -3774,7 +3774,13 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     reportError("Invalid character.", code = 1127, overrideLength = 0)
                     Identifier(text = "", pos = pos, end = getEnd())
                 } else {
-                    reportError("Expression expected.", code = 1109)
+                    // At EOF, position the error at the end of the previous token
+                    // (not at the start of the virtual next line)
+                    if (token == SyntaxKind.EndOfFile) {
+                        reportError("Expression expected.", code = 1109, overrideStart = scanner.getPrevTokenEnd(), overrideLength = 0)
+                    } else {
+                        reportError("Expression expected.", code = 1109)
+                    }
                     Identifier(text = "", pos = pos, end = getEnd())
                 }
             }
