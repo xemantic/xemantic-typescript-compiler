@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-11):** 8,054 / 10,077 tests passing (79.9%). Active queue: **Phase 16 — Fundamental Type System Features**. Phase 15 exhausted.
+**Status (2026-04-12):** 8,057 / 10,077 tests passing (79.9%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 in progress.
 
 ## Goal
 
@@ -2491,7 +2491,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — PARTIAL (+19 tests, 8055 passing)**
+- [x] **16.0. Contextual typing infrastructure (HIGHEST PRIORITY — ~300 tests realistic) — DONE (+19 tests, 8055 passing)**
 
   **Session 2026-04-11 (16.0o, +1 test: 8054→8055):** Contextual typing propagation through `checkPropertyAccessInExpr` so un-annotated arrow function parameters in object literal call arguments are typed from the contextual signature. CallExpression→ObjectLiteralExpression→PropertyAssignment→ArrowFunction chain propagates `contextualType`; at ArrowFunction, contextual sig params populate `currentLocalTypes` for TS2339 checks in the body. Added apparent-type lookup in the local-fallback branch of `checkSinglePropertyAccess` so primitive-typed identifiers (e.g. `s: string`) resolve to the String wrapper interface for property-existence checks, with `displayTypeOverride` preserving the primitive name in the diagnostic. Tightened the number-index-signature bail-out to only skip non-numeric property names when we came through the primitive-apparent path (keeps `Array.isArray` static access working). Shadowed outer params in the FunctionExpression branch to prevent outer `(s: string)` leaking into inner un-annotated `function (s) {}`. → +1 test (contextualTypingOfObjectLiterals2).
 
@@ -2547,18 +2547,22 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic)**
+- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+2 tests, 8057 passing)**
+
+  **Session 2026-04-12 (16.1a, +2 tests: 8055→8057):**
+  - `getPropertyElaborationChain(source, target, path)` — recursively compares Object→Object properties to find the deepest incompatible property path. Single-level uses "Types of property 'x' are incompatible." Nested uses "The types of 'x.y' are incompatible between these types."
+  - Hooked into 4 TS2322 emission sites: `checkVarDeclAssignability`, `checkAssignmentExpression`, `checkPropertyInitAssignability`, `checkReturnAssignability`.
+  - Index signature parameter name display: `typeToString` now extracts parameter name from `IndexSignature.parameters` declaration (was hardcoded `[x: string]`, now uses actual name like `[index: string]`).
+  - +2 tests: `multiLineErrors` (nested property path elaboration A1→A2 via x.y), `stringIndexerAssignments1` (index signature param name + property elaboration).
+  - Close misses: `typeComparisonCaching` gets correct first-error elaboration but misses second error (`c = d` where mutually recursive interfaces need relation cache invalidation). `deeplyNestedAssignabilityErrorsCombined` needs `typeof` prefix + function call paths in elaboration text.
+
+  **Remaining sub-steps:**
+  - `typeof` prefix for class constructor types in type display
+  - Function return-type elaboration path (e.g., `a.b.c.d.e.f().g`)
+  - Union target type elaboration (strip null/undefined, narrow to object constituent)
+  - Deeper TS2416 property-level elaboration for class method overrides
 
   **Problem:** Current TS2322 emits "Type X is not assignable to type Y" but doesn't emit the elaboration chain: "The types of 'x.y' are incompatible between these types." / "Type 'string' is not assignable to type 'number'." Tests like `multiLineErrors` and many TS2322 tests expect this chain.
-
-  **Requirements:**
-  - Path-tracking during structural comparison (`source.x.y` → error path)
-  - Recursive property-level comparison with accumulated error chain
-  - Message chain construction: top-level → intermediate → innermost cause
-
-  **Entry points:**
-  - `isTypeRelatedTo` / `structuredTypeRelatedTo` — already exists; add path tracking
-  - TS2322 emission in `checkVarDeclAssignability` — accept error chain and emit as `messageChain`
 
   **Files:** `Checker.kt` — relation engine, TS2322 emission
   **Expected gain:** ~100-200 tests (many TS2322 tests have elaboration chains in baselines)
