@@ -171,6 +171,7 @@ data class CompilerOptions(
     val inlineSources: Boolean = false,
     val sourceRoot: String? = null,
     val composite: Boolean = false,
+    val pretty: Boolean = false,
     val incremental: Boolean? = null,
     val isolatedDeclarations: Boolean = false,
     val ignoreDeprecations: String? = null,
@@ -471,6 +472,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "inlinesources" -> options.copy(inlineSources = boolValue)
         "sourceroot" -> options.copy(sourceRoot = value.trim())
         "composite" -> options.copy(composite = boolValue)
+        "pretty" -> options.copy(pretty = boolValue)
         "incremental" -> options.copy(incremental = boolValue)
         "isolateddeclarations" -> options.copy(isolatedDeclarations = boolValue)
         "ignoredeprecations" -> options.copy(ignoreDeprecations = value.trim())
