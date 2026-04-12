@@ -95,6 +95,10 @@ class Checker(
         /** Tracks (source.id, target.id) pairs currently being compared to detect recursive types.
          *  When a pair is already on the stack, we assume compatibility (TypeScript's approach). */
         val relationComparisonStack = HashSet<Long>()
+        /** Tracks whether the current comparison used any cycle-break assumptions. */
+        var relationUsedCycleBreak = false
+        /** Track pairs already being elaborated to prevent infinite recursion in recursive types. */
+        val elaborationStack = HashSet<Long>()
         var argCountDepth = 0
         var callTypeCheckDepth = 0
         var arithmeticCheckDepth = 0
@@ -127,6 +131,9 @@ class Checker(
     private var relationDepth: Int
         get() = state.relationDepth
         set(value) { state.relationDepth = value }
+    private var relationUsedCycleBreak: Boolean
+        get() = state.relationUsedCycleBreak
+        set(value) { state.relationUsedCycleBreak = value }
     private var argCountDepth: Int
         get() = state.argCountDepth
         set(value) { state.argCountDepth = value }
@@ -33069,14 +33076,28 @@ interface DataView {
         // Cycle detection: if we're already comparing this (source, target) pair,
         // assume compatibility to break the cycle (TypeScript's approach for recursive types).
         val pairKey = packRelationKey(source.id, target.id)
-        if (pairKey in state.relationComparisonStack) return true
+        if (pairKey in state.relationComparisonStack) {
+            relationUsedCycleBreak = true
+            return true
+        }
         state.relationComparisonStack.add(pairKey)
         relationDepth++
+        val savedCycleBreak = relationUsedCycleBreak
+        relationUsedCycleBreak = false
         val result = structuredTypeRelatedTo(source, target, relation)
+        val usedCycle = relationUsedCycleBreak
+        relationUsedCycleBreak = savedCycleBreak || usedCycle
         relationDepth--
         state.relationComparisonStack.remove(pairKey)
-        val ternary = if (result) Ternary.True else Ternary.False
-        relation.set(source.id, target.id, ternary)
+        // Only cache "true" results that were NOT influenced by cycle assumptions.
+        // A "true" result from cycle detection is speculative — it may be wrong
+        // once the full comparison completes (typeComparisonCaching test verifies this).
+        // "false" results are always safe to cache — if it failed even with the
+        // cycle break giving it the benefit of the doubt, it's genuinely incompatible.
+        if (!result || !usedCycle) {
+            val ternary = if (result) Ternary.True else Ternary.False
+            relation.set(source.id, target.id, ternary)
+        }
         return result
     }
 
@@ -33666,40 +33687,61 @@ interface DataView {
         path: String = "",
     ): List<String>? {
         if (source !is Type.Object || target !is Type.Object) return null
-        resolveStructuredTypeMembers(source)
-        resolveStructuredTypeMembers(target)
-        val targetProps = target.properties ?: return null
-        val sourceMembers = source.members ?: return null
+        // Cycle detection: don't re-enter elaboration for the same type pair
+        val pairKey = packRelationKey(source.id, target.id)
+        if (pairKey in state.elaborationStack) return null
+        state.elaborationStack.add(pairKey)
+        try {
+            resolveStructuredTypeMembers(source)
+            resolveStructuredTypeMembers(target)
+            val targetProps = target.properties ?: return null
+            val sourceMembers = source.members ?: return null
 
-        for (targetProp in targetProps) {
-            val targetName = targetProp.name
-            val sourceProp = sourceMembers[targetName] ?: continue
-            val sourcePropType = getTypeOfSymbol(sourceProp)
-            val targetPropType = getTypeOfSymbol(targetProp)
-            if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
-                val propPath = if (path.isEmpty()) targetName else "$path.$targetName"
-                // Try to go deeper into nested object properties
-                val deeper = getPropertyElaborationChain(sourcePropType, targetPropType, propPath)
-                if (deeper != null) return deeper
-                // Leaf mismatch: report at this level
-                val sourcePropStr = typeToString(sourcePropType)
-                val targetPropStr = typeToString(targetPropType)
-                return if (path.isEmpty()) {
-                    // Single-level: "Types of property 'x' are incompatible."
-                    listOf(
-                        "  Types of property '$targetName' are incompatible.",
-                        "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-                    )
-                } else {
-                    // Nested path: "The types of 'x.y' are incompatible between these types."
-                    listOf(
-                        "  The types of '$propPath' are incompatible between these types.",
-                        "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-                    )
+            // Collect all incompatible properties
+            data class IncompatibleProp(val name: String, val sourceType: Type, val targetType: Type)
+            val incompatible = mutableListOf<IncompatibleProp>()
+            for (targetProp in targetProps) {
+                val targetName = targetProp.name
+                val sourceProp = sourceMembers[targetName] ?: continue
+                val sourcePropType = getTypeOfSymbol(sourceProp)
+                val targetPropType = getTypeOfSymbol(targetProp)
+                if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
+                    incompatible.add(IncompatibleProp(targetName, sourcePropType, targetPropType))
                 }
             }
+            if (incompatible.isEmpty()) return null
+
+            // Prefer leaf mismatches (non-Object types) over recursive ones
+            // This avoids following circular property paths (A.p→D→C.q→B→A.p...)
+            // when there's a direct primitive mismatch like A.s:string vs B.s:number
+            val leaf = incompatible.firstOrNull {
+                it.sourceType !is Type.Object || it.targetType !is Type.Object
+            }
+            val chosen = leaf ?: incompatible.first()
+
+            val propPath = if (path.isEmpty()) chosen.name else "$path.${chosen.name}"
+            // Try to go deeper into nested object properties (if not a leaf)
+            if (leaf == null) {
+                val deeper = getPropertyElaborationChain(chosen.sourceType, chosen.targetType, propPath)
+                if (deeper != null) return deeper
+            }
+            // Report at this level
+            val sourcePropStr = typeToString(chosen.sourceType)
+            val targetPropStr = typeToString(chosen.targetType)
+            return if (path.isEmpty()) {
+                listOf(
+                    "  Types of property '${chosen.name}' are incompatible.",
+                    "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
+                )
+            } else {
+                listOf(
+                    "  The types of '$propPath' are incompatible between these types.",
+                    "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
+                )
+            }
+        } finally {
+            state.elaborationStack.remove(pairKey)
         }
-        return null
     }
 
     /** Check if a property symbol is optional (has questionToken in its declaration). */
