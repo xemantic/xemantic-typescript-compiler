@@ -402,7 +402,7 @@ fun CompilationResult.toErrorBaseline(): String? {
     } else {
         baseFiles
     }
-    return formatErrorBaseline(diagnostics, orderedEchoes)
+    return formatErrorBaseline(diagnostics, orderedEchoes, pretty = options.pretty)
 }
 
 /**
@@ -416,11 +416,74 @@ fun CompilationResult.toErrorBaseline(): String? {
 fun formatErrorBaseline(
     diagnostics: List<Diagnostic>,
     sourceFiles: List<Pair<String, String>>,
+    pretty: Boolean = false,
 ): String {
     val sorted = diagnostics.sortedWith(diagnosticComparator)
+    // Build source line lookup for pretty formatting
+    val sourceLinesByFile = if (pretty) {
+        sourceFiles.associate { (name, content) -> name to content.split('\n') }
+    } else emptyMap()
 
     return text {
+        // Pretty header section (ANSI-colored diagnostics with source context)
+        if (pretty) {
+            for (diag in sorted) {
+                if (diag.fileName != null && diag.line != null && diag.character != null) {
+                    // Colored: [96mfile[0m:[93mline[0m:[93mcol[0m - [91merror[0m[90m TScode: [0mmessage
+                    +"\u001b[96m${diag.fileName}\u001b[0m:\u001b[93m${diag.line}\u001b[0m:\u001b[93m${diag.character}\u001b[0m"
+                    +" - \u001b[91m${diag.category.name.lowercase()}\u001b[0m\u001b[90m TS${diag.code}: \u001b[0m${diag.message}"
+                    +"\r\n"
+                    // Message chain continuation in pretty section
+                    for (chain in diag.messageChain) {
+                        +chain
+                        +"\r\n"
+                    }
+                    +"\r\n"
+                    // Source context line with squiggle
+                    val lines = sourceLinesByFile[diag.fileName]
+                    if (lines != null && diag.line!! >= 1 && diag.line!! <= lines.size) {
+                        val lineIdx = diag.line!! - 1
+                        val sourceLine = lines[lineIdx].trimEnd('\r')
+                        // Pretty format: replace tabs with spaces for display
+                        val displayLine = sourceLine.replace("\t", " ")
+                        +"\u001b[7m${diag.line}\u001b[0m $displayLine\r\n"
+                        // Squiggle line: gutter uses reverse video for spaces
+                        val gutterSpaces = " ".repeat(diag.line.toString().length)
+                        val squiggleStart = diag.character!! - 1
+                        val squiggleLen = diag.length ?: 0
+                        val indent = " ".repeat(squiggleStart)
+                        val squiggle = "~".repeat(squiggleLen)
+                        +"\u001b[7m$gutterSpaces\u001b[0m \u001b[91m$indent$squiggle\u001b[0m\r\n"
+                    }
+                    // Related info in pretty section
+                    for (related in diag.relatedInformation) {
+                        if (related.fileName != null && related.line != null && related.character != null) {
+                            +"  \u001b[96m${related.fileName}\u001b[0m:\u001b[93m${related.line}\u001b[0m:\u001b[93m${related.character}\u001b[0m\r\n"
+                            val relLines = sourceLinesByFile[related.fileName]
+                            if (relLines != null && related.line!! >= 1 && related.line!! <= relLines.size) {
+                                val relLine = relLines[related.line!! - 1].trimEnd('\r')
+                                +"    \u001b[7m${related.line}\u001b[0m $relLine\r\n"
+                                val relGutter = " ".repeat(related.line.toString().length)
+                                val relStart = related.character!! - 1
+                                val relLen = maxOf(1, related.length ?: 1)
+                                val relIndent = buildString {
+                                    for (i in 0 until minOf(relStart, relLine.length)) {
+                                        append(if (relLine[i] == '\t') '\t' else ' ')
+                                    }
+                                }
+                                +"    \u001b[7m$relGutter\u001b[0m \u001b[96m${relIndent}${"~".repeat(relLen)}\u001b[0m\r\n"
+                            }
+                            +"    ${related.message}\r\n"
+                        }
+                    }
+                }
+            }
+            +"\r\n"
+        }
+
         // Part 1: Diagnostic summary (one line per diagnostic)
+        // When pretty is on, the pretty header replaces this section
+        if (!pretty) {
         for (diag in sorted) {
             if (diag.fileName != null && diag.line != null && diag.character != null) {
                 +diag.fileName!!
@@ -443,6 +506,7 @@ fun formatErrorBaseline(
             }
         }
         +"\r\n"
+        }
         +"\r\n"
 
         // Part 2: Global error markers (diagnostics with no file)
@@ -576,6 +640,21 @@ fun formatErrorBaseline(
                         +related.message
                         +"\r\n"
                     }
+                }
+            }
+        }
+        // Pretty footer: "Found N error(s) in file:line"
+        if (pretty) {
+            val errorCount = sorted.size
+            val firstDiag = sorted.firstOrNull { it.fileName != null }
+            if (errorCount == 1 && firstDiag != null) {
+                +"Found 1 error in ${firstDiag.fileName}\u001b[90m:${firstDiag.line}\u001b[0m\r\n"
+            } else if (errorCount > 1) {
+                val distinctFiles = sorted.mapNotNull { it.fileName }.toSet()
+                if (distinctFiles.size == 1 && firstDiag != null) {
+                    +"Found $errorCount errors in the same file, starting at: ${firstDiag.fileName}\u001b[90m:${firstDiag.line}\u001b[0m\r\n"
+                } else {
+                    +"Found $errorCount errors in ${distinctFiles.size} files.\r\n"
                 }
             }
         }
