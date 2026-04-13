@@ -12185,17 +12185,20 @@ class Checker(
                                         start = modIdx,
                                         length = modName.length,
                                     ))
-                                    // TS1184: Modifiers cannot appear here. (TypeScript emits both)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Modifiers cannot appear here.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 1184,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = modIdx,
-                                        length = modName.length,
-                                    ))
+                                    // TS1184: Modifiers cannot appear here. (TypeScript emits both
+                                    // for methods, but NOT for get/set accessors)
+                                    if (prop is MethodDeclaration) {
+                                        diagnostics.add(Diagnostic(
+                                            message = "Modifiers cannot appear here.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 1184,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = modIdx,
+                                            length = modName.length,
+                                        ))
+                                    }
                                 }
                             }
                         }
@@ -12826,6 +12829,15 @@ class Checker(
 
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
+
+        /**
+         * Properties inherited by all objects from Object prototype.
+         * Not considered "missing" in TS2740 because all objects have them.
+         */
+        private val OBJECT_PROTOTYPE_PROPERTIES = setOf(
+            "toString", "toLocaleString", "valueOf", "constructor",
+            "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+        )
 
         /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts).
          *  Excludes "static" because `static static foo` legitimately gets TS2300. */
@@ -26800,20 +26812,36 @@ interface DataView {
                 val missingProp = lastMissingPropertyName
                 val missingPropSym = lastMissingPropertySymbol
                 if (missingProp != null) {
-                    // TS2741: Property 'X' is missing in type 'Y' but required in type 'Z'.
-                    val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'."
-                    val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                    diagnostics.add(Diagnostic(
-                        message = message,
-                        category = DiagnosticCategory.Error,
-                        code = 2741,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = name.pos,
-                        length = name.text.length,
-                        relatedInformation = listOfNotNull(relatedInfo),
-                    ))
+                    // Collect all missing properties to decide TS2741 vs TS2740
+                    val allMissing = collectMissingProperties(sourceType, targetType)
+                    if (allMissing.size >= 2) {
+                        // TS2739 for 2-4 missing, TS2740 for 5+
+                        diagnostics.add(Diagnostic(
+                            message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                            category = DiagnosticCategory.Error,
+                            code = if (allMissing.size <= 4) 2739 else 2740,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                        ))
+                    } else {
+                        // TS2741: Property 'X' is missing in type 'Y' but required in type 'Z'.
+                        val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'."
+                        val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                        diagnostics.add(Diagnostic(
+                            message = message,
+                            category = DiagnosticCategory.Error,
+                            code = 2741,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                            relatedInformation = listOfNotNull(relatedInfo),
+                        ))
+                    }
                 } else {
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
@@ -26913,18 +26941,32 @@ interface DataView {
                 val missingProp = lastMissingPropertyName
                 val missingPropSym = lastMissingPropertySymbol
                 if (missingProp != null) {
-                    val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2741,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = propName.pos,
-                        length = propName.text.length,
-                        relatedInformation = listOfNotNull(relatedInfo),
-                    ))
+                    val allMissing = collectMissingProperties(sourceType, targetType)
+                    if (allMissing.size >= 2) {
+                        diagnostics.add(Diagnostic(
+                            message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                            category = DiagnosticCategory.Error,
+                            code = if (allMissing.size <= 4) 2739 else 2740,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = propName.pos,
+                            length = propName.text.length,
+                        ))
+                    } else {
+                        val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2741,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = propName.pos,
+                            length = propName.text.length,
+                            relatedInformation = listOfNotNull(relatedInfo),
+                        ))
+                    }
                 } else {
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
@@ -27131,18 +27173,33 @@ interface DataView {
                             val missingProp = lastMissingPropertyName
                             val missingPropSym = lastMissingPropertySymbol
                             if (missingProp != null) {
-                                val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                                diagnostics.add(Diagnostic(
-                                    message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2741,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = target.pos,
-                                    length = target.text.length,
-                                    relatedInformation = listOfNotNull(relatedInfo),
-                                ))
+                                // Collect all missing properties to decide TS2741 vs TS2740
+                                val allMissing = collectMissingProperties(sourceType, tt)
+                                if (allMissing.size >= 2) {
+                                    diagnostics.add(Diagnostic(
+                                        message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                                        category = DiagnosticCategory.Error,
+                                        code = if (allMissing.size <= 4) 2739 else 2740,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = target.pos,
+                                        length = target.text.length,
+                                    ))
+                                } else {
+                                    val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                                    diagnostics.add(Diagnostic(
+                                        message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2741,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = target.pos,
+                                        length = target.text.length,
+                                        relatedInformation = listOfNotNull(relatedInfo),
+                                    ))
+                                }
                                 return
                             }
                             val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
@@ -29968,36 +30025,44 @@ interface DataView {
                 if (ifaceType !is Type.Object) continue
                 resolveStructuredTypeMembers(ifaceType)
 
-                // Check each required interface property exists in class
+                // Collect all missing required properties first
                 val ifaceProps = ifaceType.properties ?: continue
+                val missingProps = mutableListOf<Symbol>()
                 for (ifaceProp in ifaceProps) {
                     val propName = ifaceProp.name
-
-                    if (propName !in classMemberNames) {
-                        // Property missing — emit TS2420
-                        val isOptional = isOptionalProperty(ifaceProp)
-                        if (isOptional) continue
-
-                        val classNameNode = classDecl.name ?: continue
-                        val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
-                        val message = "Class '$className' incorrectly implements interface '$ifaceName'."
-                        val chain = mutableListOf<String>()
-                        chain.add("  Property '$propName' is missing in type '$className' but required in type '$ifaceName'.")
+                    if (propName !in classMemberNames && !isOptionalProperty(ifaceProp)) {
+                        missingProps.add(ifaceProp)
+                    }
+                }
+                if (missingProps.isNotEmpty()) {
+                    val classNameNode = classDecl.name ?: continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                    val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                    val chain = mutableListOf<String>()
+                    val relatedInfo: List<Diagnostic>
+                    if (missingProps.size >= 2) {
+                        // TS2740-style chain: "Type 'D' is missing the following properties from type 'I': foo, bar"
+                        val missingNames = missingProps.map { it.name }
+                        chain.add("  " + formatTs2740Message(className, ifaceName, missingNames))
+                        relatedInfo = emptyList()
+                    } else {
+                        val firstMissing = missingProps[0]
+                        chain.add("  Property '${firstMissing.name}' is missing in type '$className' but required in type '$ifaceName'.")
                         // TS2728 related info: point to interface property declaration
-                        val relatedInfo = ifaceProp.valueDeclaration?.let { decl ->
+                        relatedInfo = firstMissing.valueDeclaration?.let { decl ->
                             val declPos = when (decl) {
                                 is PropertyDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
                                 is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
                                 else -> decl.pos
                             }
                             val declLength = when (decl) {
-                                is PropertyDeclaration -> (decl.name as? Identifier)?.text?.length ?: propName.length
-                                is MethodDeclaration -> (decl.name as? Identifier)?.text?.length ?: propName.length
-                                else -> propName.length
+                                is PropertyDeclaration -> (decl.name as? Identifier)?.text?.length ?: firstMissing.name.length
+                                is MethodDeclaration -> (decl.name as? Identifier)?.text?.length ?: firstMissing.name.length
+                                else -> firstMissing.name.length
                             }
                             val (rl, rc) = getLineAndCharacterOfPosition(source, declPos)
                             listOf(Diagnostic(
-                                message = "'$propName' is declared here.",
+                                message = "'${firstMissing.name}' is declared here.",
                                 category = DiagnosticCategory.Message,
                                 code = 2728,
                                 fileName = fileName,
@@ -30007,21 +30072,25 @@ interface DataView {
                                 length = declLength,
                             ))
                         } ?: emptyList()
-
-                        diagnostics.add(Diagnostic(
-                            message = message,
-                            category = DiagnosticCategory.Error,
-                            code = 2420,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = classNameNode.pos,
-                            length = className.length,
-                            messageChain = chain,
-                            relatedInformation = relatedInfo,
-                        ))
-                        return // One TS2420 per class is enough (TypeScript only reports first mismatch)
-                    } else {
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = message,
+                        category = DiagnosticCategory.Error,
+                        code = 2420,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = classNameNode.pos,
+                        length = className.length,
+                        messageChain = chain,
+                        relatedInformation = relatedInfo,
+                    ))
+                    return // One TS2420 per class is enough (TypeScript only reports first mismatch)
+                }
+                // Check each existing property
+                for (ifaceProp in ifaceProps) {
+                    val propName = ifaceProp.name
+                    if (propName in classMemberNames) {
                         // Property exists — check if it's private (interface members are always public)
                         val classMember = classDecl.members.firstOrNull { m ->
                             when (m) {
@@ -32978,7 +33047,16 @@ interface DataView {
             args.size >= sig.minArgumentCount && (args.size <= params.size || hasRest)
         }
         if (arityMatches.size == 1) {
-            val implRelated = getOverloadImplementationRelated(arityMatches[0], source, fileName)
+            // Check TS2793: only add implementation related info if the implementation
+            // would have actually matched the arguments (e.g. impl has `any` param type).
+            var implRelated: Diagnostic? = null
+            val implRelatedCandidate = getOverloadImplementationRelated(arityMatches[0], source, fileName)
+            if (implRelatedCandidate != null) {
+                val implSig = getImplementationSignature(arityMatches[0], source, fileName)
+                if (implSig != null && allArgumentsMatch(args, implSig)) {
+                    implRelated = implRelatedCandidate
+                }
+            }
             checkArgumentsAgainstSignature(args, arityMatches[0], source, fileName, implRelated)
             return
         }
@@ -33675,6 +33753,36 @@ interface DataView {
             if (!checkTypeRelatedTo(sourcePropType, targetPropType, relation)) return false
         }
         return true
+    }
+
+    /**
+     * Collect all non-optional property names from targetType that are missing from sourceType.
+     * Used to decide between TS2741 (single missing) and TS2740 (multiple missing).
+     */
+    private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
+        if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
+        resolveStructuredTypeMembers(sourceType)
+        resolveStructuredTypeMembers(targetType)
+        val sourceMembers = sourceType.members ?: emptyMap()
+        val targetProps = targetType.properties ?: return emptyList()
+        val missing = mutableListOf<String>()
+        for (prop in targetProps) {
+            if (isOptionalProperty(prop)) continue
+            if (prop.name !in sourceMembers && prop.name !in OBJECT_PROTOTYPE_PROPERTIES) {
+                missing.add(prop.name)
+            }
+        }
+        return missing
+    }
+
+    /**
+     * Format a TS2740 message: "Type 'X' is missing the following properties from type 'Y': a, b, c, and N more."
+     * Lists up to 4 property names; if >5 total, appends "and N more".
+     */
+    private fun formatTs2740Message(displaySource: String, displayTarget: String, missing: List<String>): String {
+        val listed = if (missing.size > 5) missing.take(4) else missing
+        val suffix = if (missing.size > 5) ", and ${missing.size - 4} more." else ""
+        return "Type '$displaySource' is missing the following properties from type '$displayTarget': ${listed.joinToString(", ")}$suffix"
     }
 
     /**
