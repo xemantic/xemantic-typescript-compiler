@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-13):** 8,069 / 10,077 tests passing (80.1%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 in progress.
+**Status (2026-04-13):** 8,070 / 10,077 tests passing (80.1%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done (+5 tests), next: 16.3 control flow narrowing.
 
 ## Goal
 
