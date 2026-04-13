@@ -34183,6 +34183,9 @@ interface DataView {
                     if (name.isEmpty()) {
                         // Call signature: MethodDeclaration with empty name
                         callSignatures.add(sig)
+                    } else if (name == "new") {
+                        // Construct signature: MethodDeclaration with name "new"
+                        constructSignatures.add(sig)
                     } else {
                         // Named method member
                         val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
