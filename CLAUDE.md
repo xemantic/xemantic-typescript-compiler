@@ -107,6 +107,15 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`signatureRelatedTo` parameter count**: Must check `source.minArgumentCount > target.parameters.size` — if the source function requires more args than the target provides, they're incompatible. Without this, `(a, b) => void` would be incorrectly assignable to `() => any`.
 - **Binder namespace merge gap**: `interface A {}` + `declare var A: { ... }` in the same file may not merge correctly — the binder may only keep the variable symbol, losing the interface. This blocks TS2416 for `class B extends A` where A is both interface and constructor var (e.g., `staticMismatchBecauseOfPrototype` test).
 
+### Overload resolution gotchas
+
+- **`isSimpleCheckableType` NOT used for overload resolution**: For TS2769, `allArgumentsMatch`/`getFirstArgumentError`/`getFirstFailingArgPosition` check ALL types (including objects, arrays) — not just primitives. The `isSimpleCheckableType` guard is only for single-signature TS2345 checking.
+- **Array element type comparison in `structuredTypeRelatedTo`**: When both types are `Type.Reference(Array, ...)`, compare element types directly instead of full structural comparison. Only for Array — other generic interfaces fall through to `objectTypeRelatedTo` which may pass trivially due to anyType methods in built-in lib. Adding non-Array generics here needs variance support first (invariant comparison regresses covariant interfaces).
+- **Generic overload guard**: Skip `checkArgumentsAgainstOverloads` when any signature has type parameters. Without generic type argument inference, parameter types resolve to `errorType` and produce false positive TS2769.
+- **MethodDeclaration typeParameters**: Must include type parameters from `md.typeParameters` when creating Signatures for interface method overloads — the generic guard relies on `sig.typeParameters` being populated.
+- **TS2793 conditional on implementation match**: Only emit "implementation would have succeeded" when `allArgumentsMatch(args, implSig)` returns true for the implementation signature. Otherwise the implementation may also reject the arguments (e.g., `foo({a:any}[])` still requires property 'a').
+- **Literal type widening in error display**: `getWidenedLiteralType` maps `true`→`boolean`, `false`→`boolean`, string/number/bigint literals→base types. Used in TS2769 error messages but NOT in type checking itself.
+
 ### Inline source map gotchas
 
 - **Inline source map uses output-to-source line matching**: `SourceMap.kt` generates VLQ mappings by matching output JS lines to source lines (not fixed offset). This handles cases where the emitter drops empty lines between statements. The Scanner tokenizes each matched line to find mapping positions.
