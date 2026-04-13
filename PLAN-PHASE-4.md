@@ -2590,7 +2590,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [x] **16.2. Overload resolution (HIGH — ~120 tests realistic) — IN PROGRESS (+4 tests, 8069 passing)**
+- [x] **16.2. Overload resolution (HIGH — ~120 tests realistic) — DONE (+5 tests, 8070 passing)**
+
+  **Session 2026-04-13 (16.2b, +1 test: 8069→8070):**
+  - Arity filter: when only one overload matches by argument count, use single-signature TS2345 checking instead of TS2769 error. Avoids reporting "No overload matches" when there's only one viable candidate.
+  - Excess argument check in `allArgumentsMatch`: signatures with fewer params than args (and no rest param) now correctly fail matching.
+  - +1 test: functionOverloads27.
+  - Remaining failing overload tests need: TS2394 (overload/impl compatibility), TS2554 (expected N args), generic type inference, rest param handling. All deferred.
 
   **Session 2026-04-13 (16.2a, +4 tests: 8065→8069):**
   - **Binder already merges Function+Function** — overload declarations were preserved correctly.
