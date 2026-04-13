@@ -116,6 +116,10 @@ class Transformer(
     // When the scope exits, the collected vars are prepended as `var _a;` declarations.
     private val hoistedVarScopes = mutableListOf<MutableList<String>>()
 
+    // Computed property temp var names that need hoisting before Object.defineProperty in CJS.
+    // Populated during class transformation, consumed by transformToCommonJS.
+    private val computedPropHoistNames = mutableListOf<String>()
+
     // Private field WeakMap var declarations to be hoisted to the top of the function scope.
     // `var _C_x;` is hoisted before all user statements (TypeScript behavior).
     // Each entry is a complete VariableStatement to prepend.
@@ -2156,6 +2160,24 @@ class Transformer(
                 )
             }
             result.addAll(0, tempVarDecls)
+        }
+
+        // Move computed property temp vars (var _a;) from their position in the body to before
+        // Object.defineProperty. TypeScript hoists these to module scope top.
+        if (computedPropHoistNames.isNotEmpty()) {
+            val hoistNameSet = computedPropHoistNames.toSet()
+            // Find and remove the VariableStatement containing these vars from the result
+            val toRemove = result.filter { stmt ->
+                stmt is VariableStatement && stmt.pos == -1 &&
+                    stmt.declarationList.flags == VarKeyword &&
+                    stmt.declarationList.declarations.all { decl ->
+                        decl.initializer == null && (decl.name as? Identifier)?.text in hoistNameSet
+                    }
+            }
+            if (toRemove.isNotEmpty()) {
+                result.removeAll(toRemove.toSet())
+                result.addAll(0, toRemove)
+            }
         }
 
         // Insert function export stubs after void0 hoists and Object.defineProperty preamble.
@@ -9496,6 +9518,8 @@ class Transformer(
                     val tempVar = nextTempVarName()
                     computedPropTempVars[member] = tempVar
                     computedPropLeadingVars.add(tempVar)
+                    // Track for CJS hoisting — these vars need to appear before Object.defineProperty
+                    if (functionScopeDepth == 0) computedPropHoistNames.add(tempVar)
                     computedPropAssignments.add(tempVar to transformExpression(expr))
                 }
             }
