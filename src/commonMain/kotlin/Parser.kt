@@ -5174,7 +5174,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 overrideLength = text.length
             )
         }
-        return NumericLiteralNode(text = text, pos = pos, end = getEnd())
+        // Capture trailing comments only when the next token is a dot (property access).
+        // This preserves `0 /* comment */.toString()` but avoids stealing comments that
+        // belong to the enclosing statement (e.g. `await 3 /*comment*/` → comment trails stmt).
+        val trailingComments = if (token == SyntaxKind.Dot) scanner.consumeTrailingComments() else null
+        return NumericLiteralNode(text = text, pos = pos, end = getEnd(), trailingComments = trailingComments)
     }
 
     /** Checks if the current token can start an expression. */
