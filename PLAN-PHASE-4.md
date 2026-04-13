@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-12):** 8,060 / 10,077 tests passing (80.0%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 in progress.
+**Status (2026-04-13):** 8,069 / 10,077 tests passing (80.1%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 in progress.
 
 ## Goal
 
@@ -2590,7 +2590,28 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.2. Overload resolution (HIGH — ~120 tests realistic)**
+- [x] **16.2. Overload resolution (HIGH — ~120 tests realistic) — IN PROGRESS (+4 tests, 8069 passing)**
+
+  **Session 2026-04-13 (16.2a, +4 tests: 8065→8069):**
+  - **Binder already merges Function+Function** — overload declarations were preserved correctly.
+  - **Core fix**: `isSimpleCheckableType` guard removed from `allArgumentsMatch`, `getFirstArgumentError`, `getFirstFailingArgPosition` — these now check ALL types for overload resolution, not just primitives.
+  - **Array element type comparison**: Added Array-specific comparison in `structuredTypeRelatedTo` — when both types are `Type.Reference(Array, ...)`, compare element types directly instead of full structural comparison (which passes trivially since Array methods resolve to anyType in built-in lib). Limited to Array only to avoid regressions from invariant comparison on other generic interfaces.
+  - **Literal type widening in errors**: `getWidenedLiteralType` helper widens `true`→`boolean`, string literals→`string`, etc. for TS2769 error messages.
+  - **TS2793 conditional**: Only emit "implementation would have succeeded" when the implementation signature actually matches the arguments (via `getImplementationSignature` + `allArgumentsMatch`).
+  - **TS2793 position fix**: Points to function NAME (`foo`) not declaration start (`function`).
+  - **TS6500 related info**: For property type mismatches in object literal args, emit "The expected type comes from property 'X' which is declared here on type 'Y'" pointing to the property declaration in the param type.
+  - **TS2728 related info**: For missing property errors, emit "'X' is declared here." pointing to the missing property's declaration.
+  - **Object literal position**: Squiggle the property NAME (not value) for property-level mismatches in overload errors.
+  - **Generic overload guard**: Skip overload checking when signatures have type parameters (no generic type inference yet).
+  - **MethodDeclaration typeParameters**: Added typeParameters to Signature creation for interface method overloads (was missing, causing the generic guard to fail).
+  - +4 tests: functionOverloads2, functionOverloads40, functionOverloads41, overloadResolutionTest1.
+  - Zero regressions (tested: instantiatedReturnTypeContravariance, objectLiteralParameterResolution both pass).
+  
+  **Remaining sub-steps (DEFERRED — need generic infrastructure):**
+  - Generic type argument inference for overload resolution
+  - Rest parameter handling in overload matching
+  - Constructor overloads (TS2769 for `new` expressions)
+  - Interface method overloads with type parameters
 
   **Problem:** 511 TS2769 "No overload matches this call" occurrences in "none produced" tests. Also needed for TS2349 ("This expression is not callable") and proper signature resolution when calling overloaded methods.
 

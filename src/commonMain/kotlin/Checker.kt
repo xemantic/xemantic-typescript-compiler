@@ -27723,8 +27723,16 @@ interface DataView {
                 fnType.callSignatures = if (sigDecls.isNotEmpty()) {
                     sigDecls.map { md ->
                         val returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        val typeParams = md.typeParameters?.map { tp ->
+                            val param = Type.TypeParam()
+                            param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                            tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+                            tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                            param
+                        }
                         Signature(
                             declaration = md,
+                            typeParameters = typeParams,
                             parameters = getParameterSymbols(md.parameters),
                             resolvedReturnType = returnType,
                             minArgumentCount = md.parameters.count {
@@ -32680,6 +32688,11 @@ interface DataView {
             val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
+            // Skip overload resolution when any signature has type parameters —
+            // without generic type argument inference, parameter types may resolve
+            // incorrectly and produce false positive TS2769 errors.
+            val hasTypeParams = signatures.any { !it.typeParameters.isNullOrEmpty() }
+            if (hasTypeParams) return
             // Overload resolution: try each signature in order
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName)
         }
@@ -32754,14 +32767,19 @@ interface DataView {
     }
 
     private fun makeTs2793Diagnostic(implDecl: Node, source: String, fileName: String): Diagnostic {
-        val implPos = implDecl.pos
+        // Point to the function/method name, spanning to the body start
+        val namePos = when (implDecl) {
+            is FunctionDeclaration -> implDecl.name?.pos ?: implDecl.pos
+            is MethodDeclaration -> (implDecl.name as? Identifier)?.pos ?: implDecl.pos
+            else -> implDecl.pos
+        }
         val implEnd = when (implDecl) {
             is MethodDeclaration -> implDecl.body?.pos ?: implDecl.end
             is FunctionDeclaration -> implDecl.body?.pos ?: implDecl.end
             else -> implDecl.end
         }
-        val implLength = implEnd - implPos
-        val (implLine, implChar) = getLineAndCharacterOfPosition(source, implPos)
+        val implLength = implEnd - namePos
+        val (implLine, implChar) = getLineAndCharacterOfPosition(source, namePos)
         return Diagnostic(
             message = "The call would have succeeded against this implementation, but implementation signatures of overloads are not externally visible.",
             category = DiagnosticCategory.Message,
@@ -32769,9 +32787,158 @@ interface DataView {
             fileName = fileName,
             line = implLine,
             character = implChar,
-            start = implPos,
+            start = namePos,
             length = implLength,
         )
+    }
+
+    /**
+     * For a TS2769 overload error caused by a property type mismatch,
+     * generate TS6500 related info: "The expected type comes from property 'X'
+     * which is declared here on type 'Y'".
+     * Points to the property declaration in the parameter's type literal.
+     */
+    private fun getPropertySourceRelated(
+        args: List<Expression>,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ): Diagnostic? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            // Dig through array types to get to the element type
+            val (actualArg, actualParamType) = unwrapArrayArg(arg, paramType) ?: Pair(arg, paramType)
+            if (actualArg !is ObjectLiteralExpression || actualParamType !is Type.Object) continue
+            resolveStructuredTypeMembers(actualParamType)
+            val targetProps = actualParamType.properties ?: continue
+            val argType = getTypeOfExpression(actualArg) as? Type.Object ?: continue
+            for (targetProp in targetProps) {
+                val sourceProp = argType.members?.get(targetProp.name) ?: continue
+                val sourcePropType = getTypeOfSymbol(sourceProp)
+                val targetPropType = getTypeOfSymbol(targetProp)
+                if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
+                    // Found the mismatched property — point to its declaration in the param type
+                    val propDecl = targetProp.declarations.firstOrNull() ?: continue
+                    val propName = targetProp.name
+                    val propPos = when (propDecl) {
+                        is PropertyDeclaration -> propDecl.name.pos
+                        is PropertyAssignment -> propDecl.name.pos
+                        else -> propDecl.pos
+                    }
+                    val propLength = propName.length
+                    // Get the containing type display name
+                    val typeDisplay = typeToString(actualParamType)
+                    val (propLine, propChar) = getLineAndCharacterOfPosition(source, propPos)
+                    return Diagnostic(
+                        message = "The expected type comes from property '$propName' which is declared here on type '$typeDisplay'",
+                        category = DiagnosticCategory.Message,
+                        code = 6500,
+                        fileName = fileName,
+                        line = propLine,
+                        character = propChar,
+                        start = propPos,
+                        length = propLength,
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * For a TS2769 overload error caused by a MISSING property,
+     * generate TS2728 related info: "'X' is declared here."
+     * Points to the property declaration in the parameter's type literal.
+     */
+    private fun getMissingPropertyDeclaredHere(
+        args: List<Expression>,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ): Diagnostic? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val (actualArg, actualParamType) = unwrapArrayArg(arg, paramType) ?: Pair(arg, paramType)
+            if (actualParamType !is Type.Object) continue
+            resolveStructuredTypeMembers(actualParamType)
+            val targetProps = actualParamType.properties ?: continue
+            val argType = getTypeOfExpression(actualArg)
+            if (argType !is Type.Object) continue
+            for (targetProp in targetProps) {
+                if (isOptionalProperty(targetProp)) continue
+                val sourceProp = argType.members?.get(targetProp.name)
+                if (sourceProp == null) {
+                    // Found missing property — point to its declaration
+                    val propDecl = targetProp.declarations.firstOrNull() ?: continue
+                    val propPos = when (propDecl) {
+                        is PropertyDeclaration -> propDecl.name.pos
+                        else -> propDecl.pos
+                    }
+                    val propName = targetProp.name
+                    val (propLine, propChar) = getLineAndCharacterOfPosition(source, propPos)
+                    return Diagnostic(
+                        message = "'$propName' is declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 2728,
+                        fileName = fileName,
+                        line = propLine,
+                        character = propChar,
+                        start = propPos,
+                        length = propName.length,
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Get the implementation signature for a function/method that has overloads.
+     * Returns null if no implementation exists.
+     */
+    private fun getImplementationSignature(
+        overloadSig: Signature,
+        source: String,
+        fileName: String,
+    ): Signature? {
+        val overloadDecl = overloadSig.declaration ?: return null
+        if (overloadDecl is FunctionDeclaration) {
+            val name = overloadDecl.name?.text ?: return null
+            val symbol = globals[name] ?: currentFileLocals?.get(name) ?: return null
+            val implDecl = symbol.declarations.filterIsInstance<FunctionDeclaration>()
+                .find { it.body != null } ?: return null
+            val returnType = implDecl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            return Signature(
+                declaration = implDecl,
+                parameters = getParameterSymbols(implDecl.parameters),
+                resolvedReturnType = returnType,
+                minArgumentCount = implDecl.parameters.count {
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                },
+            )
+        }
+        return null
+    }
+
+    /**
+     * If arg is ArrayLiteral and paramType is Array<T>, return the first element
+     * and the element type T. Otherwise return null.
+     */
+    private fun unwrapArrayArg(arg: Expression, paramType: Type): Pair<Expression, Type>? {
+        if (arg !is ArrayLiteralExpression) return null
+        if (paramType !is Type.Reference || paramType.target?.symbol?.name != "Array") return null
+        val elemType = paramType.resolvedTypeArguments?.firstOrNull() ?: return null
+        val firstElem = arg.elements.firstOrNull() ?: return null
+        if (firstElem is SpreadElement) return null
+        return Pair(firstElem, elemType)
     }
 
     /**
@@ -32826,6 +32993,28 @@ interface DataView {
                     chain.add("  Overload $overloadIdx of $totalOverloads, '$sigStr', gave the following error.")
                     chain.add("    $errorMsg")
                 }
+                // Collect related info: TS6500/TS2728 for property source, TS2793 for implementation
+                val related = mutableListOf<Diagnostic>()
+                for ((_, sig, errorMsg) in overloadErrors) {
+                    if (errorMsg.startsWith("Property '") && errorMsg.contains("is missing")) {
+                        // TS2728: "'X' is declared here." for missing property errors
+                        val ts2728 = getMissingPropertyDeclaredHere(args, sig, source, fileName)
+                        if (ts2728 != null) related.add(ts2728)
+                    } else {
+                        // TS6500: "The expected type comes from property 'X' which is declared here on type 'Y'"
+                        val ts6500 = getPropertySourceRelated(args, sig, source, fileName)
+                        if (ts6500 != null) related.add(ts6500)
+                    }
+                }
+                // TS2793: only if implementation would have matched the arguments
+                val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
+                if (implRelated != null) {
+                    // Check if implementation actually accepts these args
+                    val implSig = getImplementationSignature(signatures[0], source, fileName)
+                    if (implSig != null && allArgumentsMatch(args, implSig)) {
+                        related.add(implRelated)
+                    }
+                }
                 diagnostics.add(Diagnostic(
                     message = "No overload matches this call.",
                     category = DiagnosticCategory.Error,
@@ -32836,11 +33025,12 @@ interface DataView {
                     start = argStart,
                     length = argLength,
                     messageChain = chain,
+                    relatedInformation = related,
                 ))
                 return
             }
         }
-        // Fallback: report TS2345 against the last signature
+        // Fallback: no position found despite errors — try fallback TS2345
         val lastSig = signatures.last()
         checkArgumentsAgainstSignature(args, lastSig, source, fileName)
     }
@@ -32855,15 +33045,89 @@ interface DataView {
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
-            if (!isSimpleCheckableType(paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
-                return "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
+                // For object literal args, try to find the specific mismatched property
+                val propError = getObjectLiteralPropertyError(arg, argType, paramType)
+                if (propError != null) return propError
+                val displayArgType = getWidenedLiteralType(argType)
+                return "Argument of type '${typeToString(displayArgType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
             }
         }
         return null
     }
 
-    /** Get the position and length of the first failing argument for a signature. */
+    /**
+     * For an object literal argument that doesn't match a target object type,
+     * find the specific property that mismatches and return an elaborated error.
+     * e.g., "Type 'string' is not assignable to type 'number'."
+     */
+    private fun getObjectLiteralPropertyError(
+        arg: Expression,
+        argType: Type,
+        paramType: Type,
+    ): String? {
+        if (arg !is ObjectLiteralExpression && arg !is ArrayLiteralExpression) return null
+        // For array literal → array type: dig into element comparison
+        if (arg is ArrayLiteralExpression && paramType is Type.Reference &&
+            paramType.target?.symbol?.name == "Array") {
+            val targetElemType = paramType.resolvedTypeArguments?.firstOrNull() ?: return null
+            for (elem in arg.elements) {
+                if (elem is SpreadElement) continue
+                val elemType = getTypeOfExpression(elem)
+                if (elemType === anyType || elemType === errorType) continue
+                if (!checkTypeRelatedTo(elemType, targetElemType, assignableRelation)) {
+                    // Recurse: check if the element is an object literal with property mismatch
+                    val inner = getObjectLiteralPropertyError(elem, elemType, targetElemType)
+                    if (inner != null) return inner
+                    val displayArgType = getWidenedLiteralType(elemType)
+                    return "Type '${typeToString(displayArgType)}' is not assignable to type '${typeToString(targetElemType)}'."
+                }
+            }
+            return null
+        }
+        // For object literal → object type: find first mismatched property
+        if (arg is ObjectLiteralExpression && paramType is Type.Object) {
+            resolveStructuredTypeMembers(paramType)
+            val targetProps = paramType.properties ?: return null
+            if (argType !is Type.Object) return null
+            for (targetProp in targetProps) {
+                val isOptional = isOptionalProperty(targetProp)
+                val sourceProp = argType.members?.get(targetProp.name)
+                if (sourceProp == null) {
+                    if (!isOptional) {
+                        return "Property '${targetProp.name}' is missing in type '${typeToString(argType)}' but required in type '${typeToString(paramType)}'."
+                    }
+                    continue
+                }
+                val sourcePropType = getTypeOfSymbol(sourceProp)
+                val targetPropType = getTypeOfSymbol(targetProp)
+                if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
+                    val displaySource = getWidenedLiteralType(sourcePropType)
+                    return "Type '${typeToString(displaySource)}' is not assignable to type '${typeToString(targetPropType)}'."
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Widen literal types to their base types for error message display.
+     * TypeScript displays `true` as `boolean`, string literals as `string`, etc.
+     */
+    private fun getWidenedLiteralType(type: Type): Type {
+        val f = type.flags
+        if (f.hasAny(TypeFlags.BooleanLiteral)) return booleanType
+        if (type is Type.StringLiteral) return stringType
+        if (type is Type.NumberLiteral) return numberType
+        if (type is Type.BigIntLiteral) return bigintType
+        return type
+    }
+
+    /**
+     * Get the position and length of the first failing argument for a signature.
+     * For object literal/array literal arguments, dig into elements to find the
+     * specific mismatched value (TypeScript squiggles the inner value, not the whole arg).
+     */
     private fun getFirstFailingArgPosition(args: List<Expression>, sig: Signature): Pair<Int, Int>? {
         val params = sig.parameters
         for ((i, arg) in args.withIndex()) {
@@ -32873,11 +33137,75 @@ interface DataView {
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
-            if (!isSimpleCheckableType(paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // For object/array literals, find the inner mismatched expression
+                val inner = findInnerMismatchPosition(arg, paramType)
+                if (inner != null) return inner
                 val start = arg.pos
                 val length = expressionTrueEnd(arg) - start
                 if (length > 0) return Pair(start, length)
+            }
+        }
+        return null
+    }
+
+    /**
+     * For an array/object literal arg, find the position of the specific inner
+     * expression that causes the type mismatch. Returns (start, length) or null.
+     */
+    private fun findInnerMismatchPosition(arg: Expression, paramType: Type): Pair<Int, Int>? {
+        // Array literal → array type: find the mismatched element
+        if (arg is ArrayLiteralExpression && paramType is Type.Reference &&
+            paramType.target?.symbol?.name == "Array") {
+            val targetElemType = paramType.resolvedTypeArguments?.firstOrNull() ?: return null
+            for (elem in arg.elements) {
+                if (elem is SpreadElement) continue
+                val elemType = getTypeOfExpression(elem)
+                if (elemType === anyType || elemType === errorType) continue
+                if (!checkTypeRelatedTo(elemType, targetElemType, assignableRelation)) {
+                    // Recurse into the element (might be an object literal)
+                    val inner = findInnerMismatchPosition(elem, targetElemType)
+                    if (inner != null) return inner
+                    val start = elem.pos
+                    val length = expressionTrueEnd(elem) - start
+                    if (length > 0) return Pair(start, length)
+                }
+            }
+        }
+        // Object literal → object type: find the mismatched property value
+        if (arg is ObjectLiteralExpression && paramType is Type.Object) {
+            resolveStructuredTypeMembers(paramType)
+            val targetProps = paramType.properties ?: return null
+            val argType = getTypeOfExpression(arg)
+            if (argType !is Type.Object) return null
+            for (targetProp in targetProps) {
+                val sourceProp = argType.members?.get(targetProp.name)
+                if (sourceProp == null) {
+                    // Missing property — squiggle the whole object literal
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) return Pair(start, length)
+                    continue
+                }
+                val sourcePropType = getTypeOfSymbol(sourceProp)
+                val targetPropType = getTypeOfSymbol(targetProp)
+                if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
+                    // Find the PropertyAssignment and squiggle the property NAME
+                    for (prop in arg.properties) {
+                        if (prop !is PropertyAssignment) continue
+                        val propNameNode = prop.name
+                        val propName = when (propNameNode) {
+                            is Identifier -> propNameNode.text
+                            is StringLiteralNode -> propNameNode.text
+                            else -> continue
+                        }
+                        if (propName == targetProp.name) {
+                            val start = propNameNode.pos
+                            val length = propName.length
+                            if (length > 0) return Pair(start, length)
+                        }
+                    }
+                }
             }
         }
         return null
@@ -32898,9 +33226,13 @@ interface DataView {
     /**
      * Check if all arguments match a signature (no TS2345 errors would fire).
      * Returns true if all args are assignable to their corresponding param types.
+     * For overload resolution, we check ALL types (not just simple checkable ones)
+     * because we need to determine if any overload matches.
      */
     private fun allArgumentsMatch(args: List<Expression>, sig: Signature): Boolean {
         val params = sig.parameters
+        // Check arity first
+        if (args.size < sig.minArgumentCount) return false
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
@@ -32908,7 +33240,6 @@ interface DataView {
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
-            if (!isSimpleCheckableType(paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
         }
         return true
@@ -33235,6 +33566,24 @@ interface DataView {
         // Intersection source: some constituent must be related to target
         if (source is Type.Intersection) {
             return source.types.any { checkTypeRelatedTo(it, target, relation) }
+        }
+        // Array types: compare element types directly.
+        // For Array<A> vs Array<B>, check A → B covariance instead of full
+        // structural comparison (which would pass trivially since Array methods
+        // resolve to anyType in our built-in lib).
+        // Only for Array — other generics need full structural comparison
+        // because interface type parameters may be covariant in practice.
+        if (source is Type.Reference && target is Type.Reference &&
+            source.target === target.target &&
+            source.target?.symbol?.name == "Array") {
+            val sourceArgs = source.resolvedTypeArguments
+            val targetArgs = target.resolvedTypeArguments
+            if (sourceArgs != null && targetArgs != null && sourceArgs.size == targetArgs.size) {
+                for (i in sourceArgs.indices) {
+                    if (!checkTypeRelatedTo(sourceArgs[i], targetArgs[i], relation)) return false
+                }
+                return true
+            }
         }
         // Object types: structural comparison
         if (source is Type.Object && target is Type.Object) {
