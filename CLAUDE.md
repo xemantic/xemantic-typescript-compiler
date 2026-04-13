@@ -113,8 +113,11 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Array element type comparison in `structuredTypeRelatedTo`**: When both types are `Type.Reference(Array, ...)`, compare element types directly instead of full structural comparison. Only for Array — other generic interfaces fall through to `objectTypeRelatedTo` which may pass trivially due to anyType methods in built-in lib. Adding non-Array generics here needs variance support first (invariant comparison regresses covariant interfaces).
 - **Generic overload guard**: Skip `checkArgumentsAgainstOverloads` when any signature has type parameters. Without generic type argument inference, parameter types resolve to `errorType` and produce false positive TS2769.
 - **MethodDeclaration typeParameters**: Must include type parameters from `md.typeParameters` when creating Signatures for interface method overloads — the generic guard relies on `sig.typeParameters` being populated.
-- **TS2793 conditional on implementation match**: Only emit "implementation would have succeeded" when `allArgumentsMatch(args, implSig)` returns true for the implementation signature. Otherwise the implementation may also reject the arguments (e.g., `foo({a:any}[])` still requires property 'a').
+- **TS2793 conditional on implementation match**: Only emit "implementation would have succeeded" when `allArgumentsMatch(args, implSig)` returns true for the implementation signature. Otherwise the implementation may also reject the arguments (e.g., `foo({a:any}[])` still requires property 'a'). In the arity-filtered single-overload path, use the same `allArgumentsMatch` check — don't blindly attach TS2793 to TS2345.
 - **Literal type widening in error display**: `getWidenedLiteralType` maps `true`→`boolean`, `false`→`boolean`, string/number/bigint literals→base types. Used in TS2769 error messages but NOT in type checking itself.
+- **TS2739 vs TS2740 code selection**: TS2739 for 2-4 missing properties, TS2740 for 5+. Both use the same "Type 'X' is missing the following properties from type 'Y': a, b, ..." message format. TS2741 is for single missing property only.
+- **TS1184 accessor guard**: "Modifiers cannot appear here" (TS1184) fires alongside TS1042 only for `MethodDeclaration` in object literals, NOT for `GetAccessor`/`SetAccessor`. TypeScript only emits TS1042 for accessor modifier errors.
+- **OBJECT_PROTOTYPE_PROPERTIES filter**: `collectMissingProperties` excludes toString, toLocaleString, valueOf, constructor, hasOwnProperty, isPrototypeOf, propertyIsEnumerable — all objects inherit these from Object, so they're never truly "missing".
 
 ### Inline source map gotchas
 
@@ -237,7 +240,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 12: Emit Polish + Diagnostic Coverage.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. 8,010 / 10,077 tests passing (79.5%). Of 2,067 remaining: 1,176 (57%) zero diagnostics (anyType bottleneck), 659 (32%) mixed diffs, 232 (11%) JS emit. Phase 12 harvests remaining JS emit wins (inline source maps, comment fixes), extends TS2353 excess property checking, and fixes type display issues.
+**Phase 16: Fundamental Type System Features.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. 8,077 / 10,077 tests passing (80.2%). Of 2,000 remaining: ~1,133 zero diagnostics (anyType bottleneck), ~660 mixed diffs, ~207 JS emit. Phase 16 builds core type system features: contextual typing, structural comparison, overload resolution, control flow narrowing.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
