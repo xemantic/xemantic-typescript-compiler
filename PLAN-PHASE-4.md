@@ -2547,7 +2547,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — PARTIAL (+11 tests, 8066 passing)**
+- [x] **16.1. Deep structural comparison with error elaboration (HIGH — ~150 tests realistic) — DONE (+13 tests, 8065 passing)**
 
   **Session 2026-04-12 (16.1d-e, +6 tests: 8060→8066):**
   - TS2561: excess property spelling suggestion in `checkExcessProperties` — when excess property name is close to a target property (Damerau-Levenshtein), emit TS2561 "Did you mean to write 'X'?" instead of TS2353. → +1 test: `nestedFreshLiteral`.
@@ -2568,7 +2568,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   - +2 tests: `multiLineErrors` (nested property path elaboration A1→A2 via x.y), `stringIndexerAssignments1` (index signature param name + property elaboration).
   - Close misses: `typeComparisonCaching` gets correct first-error elaboration but misses second error (`c = d` where mutually recursive interfaces need relation cache invalidation). `deeplyNestedAssignabilityErrorsCombined` needs `typeof` prefix + function call paths in elaboration text.
 
-  **Remaining sub-steps:**
+  **Session 2026-04-13 (16.1f, +2 tests: 8063→8065):**
+  - CJS computed property temp var hoisting: `var _a;` from computed property names now hoisted before `Object.defineProperty` in CommonJS modules. Uses `computedPropHoistNames` field to communicate between class transform and CJS transform. → +2 tests: `variableDeclarationDeclarationEmitUniqueSymbolPartialStatement`, `declarationEmitPrivateSymbolCausesVarDeclarationEmit2`.
+  - Construct signature detection in `getTypeFromTypeLiteral`: `MethodDeclaration` with name "new" now correctly added to `constructSignatures` list (not as named property). Single-construct-signature types now display as `new () => T` (was `{ new: () => any; }`).
+  - Numeric literal trailing comment preservation: parser captures trailing comments on `NumericLiteralNode` when followed by `.` (property access). Preserves `0 /* comment */.toString()` format. Guarded by Dot token to avoid stealing statement-trailing comments.
+  - INVESTIGATED: typeof prefix (no tests pass alone), function return-type elaboration (needs method body inference), cross-line numeric literal comments (needs `.` token leading comment propagation), TS1005/TS1109 swap (22 tests, but known regression risk), multi-file ordering (medium effort, deferred).
+
+  **Remaining sub-steps (DEFERRED — each needs significant infrastructure, 0 individual test gains):**
   - `typeof` prefix for class constructor types in type display
   - Function return-type elaboration path (e.g., `a.b.c.d.e.f().g`)
   - Union target type elaboration (strip null/undefined, narrow to object constituent)
