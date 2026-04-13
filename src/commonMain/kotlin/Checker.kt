@@ -32968,6 +32968,20 @@ interface DataView {
         source: String,
         fileName: String,
     ) {
+        // Filter overloads by arity — if only one matches by arity,
+        // check it as a single signature (TS2345, not TS2769).
+        val arityMatches = signatures.filter { sig ->
+            val params = sig.parameters
+            val hasRest = params.isNotEmpty() && params.last().declarations.any {
+                it is Parameter && it.dotDotDotToken
+            }
+            args.size >= sig.minArgumentCount && (args.size <= params.size || hasRest)
+        }
+        if (arityMatches.size == 1) {
+            val implRelated = getOverloadImplementationRelated(arityMatches[0], source, fileName)
+            checkArgumentsAgainstSignature(args, arityMatches[0], source, fileName, implRelated)
+            return
+        }
         for (sig in signatures) {
             if (allArgumentsMatch(args, sig)) return // found a matching overload
         }
@@ -33231,8 +33245,13 @@ interface DataView {
      */
     private fun allArgumentsMatch(args: List<Expression>, sig: Signature): Boolean {
         val params = sig.parameters
-        // Check arity first
+        // Check arity: too few arguments
         if (args.size < sig.minArgumentCount) return false
+        // Check arity: too many arguments (unless last param is rest)
+        val hasRestParam = params.isNotEmpty() && params.last().let { lastParam ->
+            lastParam.declarations.any { d -> d is Parameter && d.dotDotDotToken }
+        }
+        if (args.size > params.size && !hasRestParam) return false
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
