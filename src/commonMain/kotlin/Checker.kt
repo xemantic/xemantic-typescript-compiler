@@ -31861,6 +31861,7 @@ interface DataView {
             is ElementAccessExpression -> {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 checkPropertyAccessInExpr(expr.argumentExpression, source, fileName, enclosingClassType)
+                checkSingleElementAccess(expr, source, fileName, enclosingClassType)
             }
             is AsExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
             is NonNullExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
@@ -32282,8 +32283,37 @@ interface DataView {
         if (checkPrivateMemberAccess(expr, source, fileName, enclosingClassType)) return
 
         // === TS2339/TS2551: Property does not exist check ===
-        val isThisAccess = expr.expression is Identifier && (expr.expression as Identifier).text == "this"
-        val propName = expr.name.text
+        checkMemberAccessMissing(
+            objectExpr = expr.expression,
+            propName = expr.name.text,
+            diagStart = expr.name.pos,
+            diagLength = expr.name.text.length,
+            source = source,
+            fileName = fileName,
+            enclosingClassType = enclosingClassType,
+            emitTs2728RelatedInfo = true,
+        )
+    }
+
+    /**
+     * Shared TS2339/TS2551 "property does not exist" check used by both property access
+     * (`obj.prop`) and element access with literal key (`obj["prop"]`, `obj[0]`).
+     *
+     * `emitTs2728RelatedInfo` controls whether to attach the TS2728 "'X' is declared here"
+     * related info for spelling suggestions. TypeScript only emits this for property
+     * access, not for element access.
+     */
+    private fun checkMemberAccessMissing(
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        enclosingClassType: Type?,
+        emitTs2728RelatedInfo: Boolean,
+    ) {
+        val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
 
         // === Static method "this" access ===
         // In static methods, "this" refers to the constructor type (typeof C).
@@ -32294,14 +32324,12 @@ interface DataView {
             if (classSymbol.exports?.containsKey(propName) == true) return
             if (propName in RUNTIME_PROPERTIES) return
             val typeName = "typeof ${classSymbol.name}"
-            val start = expr.name.pos
-            val length = expr.name.text.length
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
             diagnostics.add(Diagnostic(
                 message = "Property '$propName' does not exist on type '$typeName'.",
                 category = DiagnosticCategory.Error, code = 2339,
                 fileName = fileName, line = line, character = character,
-                start = start, length = length,
+                start = diagStart, length = diagLength,
             ))
             return
         }
@@ -32313,8 +32341,8 @@ interface DataView {
             if (enclosingClassType == null) return
             enclosingClassType
         } else {
-            if (expr.expression !is Identifier) return
-            val identName = (expr.expression as Identifier).text
+            if (objectExpr !is Identifier) return
+            val identName = objectExpr.text
             val identSymbol = globals[identName]
 
             if (identSymbol != null) {
@@ -32329,14 +32357,12 @@ interface DataView {
                         if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return
                         if (propName in RUNTIME_PROPERTIES) return
                         val typeName = "typeof $identName"
-                        val start = expr.name.pos
-                        val length = expr.name.text.length
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                         diagnostics.add(Diagnostic(
                             message = "Property '$propName' does not exist on type '$typeName'.",
                             category = DiagnosticCategory.Error, code = 2339,
                             fileName = fileName, line = line, character = character,
-                            start = start, length = length,
+                            start = diagStart, length = diagLength,
                         ))
                         return
                     }
@@ -32356,7 +32382,7 @@ interface DataView {
                 exprType
             } else {
                 // Fallback: try resolving from currentLocalTypes (function params, local vars)
-                val rawType = getTypeOfIdentifier(expr.expression as Identifier)
+                val rawType = getTypeOfIdentifier(objectExpr)
                 if (rawType === anyType || rawType === errorType || rawType === unknownType) return
                 // 16.0: For primitive types, use the apparent (wrapper) type so that
                 // e.g. `s: string` can detect `s.hmm` as TS2339 via the String wrapper.
@@ -32402,9 +32428,6 @@ interface DataView {
         // Try spelling suggestion from known properties
         val memberNames = (objectType.properties ?: emptyList()).map { it.name }.toSet()
         val suggestion = getSpellingSuggestionFromNames(propName, memberNames)
-        // Emit TS2339 (or TS2551 with spelling suggestion)
-        val start = expr.name.pos
-        val length = expr.name.text.length
         // For static access on class/namespace identifiers, use "typeof X" format
         val rawTypeName = typeToString(displayTypeOverride ?: objectType)
         val typeName = if (!isThisAccess && objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true) {
@@ -32412,11 +32435,11 @@ interface DataView {
         } else {
             rawTypeName
         }
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
         if (suggestion != null) {
             // Find the declaration of the suggested property for TS2728 related info
             val suggestedProp = objectType.properties?.find { it.name == suggestion }
-            val relatedInfo = if (suggestedProp != null) {
+            val relatedInfo = if (emitTs2728RelatedInfo && suggestedProp != null) {
                 val decl = suggestedProp.valueDeclaration ?: suggestedProp.declarations.firstOrNull()
                 if (decl != null) {
                     val declPos = when (decl) {
@@ -32455,8 +32478,8 @@ interface DataView {
                 fileName = fileName,
                 line = line,
                 character = character,
-                start = start,
-                length = length,
+                start = diagStart,
+                length = diagLength,
                 relatedInformation = relatedInfo,
             ))
         } else {
@@ -32467,10 +32490,50 @@ interface DataView {
                 fileName = fileName,
                 line = line,
                 character = character,
-                start = start,
-                length = length,
+                start = diagStart,
+                length = diagLength,
             ))
         }
+    }
+
+    /**
+     * Element access with literal key: `obj["prop"]` or `obj[0]`.
+     * Mirrors `checkSinglePropertyAccess` for the TS2339/TS2551 diagnostic, but only
+     * when the argument expression is a string or numeric literal (so the key is known
+     * at check time). Runtime index expressions fall through to normal index-signature
+     * resolution elsewhere.
+     */
+    private fun checkSingleElementAccess(
+        expr: ElementAccessExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        val arg = expr.argumentExpression
+        val propName: String
+        val diagStart: Int
+        val diagLength: Int
+        when (arg) {
+            is StringLiteralNode -> {
+                propName = arg.text
+                diagStart = arg.pos
+                diagLength = (arg.rawText?.length ?: arg.text.length) + 2
+            }
+            is NumericLiteralNode -> {
+                propName = arg.text
+                diagStart = arg.pos
+                diagLength = arg.text.length
+            }
+            else -> return
+        }
+        checkMemberAccessMissing(
+            objectExpr = expr.expression,
+            propName = propName,
+            diagStart = diagStart,
+            diagLength = diagLength,
+            source = source,
+            fileName = fileName,
+            enclosingClassType = enclosingClassType,
+            emitTs2728RelatedInfo = false,
+        )
     }
 
     /** Check if `propName` is exported from a namespace symbol. */
