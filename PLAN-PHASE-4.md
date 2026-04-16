@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,077 / 10,078 tests passing (80.1%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done (+5 tests), 16.3 in progress (+14 tests, surgical fixes).
+**Status (2026-04-16):** 8,079 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+2 tests).
 
 ## Goal
 
@@ -2675,7 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
-  **Session 2026-04-16 (16.4a, +0 tests, infrastructure):** Added explicit type argument support in `getReturnTypeOfCallExpression` — when a call expression has explicit type arguments (e.g., `f<number, string>(...)`), finds matching generic signature, creates TypeMapper, and instantiates the return type via `instantiateSignature`. Infrastructure only — test gains need parameter type instantiation flowing into TS2322/TS2345 argument checking and TS2344 constraint validation for call expression type args. Existing infrastructure: createTypeMapper, instantiateType, instantiateSignature, resolveGenericPropertyType (all working for class/interface generics).
+  **Session 2026-04-16 (16.4a, +2 tests: 8077→8079):** Generic function call type argument instantiation:
+  - **Explicit type argument support**: When CallExpression has explicit type args (e.g., `f<number, string>(...)`), finds matching generic signature, creates TypeMapper, and instantiates both return type and parameter types via `instantiateSignature`.
+  - **Type parameter scope in `getTypeOfFunction`**: Set `currentTypeParamScope` when resolving function signature parameter/return types, so `T` in `T[]` resolves to the same `Type.TypeParam` objects as in the signature's type parameter list. Without this, `instantiateType` can't map type parameters.
+  - **Parameter type eager resolution**: Resolve parameter types eagerly within the type param scope so `symbolTypes[param.id]` contains the correct `Type.Reference(Array, [TypeParam])` for later instantiation.
+  - **Type argument count guard**: Only instantiate when type argument count matches type parameter count — prevents FP TS2322 on calls like `map<number>([1, ""])` where TS2558 should be the only error.
+  - → +2 tests (mismatchedExplicitTypeParameterAndArgumentType + 1 other). Infrastructure enables future gains from broader type checking in argument positions.
 
   **Problem:** When calling `f<T>(x: T): T` as `f(42)`, T should be inferred to `number`. Currently generic functions return `anyType` for type parameter return types. Blocks TS2345, many TS2322 with generic targets.
 
