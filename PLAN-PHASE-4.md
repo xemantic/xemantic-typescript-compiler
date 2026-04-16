@@ -2758,6 +2758,8 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 - If a feature causes >20 regressions, add more guards or narrow scope; don't revert without analysis.
 - Document each partial implementation in CLAUDE.md gotchas.
 
+**Per-session throughput — fix multiple items per session.** A single sub-step (e.g. 16.4h, 16.4i) is the unit of commit, not the unit of session. After committing + pushing one sub-step, loop back to pick up the next unchecked sub-step. Keep going until (a) the queue is empty, (b) the next item is genuinely blocked, or (c) context/time budget is nearly exhausted — then wrap up with a summary. Two-to-four sub-steps per session is a reasonable target when the items are small (+1 to +5 tests each); larger infrastructure items may consume a full session on their own. Always finish each sub-step cleanly (test suite green, commit + push) before starting the next — never bundle unrelated work into one commit.
+
 **Realistic total gain:** 500-800 new passing tests → ~85-88% pass rate.
 
 ---

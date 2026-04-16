@@ -250,21 +250,27 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Execution protocol (MANDATORY — follow exactly)
 
-PLAN-PHASE-4.md contains the **QUEUE**. Execute top-to-bottom:
+PLAN-PHASE-4.md contains the **QUEUE**. Execute top-to-bottom, **fixing as many items per session as the budget allows** — do not stop after a single item if there is remaining context and more tractable work ahead. The outer loop:
 
-1. Find the first unchecked (`- [ ]`) item in the QUEUE
-2. Implement it — the item describes the deliverable
-3. Run the full suite (`./gradlew jvmTest 2>&1 | grep -a "tests completed"`)
-4. Verify no regressions from the currently passing test count
-5. Check off the item (`- [x]`), add CLAUDE.md gotcha if applicable, commit and push
-6. If the queue is empty or all remaining items are blocked/skipped: stop and wait for instructions
+1. Find the first unchecked (`- [ ]`) item in the QUEUE (or next unfinished sub-step of an `IN PROGRESS` item).
+2. Implement it — the item describes the deliverable.
+3. Run the full suite (`rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "tests completed"`).
+4. Verify no regressions from the currently passing test count.
+5. Check off the item (`- [x]`), add a CLAUDE.md gotcha if applicable, **commit and push** (one commit per sub-step — keeps history bisectable and lets the next agent pick up mid-stream without re-running everything).
+6. **Loop back to step 1** and pick up the next item. Keep going until one of these stop conditions:
+   - The queue is empty or all remaining items are blocked/skipped.
+   - You are genuinely stuck (a fix regresses repeatedly, required infrastructure is missing, or the approach needs user input).
+   - Context budget is running out — finish the current item cleanly, commit, then stop.
+7. End the session with a concise summary of items completed and net test count delta.
 
 **HARD RULES:**
-- **Do NOT skip ahead** in the queue — work item 0 before item 1, always.
-- **Do NOT switch items** mid-task — finish the current item before moving on.
+- **Do NOT skip ahead** in the queue — work item 0 before item 1, always. "Multi-item per session" means sequential progress through the queue, not cherry-picking.
+- **Do NOT switch items** mid-task — finish the current item (commit + push) before starting the next.
+- **Commit between items** — never bundle two unrelated sub-steps into one commit. Each committed sub-step leaves the repo in a clean state for the next agent.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
 - **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
-- **No regressions** — the currently passing tests must continue to pass after every change.
+- **No regressions** — the currently passing tests must continue to pass after every change. Re-run the full suite between sub-steps; a +1 / -2 swap is still a regression.
+- **Full-suite run caveat**: a clean JVM test run takes ~4-6 minutes. Budget accordingly when deciding whether to attempt another item.
 
 ### Reference TypeScript sources
 
