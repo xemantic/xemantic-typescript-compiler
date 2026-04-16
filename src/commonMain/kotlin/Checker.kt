@@ -32808,6 +32808,8 @@ interface DataView {
                 }
                 if (genericSig?.typeParameters != null) {
                     val mapper = createTypeMapper(genericSig.typeParameters!!, resolvedTypeArgs)
+                    // TS2344: Check type argument constraints
+                    checkCallTypeArgConstraints(genericSig.typeParameters!!, resolvedTypeArgs, typeArgs, mapper, source, fileName)
                     val instantiated = instantiateSignature(genericSig, mapper)
                     val implRelated = getOverloadImplementationRelated(genericSig, source, fileName)
                     checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated)
@@ -33543,6 +33545,21 @@ interface DataView {
                 if (implementationRelated != null) {
                     relatedInfo.add(implementationRelated)
                 }
+                // Union elaboration: find the failing constituent and add as message chain
+                val chain = mutableListOf<String>()
+                if (argType is Type.Union) {
+                    // Find the last failing constituent (matches TypeScript's behavior)
+                    var lastFailing: Type? = null
+                    for (constituent in argType.types) {
+                        if (!checkTypeRelatedTo(constituent, paramType, assignableRelation)) {
+                            lastFailing = constituent
+                        }
+                    }
+                    if (lastFailing != null) {
+                        val constStr = typeToString(lastFailing)
+                        chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
+                    }
+                }
                 diagnostics.add(Diagnostic(
                     message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
                     category = DiagnosticCategory.Error,
@@ -33552,9 +33569,53 @@ interface DataView {
                     character = character,
                     start = start,
                     length = length,
+                    messageChain = chain,
                     relatedInformation = relatedInfo,
                 ))
                 break // TypeScript reports only the first failing argument per call
+            }
+        }
+    }
+
+    /**
+     * 16.4: Check type argument constraints for call expression type arguments.
+     * For each type parameter with a constraint, check the supplied type arg against
+     * the instantiated constraint. Emits TS2344.
+     */
+    private fun checkCallTypeArgConstraints(
+        typeParams: List<Type.TypeParam>,
+        resolvedTypeArgs: List<Type>,
+        typeArgNodes: List<TypeNode>,
+        mapper: TypeMapper,
+        source: String,
+        fileName: String,
+    ) {
+        val len = minOf(typeParams.size, resolvedTypeArgs.size, typeArgNodes.size)
+        for (i in 0 until len) {
+            val constraint = typeParams[i].constraint ?: continue
+            val argType = resolvedTypeArgs[i]
+            if (argType === anyType || argType === errorType) continue
+            // Instantiate the constraint (e.g., `U extends T` where T is mapped to number → constraint = number)
+            val instantiatedConstraint = instantiateType(constraint, mapper)
+            if (instantiatedConstraint === anyType || instantiatedConstraint === errorType) continue
+            if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
+                val argNode = typeArgNodes[i]
+                val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
+                val constraintDisplay = typeToString(instantiatedConstraint)
+                val start = argNode.pos
+                val length = argNode.end - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$argDisplay' does not satisfy the constraint '$constraintDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2344,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
             }
         }
     }
