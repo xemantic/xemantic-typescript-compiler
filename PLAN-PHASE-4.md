@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,087 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+11 tests, 1991 remaining).
+**Status (2026-04-16):** 8,088 / 10,078 tests passing (80.3%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+12 tests, 1990 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4i, +1 test: 8087→8088):** TS2345 via constraint for un-instantiated generic parameters:
+  - When a parameter's declared type is a `Type.TypeParam` with a simple primitive-checkable constraint (e.g. `y: U` where `U extends number`) and the argument type is primitive, check the arg against the constraint. On failure, emit TS2345 with the CONSTRAINT type as the displayed parameter type (not "U"), because the type param would be inferred as the arg type, which would itself fail the constraint check.
+  - Placed before the general `isSimpleCheckableType(paramType)` guard in `checkArgumentsAgainstSignature`; always `continue` after handling so we don't also fall through to the generic TypeParam-as-param check.
+  - Enabled by 16.4h which populates `Signature.typeParameters` with instantiated constraints — so `x.bar2(2, "")` on `bar2<U extends T>` with `x: C<number>` now sees paramType U with `constraint=number`.
+  - → +1 test: `primitiveConstraints2`. Zero regressions.
 
   **Session 2026-04-16 (16.4h, +1 test: 8086→8087):** Method-level constraint checking with outer class type parameters:
   - `resolveGenericPropertyType` MethodDeclaration branch now populates the method's own `typeParameters` on the resulting Signature, with each constraint/default resolved in a scope containing both the class's and the method's type params, then instantiated via the class mapper.
