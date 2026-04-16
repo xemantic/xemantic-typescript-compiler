@@ -11768,7 +11768,7 @@ class Checker(
                     val labelStart = stmt.label.pos
                     val (line, character) = getLineAndCharacterOfPosition(source, labelStart)
                     diagnostics.add(Diagnostic(
-                        message = "'A label is not allowed here.",
+                        message = "A label is not allowed here.",
                         category = DiagnosticCategory.Error,
                         code = 1344,
                         fileName = fileName,
