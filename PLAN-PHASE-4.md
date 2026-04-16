@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,082 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+5 tests).
+**Status (2026-04-16):** 8,083 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+7 tests).
 
 ## Goal
 
@@ -2687,6 +2687,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   - **TS2344 constraint checking for call expression type args**: `checkCallTypeArgConstraints` validates each explicit type arg against its (instantiated) constraint. Span uses `argDisplay.length` to avoid node.end overshoot. → +1 test: `primitiveConstraints1`.
   - **Qualified name type resolution**: `getTypeFromTypeReference` now uses `resolveTypeNameToSymbol(node.typeName)` for qualified names like `m1.c1`, falling back to `globals[name]`. Previously namespace-qualified type refs returned errorType.
   - **TS2345 broadened for primitive→class**: Allow TS2345 checking when arg is a primitive and param is a named class/interface (primitives are never structurally assignable to class instances). → +1 test: `functionCall7`.
+  - **TypeLiteral display in `formatTypeForDisplay`**: Handles PropertyDeclaration (optional → `| undefined`), IndexSignature, MethodDeclaration. Fixes type display like `{ [key: string]: T[]; }` instead of `{ [key: string]: error[]; }`. → +2 tests: `indexerReturningTypeParameter1`, `strictSubtypeAndNarrowing`.
   - INVESTIGATED: Setting `currentTypeParamScope` in `checkFunctionBody` causes 19 regressions (type params resolving in too many contexts). Method-level TS2344 with outer class type params (e.g., `U extends T` where `T` from outer class) needs per-method scope management.
 
   **Problem:** When calling `f<T>(x: T): T` as `f(42)`, T should be inferred to `number`. Currently generic functions return `anyType` for type parameter return types. Blocks TS2345, many TS2322 with generic targets.
