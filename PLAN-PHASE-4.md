@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4n, +1 test: 8093→8094):** TS2664 "Invalid module name in augmentation" — tangential to generics, small wins:
+  - A `declare module "X"` inside a MODULE file (has imports/exports) is an augmentation, not a definition. The augmented module must exist — either by resolving to a file via `resolveModuleSpecifier` or by another `declare module "X"` in a script (non-module) file or a .d.ts file.
+  - New `checkAmbientModuleAugmentations()`: collects module-definition names from script and .d.ts files, then iterates each top-level `declare module "X"` in non-.d.ts module files. Emits TS2664 at `name.pos` with length `moduleName.length + 2` (for quotes) when X doesn't resolve.
+  - Hooked into Checker init right after `checkUnresolvedModules` (step 14a).
+  - → +1 test: `ambientExternalModuleInAnotherExternalModule`. Zero regressions. Conservative scope (skips inside .d.ts, skips nested `declare module` inside namespaces) keeps FP risk low across 165 tests that use `declare module "..."`.
+
   **Session 2026-04-16 (16.4m, +1 test: 8092→8093):** Override methods get fresh symbol to avoid contaminating base-class symbol:
   - In `resolveInterfaceMembers`, when inheriting members from base types, track `inheritedMemberNames`. When the MethodDeclaration branch encounters a name that was inherited, create a NEW `Symbol` instead of `members.getOrPut`. Otherwise `A.foo + C2 extends A { foo() {} }` ended up mutating A's foo Symbol (`declarations.add(C2's fooDecl)`), so TS2728 "'foo' is declared here" related info could resolve to either A's or C2's declaration unpredictably.
   - `createPropertyDeclaredHereRelatedInfo` still uses `.firstOrNull()`, but now the override symbol's declarations list contains ONLY the overriding declaration.
