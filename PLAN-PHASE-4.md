@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,079 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+2 tests).
+**Status (2026-04-16):** 8,082 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+5 tests).
 
 ## Goal
 
@@ -2681,6 +2681,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
   - **Parameter type eager resolution**: Resolve parameter types eagerly within the type param scope so `symbolTypes[param.id]` contains the correct `Type.Reference(Array, [TypeParam])` for later instantiation.
   - **Type argument count guard**: Only instantiate when type argument count matches type parameter count — prevents FP TS2322 on calls like `map<number>([1, ""])` where TS2558 should be the only error.
   - → +2 tests (mismatchedExplicitTypeParameterAndArgumentType + 1 other). Infrastructure enables future gains from broader type checking in argument positions.
+
+  **Session 2026-04-16 (16.4b-c, +3 tests: 8079→8082):**
+  - **TS2345 union elaboration**: When argument type is a union (e.g., `number | null`) not assignable to parameter type, add elaboration chain showing the failing constituent. → +1 test: `typePredicatesInUnion3`.
+  - **TS2344 constraint checking for call expression type args**: `checkCallTypeArgConstraints` validates each explicit type arg against its (instantiated) constraint. Span uses `argDisplay.length` to avoid node.end overshoot. → +1 test: `primitiveConstraints1`.
+  - **Qualified name type resolution**: `getTypeFromTypeReference` now uses `resolveTypeNameToSymbol(node.typeName)` for qualified names like `m1.c1`, falling back to `globals[name]`. Previously namespace-qualified type refs returned errorType.
+  - **TS2345 broadened for primitive→class**: Allow TS2345 checking when arg is a primitive and param is a named class/interface (primitives are never structurally assignable to class instances). → +1 test: `functionCall7`.
+  - INVESTIGATED: Setting `currentTypeParamScope` in `checkFunctionBody` causes 19 regressions (type params resolving in too many contexts). Method-level TS2344 with outer class type params (e.g., `U extends T` where `T` from outer class) needs per-method scope management.
 
   **Problem:** When calling `f<T>(x: T): T` as `f(42)`, T should be inferred to `number`. Currently generic functions return `anyType` for type parameter return types. Blocks TS2345, many TS2322 with generic targets.
 
