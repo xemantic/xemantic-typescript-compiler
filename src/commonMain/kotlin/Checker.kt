@@ -7441,7 +7441,12 @@ class Checker(
                         // Skip keyword identifiers (null, true, false, this, etc.)
                         val validIdStart = name.isNotEmpty() &&
                             (name[0] in 'A'..'Z' || name[0] in 'a'..'z' || name[0] == '_' || name[0] == '$')
-                        if (validIdStart && name !in KEYWORD_IDENTIFIERS && !scope.has(name)) {
+                        // Skip synthetic literal refs produced by parser recovery for `import X = <literal>`
+                        // (string literal → rawText starts with quote; `null` → text == "null").
+                        val isSyntheticLiteral = name == "null" ||
+                            (leftmost.rawText?.let { it.startsWith("\"") || it.startsWith("'") } == true)
+                        if (validIdStart && name !in KEYWORD_IDENTIFIERS && !isSyntheticLiteral &&
+                            (!scope.has(name) || name in VALUE_ONLY_GLOBALS || name == "undefined")) {
                             emitTS2503(name, leftmost, source, fileName)
                         }
                     }

@@ -2125,7 +2125,33 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     parseExpected(SyntaxKind.CloseParen)
                     ExternalModuleReference(expression = expr, pos = pos, end = getEnd())
                 } else {
-                    parseQualifiedName()
+                    // Emit parser diagnostics for invalid RHS literals (TypeScript parses
+                    // `import X = <entityName>` and reports identifier errors at parse time).
+                    // The resulting Identifier carries the literal text/rawText so the Transformer
+                    // can emit it as a bare ExpressionStatement.
+                    when (token) {
+                        SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral, SyntaxKind.StringLiteral -> {
+                            val litStart = getPos()
+                            val litToken = token
+                            val litText = scanner.getTokenText()
+                            val litValue = scanner.getTokenValue()
+                            reportError("Identifier expected.", code = 1003,
+                                overrideStart = litStart, overrideLength = litText.length)
+                            nextToken()
+                            val raw = if (litToken == SyntaxKind.StringLiteral || litText != litValue) litText else null
+                            Identifier(text = litValue, rawText = raw, pos = litStart, end = getEnd())
+                        }
+                        SyntaxKind.NullKeyword -> {
+                            val litStart = getPos()
+                            reportError(
+                                "Identifier expected. 'null' is a reserved word that cannot be used here.",
+                                code = 1359, overrideStart = litStart, overrideLength = 4
+                            )
+                            nextToken()
+                            Identifier(text = "null", pos = litStart, end = getEnd())
+                        }
+                        else -> parseQualifiedName()
+                    }
                 }
             parseSemicolon()
             val trailing = trailingComments()

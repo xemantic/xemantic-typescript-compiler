@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,089 / 10,078 tests passing (80.3%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+13 tests, 1989 remaining).
+**Status (2026-04-16):** 8,097 / 10,078 tests passing (80.3%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+21 tests, 1978 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4t, +1 test: 8096→8097):** TS1003/TS1359/TS2503 for invalid `import X = <literal>` RHS:
+  - Parser: in `parseImportDeclaration` after `=`, detect `NumericLiteral`/`BigIntLiteral`/`StringLiteral` → emit TS1003 "Identifier expected." (squiggle = full literal including quotes); detect `NullKeyword` → emit TS1359 "Identifier expected. 'null' is a reserved word…". In both cases produce a synthetic `Identifier` carrying the literal text/rawText so the existing Transformer path (`transformImportEqualsDeclaration`) still emits the bare expression statement (`5;`, `"s";`, `null;`).
+  - Checker: `import r = undefined;` — `undefined` is a KNOWN_GLOBAL but a VALUE_ONLY alias target → emit TS2503. Extended the `ImportEqualsDeclaration` TS2503 check to fire when `name in VALUE_ONLY_GLOBALS || name == "undefined"`. Suppress TS2503 for parser-synthetic literal refs (string/null) so we don't double-report on top of TS1003/TS1359.
+  - → +1 test: `aliasErrors_ts has expected errors matching aliasErrors_errors_txt`. Zero regressions.
 
   **Session 2026-04-16 (16.4s, +1 test: 8099→8100):** TS2341 for `super.X` when X is a private method:
   - `checkPrivateMemberAccess` handled `this.prop` and `C.prop` but returned early for `super.prop` (because `globals["super"]` is null). Added a `super` branch that walks the enclosing class's `baseTypes`, finds the property, and emits TS2341 when it's a private METHOD.
