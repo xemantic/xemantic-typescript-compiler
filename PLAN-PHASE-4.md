@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,083 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+8 tests, 1995 remaining).
+**Status (2026-04-16):** 8,084 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+9 tests, 1994 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4e, +1 test: 8083→8084):** Element access `obj["prop"]` / `obj[0]` TS2339/TS2551 check:
+  - Refactored `checkSinglePropertyAccess` to extract shared `checkMemberAccessMissing` helper taking `objectExpr`, `propName`, `diagStart`, `diagLength`, plus an `emitTs2728RelatedInfo` flag (property access emits TS2728 "'X' is declared here" related info; element access does not — matches TypeScript's behavior).
+  - Added `checkSingleElementAccess(expr: ElementAccessExpression, ...)` that extracts the literal key from `StringLiteralNode`/`NumericLiteralNode` argument expression and calls the shared helper. Squiggle span: for string literals, pos + `rawText.length + 2` (includes quotes); for numeric literals, pos + `text.length`.
+  - Hooked into `checkPropertyAccessInExpr` ElementAccessExpression branch after recursing into sub-expressions.
+  - → +1 test: `indexedAccessImplicitlyAny`. Most other bracket-access failures need additional infrastructure (TS7015 implicit-any index, TS7053 element type, generic property resolution).
 
   **Session 2026-04-16 (16.4a, +2 tests: 8077→8079):** Generic function call type argument instantiation:
   - **Explicit type argument support**: When CallExpression has explicit type args (e.g., `f<number, string>(...)`), finds matching generic signature, creates TypeMapper, and instantiates both return type and parameter types via `instantiateSignature`.
