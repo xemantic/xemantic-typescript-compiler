@@ -33699,6 +33699,37 @@ interface DataView {
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
             }
+            // 16.4i: Generic parameter with a simple constraint — when the argument
+            // doesn't satisfy the constraint, report TS2345 using the constraint as
+            // the effective parameter type (the type parameter would be inferred as
+            // the argument type, which would then fail the constraint check).
+            if (paramType is Type.TypeParam) {
+                val constraint = paramType.constraint
+                if (constraint != null &&
+                    isSimpleCheckableType(constraint) &&
+                    isSimpleCheckableType(argType) &&
+                    !checkTypeRelatedTo(argType, constraint, assignableRelation)
+                ) {
+                    val argTypeStr = typeToString(argType)
+                    val paramTypeStr = typeToString(constraint)
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+                continue
+            }
             // Conservative: only check when parameter type is a well-known type
             // (primitive, void, undefined, null, never). Skip object/interface/union/
             // intersection types which need deeper structural comparison or generics.
