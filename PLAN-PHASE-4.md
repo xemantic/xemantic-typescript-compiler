@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4m, +1 test: 8092→8093):** Override methods get fresh symbol to avoid contaminating base-class symbol:
+  - In `resolveInterfaceMembers`, when inheriting members from base types, track `inheritedMemberNames`. When the MethodDeclaration branch encounters a name that was inherited, create a NEW `Symbol` instead of `members.getOrPut`. Otherwise `A.foo + C2 extends A { foo() {} }` ended up mutating A's foo Symbol (`declarations.add(C2's fooDecl)`), so TS2728 "'foo' is declared here" related info could resolve to either A's or C2's declaration unpredictably.
+  - `createPropertyDeclaredHereRelatedInfo` still uses `.firstOrNull()`, but now the override symbol's declarations list contains ONLY the overriding declaration.
+  - → +1 test: `classImplementsClass2`. Zero regressions.
+
   **Session 2026-04-16 (16.4l, +1 test: 8091→8092):** TS2720 "Class incorrectly implements class. Did you mean to extend…" for class-implements-class:
   - Previously `checkImplementsClauses` only ran for target symbols with the `Interface` flag; class targets were silently skipped (leaving `class B implements A` where `A` is a class with no diagnostic).
   - Now handles both: emits TS2720 for pure-class targets (with "Did you mean to extend…" hint) and TS2420 for interface targets. Selection: `isClassTarget = hasClass && !hasInterface` (merged class+interface still goes through TS2420).
