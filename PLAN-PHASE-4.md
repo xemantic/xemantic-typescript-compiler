@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,097 / 10,078 tests passing (80.3%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+21 tests, 1978 remaining).
+**Status (2026-04-16):** 8,098 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+22 tests, 1977 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4u, +1 test: 8097→8098):** TS2538 for invalid index type in `T[K]`:
+  - `checkUnresolvedInType` IndexedAccessType branch now calls `checkIndexTypeValidity(indexType, ...)` which emits TS2538 "Type 'X' cannot be used as an index type." for syntactically-invalid index type nodes: `TupleType`, `TypeLiteral`, `FunctionType`, `ConstructorType`, `ArrayType`. Display via `formatTypeForDisplay`, squiggle length = display length (for `[]` → 2, matching source text).
+  - Kept conservative: only handles syntactic forms where the resulting type is clearly non-index-compatible. Does NOT try to resolve the indexType to a semantic `Type` and check assignability to `string | number | symbol` — that path has more moving parts and risks FPs with generic type params / keyof.
+  - → +1 test: `anyIndexedAccessArrayNoException_ts`. Zero regressions.
 
   **Session 2026-04-16 (16.4t, +1 test: 8096→8097):** TS1003/TS1359/TS2503 for invalid `import X = <literal>` RHS:
   - Parser: in `parseImportDeclaration` after `=`, detect `NumericLiteral`/`BigIntLiteral`/`StringLiteral` → emit TS1003 "Identifier expected." (squiggle = full literal including quotes); detect `NullKeyword` → emit TS1359 "Identifier expected. 'null' is a reserved word…". In both cases produce a synthetic `Identifier` carrying the literal text/rawText so the existing Transformer path (`transformImportEqualsDeclaration`) still emits the bare expression statement (`5;`, `"s";`, `null;`).
