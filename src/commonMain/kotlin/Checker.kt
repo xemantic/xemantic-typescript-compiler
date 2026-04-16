@@ -27452,28 +27452,64 @@ interface DataView {
                     val sigDecls = if (overloadDecls.isNotEmpty()) overloadDecls else listOfNotNull(implDecl)
                     if (sigDecls.isEmpty()) return null
                     val sigs = sigDecls.map { md ->
-                        val rawReturn = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                        val returnType = if (rawReturn === errorType) anyType
-                                         else instantiateType(rawReturn, mapper)
-                        val params = md.parameters.mapNotNull { p ->
-                            val pName = (p.name as? Identifier)?.text ?: return@mapNotNull null
-                            if (pName == "this") return@mapNotNull null
-                            val sym = Symbol(SymbolFlags.FunctionScopedVariable, pName)
-                            sym.declarations.add(p)
-                            sym.valueDeclaration = p
-                            val rawParamType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                            val paramType = if (rawParamType === errorType) anyType
-                                            else instantiateType(rawParamType, mapper)
-                            symbolTypes[sym.id] = paramType
-                            sym
+                        // 16.4h: Preserve method's own type params with constraints
+                        // instantiated via the class mapper — so `<U extends T>` on a
+                        // method of C<T>, when accessed via x: C<number>, becomes
+                        // `<U extends number>` for TS2344 checking on explicit type args.
+                        val methodTypeParams = md.typeParameters?.map { tpDecl ->
+                            Type.TypeParam().also { tp ->
+                                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+                            }
                         }
-                        Signature(
-                            declaration = md, parameters = params,
-                            resolvedReturnType = returnType,
-                            minArgumentCount = md.parameters.count {
-                                !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                            },
-                        )
+                        val savedMethodScope = currentTypeParamScope
+                        if (!methodTypeParams.isNullOrEmpty()) {
+                            val methodScope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                            methodTypeParams.forEachIndexed { i, tp ->
+                                methodScope[md.typeParameters!![i].name.text] = tp
+                            }
+                            currentTypeParamScope = methodScope
+                        }
+                        try {
+                            methodTypeParams?.forEachIndexed { i, tp ->
+                                val tpDecl = md.typeParameters!![i]
+                                tpDecl.constraint?.let { cNode ->
+                                    val raw = getTypeFromTypeNode(cNode)
+                                    tp.constraint = if (raw === errorType) raw
+                                                    else instantiateType(raw, mapper)
+                                }
+                                tpDecl.default?.let { dNode ->
+                                    val raw = getTypeFromTypeNode(dNode)
+                                    tp.default = if (raw === errorType) raw
+                                                 else instantiateType(raw, mapper)
+                                }
+                            }
+                            val rawReturn = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            val returnType = if (rawReturn === errorType) anyType
+                                             else instantiateType(rawReturn, mapper)
+                            val params = md.parameters.mapNotNull { p ->
+                                val pName = (p.name as? Identifier)?.text ?: return@mapNotNull null
+                                if (pName == "this") return@mapNotNull null
+                                val sym = Symbol(SymbolFlags.FunctionScopedVariable, pName)
+                                sym.declarations.add(p)
+                                sym.valueDeclaration = p
+                                val rawParamType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                                val paramType = if (rawParamType === errorType) anyType
+                                                else instantiateType(rawParamType, mapper)
+                                symbolTypes[sym.id] = paramType
+                                sym
+                            }
+                            Signature(
+                                declaration = md,
+                                typeParameters = methodTypeParams,
+                                parameters = params,
+                                resolvedReturnType = returnType,
+                                minArgumentCount = md.parameters.count {
+                                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                                },
+                            )
+                        } finally {
+                            currentTypeParamScope = savedMethodScope
+                        }
                     }
                     val fnType = Type.Object()
                     fnType.callSignatures = sigs

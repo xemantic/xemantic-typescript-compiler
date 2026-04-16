@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,085 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+10 tests, 1993 remaining).
+**Status (2026-04-16):** 8,087 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+11 tests, 1991 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4h, +1 test: 8086→8087):** Method-level constraint checking with outer class type parameters:
+  - `resolveGenericPropertyType` MethodDeclaration branch now populates the method's own `typeParameters` on the resulting Signature, with each constraint/default resolved in a scope containing both the class's and the method's type params, then instantiated via the class mapper.
+  - Enables `x.bar2<string>` where `bar2<U extends T>` is defined on `C<T>` and `x: C<number>` → the method signature has `typeParameters=[U extends number]` so `checkCallTypeArgConstraints` can verify that `string` fails the `number` constraint and emits TS2344.
+  - Constraint resolution runs inside a `try/finally` that restores `currentTypeParamScope` per-signature so sibling overloads see the original class-only scope.
+  - → +1 test: `genericConstraint1`. Zero regressions.
 
   **Session 2026-04-16 (16.4g, +1 test: 8085→8086):** TS1477 instantiation expression followed by property access:
   - In the parser's call/access loop, the `LessThan` branch parses possible type arguments via `tryScan { tryParseTypeArguments() }`. When type args parse and the next token is `.` or `?.`, it's an instantiation expression (e.g., `f<number, string>.foo`) — TypeScript emits TS1477.
