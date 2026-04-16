@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4r, +1 test: 8098→8099):** TS2497 for `import * as X from` against `export =` module in ESM output, gated on alias usage:
+  - In `checkDefaultImports`, added a post-check that emits TS2497 when: (a) the output format is ESM (`isESModuleFormat`), (b) the target module has `export =`, (c) the import uses NamespaceImport binding, AND (d) the namespace alias is referenced as a value somewhere in the file.
+  - First attempt without (d) caused a regression: `es6ExportAssignment2` has `import * as a from "./a"` but never uses `a`, and TypeScript omits TS2497 in that case. Added `isIdentifierReferencedAsValue` helper that walks top-level statements looking for the alias name in value-expression positions (Identifier, PropertyAccess base, Call/New, Binary/Unary operands, etc.).
+  - Squiggle position: the module specifier StringLiteralNode, length = `moduleName.length + 2` (for quotes).
+  - → +1 test: `es6ImportEqualsExportModuleEs2015Error`. Zero regressions.
+
   **Session 2026-04-16 (16.4q, +1 test: 8097→8098):** TS2693 for `typeof X` in type position where X is type-only:
   - `checkTypeQueryName` only delegated to `checkIdentifierResolved`, which returns early when `scope.has(name)` — so interfaces/type aliases referenced by `typeof` passed silently instead of emitting TS2693.
   - Added `isTypeOnlySymbolName(name, fileName)` helper that looks up the symbol in `fileResults[fileName].locals` or `globals`, returns true when the symbol has `Type` flag but no `Value` flag (and, for modules, no value exports).
