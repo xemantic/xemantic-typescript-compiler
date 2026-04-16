@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4k, +2 tests: 8089→8091):** `implements` clauses must NOT contribute members to a class's instance type, plus TS2420/TS2344 polish:
+  - **Root cause fix**: `resolveBaseTypesLazy` was iterating ALL heritage clauses (both `extends` and `implements`), so a class `C implements I` ended up with I's members inherited as baseType members. This made `propertiesRelatedTo(C, I)` trivially true even when C didn't declare I's members, masking both TS2420 and TS2344-via-constraint failures. Fix: skip `clause.token == SyntaxKind.ImplementsKeyword` when collecting baseTypes.
+  - **TS2420 display polish**: `checkImplementsClauses` now formats the interface name with its type arguments — e.g. `Comparable<string>` instead of bare `Comparable`. Uses `formatTypeForDisplay` on each `typeExpr.typeArguments`.
+  - **TS2344 elaboration chain + TS2728 related info**: `checkCallTypeArgConstraints` now resets `lastMissingPropertyName`/`lastMissingPropertySymbol` before the relation check, and if a missing-property failure was recorded, emits `"  Property 'X' is missing in type 'A' but required in type 'B'."` as a messageChain line plus a TS2728 "'X' is declared here" related info pointing to the interface property.
+  - → +2 tests: `genericConstraint2` (TS2420 with `Comparable<string>` + TS2344 on `compare<ComparableString>(a, b)`), `recursiveInheritance3` (TS2420 on `class C implements I` where I extends C). Zero regressions.
+
   **Session 2026-04-16 (16.4j, INVESTIGATED — reverted):** Cross-instance generic assignability (`Bar<string>` ↛ `Bar<number>`):
   - Target test: `genericCloneReturnTypes` — expects `TS2322: Type 'Bar<string>' is not assignable to type 'Bar<number>'. Type 'string' is not assignable to type 'number'.`
   - Diagnosis: properties `t: T` on `Bar<T>` resolve to `errorType` because `getTypeOfSymbol(prop)` → `getTypeFromTypeNode(T)` is called without `currentTypeParamScope` active. The errorType gets cached in `symbolTypes`, so subsequent instantiation via mapper is a no-op — comparison incorrectly succeeds.

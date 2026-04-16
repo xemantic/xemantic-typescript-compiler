@@ -27787,6 +27787,12 @@ interface DataView {
                     else -> null
                 } ?: continue
                 for (clause in heritageClauses) {
+                    // `implements` clauses are structural constraints, not base types —
+                    // they must not contribute members to the class's instance type.
+                    // (Otherwise a class `implements I` would silently "inherit" I's
+                    //  members even when the class doesn't declare them, masking TS2420
+                    //  and TS2344 via-constraint failures.)
+                    if (clause.token == SyntaxKind.ImplementsKeyword) continue
                     for (exprWithArgs in clause.types) {
                         val baseType = getTypeFromBaseTypeExpression(exprWithArgs)
                         if (baseType !== errorType) {
@@ -30181,17 +30187,23 @@ interface DataView {
 
         for (clause in implementsClauses) {
             for (typeExpr in clause.types) {
-                val ifaceName = when (val tn = typeExpr.expression) {
+                val baseIfaceName = when (val tn = typeExpr.expression) {
                     is Identifier -> tn.text
                     is PropertyAccessExpression -> (tn.name as? Identifier)?.text
                     else -> null
                 } ?: continue
-                val ifaceSymbol = globals[ifaceName] ?: continue
+                val ifaceSymbol = globals[baseIfaceName] ?: continue
                 // Only check actual interfaces, not classes (TS2720 handles class-implementing-class)
                 if (!ifaceSymbol.flags.hasAny(SymbolFlags.Interface)) continue
                 val ifaceType = getDeclaredTypeOfSymbol(ifaceSymbol)
                 if (ifaceType !is Type.Object) continue
                 resolveStructuredTypeMembers(ifaceType)
+                // 16.4k: Include type arguments in the displayed interface name
+                // (e.g. `Comparable<string>` not just `Comparable`).
+                val ifaceName = typeExpr.typeArguments?.takeIf { it.isNotEmpty() }?.let { args ->
+                    val argStrs = args.map { formatTypeForDisplay(it) ?: return@let null }
+                    "$baseIfaceName<${argStrs.joinToString(", ")}>"
+                } ?: baseIfaceName
 
                 // Collect all missing required properties first
                 val ifaceProps = ifaceType.properties ?: continue
@@ -33824,6 +33836,8 @@ interface DataView {
             // Instantiate the constraint (e.g., `U extends T` where T is mapped to number → constraint = number)
             val instantiatedConstraint = instantiateType(constraint, mapper)
             if (instantiatedConstraint === anyType || instantiatedConstraint === errorType) continue
+            lastMissingPropertyName = null
+            lastMissingPropertySymbol = null
             if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
                 val argNode = typeArgNodes[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
@@ -33833,6 +33847,13 @@ interface DataView {
                 val length = argDisplay.length
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
+                val chain = mutableListOf<String>()
+                val missingProp = lastMissingPropertyName
+                val missingPropSym = lastMissingPropertySymbol
+                val relatedInfo = if (missingProp != null) {
+                    chain.add("  Property '$missingProp' is missing in type '$argDisplay' but required in type '$constraintDisplay'.")
+                    missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { listOf(it) } ?: emptyList()
+                } else emptyList()
                 diagnostics.add(Diagnostic(
                     message = "Type '$argDisplay' does not satisfy the constraint '$constraintDisplay'.",
                     category = DiagnosticCategory.Error,
@@ -33842,6 +33863,8 @@ interface DataView {
                     character = character,
                     start = start,
                     length = length,
+                    messageChain = chain,
+                    relatedInformation = relatedInfo,
                 ))
             }
         }
