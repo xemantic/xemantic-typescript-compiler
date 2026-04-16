@@ -33609,7 +33609,8 @@ interface DataView {
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
                 val constraintDisplay = typeToString(instantiatedConstraint)
                 val start = argNode.pos
-                val length = argNode.end - start
+                // Use display text length for span — node.end overshoots (includes next token trivia)
+                val length = argDisplay.length
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
