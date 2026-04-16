@@ -22334,6 +22334,7 @@ interface DataView {
             is ImportDeclaration -> if (isStrict) {
                 val clause = stmt.importClause
                 if (clause != null) {
+                    clause.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass, isModule) }
                     when (val bindings = clause.namedBindings) {
                         is NamespaceImport -> checkIdentForStrictReserved(bindings.name, source, fileName, inClass, isModule)
                         is NamedImports -> for (spec in bindings.elements) checkIdentForStrictReserved(spec.name, source, fileName, inClass, isModule)
