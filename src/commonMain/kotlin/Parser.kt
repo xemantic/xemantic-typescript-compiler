@@ -3492,8 +3492,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 LessThan -> {
                     // Try type arguments for call/tagged-template/instantiation — wrap in tryScan so if no `(` or
                     // template follows, scanner is restored to before `<` (fixing `i < 10` in for-loop)
+                    val typeArgsStart = getPos()
+                    var typeArgsEnd = -1
                     val callExpr: Expression? = scanner.tryScan {
                         val typeArgs = tryParseTypeArguments()
+                        if (typeArgs != null) typeArgsEnd = scanner.getPrevTokenEnd()
                         when {
                             typeArgs != null && token == SyntaxKind.OpenParen -> {
                                 val args = parseArgumentList()
@@ -3527,10 +3530,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                             typeArgs != null && canFollowTypeArgumentsInExpression() -> {
                                 when (token) {
                                     SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> result
-                                    SyntaxKind.Dot, SyntaxKind.QuestionDot ->
+                                    SyntaxKind.Dot, SyntaxKind.QuestionDot -> {
+                                        // TS1477: an instantiation expression cannot be followed by a property access.
+                                        reportError(
+                                            "An instantiation expression cannot be followed by a property access.",
+                                            code = 1477,
+                                            overrideStart = typeArgsStart,
+                                            overrideLength = typeArgsEnd - typeArgsStart,
+                                        )
                                         if (expressionHasOptionalChain(result))
                                             ParenthesizedExpression(expression = result, pos = result.pos, end = getEnd())
                                         else result
+                                    }
                                     else -> ParenthesizedExpression(
                                         expression = result,
                                         pos = result.pos,

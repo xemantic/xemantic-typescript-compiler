@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4g, +1 test: 8085→8086):** TS1477 instantiation expression followed by property access:
+  - In the parser's call/access loop, the `LessThan` branch parses possible type arguments via `tryScan { tryParseTypeArguments() }`. When type args parse and the next token is `.` or `?.`, it's an instantiation expression (e.g., `f<number, string>.foo`) — TypeScript emits TS1477.
+  - Captured `typeArgsStart = getPos()` BEFORE `scanner.tryScan` (we're at `<`) and `typeArgsEnd = scanner.getPrevTokenEnd()` INSIDE the lambda after `tryParseTypeArguments()` returns non-null (position right after `>`). Both flow out via closure capture.
+  - In the existing `Dot, QuestionDot` match branch, call `reportError(..., code = 1477, overrideStart = typeArgsStart, overrideLength = typeArgsEnd - typeArgsStart)` so the squiggle covers the full `<TypeArgs>` span. The branch returns non-null so `tryScan` keeps state and the diagnostic persists.
+  - → +1 test: `genericCallWithoutArgs`. Zero regressions.
+
   **Session 2026-04-16 (16.4f, +1 test: 8084→8085):** TS2552 spelling suggestions in type positions:
   - Added `forTypePosition: Boolean` parameter to `getSpellingSuggestion`. Removed the `!inTypePosition` guard so TS2552 now fires in type positions too.
   - Added `NameScope.typeNames` set + `addType(name)` helper; ClassDeclaration/InterfaceDeclaration/TypeAliasDeclaration/EnumDeclaration now populate it (replaces plain `names.add`). `buildNamespaceScope` marks type-eligible exports in the new set when merging namespace symbols.
