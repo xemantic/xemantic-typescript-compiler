@@ -8252,8 +8252,13 @@ class Checker(
         // typeof X in type position — the identifier is a value reference, so spelling
         // suggestions (TS2552) are allowed, but class-member suggestions (TS2662/TS2663) are not.
         // TypeScript emits plain TS2304 (not TS2663) for `typeof a` in class property types.
+        // If X resolves to a TYPE-ONLY symbol (interface, type alias), emit TS2693 instead.
         when (name) {
             is Identifier -> {
+                if (isTypeOnlySymbolName(name.text, fileName)) {
+                    emitTS2693(name.text, name, source, fileName)
+                    return
+                }
                 checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = false, suppressClassSuggestion = true)
             }
             is QualifiedName -> {
@@ -8265,6 +8270,23 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * Returns true when [name] resolves to a symbol that has only a Type flag
+     * (interface or type alias) and no Value flag — i.e. using it in a value
+     * position (including inside `typeof`) is a TS2693 error.
+     */
+    private fun isTypeOnlySymbolName(name: String, fileName: String): Boolean {
+        val result = fileResults[fileName]
+        val sym = result?.locals?.get(name) ?: globals[name] ?: return false
+        if (sym.flags.hasAny(SymbolFlags.Value)) return false
+        // NamespaceModule with value exports is still usable as a value — skip.
+        if (sym.flags.hasAny(SymbolFlags.Module)) {
+            val exports = sym.exports
+            if (exports != null && exports.values.any { it.flags.hasAny(SymbolFlags.Value) }) return false
+        }
+        return sym.flags.hasAny(SymbolFlags.Type)
     }
 
     /**
