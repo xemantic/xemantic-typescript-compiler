@@ -11326,8 +11326,89 @@ class Checker(
                         }
                     }
                 }
+
+                // TS2497: `import * as X from` against an `export =` module in an ESM
+                // output format (ES2015+, ESNext, Preserve) requires
+                // allowSyntheticDefaultImports (already guarded at the top of this
+                // function). Only fires when the namespace alias is actually referenced
+                // as a value — plain `import * as X from "./a"` without any use of X
+                // compiles away cleanly.
+                val isEsmOutput = isESModuleFormat(options.effectiveModule, fileName)
+                val nsBinding = importClause.namedBindings
+                if (isEsmOutput && hasExportEquals && nsBinding is NamespaceImport) {
+                    val aliasName = nsBinding.name.text
+                    if (aliasName.isNotEmpty() && isIdentifierReferencedAsValue(aliasName, result.sourceFile.statements, stmt)) {
+                        val specStart = specifier.pos
+                        val specLength = moduleName.length + 2 // +2 for quotes
+                        val (line, character) = getLineAndCharacterOfPosition(source, specStart)
+                        diagnostics.add(Diagnostic(
+                            message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag and referencing its default export.",
+                            category = DiagnosticCategory.Error,
+                            code = 2497,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = specStart,
+                            length = specLength,
+                        ))
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * Returns true if [name] appears as a value-position Identifier anywhere in the
+     * file's [statements], excluding [skipStmt] (the import declaration that introduces
+     * the alias). Used by TS2497 to avoid emitting the diagnostic for unused namespace
+     * imports.
+     */
+    private fun isIdentifierReferencedAsValue(
+        name: String,
+        statements: List<Statement>,
+        skipStmt: Statement,
+    ): Boolean {
+        fun exprContains(e: Expression?): Boolean {
+            if (e == null) return false
+            return when (e) {
+                is Identifier -> e.text == name
+                is PropertyAccessExpression -> exprContains(e.expression)
+                is ElementAccessExpression -> exprContains(e.expression) || exprContains(e.argumentExpression)
+                is CallExpression -> exprContains(e.expression) || e.arguments.any { exprContains(it) }
+                is NewExpression -> exprContains(e.expression) || (e.arguments?.any { exprContains(it) } == true)
+                is BinaryExpression -> exprContains(e.left) || exprContains(e.right)
+                is PrefixUnaryExpression -> exprContains(e.operand)
+                is PostfixUnaryExpression -> exprContains(e.operand)
+                is ParenthesizedExpression -> exprContains(e.expression)
+                is ConditionalExpression -> exprContains(e.condition) || exprContains(e.whenTrue) || exprContains(e.whenFalse)
+                is TypeOfExpression -> exprContains(e.expression)
+                is SpreadElement -> exprContains(e.expression)
+                is ArrayLiteralExpression -> e.elements.any { exprContains(it) }
+                is ObjectLiteralExpression -> e.properties.any { p ->
+                    when (p) {
+                        is PropertyAssignment -> exprContains(p.initializer)
+                        is ShorthandPropertyAssignment -> p.name.text == name
+                        is SpreadAssignment -> exprContains(p.expression)
+                        else -> false
+                    }
+                }
+                else -> false
+            }
+        }
+        fun stmtContains(s: Statement): Boolean {
+            if (s === skipStmt) return false
+            return when (s) {
+                is ExpressionStatement -> exprContains(s.expression)
+                is VariableStatement -> s.declarationList.declarations.any { exprContains(it.initializer) }
+                is ReturnStatement -> exprContains(s.expression)
+                is IfStatement -> exprContains(s.expression) || stmtContains(s.thenStatement) ||
+                    (s.elseStatement?.let { stmtContains(it) } == true)
+                is Block -> s.statements.any { stmtContains(it) }
+                is ExportAssignment -> exprContains(s.expression)
+                else -> false
+            }
+        }
+        return statements.any { stmtContains(it) }
     }
 
     // -----------------------------------------------------------------------
