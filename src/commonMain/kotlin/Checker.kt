@@ -35271,6 +35271,42 @@ interface DataView {
                 if (elements.any { it == null }) return null
                 "[${elements.joinToString(", ")}]"
             }
+            is TypeLiteral -> {
+                val parts = mutableListOf<String>()
+                for (member in typeNode.members) {
+                    when (member) {
+                        is PropertyDeclaration -> {
+                            val propName = (member.name as? Identifier)?.text ?: continue
+                            val propType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
+                            if (member.questionToken) {
+                                // Optional properties display as `name?: type | undefined`
+                                parts.add("$propName?: $propType | undefined")
+                            } else {
+                                parts.add("$propName: $propType")
+                            }
+                        }
+                        is IndexSignature -> {
+                            val param = member.parameters.firstOrNull()
+                            val paramName = (param?.name as? Identifier)?.text ?: "key"
+                            val paramType = param?.type?.let { formatTypeForDisplay(it) } ?: "string"
+                            val valueType = member.type?.let { formatTypeForDisplay(it) } ?: continue
+                            parts.add("[$paramName: $paramType]: $valueType")
+                        }
+                        is MethodDeclaration -> {
+                            val methodName = (member.name as? Identifier)?.text ?: continue
+                            val params = member.parameters.joinToString(", ") { p ->
+                                val pName = (p.name as? Identifier)?.text ?: "_"
+                                val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+                                "$pName: $pType"
+                            }
+                            val retType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
+                            parts.add("$methodName($params): $retType")
+                        }
+                        else -> return null // unsupported member type
+                    }
+                }
+                "{ ${parts.joinToString("; ")}; }"
+            }
             is TypeQuery -> {
                 val name = when (val expr = typeNode.exprName) {
                     is Identifier -> expr.text
