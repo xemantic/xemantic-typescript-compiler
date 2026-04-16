@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4p, +2 tests: 8095→8097):** TS1141 "String literal expected" in `export ... from` clauses:
+  - `parseExportDeclaration` called `parseStringLiteral()` after `parseExpected(FromKeyword)` without verifying the next token was actually a string — any Identifier was silently accepted and treated as a string literal via `scanner.getTokenValue()`.
+  - Added a `token != StringLiteral` guard before the two `parseStringLiteral()` call sites (`export * from X` and `export { ... } from X`). Emits TS1141 at the scanner token position with length = identifier length (via default `reportError` behavior).
+  - → +2 tests: `exportDeclarationInInternalModule` plus one collateral win. Zero regressions.
+
   **Session 2026-04-16 (16.4o, +1 test: 8094→8095):** TS1214 for default-import reserved words:
   - In `walkStmtForStrictReserved` `ImportDeclaration` branch, also check `clause.name` (default import identifier) — not just `clause.namedBindings` (namespace/named imports). Without this, `import public from "./1"` passed through silently even though `public` is a strict-mode reserved word.
   - → +1 test: `strictModeWordInImportDeclaration`. Zero regressions.
