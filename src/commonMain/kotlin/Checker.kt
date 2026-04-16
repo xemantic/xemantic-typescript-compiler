@@ -28517,6 +28517,25 @@ interface DataView {
         resolveStructuredTypeMembers(calleeType)
         val sigs = calleeType.callSignatures
         if (sigs.isNullOrEmpty()) return anyType
+        // 16.4: Explicit type arguments on call expression — instantiate the signature
+        val typeArgs = expr.typeArguments
+        if (typeArgs != null && typeArgs.isNotEmpty()) {
+            val resolvedTypeArgs = try {
+                typeArgs.map { getTypeFromTypeNode(it) }
+            } catch (_: StackOverflowError) { null }
+            if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
+                // Find a signature with matching type parameter count
+                val matchingSig = sigs.firstOrNull { sig ->
+                    val tp = sig.typeParameters
+                    tp != null && tp.size == resolvedTypeArgs.size
+                } ?: sigs.firstOrNull { it.typeParameters != null }
+                if (matchingSig?.typeParameters != null) {
+                    val mapper = createTypeMapper(matchingSig.typeParameters!!, resolvedTypeArgs)
+                    val instantiated = instantiateSignature(matchingSig, mapper)
+                    return instantiated.resolvedReturnType ?: anyType
+                }
+            }
+        }
         // Single signature — simple resolution
         if (sigs.size == 1) return sigs[0].resolvedReturnType ?: anyType
         // Multiple signatures on interfaces — skip overload resolution (inherited overloads

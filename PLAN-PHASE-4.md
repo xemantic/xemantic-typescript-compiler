@@ -2645,7 +2645,7 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.3. Control flow narrowing (MEDIUM — ~100 tests realistic) — IN PROGRESS (+14 tests, 8077 passing)**
+- [x] **16.3. Control flow narrowing (MEDIUM — ~100 tests realistic) — PARTIAL (+14 tests, 8077 passing)**
 
   **Session 2026-04-16 (16.3b, +10 tests: 8067→8077):** Note: JDK 25 upgrade caused baseline shift from 8077→8067 (10 tests sensitive to JDK version). Surgical fix:
   - **TS1344 message fix**: Removed stray `'` from "A label is not allowed here." diagnostic message (was `"'A label..."`). This single-character fix flipped 10 tests that reference TS1344 in their error baselines (e.g., `sourceMapValidationLabeled`, various `labeledStatement` tests).
@@ -2673,7 +2673,9 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ---
 
-- [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic)**
+- [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4a, +0 tests, infrastructure):** Added explicit type argument support in `getReturnTypeOfCallExpression` — when a call expression has explicit type arguments (e.g., `f<number, string>(...)`), finds matching generic signature, creates TypeMapper, and instantiates the return type via `instantiateSignature`. Infrastructure only — test gains need parameter type instantiation flowing into TS2322/TS2345 argument checking and TS2344 constraint validation for call expression type args. Existing infrastructure: createTypeMapper, instantiateType, instantiateSignature, resolveGenericPropertyType (all working for class/interface generics).
 
   **Problem:** When calling `f<T>(x: T): T` as `f(42)`, T should be inferred to `number`. Currently generic functions return `anyType` for type parameter return types. Blocks TS2345, many TS2322 with generic targets.
 
