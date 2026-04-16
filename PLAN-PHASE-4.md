@@ -2675,6 +2675,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4l, +1 test: 8091→8092):** TS2720 "Class incorrectly implements class. Did you mean to extend…" for class-implements-class:
+  - Previously `checkImplementsClauses` only ran for target symbols with the `Interface` flag; class targets were silently skipped (leaving `class B implements A` where `A` is a class with no diagnostic).
+  - Now handles both: emits TS2720 for pure-class targets (with "Did you mean to extend…" hint) and TS2420 for interface targets. Selection: `isClassTarget = hasClass && !hasInterface` (merged class+interface still goes through TS2420).
+  - Skip static-only members in the missing-property check for class targets (the instance-member table currently includes statics from the class resolver, so without this filter `class B implements A` spuriously reports A's static members as missing).
+  - Also include members inherited via `extends` in `classMemberNames` — a class `D extends C implements C` should not be flagged for missing C's members (it inherits them via extends). Fixes regressions `extendAndImplementTheSameBaseType` and `implementClausePrecedingExtends`.
+  - → +1 test: `classImplementsClass7`. Zero regressions. classImplementsClass2/4/5/6 still fail for unrelated reasons (TS2728 related-info line mismatch from method-override symbol contamination, class-instance TS2322 with private elaboration, TS2339/TS2576 static access).
+
   **Session 2026-04-16 (16.4k, +2 tests: 8089→8091):** `implements` clauses must NOT contribute members to a class's instance type, plus TS2420/TS2344 polish:
   - **Root cause fix**: `resolveBaseTypesLazy` was iterating ALL heritage clauses (both `extends` and `implements`), so a class `C implements I` ended up with I's members inherited as baseType members. This made `propertiesRelatedTo(C, I)` trivially true even when C didn't declare I's members, masking both TS2420 and TS2344-via-constraint failures. Fix: skip `clause.token == SyntaxKind.ImplementsKeyword` when collecting baseTypes.
   - **TS2420 display polish**: `checkImplementsClauses` now formats the interface name with its type arguments — e.g. `Comparable<string>` instead of bare `Comparable`. Uses `formatTypeForDisplay` on each `typeExpr.typeArguments`.

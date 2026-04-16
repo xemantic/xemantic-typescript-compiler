@@ -30172,6 +30172,21 @@ interface DataView {
             }
             if (memberName != null) classMemberNames.add(memberName)
         }
+        // 16.4l: Also include members inherited via `extends` base class — a class that
+        // extends C inherits C's members and therefore satisfies `implements C`.
+        classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }?.let { extClause ->
+            for (baseExpr in extClause.types) {
+                val baseName = when (val bn = baseExpr.expression) {
+                    is Identifier -> bn.text
+                    is PropertyAccessExpression -> (bn.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+                val baseSym = globals[baseName] ?: continue
+                val baseType = getDeclaredTypeOfSymbol(baseSym) as? Type.Object ?: continue
+                resolveStructuredTypeMembers(baseType)
+                baseType.properties?.forEach { classMemberNames.add(it.name) }
+            }
+        }
 
         // Check if class has index signatures
         val hasStringIndex = classDecl.members.any {
@@ -30193,8 +30208,11 @@ interface DataView {
                     else -> null
                 } ?: continue
                 val ifaceSymbol = globals[baseIfaceName] ?: continue
-                // Only check actual interfaces, not classes (TS2720 handles class-implementing-class)
-                if (!ifaceSymbol.flags.hasAny(SymbolFlags.Interface)) continue
+                // 16.4l: Handle both interface (TS2420) and class (TS2720) targets.
+                val isClassTarget = ifaceSymbol.flags.hasAny(SymbolFlags.Class) &&
+                    !ifaceSymbol.flags.hasAny(SymbolFlags.Interface)
+                val isInterfaceTarget = ifaceSymbol.flags.hasAny(SymbolFlags.Interface)
+                if (!isClassTarget && !isInterfaceTarget) continue
                 val ifaceType = getDeclaredTypeOfSymbol(ifaceSymbol)
                 if (ifaceType !is Type.Object) continue
                 resolveStructuredTypeMembers(ifaceType)
@@ -30204,20 +30222,46 @@ interface DataView {
                     val argStrs = args.map { formatTypeForDisplay(it) ?: return@let null }
                     "$baseIfaceName<${argStrs.joinToString(", ")}>"
                 } ?: baseIfaceName
+                val diagCode = if (isClassTarget) 2720 else 2420
+                val targetKindWord = if (isClassTarget) "class" else "interface"
 
-                // Collect all missing required properties first
+                // Collect all missing required properties first.
+                // For class targets, also skip static-only members (they belong on the
+                // constructor side, not the instance side). We detect this from the
+                // source AST declarations since the class-member resolver currently
+                // includes static members in the instance property list.
+                fun isStaticOnlyProperty(sym: Symbol): Boolean {
+                    if (!isClassTarget) return false
+                    val decls = sym.declarations
+                    if (decls.isEmpty()) return false
+                    return decls.all { d ->
+                        when (d) {
+                            is PropertyDeclaration -> ModifierFlag.Static in d.modifiers
+                            is MethodDeclaration -> ModifierFlag.Static in d.modifiers
+                            is GetAccessor -> ModifierFlag.Static in d.modifiers
+                            is SetAccessor -> ModifierFlag.Static in d.modifiers
+                            else -> false
+                        }
+                    }
+                }
                 val ifaceProps = ifaceType.properties ?: continue
                 val missingProps = mutableListOf<Symbol>()
                 for (ifaceProp in ifaceProps) {
                     val propName = ifaceProp.name
-                    if (propName !in classMemberNames && !isOptionalProperty(ifaceProp)) {
+                    if (propName !in classMemberNames &&
+                        !isOptionalProperty(ifaceProp) &&
+                        !isStaticOnlyProperty(ifaceProp)) {
                         missingProps.add(ifaceProp)
                     }
                 }
                 if (missingProps.isNotEmpty()) {
                     val classNameNode = classDecl.name ?: continue
                     val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
-                    val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                    val message = if (isClassTarget) {
+                        "Class '$className' incorrectly implements class '$ifaceName'. Did you mean to extend '$ifaceName' and inherit its members as a subclass?"
+                    } else {
+                        "Class '$className' incorrectly implements $targetKindWord '$ifaceName'."
+                    }
                     val chain = mutableListOf<String>()
                     val relatedInfo: List<Diagnostic>
                     if (missingProps.size >= 2) {
@@ -30256,7 +30300,7 @@ interface DataView {
                     diagnostics.add(Diagnostic(
                         message = message,
                         category = DiagnosticCategory.Error,
-                        code = 2420,
+                        code = diagCode,
                         fileName = fileName,
                         line = line,
                         character = character,
@@ -30265,7 +30309,7 @@ interface DataView {
                         messageChain = chain,
                         relatedInformation = relatedInfo,
                     ))
-                    return // One TS2420 per class is enough (TypeScript only reports first mismatch)
+                    return // One TS2420/TS2720 per class is enough (TypeScript only reports first mismatch)
                 }
                 // Check each existing property
                 for (ifaceProp in ifaceProps) {
@@ -30287,7 +30331,11 @@ interface DataView {
                         if (isPrivate) {
                             val classNameNode = classDecl.name ?: continue
                             val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
-                            val message = "Class '$className' incorrectly implements interface '$ifaceName'."
+                            val message = if (isClassTarget) {
+                                "Class '$className' incorrectly implements class '$ifaceName'. Did you mean to extend '$ifaceName' and inherit its members as a subclass?"
+                            } else {
+                                "Class '$className' incorrectly implements $targetKindWord '$ifaceName'."
+                            }
                             // Check if the interface property is also private (inherited from a class)
                             val ifacePropDecl = ifaceProp.valueDeclaration ?: ifaceProp.declarations.firstOrNull()
                             val ifacePropIsPrivate = ifacePropDecl != null && isMemberPrivate(ifacePropDecl)
@@ -30299,7 +30347,7 @@ interface DataView {
                             diagnostics.add(Diagnostic(
                                 message = message,
                                 category = DiagnosticCategory.Error,
-                                code = 2420,
+                                code = diagCode,
                                 fileName = fileName,
                                 line = line,
                                 character = character,
@@ -30315,15 +30363,19 @@ interface DataView {
                 // Check index signatures
                 val ifaceStringIdx = ifaceType.stringIndexInfo
                 val ifaceNumberIdx = ifaceType.numberIndexInfo
+                fun implementsMessage(): String = if (isClassTarget) {
+                    "Class '$className' incorrectly implements class '$ifaceName'. Did you mean to extend '$ifaceName' and inherit its members as a subclass?"
+                } else {
+                    "Class '$className' incorrectly implements $targetKindWord '$ifaceName'."
+                }
                 if (ifaceNumberIdx != null && !hasNumberIndex && !hasStringIndex) {
                     val classNameNode = classDecl.name ?: continue
                     val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
-                    val message = "Class '$className' incorrectly implements interface '$ifaceName'."
                     val chain = mutableListOf("  Index signature for type 'number' is missing in type '$className'.")
                     diagnostics.add(Diagnostic(
-                        message = message,
+                        message = implementsMessage(),
                         category = DiagnosticCategory.Error,
-                        code = 2420,
+                        code = diagCode,
                         fileName = fileName,
                         line = line,
                         character = character,
@@ -30336,12 +30388,11 @@ interface DataView {
                 if (ifaceStringIdx != null && !hasStringIndex) {
                     val classNameNode = classDecl.name ?: continue
                     val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
-                    val message = "Class '$className' incorrectly implements interface '$ifaceName'."
                     val chain = mutableListOf("  Index signature for type 'string' is missing in type '$className'.")
                     diagnostics.add(Diagnostic(
-                        message = message,
+                        message = implementsMessage(),
                         category = DiagnosticCategory.Error,
-                        code = 2420,
+                        code = diagCode,
                         fileName = fileName,
                         line = line,
                         character = character,
