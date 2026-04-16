@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,088 / 10,078 tests passing (80.3%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+12 tests, 1990 remaining).
+**Status (2026-04-16):** 8,089 / 10,078 tests passing (80.3%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+13 tests, 1989 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,15 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4j, INVESTIGATED — reverted):** Cross-instance generic assignability (`Bar<string>` ↛ `Bar<number>`):
+  - Target test: `genericCloneReturnTypes` — expects `TS2322: Type 'Bar<string>' is not assignable to type 'Bar<number>'. Type 'string' is not assignable to type 'number'.`
+  - Diagnosis: properties `t: T` on `Bar<T>` resolve to `errorType` because `getTypeOfSymbol(prop)` → `getTypeFromTypeNode(T)` is called without `currentTypeParamScope` active. The errorType gets cached in `symbolTypes`, so subsequent instantiation via mapper is a no-op — comparison incorrectly succeeds.
+  - Attempt 1: in `resolveReferenceMembers`, resolve prop type fresh from `decl.type` with target's type params pushed into scope. Result: `TS2322` fires for `genericCloneReturnTypes`, but elaboration format is wrong (emits "Types of property 't' are incompatible." intermediate line that TypeScript omits for single-type-arg references). Net: +1, but **+5 regressions** elsewhere (8088→8084) from leaking scope into downstream code paths.
+  - Attempt 2: push scope only for the `getTypeOfSymbol(prop)` calls, keep the fresh-resolve approach reverted. Result: **+2 regressions** (8089→8087) — the scope push still affects caching in ways that break other tests.
+  - Root cause of regressions: once `getTypeOfSymbol` caches an errorType for a prop (from an earlier call without scope), subsequent calls in any context return errorType. Retroactively fixing via scope push doesn't help — the cache is already wrong. And bypassing the cache (Attempt 1) loses consistency with all other call sites of `getTypeOfSymbol`.
+  - **Deferred**: needs either (a) proper variance analysis so `structuredTypeRelatedTo` can directly compare `Type.Reference` type args like Array already does (see existing CLAUDE.md gotcha), or (b) a checker-wide convention that prop symbol type resolution always runs with the enclosing class's type params in scope (Checker init pre-resolves all class/interface prop types with scope active).
+  - No commit made; working tree clean at 8089 / 10,078 after revert.
 
   **Session 2026-04-16 (16.4i, +1 test: 8087→8088):** TS2345 via constraint for un-instantiated generic parameters:
   - When a parameter's declared type is a `Type.TypeParam` with a simple primitive-checkable constraint (e.g. `y: U` where `U extends number`) and the argument type is primitive, check the arg against the constraint. On failure, emit TS2345 with the CONSTRAINT type as the displayed parameter type (not "U"), because the type param would be inferred as the arg type, which would itself fail the constraint check.
