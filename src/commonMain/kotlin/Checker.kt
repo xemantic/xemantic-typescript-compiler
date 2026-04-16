@@ -32364,6 +32364,26 @@ interface DataView {
             return true
         }
 
+        if (identName == "super") {
+            // super.prop — a private METHOD in a base type is a TS2341 error.
+            // Data-property accesses via super get TS2340 instead (emitted elsewhere),
+            // so don't double-report for private data properties.
+            if (enclosingClassType !is Type.Interface) return false
+            resolveStructuredTypeMembers(enclosingClassType)
+            for (base in enclosingClassType.baseTypes ?: emptyList()) {
+                if (base !is Type.Interface) continue
+                resolveStructuredTypeMembers(base)
+                val prop = getPropertyOfType(base, propName) ?: continue
+                val decl = prop.valueDeclaration ?: prop.declarations.firstOrNull() ?: continue
+                if (decl !is MethodDeclaration) continue
+                if (!isMemberPrivate(decl)) continue
+                val (_, displayName) = findPrivateDeclaringClassInfo(base, propName) ?: continue
+                emitTS2341(expr, propName, displayName, source, fileName)
+                return true
+            }
+            return false
+        }
+
         val identSymbol = globals[identName] ?: return false
 
         if (identSymbol.flags.hasAny(SymbolFlags.Class)) {
