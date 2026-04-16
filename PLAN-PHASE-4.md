@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4q, +1 test: 8097→8098):** TS2693 for `typeof X` in type position where X is type-only:
+  - `checkTypeQueryName` only delegated to `checkIdentifierResolved`, which returns early when `scope.has(name)` — so interfaces/type aliases referenced by `typeof` passed silently instead of emitting TS2693.
+  - Added `isTypeOnlySymbolName(name, fileName)` helper that looks up the symbol in `fileResults[fileName].locals` or `globals`, returns true when the symbol has `Type` flag but no `Value` flag (and, for modules, no value exports).
+  - When the typeof target is type-only, `emitTS2693` fires at the identifier position and the normal resolution path is skipped.
+  - → +1 test: `typeofSimple`. Zero regressions.
+
   **Session 2026-04-16 (16.4p, +2 tests: 8095→8097):** TS1141 "String literal expected" in `export ... from` clauses:
   - `parseExportDeclaration` called `parseStringLiteral()` after `parseExpected(FromKeyword)` without verifying the next token was actually a string — any Identifier was silently accepted and treated as a string literal via `scanner.getTokenValue()`.
   - Added a `token != StringLiteral` guard before the two `parseStringLiteral()` call sites (`export * from X` and `export { ... } from X`). Emits TS1141 at the scanner token position with length = identifier length (via default `reportError` behavior).
