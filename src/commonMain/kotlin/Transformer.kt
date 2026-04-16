@@ -1277,9 +1277,11 @@ class Transformer(
                                     var isFirst = true
                                     var emittedAny = false
                                     for ((pairIdx, pairs) in flattenPairs.withIndex()) {
-                                        for ((localName, valueExpr) in pairs!!) {
+                                        for ((localName, valueExpr, elemComments) in pairs!!) {
                                             directExportedVarNames.add(localName)
-                                            val leadingComments = if (isFirst) stmt.leadingComments else null
+                                            // Use statement comments for first element, element comments for rest.
+                                            // Element comments (e.g. JSDoc on binding element) take priority.
+                                            val leadingComments = elemComments ?: if (isFirst) stmt.leadingComments else null
                                             result.add(ExpressionStatement(
                                                 expression = BinaryExpression(
                                                     left = PropertyAccessExpression(
@@ -12558,7 +12560,8 @@ class Transformer(
      * Example: `{ toString }` from `1` → `[("toString", 1..toString)]`
      * Example: `{ foo: bar }` from `obj` → `[("bar", obj.foo)]`
      */
-    private fun tryExpandObjectBinding(decl: VariableDeclaration): List<Pair<String, Expression>>? {
+    /** Triple of (localName, valueExpression, leadingComments from BindingElement). */
+    private fun tryExpandObjectBinding(decl: VariableDeclaration): List<Triple<String, Expression, List<Comment>?>>? {
         val pattern = decl.name as? ObjectBindingPattern ?: return null
         val initializer = decl.initializer ?: return null
         for (elem in pattern.elements) {
@@ -12579,7 +12582,7 @@ class Transformer(
                 name = Identifier(text = propName, pos = -1, end = -1),
                 pos = -1, end = -1,
             )
-            localName to valueExpr
+            Triple(localName, valueExpr, elem.leadingComments)
         }
     }
 
