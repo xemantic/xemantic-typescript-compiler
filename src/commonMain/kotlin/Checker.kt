@@ -7846,6 +7846,7 @@ class Checker(
             is IndexedAccessType -> {
                 checkUnresolvedInType(type.objectType, scope, source, fileName)
                 checkUnresolvedInType(type.indexType, scope, source, fileName)
+                checkIndexTypeValidity(type.indexType, source, fileName)
             }
             is MappedType -> {
                 val mappedScope = scope.child()
@@ -8044,6 +8045,39 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * Check that the index type of an IndexedAccessType is usable as an index.
+     * Valid index types: string, number, symbol, their literal subtypes, unions/intersections of
+     * valid types, keyof T, type parameters, type references, etc. Invalid at the syntax level:
+     * tuple types, object type literals, function/constructor types, array types.
+     * Emits TS2538: "Type 'X' cannot be used as an index type."
+     */
+    private fun checkIndexTypeValidity(indexType: TypeNode, source: String, fileName: String) {
+        val invalid = when (indexType) {
+            is TupleType -> true
+            is TypeLiteral -> true
+            is FunctionType -> true
+            is ConstructorType -> true
+            is ArrayType -> true
+            else -> false
+        }
+        if (!invalid) return
+        val display = formatTypeForDisplay(indexType) ?: return
+        val start = indexType.pos
+        val length = display.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '$display' cannot be used as an index type.",
+            category = DiagnosticCategory.Error,
+            code = 2538,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /** Emit TS2503: "Cannot find namespace 'X'." */
