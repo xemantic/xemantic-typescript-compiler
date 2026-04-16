@@ -27839,19 +27839,42 @@ interface DataView {
         if (sigDecls.isEmpty()) return anyType
 
         val signatures = sigDecls.map { decl ->
-            val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
-            // Resolve type parameters
+            // 16.4: Create type parameters FIRST, then set currentTypeParamScope
+            // so that parameter types (e.g. T[]) resolve T to the same Type.TypeParam
+            // objects used in the signature. This enables type argument instantiation.
             val typeParams = decl.typeParameters?.map { tp ->
                 val param = Type.TypeParam()
                 param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
-                tp.default?.let { param.default = getTypeFromTypeNode(it) }
                 param
             }
+            val savedScope = currentTypeParamScope
+            if (typeParams != null && typeParams.isNotEmpty()) {
+                val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                typeParams.forEachIndexed { i, tp ->
+                    scope[decl.typeParameters!![i].name.text] = tp
+                }
+                currentTypeParamScope = scope
+            }
+            // Resolve constraints AFTER scope is set (constraints may reference other type params)
+            typeParams?.forEachIndexed { i, tp ->
+                decl.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                decl.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+            }
+            val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            // Resolve parameter types eagerly within the type param scope
+            val paramSymbols = getParameterSymbols(decl.parameters)
+            for ((pi, param) in paramSymbols.withIndex()) {
+                if (pi < decl.parameters.size) {
+                    decl.parameters[pi].type?.let { typeNode ->
+                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                    }
+                }
+            }
+            currentTypeParamScope = savedScope
             Signature(
                 declaration = decl,
                 typeParameters = typeParams,
-                parameters = getParameterSymbols(decl.parameters),
+                parameters = paramSymbols,
                 resolvedReturnType = returnType,
                 minArgumentCount = decl.parameters.count {
                     !it.questionToken && !it.dotDotDotToken && it.initializer == null
@@ -28528,7 +28551,7 @@ interface DataView {
                 val matchingSig = sigs.firstOrNull { sig ->
                     val tp = sig.typeParameters
                     tp != null && tp.size == resolvedTypeArgs.size
-                } ?: sigs.firstOrNull { it.typeParameters != null }
+                }
                 if (matchingSig?.typeParameters != null) {
                     val mapper = createTypeMapper(matchingSig.typeParameters!!, resolvedTypeArgs)
                     val instantiated = instantiateSignature(matchingSig, mapper)
@@ -32771,6 +32794,27 @@ interface DataView {
         // Get call signatures
         val signatures = getCallSignaturesOfType(calleeType)
         if (signatures.isEmpty()) return
+        // 16.4: Instantiate signature when explicit type arguments are provided
+        val typeArgs = expr.typeArguments
+        if (typeArgs != null && typeArgs.isNotEmpty()) {
+            val resolvedTypeArgs = try {
+                typeArgs.map { getTypeFromTypeNode(it) }
+            } catch (_: StackOverflowError) { null }
+            if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
+                // Find a generic signature with matching type parameter count
+                val genericSig = signatures.firstOrNull { sig ->
+                    val tp = sig.typeParameters
+                    tp != null && tp.size == resolvedTypeArgs.size
+                }
+                if (genericSig?.typeParameters != null) {
+                    val mapper = createTypeMapper(genericSig.typeParameters!!, resolvedTypeArgs)
+                    val instantiated = instantiateSignature(genericSig, mapper)
+                    val implRelated = getOverloadImplementationRelated(genericSig, source, fileName)
+                    checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated)
+                    return
+                }
+            }
+        }
         if (signatures.size == 1) {
             // Check if this is an overload with an implementation signature (TS2793)
             val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
