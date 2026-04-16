@@ -6879,6 +6879,8 @@ class Checker(
         val classContext: ClassContext? = null,
         /** Names added as type parameters — excluded from TS2552 value-position suggestions. */
         val typeParamNames: MutableSet<String> = mutableSetOf(),
+        /** Type-eligible names (classes, interfaces, type aliases, enums) declared in this scope. */
+        val typeNames: MutableSet<String> = mutableSetOf(),
     ) {
         fun has(name: String): Boolean =
             name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
@@ -6891,6 +6893,12 @@ class Checker(
         fun addTypeParam(name: String) {
             names.add(name)
             typeParamNames.add(name)
+        }
+
+        /** Add a type-eligible name (class/interface/type-alias/enum) — populates both [names] and [typeNames]. */
+        fun addType(name: String) {
+            names.add(name)
+            typeNames.add(name)
         }
 
         fun child(
@@ -6969,10 +6977,10 @@ class Checker(
                     }
                 }
                 is FunctionDeclaration -> stmt.name?.let { scope.names.add(it.text) }
-                is ClassDeclaration -> stmt.name?.let { scope.names.add(it.text) }
-                is InterfaceDeclaration -> scope.names.add(stmt.name.text)
-                is TypeAliasDeclaration -> scope.names.add(stmt.name.text)
-                is EnumDeclaration -> scope.names.add(stmt.name.text)
+                is ClassDeclaration -> stmt.name?.let { scope.addType(it.text) }
+                is InterfaceDeclaration -> scope.addType(stmt.name.text)
+                is TypeAliasDeclaration -> scope.addType(stmt.name.text)
+                is EnumDeclaration -> scope.addType(stmt.name.text)
                 is ModuleDeclaration -> {
                     val name = stmt.name
                     when (name) {
@@ -7031,8 +7039,8 @@ class Checker(
         var inner: Statement = stmt
         while (inner is LabeledStatement) inner = inner.statement
         when (inner) {
-            is TypeAliasDeclaration -> scope.names.add(inner.name.text)
-            is InterfaceDeclaration -> scope.names.add(inner.name.text)
+            is TypeAliasDeclaration -> scope.addType(inner.name.text)
+            is InterfaceDeclaration -> scope.addType(inner.name.text)
             else -> {}
         }
     }
@@ -8271,7 +8279,10 @@ class Checker(
             is Identifier -> {
                 // Look up the merged symbol for this namespace via nodeToSymbol
                 val symbol = result.nodeToSymbol[nodeKey(stmt)]
-                symbol?.exports?.keys?.forEach { nsScope.names.add(it) }
+                symbol?.exports?.forEach { (exportName, exportSym) ->
+                    nsScope.names.add(exportName)
+                    if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
+                }
             }
             is PropertyAccessExpression -> {
                 // Dotted namespace A.B.C: collect exports of each ancestor namespace
@@ -8292,7 +8303,10 @@ class Checker(
                     }
                     if (sym == null) break
                     // Add exports of each ancestor namespace to scope
-                    sym.exports?.keys?.forEach { nsScope.names.add(it) }
+                    sym.exports?.forEach { (exportName, exportSym) ->
+                        nsScope.names.add(exportName)
+                        if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
+                    }
                 }
             }
             else -> {}
@@ -8482,28 +8496,28 @@ class Checker(
 
         // Try to find a spelling suggestion (TS2552)
         // TypeScript limits to 10 suggestions per unique name per file (max10SpellingSuggestions)
-        if (!inTypePosition) {
-            val countKey = "$fileName:$name"
-            val currentCount = spellingSuggestionCounts[countKey] ?: 0
-            if (currentCount < 10) {
-                val suggestion = getSpellingSuggestion(name, scope, fileName)
-                if (suggestion != null) {
-                    spellingSuggestionCounts[countKey] = currentCount + 1
-                    // Try to find the declaration position of the suggestion for TS2728 related info
-                    val relatedInfo = findDeclarationRelatedInfo(suggestion, fileName, source)
-                    diagnostics.add(Diagnostic(
-                        message = "Cannot find name '$name'. Did you mean '$suggestion'?",
-                        category = DiagnosticCategory.Error,
-                        code = 2552,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                        relatedInformation = if (relatedInfo != null) listOf(relatedInfo) else emptyList(),
-                    ))
-                    return
-                }
+        val countKey = "$fileName:$name"
+        val currentCount = spellingSuggestionCounts[countKey] ?: 0
+        if (currentCount < 10) {
+            val suggestion = getSpellingSuggestion(name, scope, fileName, forTypePosition = inTypePosition)
+            if (suggestion != null) {
+                spellingSuggestionCounts[countKey] = currentCount + 1
+                // Try to find the declaration position of the suggestion for TS2728 related info.
+                // TypeScript omits TS2728 when the suggestion is a pure type alias — `findDeclarationRelatedInfo`
+                // returns null for TypeAliasDeclaration.
+                val relatedInfo = findDeclarationRelatedInfo(suggestion, fileName, source)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot find name '$name'. Did you mean '$suggestion'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2552,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                    relatedInformation = if (relatedInfo != null) listOf(relatedInfo) else emptyList(),
+                ))
+                return
             }
         }
 
@@ -8526,30 +8540,48 @@ class Checker(
      * case-diff = 0.1, substitution = 2, insert/delete = 1.
      * Only suggests value-producing names (not type-alias/interface-only declarations).
      */
-    private fun getSpellingSuggestion(name: String, scope: NameScope, fileName: String): String? {
-        // Collect all candidate names — KNOWN_GLOBALS first (like TypeScript's lib.d.ts symbols),
-        // then scope chain names. This ensures globals win ties over local declarations,
-        // matching TypeScript's behavior where lib.d.ts entries are in the global symbol table.
-        val candidates = LinkedHashSet<String>()
-        candidates.addAll(KNOWN_GLOBALS)
-        var s: NameScope? = scope
-        while (s != null) {
-            candidates.addAll(s.names)
-            s = s.parent
-        }
-
-        // Build set of type-only names from binder locals so we don't suggest
-        // type aliases or interfaces as replacements for value-position references.
-        // NamespaceModule (declare namespace / non-instantiated namespace) IS a valid suggestion
-        // target because namespaces are referenced at value positions (e.g. NS.foo).
-        // Only pure type declarations (TypeAlias, Interface) without any Module flag are excluded.
+    private fun getSpellingSuggestion(
+        name: String,
+        scope: NameScope,
+        fileName: String,
+        forTypePosition: Boolean = false,
+    ): String? {
+        // Classify binder locals: pure-type (Class/Interface/TypeAlias/Enum/TypeParam without Value/Module)
+        // vs pure-value (Variable/Function/etc. without any Type flag).
         val typeOnlyNames = mutableSetOf<String>()
+        val typeEligibleLocalNames = mutableSetOf<String>()
         val binderResult = fileResults[fileName]
         if (binderResult != null) {
             for ((symName, sym) in binderResult.locals) {
-                if (!sym.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)) {
-                    typeOnlyNames.add(symName)
-                }
+                val hasValue = sym.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)
+                val hasType = sym.flags.hasAny(SymbolFlags.Type)
+                if (!hasValue) typeOnlyNames.add(symName)
+                if (hasType) typeEligibleLocalNames.add(symName)
+            }
+        }
+
+        // Collect candidate names. In value position, use the broad set (KNOWN_GLOBALS + scope chain).
+        // In type position, restrict to type-eligible sources: KNOWN_GLOBALS (most lib entries are
+        // interfaces/classes usable as types; pure value-only globals are filtered below), local types
+        // from the binder, and type parameters in scope. Function parameters and block-scoped variables
+        // in general scope.names are NOT included — they leak values like `x` as suggestions for type `X`.
+        // Primitive type keywords (`string`, `unknown`, etc.) are intentionally omitted: TypeScript's
+        // `getSuggestedSymbolForNonexistentType` looks up symbols, and primitive keywords have no symbol.
+        val candidates = LinkedHashSet<String>()
+        candidates.addAll(KNOWN_GLOBALS)
+        if (forTypePosition) {
+            candidates.addAll(typeEligibleLocalNames)
+            var s: NameScope? = scope
+            while (s != null) {
+                candidates.addAll(s.typeParamNames)
+                candidates.addAll(s.typeNames)
+                s = s.parent
+            }
+        } else {
+            var s: NameScope? = scope
+            while (s != null) {
+                candidates.addAll(s.names)
+                s = s.parent
             }
         }
 
@@ -8563,10 +8595,15 @@ class Checker(
         for (candidate in candidates) {
             if (candidate == name) continue  // exact match already handled by scope.has()
             if (candidate.isEmpty()) continue  // skip empty candidates
+            if (forTypePosition) {
+                // Skip value-only globals like `parseInt`, `console`, `Math` — not usable as types
+                if (candidate in VALUE_ONLY_GLOBALS) continue
+            } else {
                 // Don't suggest type-only declarations (type aliases, interfaces) in value position
-            if (candidate in typeOnlyNames) continue
-            // Don't suggest type parameters as replacements for value-position names
-            if (scope.isTypeParam(candidate)) continue
+                if (candidate in typeOnlyNames) continue
+                // Don't suggest type parameters as replacements for value-position names
+                if (scope.isTypeParam(candidate)) continue
+            }
             // Skip candidates shorter than 3 unless case-insensitive match
             if (candidate.length < 3 && candidate.lowercase() != name.lowercase()) continue
             // Quick filter: skip if length difference is too large
@@ -8611,7 +8648,7 @@ class Checker(
      */
     private fun findDeclarationRelatedInfo(name: String, fileName: String, source: String): Diagnostic? {
         val result = fileResults[fileName] ?: return null
-        val symbol = result.locals[name]
+        val symbol = result.locals[name] ?: findSymbolInNestedNamespaces(name, result.locals.values)
         val declPos = if (symbol != null) {
             val decl = symbol.declarations?.firstOrNull() ?: symbol.valueDeclaration ?: return null
             when (decl) {
@@ -8619,7 +8656,8 @@ class Checker(
                 is FunctionDeclaration -> decl.name?.pos ?: decl.pos
                 is ClassDeclaration -> decl.name?.pos ?: decl.pos
                 is InterfaceDeclaration -> decl.name.pos
-                is TypeAliasDeclaration -> decl.name.pos
+                // TypeScript omits TS2728 "declared here" when the suggestion is a pure type alias.
+                is TypeAliasDeclaration -> return null
                 is EnumDeclaration -> decl.name.pos
                 is ModuleDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
                 is ImportSpecifier -> decl.name.pos
@@ -8641,6 +8679,24 @@ class Checker(
             start = declPos,
             length = name.length,
         )
+    }
+
+    /**
+     * Search nested namespace exports (BFS) for a symbol with [name]. Used to find
+     * TS2728 "declared here" targets for classes/interfaces/enums declared inside namespaces.
+     */
+    private fun findSymbolInNestedNamespaces(name: String, topLevel: Collection<Symbol>): Symbol? {
+        val queue = ArrayDeque<Symbol>()
+        val visited = HashSet<Int>()
+        queue.addAll(topLevel)
+        while (queue.isNotEmpty()) {
+            val sym = queue.removeFirst()
+            if (!visited.add(sym.id)) continue
+            val exports = sym.exports ?: continue
+            exports[name]?.let { return it }
+            for (child in exports.values) queue.addLast(child)
+        }
+        return null
     }
 
     /**
@@ -13052,6 +13108,40 @@ class Checker(
             "AddEventListenerOptions", "EventListenerOptions",
             "PromiseSettledResult", "PromiseFulfilledResult", "PromiseRejectedResult",
             "BufferSource", "BlobPart",
+        )
+
+        /**
+         * Subset of [KNOWN_GLOBALS] that are pure runtime values, not usable in type positions.
+         * Excluded from type-position TS2552 suggestions so we don't suggest e.g. `parseInt` for
+         * a mistyped type name. Duals (classes, interfaces) are NOT listed here because they work
+         * in both positions. `undefined`/`null` are excluded from this list — they work as types.
+         */
+        private val VALUE_ONLY_GLOBALS: Set<String> = setOf(
+            "globalThis", "NaN", "Infinity", "eval",
+            "parseInt", "parseFloat", "isNaN", "isFinite",
+            "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+            "escape", "unescape",
+            "Math", "JSON", "Atomics", "Reflect", "Intl",
+            "console",
+            "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+            "setImmediate", "clearImmediate", "queueMicrotask",
+            "location", "history", "screen",
+            "self", "top", "parent", "frames", "opener",
+            "alert", "confirm", "prompt", "open", "close", "print",
+            "requestAnimationFrame", "cancelAnimationFrame",
+            "requestIdleCallback", "cancelIdleCallback",
+            "fetch", "atob", "btoa",
+            "localStorage", "sessionStorage",
+            "crypto", "performance",
+            "indexedDB", "structuredClone", "reportError",
+            "WScript", "Windows",
+            "require", "module", "exports", "global",
+            "process", "__dirname", "__filename", "__non_webpack_require__",
+            "importScripts",
+            "describe", "it", "test", "expect", "jest",
+            "beforeEach", "afterEach", "beforeAll", "afterAll", "suite",
+            "\$", "jQuery",
+            "document", "window", "navigator",
         )
 
         /**

@@ -179,6 +179,9 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Ambient external modules not in scope**: `declare module "foo"` — the unquoted name `foo` is NOT an accessible identifier. Exclude from `fileScope`.
 - **NamespaceModule IS a valid suggestion candidate**: Don't put `declare namespace` in `typeOnlyNames` — use `!sym.flags.hasAny(Value or Module)`.
 - **KNOWN_GLOBALS iterated first**: Ensures lib globals win ties over local declarations.
+- **Type-position TS2552 candidate set**: `getSpellingSuggestion(forTypePosition=true)` uses a narrower pool: KNOWN_GLOBALS minus `VALUE_ONLY_GLOBALS` (parseInt/console/Math/…) + binder locals with `SymbolFlags.Type` + `scope.typeParamNames` + `scope.typeNames` (populated via `scope.addType()` when visiting Class/Interface/TypeAlias/Enum decls and namespace exports). Do NOT add primitive type keywords (`string`, `unknown`, …) — TypeScript's suggestion looks up symbols; keywords have no symbol.
+- **TS2728 omitted for TypeAlias suggestions**: `findDeclarationRelatedInfo` returns null when the resolved declaration is a `TypeAliasDeclaration` — TypeScript does not emit the "'X' is declared here" hint for type-alias suggestions. Classes, interfaces, enums, vars/functions/imports all still get TS2728.
+- **Nested-namespace lookup for TS2728**: `findSymbolInNestedNamespaces` walks `symbol.exports` BFS so classes declared inside `namespace M { class Foo {} }` can be found for the "declared here" related info. Without this, only top-level `result.locals` entries are located and TS2728 silently drops.
 
 ### Checker diagnostic gotchas (TS18004/TS1103)
 

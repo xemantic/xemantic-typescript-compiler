@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,084 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+9 tests, 1994 remaining).
+**Status (2026-04-16):** 8,085 / 10,078 tests passing (80.2%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+10 tests, 1993 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-16 (16.4f, +1 test: 8084→8085):** TS2552 spelling suggestions in type positions:
+  - Added `forTypePosition: Boolean` parameter to `getSpellingSuggestion`. Removed the `!inTypePosition` guard so TS2552 now fires in type positions too.
+  - Added `NameScope.typeNames` set + `addType(name)` helper; ClassDeclaration/InterfaceDeclaration/TypeAliasDeclaration/EnumDeclaration now populate it (replaces plain `names.add`). `buildNamespaceScope` marks type-eligible exports in the new set when merging namespace symbols.
+  - In type-position mode, candidate set is: KNOWN_GLOBALS ∪ typeEligibleLocalNames (binder locals with Type flag) ∪ scope.typeParamNames ∪ scope.typeNames — MINUS VALUE_ONLY_GLOBALS (new set of pure runtime values like parseInt/console/Math). Primitive type keywords (`string`, `unknown`, etc.) intentionally NOT added — TypeScript's suggestion looks up symbols, and keywords have no symbol.
+  - `findDeclarationRelatedInfo` now returns null for `TypeAliasDeclaration` (TypeScript omits TS2728 "declared here" for type-alias suggestions); searches nested namespace exports via new `findSymbolInNestedNamespaces` BFS helper to find classes inside `namespace M { class Foo {} }`.
+  - → +1 test: `unspecializedConstraints` (nested class `Parameter` in namespace M now correctly suggested for `TypeParameter` typo, with proper TS2728 related info).
 
   **Session 2026-04-16 (16.4e, +1 test: 8083→8084):** Element access `obj["prop"]` / `obj[0]` TS2339/TS2551 check:
   - Refactored `checkSinglePropertyAccess` to extract shared `checkMemberAccessMissing` helper taking `objectExpr`, `propName`, `diagStart`, `diagLength`, plus an `emitTs2728RelatedInfo` flag (property access emits TS2728 "'X' is declared here" related info; element access does not — matches TypeScript's behavior).
