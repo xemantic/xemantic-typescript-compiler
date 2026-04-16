@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-16 (16.4s, +1 test: 8099→8100):** TS2341 for `super.X` when X is a private method:
+  - `checkPrivateMemberAccess` handled `this.prop` and `C.prop` but returned early for `super.prop` (because `globals["super"]` is null). Added a `super` branch that walks the enclosing class's `baseTypes`, finds the property, and emits TS2341 when it's a private METHOD.
+  - **Method guard is critical** — first attempt without the `decl is MethodDeclaration` check caused a regression on `superPropertyAccess_ts__target_es5` itself: `super.d2` (private data property) already emits TS2340 ("Only public and protected methods..."), and TypeScript doesn't double-report TS2341 for data properties. The rule appears to be: TS2340 fires for non-method super access, TS2341 fires only for private METHOD super access.
+  - → +1 test: `superPropertyAccess_ts__target_es5`. Zero regressions.
+
   **Session 2026-04-16 (16.4r, +1 test: 8098→8099):** TS2497 for `import * as X from` against `export =` module in ESM output, gated on alias usage:
   - In `checkDefaultImports`, added a post-check that emits TS2497 when: (a) the output format is ESM (`isESModuleFormat`), (b) the target module has `export =`, (c) the import uses NamespaceImport binding, AND (d) the namespace alias is referenced as a value somewhere in the file.
   - First attempt without (d) caused a regression: `es6ExportAssignment2` has `import * as a from "./a"` but never uses `a`, and TypeScript omits TS2497 in that case. Added `isIdentifierReferencedAsValue` helper that walks top-level statements looking for the alias name in value-expression positions (Identifier, PropertyAccess base, Call/New, Binary/Unary operands, etc.).
