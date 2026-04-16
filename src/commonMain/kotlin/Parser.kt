@@ -2311,6 +2311,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 NamespaceExport(name = parseIdentifier(), pos = pos, end = getEnd())
             } else null
             parseExpected(SyntaxKind.FromKeyword)
+            if (token != SyntaxKind.StringLiteral) {
+                reportError("String literal expected.", code = 1141)
+            }
             val spec = parseStringLiteral()
             val assertClauseNs = parseImportAttributes()
             parseSemicolon()
@@ -2328,7 +2331,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // export { ... } from? "module"
         if (token == SyntaxKind.OpenBrace) {
             val namedExports = parseNamedExports()
-            val moduleSpec = if (parseOptional(SyntaxKind.FromKeyword)) parseStringLiteral() else null
+            val moduleSpec = if (parseOptional(SyntaxKind.FromKeyword)) {
+                if (token != SyntaxKind.StringLiteral) {
+                    reportError("String literal expected.", code = 1141)
+                }
+                parseStringLiteral()
+            } else null
             val assertClauseNamed = if (moduleSpec != null) parseImportAttributes() else null
             parseSemicolon()
             return ExportDeclaration(
