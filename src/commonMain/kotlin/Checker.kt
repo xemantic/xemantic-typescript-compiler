@@ -27537,8 +27537,8 @@ interface DataView {
         }
         // 16.0: Check enclosing class/interface type parameter scope before globals
         currentTypeParamScope?.get(name)?.let { return it }
-        // Look up the symbol in globals
-        val symbol = globals[name]
+        // Look up the symbol — try qualified name resolution first, then globals
+        val symbol = resolveTypeNameToSymbol(node.typeName) ?: globals[name]
         if (symbol != null) {
             val declaredType = getDeclaredTypeOfSymbol(symbol)
             // If the type has type parameters and the reference has type arguments,
@@ -33513,7 +33513,13 @@ interface DataView {
             // Conservative: only check when parameter type is a well-known type
             // (primitive, void, undefined, null, never). Skip object/interface/union/
             // intersection types which need deeper structural comparison or generics.
-            if (!isSimpleCheckableType(paramType)) continue
+            // 16.4: Also check when arg is a primitive type and param is a named class/interface
+            // (primitives are never structurally assignable to class instances with members).
+            if (!isSimpleCheckableType(paramType)) {
+                val argIsPrimitive = isSimpleCheckableType(argType)
+                val paramIsNamedType = paramType is Type.Interface && paramType.symbol != null
+                if (!(argIsPrimitive && paramIsNamedType)) continue
+            }
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
                 val argTypeStr = typeToString(argType)
