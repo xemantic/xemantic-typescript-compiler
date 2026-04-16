@@ -28086,11 +28086,15 @@ interface DataView {
         var numberIndexInfo: IndexInfo? = null
 
         // Inherit from base types
+        val inheritedMemberNames = mutableSetOf<String>()
         type.baseTypes?.forEach { baseType ->
             if (baseType is Type.Object) {
                 resolveStructuredTypeMembers(baseType)
                 baseType.members?.forEach { (name, sym) ->
-                    if (name !in members) members[name] = sym
+                    if (name !in members) {
+                        members[name] = sym
+                        inheritedMemberNames.add(name)
+                    }
                 }
                 baseType.callSignatures?.let { inheritedCallSignatures.addAll(it) }
                 baseType.constructSignatures?.let { inheritedConstructSignatures.addAll(it) }
@@ -28143,9 +28147,20 @@ interface DataView {
                             ))
                             continue
                         }
-                        // Reuse existing symbol for overloaded methods (same name, multiple declarations)
-                        val methodSymbol = members.getOrPut(name) {
-                            Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                        // 16.4l: If the name came from a base type, this is an override —
+                        // create a NEW symbol so we don't mutate the base's symbol's
+                        // `declarations` list. Otherwise reuse the symbol to support
+                        // overloaded methods declared on the same class.
+                        val existingFromBase = name in inheritedMemberNames
+                        val methodSymbol = if (existingFromBase) {
+                            val fresh = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                            members[name] = fresh
+                            inheritedMemberNames.remove(name)
+                            fresh
+                        } else {
+                            members.getOrPut(name) {
+                                Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                            }
                         }
                         methodSymbol.declarations.add(member)
                         if (methodSymbol.valueDeclaration == null) {
