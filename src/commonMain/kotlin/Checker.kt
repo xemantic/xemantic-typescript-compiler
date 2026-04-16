@@ -341,6 +341,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14a. Check invalid module augmentations (TS2664)
+        checkAmbientModuleAugmentations()
         // 14b. Check default imports from modules without default export (TS1192)
         checkDefaultImports()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
@@ -11095,6 +11097,68 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Invalid module augmentation check (TS2664)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS2664: Invalid module name in augmentation.
+     * A `declare module "X"` in a MODULE file (has imports/exports) is an augmentation.
+     * The augmented module must be defined elsewhere — either by resolving to a file
+     * or by another `declare module "X"` in a script (non-module) file or a .d.ts file.
+     */
+    private fun checkAmbientModuleAugmentations() {
+        // Collect module-definition names: `declare module "X"` in script (non-module)
+        // files and .d.ts files (which may contain ambient module definitions).
+        val moduleDefinitions = mutableSetOf<String>()
+        for (result in binderResults) {
+            val fn = result.sourceFile.fileName
+            val isDts = isDtsFile(fn)
+            val isScript = !isModuleFile(result.sourceFile.statements)
+            if (!isDts && !isScript) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration) {
+                    val name = stmt.name
+                    if (name is StringLiteralNode) {
+                        moduleDefinitions.add(name.text)
+                    }
+                }
+            }
+        }
+
+        // Check each `declare module "X"` in non-.d.ts module files as an augmentation.
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (!isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val name = stmt.name
+                if (name !is StringLiteralNode) continue
+                val moduleName = name.text
+
+                val resolvesToFile = resolveModuleSpecifier(moduleName) != null
+                val definedElsewhere = moduleName in moduleDefinitions
+
+                if (!resolvesToFile && !definedElsewhere) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Invalid module name in augmentation, module '$moduleName' cannot be found.",
+                        category = DiagnosticCategory.Error,
+                        code = 2664,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = name.pos,
+                        length = moduleName.length + 2, // +2 for quotes
+                    ))
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
