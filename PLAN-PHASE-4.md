@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-16):** 8,098 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+22 tests, 1977 remaining).
+**Status (2026-04-17):** 8,101 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+25 tests, 1974 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4v, +3 tests: 8098→8101):** TS1092/TS1098/TS2392 for constructor overload edge cases:
+  - Parser (TS1092/TS1098): `parseConstructor` now inspects the `<...>` type parameter list that was previously silently consumed for error recovery. Emits TS1098 "Type parameter list cannot be empty." (squiggle = `<>` span) when empty, and ALWAYS emits TS1092 "Type parameters cannot appear on a constructor declaration." at position `<+1` with length 0 (matches TypeScript's zero-length span after the `<`).
+  - Checker (TS2392): new `checkMultipleConstructorImpls` — when a class has 2+ `Constructor` elements with `body != null`, each implementation gets TS2392 "Multiple constructor implementations are not allowed." at the `constructor` keyword (squiggle length 11). Hooked into `checkOverloadsInStatements` alongside existing `checkMethodOverloadsInClass`.
+  - → +3 tests (8098→8101): `parserConstructorDeclaration12_ts` (the prompted target, 8 duplicated constructors × 3 diagnostics) plus 2 collateral wins from TS2392 firing on other double-implementation class tests. Zero regressions.
 
   **Session 2026-04-16 (16.4u, +1 test: 8097→8098):** TS2538 for invalid index type in `T[K]`:
   - `checkUnresolvedInType` IndexedAccessType branch now calls `checkIndexTypeValidity(indexType, ...)` which emits TS2538 "Type 'X' cannot be used as an index type." for syntactically-invalid index type nodes: `TupleType`, `TypeLiteral`, `FunctionType`, `ConstructorType`, `ArrayType`. Display via `formatTypeForDisplay`, squiggle length = display length (for `[]` → 2, matching source text).
