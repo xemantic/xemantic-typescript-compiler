@@ -33423,8 +33423,22 @@ interface DataView {
                     return
                 }
 
-                val exprType = getTypeOfSymbol(identSymbol)
-                if (exprType === anyType || exprType === errorType || exprType === unknownType) return
+                val rawType = getTypeOfSymbol(identSymbol)
+                if (rawType === anyType || rawType === errorType || rawType === unknownType) return
+                // For primitive types (e.g. `declare var foo: number`), resolve to the
+                // wrapper interface's apparent type so property lookups fire TS2339 when
+                // the property doesn't exist on the wrapper. Display uses the primitive name.
+                // Narrow gate: only fire for file-level Variable declarations with an
+                // explicit type annotation — avoids FPs on function params/destructured
+                // bindings whose inferred types may be stale primitives.
+                val exprType = if (rawType !is Type.Object) {
+                    val decl = identSymbol.valueDeclaration
+                    val annotated = decl is VariableDeclaration && decl.type != null
+                    if (!annotated || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return
+                    if (propName.isEmpty()) return
+                    displayTypeOverride = rawType
+                    getApparentType(rawType)
+                } else rawType
                 if (exprType !is Type.Object) return
                 // For variables, skip class-typed access (may be narrowed via instanceof).
                 // Anonymous object types (typeSym == null) ARE checkable — e.g.
