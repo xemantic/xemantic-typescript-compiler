@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bn, +1 test: 8153→8154):** TS7008 FP suppressed for static class props assigned in a sibling `static { ... }` initializer block:
+  - `class Example4 { static accessor value; static { this.value = n; ... } }` — the 16.4bi TS7008 check for `static` properties without annotation/initializer ignored static initializer blocks and fired a spurious diagnostic. TypeScript only emits TS7008 when NO initializer path assigns to the member.
+  - Added `siblings: List<ClassElement>` parameter to `checkImplicitAnyInClassElement` (threaded from the non-ambient class-member loop). At the TS7008 emission site, skip when any sibling `ClassStaticBlockDeclaration` body contains `this.<name> = ...` (or any compound assignment). New helpers `blockAssignsToThisProperty` / `statementAssignsToThisProperty` / `exprAssignsToThisProperty` walk through `If`/`Block`/`For`/`While`/`Do`/`Try` structures recursively so conditional writes inside the static block still suppress TS7008.
+  - Only checks `this.<name>` (not `ClassName.<name>`) — writes via the static qualified name *outside* the static block (like `Example5.value = 123` below the class) correctly still flag TS7008 because the assignment is outside the class body. Matches TypeScript's flow model: in-body initialization suppresses; external assignment doesn't count.
+  - → +1 test: `controlFlowAutoAccessor1`. Zero regressions.
+
   **Session 2026-04-17 (16.4bm, +2 tests: 8151→8153):** TS2307 for relative imports when `moduleSuffixes` is configured and no suffixed file matches:
   - `moduleSuffixes: [".ios"]` + `import { ios } from "./foo"` where only `foo.ts` (unsuffixed) exists → TypeScript emits TS2307 because the suffix-aware resolver only tries `foo.ios.ts`. Our `checkUnresolvedModules` simply skipped TS2307 for node-style resolution in multi-file, producing zero diagnostics.
   - New `resolveWithModuleSuffixes(specifier, contextFileName, suffixes)` helper: iterates each suffix, tries `{base}{suffix}.{ts,tsx,d.ts,json}` + `{base}/index{suffix}.{ts,tsx,d.ts}`. Under `allowJs`/`checkJs`, also tries `.js`/`.jsx` variants. Strips explicit `.js`/`.jsx` extensions from the specifier before matching (import `./foo.js` with `moduleSuffixes: [".ios"]` tries `./foo.ios.js`). Handles both `"/path"` and `"path"` base forms to match how `fileResults` stores keys for root-anchored test layouts.
