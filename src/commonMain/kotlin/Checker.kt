@@ -17863,9 +17863,10 @@ interface DataView {
         thisIsTyped: Boolean,
         insideFunction: Boolean,
         shadowFunctionPos: Int,
+        insideArrowFunction: Boolean = false,
     ) {
         for (stmt in statements) {
-            checkThisInStatement(stmt, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+            checkThisInStatement(stmt, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
         }
     }
 
@@ -17876,6 +17877,7 @@ interface DataView {
         thisIsTyped: Boolean,
         insideFunction: Boolean,
         shadowFunctionPos: Int,
+        insideArrowFunction: Boolean = false,
     ) {
         when (stmt) {
             is FunctionDeclaration -> {
@@ -17893,7 +17895,8 @@ interface DataView {
                         it.statements, source, fileName,
                         thisIsTyped = newThisIsTyped,
                         insideFunction = true,
-                        shadowFunctionPos = newShadowPos
+                        shadowFunctionPos = newShadowPos,
+                        insideArrowFunction = false, // function resets arrow context
                     )
                 }
             }
@@ -17906,72 +17909,72 @@ interface DataView {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let {
-                        checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                     }
                 }
             }
             is ExpressionStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ReturnStatement -> {
                 stmt.expression?.let {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is IfStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInStatement(stmt.thenStatement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInStatement(stmt.thenStatement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 stmt.elseStatement?.let {
-                    checkThisInStatement(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInStatement(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is Block -> {
-                checkThisInStatements(stmt.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatements(stmt.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ForStatement -> {
                 stmt.initializer?.let {
                     when (it) {
-                        is Expression -> checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                        is Expression -> checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                         is VariableDeclarationList -> {
                             for (decl in it.declarations) {
                                 decl.initializer?.let { init ->
-                                    checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                                    checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                                 }
                             }
                         }
                         else -> {}
                     }
                 }
-                stmt.condition?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos) }
-                stmt.incrementor?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos) }
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                stmt.condition?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction) }
+                stmt.incrementor?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction) }
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ForInStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ForOfStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is WhileStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is DoStatement -> {
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is SwitchStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 for (clause in stmt.caseBlock) {
                     when (clause) {
                         is CaseClause -> {
-                            checkThisInExpr(clause.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            checkThisInExpr(clause.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                         }
                         is DefaultClause -> {
-                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                         }
                         else -> {}
                     }
@@ -17979,20 +17982,20 @@ interface DataView {
             }
             is ThrowStatement -> {
                 stmt.expression?.let {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is TryStatement -> {
-                checkThisInStatements(stmt.tryBlock.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatements(stmt.tryBlock.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 stmt.catchClause?.let {
-                    checkThisInStatements(it.block.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInStatements(it.block.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
                 stmt.finallyBlock?.let {
-                    checkThisInStatements(it.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInStatements(it.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is LabeledStatement -> {
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ModuleDeclaration -> {
                 when (val body = stmt.body) {
@@ -18067,11 +18070,28 @@ interface DataView {
         thisIsTyped: Boolean,
         insideFunction: Boolean,
         shadowFunctionPos: Int,
+        insideArrowFunction: Boolean = false,
     ) {
         when (expr) {
             is Identifier -> {
-                if (expr.text == "this" && !thisIsTyped && insideFunction) {
-                    emitTS2683(expr, source, fileName, shadowFunctionPos)
+                if (expr.text == "this" && !thisIsTyped) {
+                    if (insideFunction) {
+                        emitTS2683(expr, source, fileName, shadowFunctionPos)
+                    } else if (insideArrowFunction) {
+                        // TS7041: arrow function at top level captures global 'this'
+                        val start = expr.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "The containing arrow function captures the global value of 'this'.",
+                            category = DiagnosticCategory.Error,
+                            code = 7041,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = 4,
+                        ))
+                    }
                 }
             }
             is FunctionExpression -> {
@@ -18088,23 +18108,28 @@ interface DataView {
                         it.statements, source, fileName,
                         thisIsTyped = newThisIsTyped,
                         insideFunction = true,
-                        shadowFunctionPos = newShadowPos
+                        shadowFunctionPos = newShadowPos,
+                        insideArrowFunction = false, // function resets arrow context
                     )
                 }
             }
             is ArrowFunction -> {
-                // Arrow functions are transparent — inherit outer this context
-                // insideFunction stays as-is: arrows don't create their own this
+                // Arrow functions are transparent — inherit outer this context.
+                // insideFunction stays as-is: arrows don't create their own this.
+                // insideArrowFunction becomes true so TS7041 can fire on `this` inside
+                // an arrow at top-level (not enclosed by any regular function).
                 when (val body = expr.body) {
                     is Block -> checkThisInStatements(
                         body.statements, source, fileName,
                         thisIsTyped, insideFunction,
-                        shadowFunctionPos
+                        shadowFunctionPos,
+                        insideArrowFunction = true,
                     )
                     is Expression -> checkThisInExpr(
                         body, source, fileName,
                         thisIsTyped, insideFunction,
-                        shadowFunctionPos
+                        shadowFunctionPos,
+                        insideArrowFunction = true,
                     )
                     else -> {}
                 }
@@ -18117,41 +18142,41 @@ interface DataView {
             is CallExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
                 expr.arguments.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is NewExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 expr.arguments?.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is BinaryExpression -> {
                 var current: Expression = expr
                 while (current is BinaryExpression) {
-                    checkThisInExpr(current.right, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(current.right, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                     current = current.left
                 }
-                checkThisInExpr(current, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(current, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ParenthesizedExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is PropertyAccessExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ElementAccessExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInExpr(expr.argumentExpression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInExpr(expr.argumentExpression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ConditionalExpression -> {
-                checkThisInExpr(expr.condition, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInExpr(expr.whenTrue, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                checkThisInExpr(expr.whenFalse, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.condition, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInExpr(expr.whenTrue, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                checkThisInExpr(expr.whenFalse, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is ArrayLiteralExpression -> {
                 expr.elements.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is ObjectLiteralExpression -> {
@@ -18169,7 +18194,7 @@ interface DataView {
                                     )
                                 }
                             } else {
-                                checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                                checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                             }
                         }
                         is MethodDeclaration -> {
@@ -18182,11 +18207,11 @@ interface DataView {
                             }
                         }
                         is SpreadAssignment -> {
-                            checkThisInExpr(prop.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            checkThisInExpr(prop.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                         }
                         is ShorthandPropertyAssignment -> {
                             prop.objectAssignmentInitializer?.let {
-                                checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                                checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                             }
                         }
                         else -> {}
@@ -18195,55 +18220,55 @@ interface DataView {
             }
             is TemplateExpression -> {
                 for (span in expr.templateSpans) {
-                    checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is TaggedTemplateExpression -> {
-                checkThisInExpr(expr.tag, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.tag, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 when (val template = expr.template) {
                     is TemplateExpression -> {
                         for (span in template.templateSpans) {
-                            checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                            checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                         }
                     }
                     else -> {}
                 }
             }
             is PrefixUnaryExpression -> {
-                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is PostfixUnaryExpression -> {
-                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is TypeOfExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is VoidExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is DeleteExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is AwaitExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is SpreadElement -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is YieldExpression -> {
                 expr.expression?.let {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             is AsExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is NonNullExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
             is CommaListExpression -> {
                 expr.elements.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
+                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
                 }
             }
             else -> {}
