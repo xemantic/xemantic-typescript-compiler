@@ -195,12 +195,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     /**
      * 16.0: Detect `/// <reference path="self.ts" />` self-reference and emit TS1006.
+     * Also detects malformed `<reference ... />` directives and emits TS1084.
      * Scans the file's leading triple-slash directives without using the parser/scanner.
-     * Compares the basename portion of the path against the source file's basename.
      */
     private fun checkTripleSlashSelfReference() {
         val ownBaseName = fileName.substringAfterLast('/')
         val refRegex = Regex("""///\s*<reference\s+path\s*=\s*["']([^"']+)["']""")
+        val validRefRegex = Regex("""^\s*///\s*<reference(?:\s+[A-Za-z-]+\s*=\s*(?:"[^"]*"|'[^']*'))+\s*/>\s*$""")
+        val referenceStartRegex = Regex("""^\s*///\s*<reference\b""")
         var pos = 0
         for (line in source.lineSequence()) {
             val trimmed = line.trimStart()
@@ -208,6 +210,25 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 if (trimmed.isNotEmpty()) break // first non-triple-slash, non-blank line stops scan
                 pos += line.length + 1
                 continue
+            }
+            // TS1084: Malformed <reference ...> directive
+            if (referenceStartRegex.containsMatchIn(line) && !validRefRegex.matches(line)) {
+                val leadingWs = line.length - trimmed.length
+                val absStart = pos + leadingWs
+                val absLen = trimmed.trimEnd().length
+                val (line0, char0) = getLineAndCharacterOfPosition(absStart)
+                diagnostics.add(
+                    Diagnostic(
+                        message = "Invalid 'reference' directive syntax.",
+                        category = DiagnosticCategory.Error,
+                        code = 1084,
+                        fileName = fileName,
+                        line = line0,
+                        character = char0,
+                        start = absStart,
+                        length = absLen,
+                    )
+                )
             }
             val match = refRegex.find(trimmed)
             if (match != null) {

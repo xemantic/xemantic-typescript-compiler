@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,102 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+26 tests, 1973 remaining).
+**Status (2026-04-17):** 8,103 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+27 tests, 1972 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4x, +1 test: 8102→8103):** TS1084 for malformed `<reference>` triple-slash directive:
+  - Extended `checkTripleSlashSelfReference` in the Parser to emit TS1084 "Invalid 'reference' directive syntax." when a `///`-prefixed line contains `<reference\b` but doesn't match a valid directive (attribute list with balanced quotes ending in `/>`).
+  - Valid pattern allows MULTIPLE `attrName="value"` pairs (e.g. `<reference types="jquery" preserve="true" />`) — first regex version was too strict (single attribute only) and regressed `moduleSymbolMerging_ts` / `declarationFilesGeneratingTypeReferences_ts`. Fixed with `(?:\s+[A-Za-z-]+\s*=\s*(?:"[^"]*"|'[^']*'))+`.
+  - Squiggle: whole trimmed directive text, starting at first non-whitespace char of the line.
+  - → +1 test: `invalidReferenceSyntax1_ts`. Zero regressions.
 
   **Session 2026-04-17 (16.4w, +1 test: 8101→8102):** TS2405 for-in LHS type check:
   - New `checkForInLhsTypes` pass walks statements and emits TS2405 "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'." when the initializer is a bare `Identifier` (not a VariableDeclarationList) whose resolved symbol has a value-declaration with an incompatible type annotation.
