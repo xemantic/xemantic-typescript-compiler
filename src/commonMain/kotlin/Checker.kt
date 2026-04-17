@@ -30994,14 +30994,19 @@ interface DataView {
                     param.type?.let { findTypeParamRefsInType(it, effectiveNames, source, fileName) }
                 }
                 member.type?.let { findTypeParamRefsInType(it, effectiveNames, source, fileName) }
+                // Walk method body — static method bodies cannot reference class type params
+                // either (e.g. `var entry: List<T>` or `new List<T>()` inside the body).
+                member.body?.statements?.forEach { findTypeParamRefsInStatement(it, effectiveNames, source, fileName) }
             }
             is GetAccessor -> {
                 member.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                member.body?.statements?.forEach { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
             }
             is SetAccessor -> {
                 for (param in member.parameters) {
                     param.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
                 }
+                member.body?.statements?.forEach { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
             }
             else -> {}
         }
@@ -31060,6 +31065,77 @@ interface DataView {
         }
     }
 
+    /** Walk a statement (and nested blocks) to find type parameter references in type annotations. */
+    private fun findTypeParamRefsInStatement(stmt: Statement, typeParamNames: Set<String>, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                    decl.initializer?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            is Block -> stmt.statements.forEach { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
+            is IfStatement -> {
+                findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInStatement(stmt.thenStatement, typeParamNames, source, fileName)
+                stmt.elseStatement?.let { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> {
+                        for (decl in init.declarations) {
+                            decl.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                            decl.initializer?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+                        }
+                    }
+                    is Expression -> findTypeParamRefsInExpr(init, typeParamNames, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+                stmt.incrementor?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+                findTypeParamRefsInStatement(stmt.statement, typeParamNames, source, fileName)
+            }
+            is ForInStatement -> {
+                findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInStatement(stmt.statement, typeParamNames, source, fileName)
+            }
+            is ForOfStatement -> {
+                findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInStatement(stmt.statement, typeParamNames, source, fileName)
+            }
+            is WhileStatement -> {
+                findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInStatement(stmt.statement, typeParamNames, source, fileName)
+            }
+            is DoStatement -> {
+                findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInStatement(stmt.statement, typeParamNames, source, fileName)
+            }
+            is SwitchStatement -> {
+                findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            findTypeParamRefsInExpr(clause.expression, typeParamNames, source, fileName)
+                            clause.statements.forEach { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
+                        }
+                        is DefaultClause -> clause.statements.forEach { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                findTypeParamRefsInStatement(stmt.tryBlock, typeParamNames, source, fileName)
+                stmt.catchClause?.block?.let { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
+                stmt.finallyBlock?.let { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
+            }
+            is ThrowStatement -> stmt.expression?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            else -> {}
+        }
+    }
+
     /** Walk an expression to find type parameter references in embedded type annotations. */
     private fun findTypeParamRefsInExpr(expr: Expression, typeParamNames: Set<String>, source: String, fileName: String) {
         when (expr) {
@@ -31087,12 +31163,52 @@ interface DataView {
             }
             is CallExpression -> {
                 findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                expr.typeArguments?.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                expr.arguments.forEach { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            }
+            is NewExpression -> {
+                findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                expr.typeArguments?.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
                 expr.arguments?.forEach { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
             }
             is AsExpression -> {
                 findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
                 findTypeParamRefsInType(expr.type, typeParamNames, source, fileName)
             }
+            is TypeAssertionExpression -> {
+                findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInType(expr.type, typeParamNames, source, fileName)
+            }
+            is SatisfiesExpression -> {
+                findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInType(expr.type, typeParamNames, source, fileName)
+            }
+            is PropertyAccessExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is ElementAccessExpression -> {
+                findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+                findTypeParamRefsInExpr(expr.argumentExpression, typeParamNames, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> findTypeParamRefsInExpr(prop.initializer, typeParamNames, source, fileName)
+                        is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let {
+                            findTypeParamRefsInExpr(it, typeParamNames, source, fileName)
+                        }
+                        is SpreadAssignment -> findTypeParamRefsInExpr(prop.expression, typeParamNames, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is PrefixUnaryExpression -> findTypeParamRefsInExpr(expr.operand, typeParamNames, source, fileName)
+            is PostfixUnaryExpression -> findTypeParamRefsInExpr(expr.operand, typeParamNames, source, fileName)
+            is NonNullExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is SpreadElement -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is DeleteExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is TypeOfExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is VoidExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
+            is AwaitExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
             else -> {} // literals, identifiers, etc.
         }
     }
