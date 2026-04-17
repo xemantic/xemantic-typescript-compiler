@@ -11,12 +11,15 @@ approach.
 ```
 Continue Phase 4 of the TypeScript compiler port.
 
-Before picking any work: read CLAUDE.md's "AI agent mission" and "Execution
-protocol" sections, then open PLAN-PHASE-4.md and read the "Known
-architectural blockers" and "Candidate-picking workflow" sections near the
-bottom (around line ~2990). These tell you which candidates are reachable
-with surgical fixes and which are multi-session investigations you should
-skip.
+Before picking any work:
+- read STATUS.md for the current test count
+- read CLAUDE.md's "AI agent mission" and "Execution protocol" sections
+- open PLAN-PHASE-4.md and read the "Known architectural blockers" and
+  "Candidate-picking workflow" sections near the bottom. These tell you
+  which candidates are reachable with surgical fixes and which are
+  multi-session investigations you should skip.
+- `PLAN-PHASE-4-HISTORY.md` holds archived session notes from completed
+  items. Only read it if you need to understand why a past fix was made.
 
 Your loop (per CLAUDE.md § Execution protocol):
 

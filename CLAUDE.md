@@ -10,6 +10,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Add an entry** when a developer flags an anti-pattern produced by AI — describe the anti-pattern and the preferred alternative.
 - **Do not** add codebase overviews, directory listings, or anything discoverable by reading the source.
 - Keep entries concise: one line per lesson, grouped under a heading if a theme emerges.
+- **Durable-invariant test** before adding a gotcha: "Would a future agent rediscover this in under 60 seconds via Grep + reading source?" If yes, it belongs in the git commit message, not here. Every entry costs tokens on every session — the bar for inclusion is **future agents will break things if they don't know this**. Per-fix narratives (test name, specific code path, fix story) go in PLAN-PHASE-4.md session notes instead.
 
 ## Known gotchas
 
@@ -250,7 +251,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 16: Fundamental Type System Features.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. ~8,140 / 10,078 tests passing (80.8%). Of ~1,936 remaining: ~1,059 zero diagnostics (anyType bottleneck + missing checks), remainder mixed diffs and JS emit. Phase 16 builds core type system features: contextual typing, structural comparison, overload resolution, control flow narrowing. See `PLAN-PHASE-4.md` § "Known architectural blockers" for recurring multi-test issues that won't yield to surgical fixes.
+**Phase 16: Fundamental Type System Features.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. Phase 16 builds core type system features: contextual typing, structural comparison, overload resolution, control flow narrowing. Live test count is in `STATUS.md` (kept separate to avoid churn in this file). See `PLAN-PHASE-4.md` § "Known architectural blockers" for recurring multi-test issues that won't yield to surgical fixes.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
@@ -282,43 +283,9 @@ The original TypeScript compiler source is in `typescript-repo/src/compiler/` (i
 
 ## AI agent workflow
 
-Long multi-session conversations accumulate dead-end investigations and compacted summaries that dilute signal. Prefer **focused subagent tasks** over extending the main context indefinitely.
-
-### Subagent brief template
-
-A well-formed subagent brief for a fix in this codebase includes:
-
-1. **The failing test(s)**: exact test name(s) to run, e.g. `./gradlew jvmTest --tests '*.commentOnBinaryOperator1*'`
-2. **Expected vs actual diff**: paste the `--- expected / +++ actual` output so the agent sees the target immediately
-3. **The source file**: path in `typescript-repo/tests/cases/compiler/` so the agent can read the TypeScript input
-4. **The likely fix area**: name the file and function (e.g. "look at `emitBinaryExpression` in `Emitter.kt`")
-5. **Relevant CLAUDE.md gotchas**: copy any gotcha entries that apply to the area being changed
-6. **Regression guard**: "run the full suite (`./gradlew jvmTest 2>&1 | grep -a 'tests completed'`) before finishing and report the before/after count"
-
-### Parallelism and branch isolation
-
-Run parallel subagents in **separate branches** (use `isolation: "worktree"` in the Agent tool call). Limit to **max 2 parallel subagents** to keep resource usage and merge conflicts manageable — nearly every fix touches `Parser.kt`, `Transformer.kt`, or `Emitter.kt`.
-
-Dispatch in **waves** to keep merge conflicts manageable:
-- Pick fixes that touch *different* primary files for a wave
-- Merge + resolve conflicts between waves before starting the next
-- Fixes that touch the same file heavily (e.g. two Transformer changes) should be sequential
-
-### Merge workflow (between waves)
-
-After all subagents in a wave complete, merge their worktree branches sequentially into `main`:
-
-```bash
-git fetch
-git merge <worktree-branch> --no-ff -m "merge: task <X> fix"
-# Conflicts are typically in different functions of the same file — resolve manually
-git push
-```
-
-### Context discipline
-
-- Keep this file and `PLAN-PHASE-4.md` up to date after each session so the next agent/developer starts with accurate state
-- `PLAN-PHASE-4.md` contains the type checker implementation queue; `PLAN-PHASE-3.md` has deferred Phase 3 items
+- Keep this file and `PLAN-PHASE-4.md` up to date after each session so the next agent/developer starts with accurate state.
+- `PLAN-PHASE-4.md` contains the live queue + blockers + workflow; `PLAN-PHASE-4-HISTORY.md` has archived session notes; `PLAN-PHASE-3.md` has deferred Phase 3 items.
+- For subagent-based parallel work (rarely needed — most surgical fixes are faster done in-line), see `docs/subagent-workflow.md`.
 
 ## How to run tests
 
