@@ -3462,7 +3462,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     nextToken()
                     parseExpected(OpenParen)
                     val arg = parseAssignmentExpression()
-                    parseOptional(Comma) // allow trailing comma: import(spec,)
+                    if (token == Comma) {
+                        val commaPos = getPos()
+                        nextToken()
+                        // Trailing comma `import(spec,)` — TS1009. Second-arg (options) is
+                        // TypeScript 5.3+; the trailing-comma-before-`)` form is still an error.
+                        if (token == CloseParen) {
+                            reportError("Trailing comma not allowed.", code = 1009,
+                                overrideStart = commaPos, overrideLength = 1)
+                        }
+                    }
                     parseExpected(CloseParen)
                     CallExpression(
                         expression = Identifier("import", pos = pos),
