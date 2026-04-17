@@ -3499,10 +3499,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 val pos = getPos(); nextToken()
                 val superExpr = Identifier(text = "super", pos = pos, end = getEnd())
                 // TypeScript requires super to be followed by `.`, `[`, `(`, or `<` (type args).
-                // If the next token is none of these, insert a missing property name
-                // for TypeScript-compatible error recovery (emits `super.` in output).
+                // If the next token is none of these, emit TS1034 at the position of the
+                // expected follower (1-char span) and insert a missing property name for
+                // TypeScript-compatible error recovery (emits `super.`).
                 if (token != Dot && token != OpenBracket && token != OpenParen && token != LessThan) {
-                    val missingName = Identifier(text = "", pos = getPos(), end = getPos())
+                    val nextPos = getPos()
+                    reportError(
+                        "'super' must be followed by an argument list or member access.",
+                        code = 1034,
+                        overrideStart = nextPos,
+                        overrideLength = 1,
+                    )
+                    val missingName = Identifier(text = "", pos = nextPos, end = nextPos)
                     PropertyAccessExpression(expression = superExpr, name = missingName, pos = pos, end = getPos())
                 } else {
                     superExpr
