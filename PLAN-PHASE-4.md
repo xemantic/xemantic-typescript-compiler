@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4be, +1 test: 8143→8144):** TS2339 FP guard for generic references whose target has base types:
+  - `c: IC<number>; var x = c.foo;` where `interface IC<T> extends IA<T>, IB<T>` — the `.foo` property is inherited from IA<T> and should resolve via `resolveReferenceMembers` instantiating base-interface members. Our implementation has ordering/cache quirks that leave one base's inherited members missing from `IC<number>.properties`, producing a spurious TS2339 for `foo` (bar, declared in the other base, still resolves — the FP was asymmetric across the two inherited methods).
+  - Existing guard at `checkMemberAccessMissing` skips TS2339 when the receiver type is a `Type.Interface` whose `baseTypes` is non-empty. Extended the same guard to cover `Type.Reference` whose `target.baseTypes` is non-empty — mirrors the Interface case and addresses the same "inherited-via-multi-base" gap for generic instantiations.
+  - → +1 test: `genericTypeWithMultipleBases3`. Zero regressions.
+
   **Session 2026-04-17 (16.4bd, +1 test: 8142→8143):** TS1005 "';' expected." when `:` follows an expression statement without a line break:
   - Source `this.foo: any;` inside a constructor body (mis-typed class-field): our parser previously parsed `this.foo` as an expression statement, called `parseSemicolon` (which silently accepted when ASI didn't apply), then treated `:` as a statement start and emitted TS1109 "Expression expected." at the `:` position. TypeScript emits TS1005 "';' expected." instead.
   - Fix: in `parseSemicolon`, when the current token is `Colon` and there is no preceding line break, emit TS1005 with a 1-char squiggle at the colon position. Narrow to `:` only — broadening to "any non-ASI token" regresses 8+ tests in error-recovery paths (tried first, reverted).

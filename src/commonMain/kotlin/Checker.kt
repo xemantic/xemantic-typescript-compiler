@@ -33603,8 +33603,17 @@ interface DataView {
         // Resolve members
         resolveStructuredTypeMembers(objectType)
         if (objectType.properties.isNullOrEmpty()) return
-        // Skip if class/interface has base types — incomplete inheritance resolution causes FPs
+        // Skip if class/interface has base types — incomplete inheritance resolution causes FPs.
+        // Also applies to generic references whose target is an Interface with base types
+        // (e.g. `c: IC<number>` where IC extends IA<T>, IB<T> — inherited members on the
+        // Reference are populated via instantiation, but cache misses or ordering quirks
+        // can leave one base's members unresolved, producing TS2339 for properties that
+        // structurally exist).
         if (objectType is Type.Interface && objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) return
+        if (objectType is Type.Reference) {
+            val tgt = objectType.target
+            if (tgt.baseTypes != null && tgt.baseTypes!!.isNotEmpty()) return
+        }
         // Skip well-known runtime properties
         if (propName in RUNTIME_PROPERTIES) return
         // Check if property exists in type members
