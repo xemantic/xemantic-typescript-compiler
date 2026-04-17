@@ -2614,19 +2614,64 @@ the live plan focused. Quick reference:
 
 ---
 
-### Known architectural blockers (as of 2026-04-17, 8140 passing)
+### Known architectural blockers (as of 2026-04-17, 8145 passing)
 
 These blockers recur across multiple "close-to-passing" tests and cannot be fixed with surgical changes in a single session. Any agent attempting these should plan for a multi-session investigation with regression budget.
 
-- **Cross-file global scope conflation** — `Checker.init` does `mergeSymbolTable(globals, result.locals)` for every binderResult, merging module-file exports into the shared `globals` map alongside script-file locals and lib. In module files, identifiers from OTHER module files that weren't imported appear in `scope.has(name)` as if they were globals. Blocks fine-grained module-visibility diagnostics: TS2301 vs TS2663 distinction (e.g. `classMemberInitializerWithLamdaScoping4`), default-import-from-export-equals visibility, etc. Fix requires splitting "true globals" (script locals + lib + KNOWN_GLOBALS) from per-file module locals and reconstructing `fileScope` to only include imports the current file actually declares. Broad regression risk — touches every identifier-resolution check.
+**Priority ordering** — ranked by (expected tests unblocked) ÷ (regression risk / refactor scope). Higher rank = better cost/benefit. Work 1 → 5 only when an agent has the full-session budget to see one through; otherwise keep grinding surgical fixes in the meantime.
 
-- **Structural comparison of generic type references** — `objectTypeRelatedTo` passes trivially for many generic-reference pairs (e.g. `Bar<string>` vs `Bar<number>`) because member types resolve to `errorType` when the type parameter isn't in scope at resolution time. Array has a special-case in `structuredTypeRelatedTo` (direct element-type comparison); other generics fall through to full structural comparison which passes incorrectly. Full fix requires either variance annotations or consistent per-class type-parameter scope during symbol-type resolution (setting `currentTypeParamScope` everywhere `getTypeOfSymbol` fires on a class/interface member). Attempt 16.4j showed +5 regressions from partial scope push. Blocks ~30+ TS2322 tests involving generic assignment.
+---
 
-- **TS7006 over-suppression for callback parameters** — We suppress TS7006 for any `contextuallyTyped=true` param (any callback context). TypeScript only suppresses when the contextual type actually provides param types (bidirectional inference succeeds). Fixing properly needs real contextual typing that distinguishes "context present but param-less" from "context provides the param type." Blocks several TS7006 tests with nuanced expectations (intraBindingPattern, subtypeReduction, signatureCombiningRestParameters).
+#### 1. Structural comparison of generic type references — HIGH yield, MEDIUM risk
 
-- **JSDoc type annotations** (`@type {T}`, `@this {T}`, `@typedef`, `@param {T}`) — We bind JSDoc `@typedef` nominally but don't honor `@type` assertions or `@this` parameter types. Blocks `.js` file tests that rely on JSDoc for type info (TS2352 in `@type` casts, TS2683 suppression when `@this` is present, TS2741 with `@typedef` class shapes).
+`objectTypeRelatedTo` passes trivially for many generic-reference pairs (e.g. `Bar<string>` vs `Bar<number>`) because member types resolve to `errorType` when the type parameter isn't in scope at resolution time. Array has a special-case in `structuredTypeRelatedTo` (direct element-type comparison); other generics fall through to full structural comparison which passes incorrectly.
 
-- **Parser error-recovery asymmetry** — Several tests expect specific token-consumption-then-continue recovery (e.g. `declare class foo();` → class with empty body + phantom `()` statement + next function). Our recovery consumes tokens differently, producing TS1183 where TS emits TS1109+TS1005. Fixing each case individually is tractable but regression-prone. Not a single-session item.
+Full fix requires either variance annotations or consistent per-class type-parameter scope during symbol-type resolution (setting `currentTypeParamScope` everywhere `getTypeOfSymbol` fires on a class/interface member). Attempt 16.4j showed +5 regressions from a partial scope push.
+
+- **Yield**: ~30+ TS2322 tests involving generic assignment.
+- **Scope**: contained to the checker (no binder/parser changes).
+- **Why first**: highest test-unblock count of any blocker; infrastructure stays in checker; the regression burst from 16.4j is understood (partial scope push without variance-respecting ref comparison).
+- **Retry plan**: (a) generalize the Array ref-element comparison in `structuredTypeRelatedTo` to all `Type.Reference` pairs with matching target + resolved type arguments (invariant comparison of args by default, widen to covariant for known-readonly shapes); (b) push `currentTypeParamScope` in every `getTypeOfSymbol` call that fires on a class/interface member (not just at declaration-site resolution); (c) add a cycle-break guard for self-referential generics like `List<T> { next: List<T> }` before expanding the engine.
+
+#### 2. JSDoc type annotations — LOW yield, LOW risk
+
+`@type {T}`, `@this {T}`, `@typedef`, `@param {T}` — we bind `@typedef` nominally but don't honor `@type` assertions or `@this` parameter types.
+
+- **Yield**: handful of `.js` file tests (TS2352 in `@type` casts, TS2683 suppression when `@this` is present, TS2741 with `@typedef` class shapes).
+- **Scope**: contained to JSDoc parsing (scanner comment handling) and a new JSDoc-to-TypeNode bridge in the checker. Does not touch non-JS checking paths.
+- **Why second**: smallest blast radius of any blocker; can proceed in parallel with #1 because it only affects `.js`/`.jsx` files.
+
+#### 3. TS7006 over-suppression for callback parameters — LOW yield, MEDIUM risk
+
+We suppress TS7006 for any `contextuallyTyped=true` param (any callback context). TypeScript only suppresses when the contextual type actually provides param types (bidirectional inference succeeds).
+
+Fixing properly needs real contextual typing that distinguishes "context present but param-less" (should still fire TS7006) from "context provides the param type" (correctly suppressed). Blocks several TS7006 tests with nuanced expectations (`intraBindingPattern`, `subtypeReduction`, `signatureCombiningRestParameters`).
+
+- **Yield**: ~3-5 tests. Small.
+- **Scope**: requires bidirectional inference infrastructure — new plumbing in contextual typing.
+- **Why third**: needs genuine infrastructure but yield is small; lower priority than #1/#2 unless the inference work is already happening for another reason.
+
+#### 4. Parser error-recovery asymmetry — LOW yield, HIGH risk per attempt
+
+Several tests expect specific token-consumption-then-continue recovery (e.g. `declare class foo();` → class with empty body + phantom `()` statement + next function). Our recovery consumes tokens differently, producing TS1183 where TS emits TS1109+TS1005.
+
+- **Yield**: 1-2 tests per case, case-by-case.
+- **Scope**: per-case parser edits.
+- **Why fourth**: each case is tractable but regression-prone (touches error-recovery paths used across many tests). No multiplier — best handled opportunistically when a specific case aligns with a surgical session's budget.
+
+#### 5. Cross-file global scope conflation — MEDIUM yield, HIGHEST risk
+
+`Checker.init` does `mergeSymbolTable(globals, result.locals)` for every binderResult, merging module-file exports into the shared `globals` map alongside script-file locals and lib. In module files, identifiers from OTHER module files that weren't imported appear in `scope.has(name)` as if they were globals.
+
+Blocks fine-grained module-visibility diagnostics: TS2301 vs TS2663 distinction (e.g. `classMemberInitializerWithLamdaScoping4`), default-import-from-export-equals visibility, etc.
+
+- **Yield**: unclear count — many tests have cross-file global leakage as one of several issues.
+- **Scope**: splitting "true globals" (script locals + lib + `KNOWN_GLOBALS`) from per-file module locals; reconstructing `fileScope` to only include imports the current file actually declares. Touches **every identifier-resolution check** in the checker.
+- **Why last**: broadest regression risk of any blocker. Defer until #1 and #2 have cleared the "close-to-passing" pool — at that point the remaining failures pointing to this blocker will be clearer, and the refactor can be done against a smaller, better-characterized set of expected flips.
+
+---
+
+**Parallelism note**: #1, #2, and #4 can be worked independently in parallel (different agents / different sessions). #3 and #5 are sequential — #3 depends on enough contextual-typing infrastructure that #1's checker work should land first; #5 is intentionally last.
 
 ### Candidate-picking workflow for surgical fixes
 
