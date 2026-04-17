@@ -11637,7 +11637,8 @@ class Checker(
                 if (name !is StringLiteralNode) continue
                 val moduleName = name.text
 
-                val resolvesToFile = resolveModuleSpecifier(moduleName) != null
+                val resolvesToFile = resolveModuleSpecifier(moduleName) != null ||
+                    resolvesAsJsOrJsx(moduleName)
                 val definedElsewhere = moduleName in moduleDefinitions
 
                 if (!resolvesToFile && !definedElsewhere) {
@@ -11655,6 +11656,39 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * Scoped helper for [checkAmbientModuleAugmentations]: checks whether [specifier] resolves to
+     * a `.js`/`.jsx`/`.mjs`/`.cjs` sibling file under `allowJs`/`checkJs`. The main
+     * [resolveModuleSpecifier] intentionally does not try JS extensions (they would change the
+     * behavior of TS2307 and cross-file type lookups elsewhere in non-desirable ways).
+     */
+    private fun resolvesAsJsOrJsx(specifier: String): Boolean {
+        if (!options.allowJs && !options.checkJs) return false
+        val baseName = specifier.removePrefix("./").removePrefix("../")
+        val isRelative = specifier.startsWith("./") || specifier.startsWith("../")
+        val candidates = mutableListOf(
+            "$baseName.js", "$baseName.jsx",
+            "./$baseName.js", "./$baseName.jsx",
+        )
+        if (isRelative) {
+            candidates.add("$baseName.mjs")
+            candidates.add("$baseName.cjs")
+            candidates.add("./$baseName.mjs")
+            candidates.add("./$baseName.cjs")
+        }
+        for (candidate in candidates) {
+            if (candidate in fileResults) return true
+        }
+        // Last-resort base match for flat-directory absolute-path layouts (@Filename: /test.js)
+        for (fileName in fileResults.keys) {
+            val fileBase = fileName.removePrefix("./")
+                .removeSuffix(".js").removeSuffix(".jsx").removeSuffix(".mjs").removeSuffix(".cjs")
+            if (fileBase == baseName || fileBase == "/$baseName" ||
+                (!isRelative && fileBase.endsWith("/$baseName"))) return true
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
