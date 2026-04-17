@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cs, +1 test net: 8204→8205):** TS6234 "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?" for `obj.prop()` where `prop` is a getter:
+  - In `checkSingleCallExpressionTypes`, after resolving `calleeType` to a non-callable type (`signatures.isEmpty()`), if the callee is a `PropertyAccessExpression`, look up the property symbol on the receiver's apparent type. If all of its declarations are `GetAccessor`/`SetAccessor` (with at least one getter), emit TS6234 squiggling the property name only.
+  - Display the apparent type of the return type for the chain elaboration: `number → "Number"`, `string → "String"`, `boolean → "Boolean"` — uses existing `getApparentType` to resolve primitive→wrapper.
+  - Squiggle: `name.pos` to `name.pos + name.text.length` (just the property identifier, not the call parens). Matches TypeScript's "(line, col, len 8 for 'property')".
+  - Conservative gate: only fires when the symbol's decls are exclusively GetAccessor/SetAccessor — won't trigger on regular methods/properties even if their type happens to resolve to a non-callable.
+  - → +2 newly passing accessor tests (es5 + es2015 variants of `accessorAccidentalCallDiagnostic_ts`), -1 unidentified regression elsewhere → +1 net.
+
   **Session 2026-04-17 (16.4cr, +1 test: 8203→8204):** TS2554 for `new S18(123)` where S18 has circular `extends` base:
   - `class S18<B,A,C> extends S18<A[], {...}, C[]> { }; (new S18(123))` expected TS2554 "Expected 0 arguments, but got 1." — the circular extends makes the inherited constructor unresolvable, so TypeScript treats the class as having an implicit 0-arg constructor.
   - `collectFuncDecls` previously skipped classes with heritage clauses entirely ("they inherit the base constructor's param count which we can't resolve"). Added a third branch: when `classHasCircularBase(stmt)` (reusing 16.4cq helper), register `FuncParamInfo(0, 0, hasRest = false, isOverloaded = false)` — treat as no-inheritance. This lets the existing TS2554 path emit on excess args.
@@ -2859,7 +2866,6 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `errorsOnImportedSymbol_ts`: `import Sammy = require("./mod")` where `mod` has `export = Sammy` (type-only interface) — need to flag `Sammy` as type-only across files.
 
 **Needs a new diagnostic / feature (non-blocker, but non-surgical):**
-- `accessorAccidentalCallDiagnostic_ts` → TS6234 ("This expression is not callable because it is a 'get' accessor"). Not implemented; needs call-site accessor detection + primary "not callable" (TS2349) elaboration.
 - `genericArrayAssignmentCompatErrors_ts` → TS2351 ("This expression is not constructable"). Not implemented.
 - `aliasUsageInGenericFunction_ts` → TS2352 ("Conversion of type X to Y may be a mistake…"). Not implemented (type-assertion compatibility check).
 - `argumentsObjectIterator02_ES5_ts` → TS2802 ("can only be iterated through when using `--downlevelIteration`"). Not implemented.

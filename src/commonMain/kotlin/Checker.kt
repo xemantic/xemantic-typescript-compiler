@@ -35368,7 +35368,14 @@ interface DataView {
         if (calleeType === anyType || calleeType === errorType) return
         // Get call signatures
         val signatures = getCallSignaturesOfType(calleeType)
-        if (signatures.isEmpty()) return
+        if (signatures.isEmpty()) {
+            // 16.4cs: TS6234 — calling a property whose only declarations are
+            // `get`/`set` accessors. The property resolves to its return type
+            // (e.g. `number`), which has no call signatures, so an attempted
+            // `obj.prop()` is a user error — they likely meant `obj.prop`.
+            checkTs6234GetAccessorCall(expr, calleeType, source, fileName)
+            return
+        }
         // 16.4: Instantiate signature when explicit type arguments are provided
         val typeArgs = expr.typeArguments
         if (typeArgs != null && typeArgs.isNotEmpty()) {
@@ -35405,6 +35412,52 @@ interface DataView {
             // Overload resolution: try each signature in order
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName)
         }
+    }
+
+    /**
+     * 16.4cs: TS6234 — emit when a call's callee is `recv.prop()` and `prop` is a
+     * `get` accessor (no callable companion). Squiggle on the property name; chain
+     * uses the apparent type's display name ("Number" for `number`, etc.).
+     */
+    private fun checkTs6234GetAccessorCall(
+        expr: CallExpression,
+        calleeType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        val callee = expr.expression as? PropertyAccessExpression ?: return
+        val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { return }
+        if (recvType === anyType || recvType === errorType) return
+        val apparent = getApparentType(recvType)
+        val prop = getPropertyOfType(apparent, callee.name.text) ?: return
+        val decls = prop.declarations
+        if (decls.isEmpty()) return
+        var hasGetter = false
+        for (d in decls) {
+            when (d) {
+                is GetAccessor -> hasGetter = true
+                is SetAccessor -> { /* getter+setter pair still qualifies */ }
+                else -> return
+            }
+        }
+        if (!hasGetter) return
+        val name = callee.name
+        val start = name.pos
+        val length = name.text.length
+        if (length <= 0) return
+        val displayType = typeToString(getApparentType(calleeType))
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
+            category = DiagnosticCategory.Error,
+            code = 6234,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            messageChain = listOf("  Type '$displayType' has no call signatures."),
+        ))
     }
 
     /**
