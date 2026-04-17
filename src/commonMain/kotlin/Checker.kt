@@ -15080,6 +15080,16 @@ interface DataView {
             val symbol = result.locals[name] ?: continue
             val info = getTypeParamInfoFromSymbol(symbol)
             if (info != null) return info
+            // 16.4: resolve import aliases to the underlying generic class/interface.
+            // `import a = require("./C")` where `C` is `class C<T>` should report TS2314
+            // as `'C<T>' requires 1 type argument(s)` (baseline uses the resolved name).
+            if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+                val resolved = try { resolveAlias(symbol) } catch (_: StackOverflowError) { null }
+                if (resolved != null && resolved !== symbol) {
+                    val aliasInfo = getTypeParamInfoFromSymbol(resolved)
+                    if (aliasInfo != null) return aliasInfo
+                }
+            }
         }
         // Also check namespace exports (for types declared inside namespaces)
         for (result in binderResults) {
