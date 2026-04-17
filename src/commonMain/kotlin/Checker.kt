@@ -36721,19 +36721,19 @@ interface DataView {
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
             try {
-                checkForInLhsInStatements(result.sourceFile.statements, result.locals, source, fileName)
+                checkForInLhsInStatements(result.sourceFile.statements, result.locals, source, fileName, inAmbient = false)
             } catch (_: StackOverflowError) {}
         }
     }
 
     private fun checkForInLhsInStatements(
-        stmts: List<Statement>, locals: SymbolTable, source: String, fileName: String,
+        stmts: List<Statement>, locals: SymbolTable, source: String, fileName: String, inAmbient: Boolean,
     ) {
-        for (stmt in stmts) checkForInLhsInStmt(stmt, locals, source, fileName)
+        for (stmt in stmts) checkForInLhsInStmt(stmt, locals, source, fileName, inAmbient)
     }
 
     private fun checkForInLhsInStmt(
-        stmt: Statement, locals: SymbolTable, source: String, fileName: String,
+        stmt: Statement, locals: SymbolTable, source: String, fileName: String, inAmbient: Boolean,
     ) {
         when (stmt) {
             is ForInStatement -> {
@@ -36760,37 +36760,82 @@ interface DataView {
                         }
                     }
                 }
-                checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+                // TS2407: RHS must be 'any', an object type, or a type parameter.
+                // Skip in ambient contexts (TypeScript only emits TS1036 for those).
+                val rhsDisplay = if (!inAmbient) simpleRhsNonObjectDisplay(stmt.expression) else null
+                if (rhsDisplay != null) {
+                    val rhsStart = stmt.expression.pos
+                    val rhsEnd = expressionTrueEnd(stmt.expression)
+                    val rhsLen = (rhsEnd - rhsStart).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, rhsStart)
+                    diagnostics.add(Diagnostic(
+                        message = "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type '$rhsDisplay'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2407,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = rhsStart,
+                        length = rhsLen,
+                    ))
+                }
+                checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
             }
-            is Block -> checkForInLhsInStatements(stmt.statements, locals, source, fileName)
+            is Block -> checkForInLhsInStatements(stmt.statements, locals, source, fileName, inAmbient)
             is IfStatement -> {
-                checkForInLhsInStmt(stmt.thenStatement, locals, source, fileName)
-                stmt.elseStatement?.let { checkForInLhsInStmt(it, locals, source, fileName) }
+                checkForInLhsInStmt(stmt.thenStatement, locals, source, fileName, inAmbient)
+                stmt.elseStatement?.let { checkForInLhsInStmt(it, locals, source, fileName, inAmbient) }
             }
-            is ForStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
-            is ForOfStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
-            is WhileStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
-            is DoStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is ForStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
+            is ForOfStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
+            is WhileStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
+            is DoStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
             is SwitchStatement -> {
                 for (clause in stmt.caseBlock) {
                     when (clause) {
-                        is CaseClause -> checkForInLhsInStatements(clause.statements, locals, source, fileName)
-                        is DefaultClause -> checkForInLhsInStatements(clause.statements, locals, source, fileName)
+                        is CaseClause -> checkForInLhsInStatements(clause.statements, locals, source, fileName, inAmbient)
+                        is DefaultClause -> checkForInLhsInStatements(clause.statements, locals, source, fileName, inAmbient)
                         else -> {}
                     }
                 }
             }
             is TryStatement -> {
-                checkForInLhsInStatements(stmt.tryBlock.statements, locals, source, fileName)
-                stmt.catchClause?.block?.let { checkForInLhsInStatements(it.statements, locals, source, fileName) }
-                stmt.finallyBlock?.let { checkForInLhsInStatements(it.statements, locals, source, fileName) }
+                checkForInLhsInStatements(stmt.tryBlock.statements, locals, source, fileName, inAmbient)
+                stmt.catchClause?.block?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+                stmt.finallyBlock?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
             }
-            is FunctionDeclaration -> stmt.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName) }
-            is LabeledStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+            is LabeledStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                checkForInLhsInStatements(it.statements, locals, source, fileName)
+                val ambient = inAmbient || ModifierFlag.Declare in stmt.modifiers
+                checkForInLhsInStatements(it.statements, locals, source, fileName, ambient)
             }
             else -> {}
+        }
+    }
+
+    /**
+     * If the RHS expression of a for-in is clearly a non-object, non-any value (number literal,
+     * string literal, boolean, null, undefined), return its display text for TS2407. Otherwise
+     * return null — conservative: unknown expressions are assumed valid.
+     */
+    private fun simpleRhsNonObjectDisplay(expr: Expression): String? {
+        return when (expr) {
+            is NumericLiteralNode -> expr.text
+            is BigIntLiteralNode -> expr.text
+            is StringLiteralNode -> "\"${expr.text}\""
+            is Identifier -> when (expr.text) {
+                "true", "false", "null", "undefined" -> expr.text
+                else -> null
+            }
+            is PrefixUnaryExpression -> {
+                // `-1` is still a numeric literal form
+                if (expr.operator == SyntaxKind.Minus || expr.operator == SyntaxKind.Plus) {
+                    val inner = simpleRhsNonObjectDisplay(expr.operand) ?: return null
+                    (if (expr.operator == SyntaxKind.Minus) "-" else "") + inner
+                } else null
+            }
+            else -> null
         }
     }
 
