@@ -31602,8 +31602,20 @@ interface DataView {
                 val propSources = mutableMapOf<String, MutableList<BaseProperty>>()
 
                 for (typeExpr in baseTypeExprs) {
-                    val baseName = (typeExpr.expression as? Identifier)?.text ?: continue
-                    val baseSymbol = globals[baseName] ?: continue
+                    // 16.4cu: Resolve both bare Identifier (`extends Mover`) and qualified
+                    // PropertyAccessExpression (`extends NS.Mover`) base types. For qualified,
+                    // the base name displayed in the diagnostic is the rightmost segment.
+                    val (baseName, baseSymbol) = when (val be = typeExpr.expression) {
+                        is Identifier -> {
+                            val sym = globals[be.text] ?: currentFileLocals?.get(be.text) ?: continue
+                            be.text to sym
+                        }
+                        is PropertyAccessExpression -> {
+                            val sym = resolvePropertyAccessToSymbol(be) ?: continue
+                            be.name.text to sym
+                        }
+                        else -> continue
+                    }
                     // Get members from all declarations (class or interface)
                     for (decl in baseSymbol.declarations) {
                         val members: List<Any> = when (decl) {
