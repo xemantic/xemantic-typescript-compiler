@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ai, +1 test: 8114→8115):** TS2339 fires on anonymous-object-typed variables:
+  - `checkMemberAccessMissing` (non-this branch): the gate `if (typeSym == null || typeSym.flags.hasAny(SymbolFlags.Class)) return` skipped all anonymous-object types. Inverted: only skip when the type's symbol IS a class. Anonymous types (typeSym == null) — e.g. `declare var x: { a: string }` — are now checkable.
+  - Rationale for the gate: class-typed variables may be narrowed via `instanceof`, so we historically skip them. But anonymous object types have fully-known members and never benefit from narrowing, so they're safe to check.
+  - → +1 test (collateral; primary target `errorMessageOnObjectLiteralType_ts` still fails due to unrelated TS2728 related-info position issue for lib-declared symbols). Zero regressions.
+
   **Session 2026-04-17 (16.4ah, +1 test: 8113→8114):** TS7033 for bodyless get accessor without return type annotation:
   - New `checkAbstractAccessorReturnTypes` pass, gated on `noImplicitAny || strict`. Walks class bodies; for any `GetAccessor` whose `body == null` and `type == null` (abstract/interface form), emits TS7033 "Property 'X' implicitly has type 'any', because its get accessor lacks a return type annotation." at the accessor's name identifier.
   - Conservative: does NOT fire for getters with bodies (would need body return-type inference).
