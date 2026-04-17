@@ -34000,9 +34000,15 @@ interface DataView {
                 if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
                     val typeSym = exprType.symbol
                     if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
-                        // TS2576: instance-of-class access to a static-only member.
-                        if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName)) return
-                        return
+                        // Instance-side class type (Type.Interface) — the narrowing concern
+                        // applies: the variable may be narrowed by `instanceof`, so bail.
+                        // Constructor-side `typeof K` (Type.Object with Class symbol) carries
+                        // the static members as properties and falls through to normal
+                        // property-missing checks (TS2339) below.
+                        if (exprType is Type.Interface) {
+                            if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return
+                            return
+                        }
                     }
                 }
                 exprType
@@ -34017,11 +34023,14 @@ interface DataView {
                     getApparentType(rawType)
                 } else rawType
                 if (exprType !is Type.Object) return
-                // For local variables, skip class-typed (may be narrowed)
+                // For local variables, skip class-typed (may be narrowed) — same
+                // instance-side-only gate as the globals branch above.
                 val typeSym = exprType.symbol
                 if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
-                    if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName)) return
-                    return
+                    if (exprType is Type.Interface) {
+                        if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return
+                        return
+                    }
                 }
                 // Skip malformed types (e.g., unresolved mapped types with empty property names)
                 resolveStructuredTypeMembers(exprType)
@@ -34035,7 +34044,29 @@ interface DataView {
         if (objectType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return
         // Resolve members
         resolveStructuredTypeMembers(objectType)
-        if (objectType.properties.isNullOrEmpty()) return
+        if (objectType.properties.isNullOrEmpty()) {
+            // Constructor-side class receiver (typeof K) may have no cached properties (the
+            // binder may not have populated exports), but we can still check the class
+            // declaration for the static-member presence and emit a precise TS2339 when
+            // the property isn't a static of the class.
+            val ctorClassSym = objectType.symbol
+            if (ctorClassSym != null && ctorClassSym.flags.hasAny(SymbolFlags.Class)
+                && objectType !is Type.Interface) {
+                val classDecl = ctorClassSym.declarations.firstOrNull() as? ClassDeclaration
+                if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
+                    if (isStaticMemberOfClass(classDecl, propName)) return
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'typeof ${ctorClassSym.name}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
+            }
+            return
+        }
         // Skip if class/interface has base types — incomplete inheritance resolution causes FPs.
         // Also applies to generic references whose target is an Interface with base types
         // (e.g. `c: IC<number>` where IC extends IA<T>, IB<T> — inherited members on the
@@ -34334,13 +34365,23 @@ interface DataView {
     }
 
     /** TS2576 when `instance.X` / `instance["X"]` accesses a STATIC-only member of the class.
-     *  Returns true if emitted (caller should return early). */
+     *  Returns true if emitted (caller should return early).
+     *
+     *  Only fires for INSTANCE-side access: skip when the receiver type already carries the
+     *  property (e.g. `const k2: typeof K; k2.bar` — k2's type is the constructor side, so
+     *  `bar` resolves there and `k2.bar` is legitimate). */
     private fun tryEmitStaticAccessTs2576(
         typeSym: Symbol, propName: String, diagStart: Int, diagLength: Int,
         suggestionKey: String, source: String, fileName: String,
+        receiverType: Type? = null,
     ): Boolean {
         if (propName.isEmpty()) return false
         if (propName in RUNTIME_PROPERTIES) return false
+        // Only fire for INSTANCE-side access (Type.Interface). Constructor-side receivers
+        // (`typeof C`, Type.Object built by `getTypeOfSymbolForTypeQuery`) carry static
+        // members as actual properties and should fall through to normal TS2339 checking.
+        // NOTE: Type.Interface extends Type.Object so `is Type.Object` alone matches both.
+        if (receiverType != null && receiverType !is Type.Interface && receiverType is Type.Object) return false
         val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return false
         if (!isStaticMemberOfClass(classDecl, propName)) return false
         if (hasInstanceMemberNamed(classDecl, propName)) return false
