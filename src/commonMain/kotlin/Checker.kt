@@ -21449,41 +21449,7 @@ interface DataView {
                     }
                 }
                 is ClassDeclaration -> {
-                    for (m in stmt.members) {
-                        if (m is PropertyDeclaration && m.initializer != null) {
-                            // Emit TS1039 when the class is ambient OR the property itself is `declare`.
-                            val memberAmbient = ambient || ModifierFlag.Declare in m.modifiers
-                            if (memberAmbient) {
-                                val init = m.initializer!!
-                                val start = init.pos
-                                val length = (init.end - 1 - start).coerceAtLeast(1)
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "Initializers are not allowed in ambient contexts.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 1039,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                ))
-                            }
-                        }
-                        // TS1031: `export` modifier is not allowed on class members.
-                        val exportStart = getModifierKeywordStart(m, "export", source) ?: continue
-                        val (line, character) = getLineAndCharacterOfPosition(source, exportStart)
-                        diagnostics.add(Diagnostic(
-                            message = "'export' modifier cannot appear on class elements of this kind.",
-                            category = DiagnosticCategory.Error,
-                            code = 1031,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = exportStart,
-                            length = 6, // "export".length
-                        ))
-                    }
+                    checkClassMemberModifiersForAmbient(stmt.members, ambient, source, fileName)
                 }
                 is ModuleDeclaration -> {
                     (stmt.body as? ModuleBlock)?.let {
@@ -21494,6 +21460,71 @@ interface DataView {
                 is FunctionDeclaration -> stmt.body?.let { checkAmbientInitInStatements(it.statements, source, fileName, false) }
                 else -> {}
             }
+            // Also walk VariableStatement initializers for ClassExpressions (not ambient).
+            if (stmt is VariableStatement) {
+                for (d in stmt.declarationList.declarations) {
+                    val init = d.initializer ?: continue
+                    visitExprForClassExpression(init, ambient, source, fileName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Emit TS1039 and TS1031 on class members. Used for both ClassDeclaration and ClassExpression.
+     */
+    private fun checkClassMemberModifiersForAmbient(
+        members: List<ClassElement>, ambient: Boolean, source: String, fileName: String,
+    ) {
+        for (m in members) {
+            if (m is PropertyDeclaration && m.initializer != null) {
+                val memberAmbient = ambient || ModifierFlag.Declare in m.modifiers
+                if (memberAmbient) {
+                    val init = m.initializer!!
+                    val start = init.pos
+                    val length = (init.end - 1 - start).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Initializers are not allowed in ambient contexts.",
+                        category = DiagnosticCategory.Error,
+                        code = 1039,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            val exportStart = getModifierKeywordStart(m, "export", source) ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, exportStart)
+            diagnostics.add(Diagnostic(
+                message = "'export' modifier cannot appear on class elements of this kind.",
+                category = DiagnosticCategory.Error,
+                code = 1031,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = exportStart,
+                length = 6,
+            ))
+        }
+    }
+
+    /** Walk an expression looking for ClassExpressions (and recurse into their members). */
+    private fun visitExprForClassExpression(
+        expr: Expression, ambient: Boolean, source: String, fileName: String,
+    ) {
+        when (expr) {
+            is ClassExpression -> {
+                checkClassMemberModifiersForAmbient(expr.members, ambient, source, fileName)
+            }
+            is ParenthesizedExpression -> visitExprForClassExpression(expr.expression, ambient, source, fileName)
+            is BinaryExpression -> {
+                visitExprForClassExpression(expr.left, ambient, source, fileName)
+                visitExprForClassExpression(expr.right, ambient, source, fileName)
+            }
+            else -> {}
         }
     }
 

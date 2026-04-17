@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,106 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+30 tests, 1969 remaining).
+**Status (2026-04-17):** 8,107 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+31 tests, 1968 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4ab, +1 test: 8106→8107):** TS1031/TS1039 also for `ClassExpression` members:
+  - Extracted the class-member modifier check into `checkClassMemberModifiersForAmbient` so both `ClassDeclaration` and `ClassExpression` reuse the same logic.
+  - Added `visitExprForClassExpression` that walks `VariableStatement` initializers (recurses through `ParenthesizedExpression` and `BinaryExpression`) and invokes the shared check on any `ClassExpression` encountered. Covers patterns like `const a = class Cat { declare [x]= 1; export foo = 1; }`.
+  - → +1 test: `classExpressionPropertyModifiers_ts`. Zero regressions.
 
   **Session 2026-04-17 (16.4aa, +1 test: 8105→8106):** TS1031/TS1039 for class-member modifiers:
   - In `checkAmbientInitInStatements` ClassDeclaration branch: emit TS1039 "Initializers are not allowed in ambient contexts." when a `PropertyDeclaration` has an initializer AND either the class is ambient OR the property itself has `declare` modifier. Previously only checked class-level ambient.
