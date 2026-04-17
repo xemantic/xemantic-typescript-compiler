@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cm, +2 tests: 8191→8193):** TS2310 "Type 'X' recursively references itself as a base type" for interface extends cycles:
+  - `interface I5 extends I5 { ... }` (direct self-reference) and `interface i8 extends i9 { } interface i9 extends i8 { }` (mutual 2-cycle) previously emitted no diagnostic — we only had TS2506 for class extends cycles. TypeScript uses TS2310 (not TS2506) for interfaces.
+  - New `checkCircularInterfaceBases()` pass runs after `checkCircularBaseClasses`. Walks `InterfaceDeclaration` at each statement-block scope (top-level + inside `ModuleDeclaration` bodies), collects name → extends-base-names via identifier-only lookup (QualifiedName/PropertyAccess base exprs skipped), and runs DFS-reachability: emit TS2310 for each interface `N` where `N` is reachable from itself through the extends graph.
+  - Diagnostic position = name node (`decl.name.pos`, length = name text). Display name includes type parameters when present (`Foo2<T>` not `Foo2`) matching TypeScript's baseline format. Merged interface declarations (same name, multiple `interface X` blocks) emit one TS2310 per declaration.
+  - Narrow scope: handles name-level cycles only. Generic self-reference via default-type-arg chains (e.g. `class Foo extends NextType<Foo>` in `circularConstraintYieldsAppropriateError_ts`) is NOT handled — that requires full instantiation-depth tracking and has CRTP-pattern FP risk.
+  - → +2 tests: `recursiveInheritance_ts`, `recursiveInheritanceGeneric_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cl, +1 test: 8190→8191):** TS2347 "Untyped function calls may not accept type arguments":
   - `var nake; ... nake.fileSetSync<number, number, any>(folder)` — the callee is `any`, so explicit type args are not allowed. New `isImplicitAnyVarChain(expr)` helper walks any PropertyAccess chain to the root Identifier and returns true only when that name resolves to a `VariableDeclaration` with BOTH `type == null` AND `initializer == null` (definitively implicit-any). `checkSingleCallExpressionTypes` emits TS2347 at the full call-expression span (via `expressionTrueEnd`) when typeArguments is non-empty and the gate holds. Running BEFORE the existing `calleeType === anyType` early-return so the diagnostic actually fires for `any` callees.
   - Gate rationale: broader "calleeType === anyType" gating would regress heavily because our checker resolves many callees to `any` due to incomplete inference; the var-chain gate is narrow enough to catch the intended pattern without FP risk.
