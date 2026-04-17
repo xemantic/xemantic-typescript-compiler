@@ -50,3 +50,4 @@ bin/
 # Clone it with: ./gradlew cloneTypeScriptRepo
 /typescript-repo/
 .claude/worktrees/
+.claude/scheduled_tasks.lock
