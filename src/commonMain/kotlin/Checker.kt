@@ -39384,6 +39384,15 @@ interface DataView {
                 }
             }
             is ClassDeclaration -> {
+                // 16.4cx: `class C2 implements M` (M = namespace) → TS2709 at M.
+                // (`class C extends M` is a value position → TS2708, handled elsewhere.)
+                stmt.heritageClauses?.forEach { clause ->
+                    if (clause.token == SyntaxKind.ImplementsKeyword) {
+                        for (typeExpr in clause.types) {
+                            checkHeritageExprForNamespace(typeExpr.expression, source, fileName)
+                        }
+                    }
+                }
                 for (member in stmt.members) {
                     when (member) {
                         is PropertyDeclaration -> checkTypeRefForNamespace(member.type, source, fileName)
@@ -39392,6 +39401,16 @@ interface DataView {
                             checkTypeRefForNamespace(member.type, source, fileName)
                         }
                         else -> {}
+                    }
+                }
+            }
+            is InterfaceDeclaration -> {
+                // 16.4cx: `interface I extends M` (M = namespace) → TS2709 at M.
+                stmt.heritageClauses?.forEach { clause ->
+                    if (clause.token == SyntaxKind.ExtendsKeyword) {
+                        for (typeExpr in clause.types) {
+                            checkHeritageExprForNamespace(typeExpr.expression, source, fileName)
+                        }
                     }
                 }
             }
@@ -39439,6 +39458,29 @@ interface DataView {
     }
 
     private var currentCheckLocals: SymbolTable? = null
+
+    /**
+     * 16.4cx: Heritage-clause variant — emit TS2709 when an interface `extends X`
+     * or class `implements X` and `X` resolves to a namespace-only symbol.
+     */
+    private fun checkHeritageExprForNamespace(expr: Expression, source: String, fileName: String) {
+        if (expr !is Identifier) return
+        val name = expr.text
+        val symbol = currentCheckLocals?.get(name) ?: globals[name] ?: return
+        if (!symbol.flags.hasAny(SymbolFlags.Module)) return
+        if (symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Enum)) return
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot use namespace '$name' as a type.",
+            category = DiagnosticCategory.Error,
+            code = 2709,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = name.length,
+        ))
+    }
 
     private fun checkTypeRefForNamespace(typeNode: TypeNode?, source: String, fileName: String) {
         if (typeNode == null) return
