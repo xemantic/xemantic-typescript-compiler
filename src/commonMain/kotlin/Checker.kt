@@ -18518,11 +18518,41 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkConstAssignment() {
+        // Script files (no imports/exports) share a global scope — a `const x` in
+        // fileA.ts is visible to `x++` in fileB.ts. Collect top-level immutable
+        // bindings from all script files first, then seed each file's check with
+        // those shared names. Module files keep their own file-local scope.
+        val sharedConsts = mutableMapOf<String, Int>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                    for (decl in stmt.declarationList.declarations) {
+                        (decl.name as? Identifier)?.let { sharedConsts.putIfAbsent(it.text, 2588) }
+                    }
+                }
+                if (stmt is ClassDeclaration && stmt.name != null) {
+                    sharedConsts.putIfAbsent(stmt.name!!.text, 2629)
+                }
+                if (stmt is EnumDeclaration) {
+                    sharedConsts.putIfAbsent(stmt.name.text, 2628)
+                }
+                if (stmt is FunctionDeclaration && stmt.name != null) {
+                    sharedConsts.putIfAbsent(stmt.name!!.text, 2630)
+                }
+                if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+                    sharedConsts.putIfAbsent((stmt.name as Identifier).text, 2708)
+                }
+            }
+        }
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkConstAssignmentInStatements(result.sourceFile.statements, source, fileName, mutableMapOf())
+            val seed = if (isModuleFile(result.sourceFile.statements)) mutableMapOf() else sharedConsts.toMutableMap()
+            checkConstAssignmentInStatements(result.sourceFile.statements, source, fileName, seed)
         }
     }
 
