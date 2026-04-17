@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4ct, +5 tests: 8205→8210):** TS2749 "'X' refers to a value, but is being used as a type here. Did you mean 'typeof X'?" for `var X: X` self-referential annotations:
+  - In `checkIdentifierResolved`, when an in-scope name is referenced in type position and resolves to a value-only declaration (var/function/etc.), emit TS2749 instead of staying silent. Squiggle covers the type-name identifier (`name.length` chars from `node.pos`).
+  - Helper `isValueOnlyTypeRef`: returns true only when (a) name has no type meaning anywhere in the scope chain (`hasType` walks `typeNames` + `typeParamNames`), AND (b) name is NOT a `KNOWN_GLOBALS` interface, AND (c) the binder symbol (if any) carries `Value` flag without `Type|Module|Alias`. Falls back to `name in VALUE_ONLY_GLOBALS` when no binder symbol exists.
+  - Critical guard: `name in KNOWN_GLOBALS && name !in VALUE_ONLY_GLOBALS` short-circuits to "no TS2749". Lib.es5.d.ts identifiers like `Date`/`Error`/`Function`/`Promise`/`RegExp`/`Set`/`Map` etc. are declaration-merged interface+var pairs in TypeScript's lib but our `Binder.canMerge` doesn't unify Variable+Interface — when the var declaration arrives second, the interface symbol is overwritten and `globals[X]` carries only `Variable` flag. Without the `KNOWN_GLOBALS` guard, every legitimate `: Date`/`: Promise<T>` etc. would FP TS2749 (29-test regression seen in first iteration; dropped to zero with the guard).
+  - Added `NameScope.hasType(name)` helper that walks the chain checking `typeNames`/`typeParamNames`, mirroring `has` and `isTypeParam`.
+  - → +5 tests: `intrinsics_ts` (the target test) + 4 incidental wins from the new diagnostic firing where it should.
+
   **Session 2026-04-17 (16.4cs, +1 test net: 8204→8205):** TS6234 "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?" for `obj.prop()` where `prop` is a getter:
   - In `checkSingleCallExpressionTypes`, after resolving `calleeType` to a non-callable type (`signatures.isEmpty()`), if the callee is a `PropertyAccessExpression`, look up the property symbol on the receiver's apparent type. If all of its declarations are `GetAccessor`/`SetAccessor` (with at least one getter), emit TS6234 squiggling the property name only.
   - Display the apparent type of the return type for the chain elaboration: `number → "Number"`, `string → "String"`, `boolean → "Boolean"` — uses existing `getApparentType` to resolve primitive→wrapper.
