@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4co, +1 test: 8194→8195):** tsconfig.json `"extends"` chain (string and array forms):
+  - `// @Filename: /tsconfig.json` with `{"extends": ["./tsconfig1.json", "./tsconfig2.json"]}` previously applied ZERO options — our `applyTsconfigOptions` bailed on missing `"compilerOptions"` key. The test needed `noImplicitAny` (from tsconfig2) to enable TS7006 on `function f(x)`.
+  - New `collectExtendedTsconfigs(entry, fileEntries, visited)` helper walks the extends key BEFORE applying the main tsconfig. Supports both forms: string (`"extends": "./base"`) and array (`"extends": [...]`). Paths are resolved relative to the current tsconfig's directory via `resolveTsconfigPath` (handles `./`, `../`, and bare names; auto-appends `.json` if missing). Recursion handled with a `visited` set to avoid cycles. Non-relative specifiers (package-style) return the raw path and silently skip if no file entry matches.
+  - Application order: deepest-first, then the main tsconfig last — later entries override earlier keys, matching TypeScript's merge semantics. Directive-based `// @noImplicitAny: ...` still applied AFTER tsconfig chain (unchanged), so test directives continue to win.
+  - → +1 test: `configFileExtendsAsList`. Zero regressions.
+
   **Session 2026-04-17 (16.4cn, +1 test: 8193→8194):** TS2322 elaboration "Index signature for type 'string' is missing in type 'X'." for class→class assignment:
   - `class C1 { [i: string]: string; one: string }; class C2 { one: string }; declare var x: C1, a: C2; x = a;` expected TS2322 with the "Index signature... is missing" elaboration chain. Previously `objectTypeRelatedTo` returned true (C2 has `one: string` — matches C1.one), so no diagnostic fired at all for this assignment; only the C3 case (conflicting property types) emitted.
   - `objectTypeRelatedTo` now checks `target.stringIndexInfo != null && source.stringIndexInfo == null` AFTER the properties/signatures checks. When true AND the source is NOMINAL (Class or Interface via `source.symbol.flags`), it sets `lastMissingIndexSigKind = "string"` and returns false. Named-source gate avoids regressions from anonymous object literals, which have a different index-signature satisfaction rule (properties individually match the index type).
