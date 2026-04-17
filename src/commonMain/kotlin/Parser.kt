@@ -1436,7 +1436,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             reportError("Type parameter list cannot be empty.", code = 1098,
                 overrideStart = ltPos, overrideLength = gtEnd - ltPos)
         }
-        val heritage = parseHeritageClauses()
+        val heritage = parseHeritageClauses(isClass = true)
         val beforeOpenBrace = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseClassMembers()
@@ -1457,7 +1457,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         )
     }
 
-    private fun parseHeritageClauses(): List<HeritageClause>? {
+    private fun parseHeritageClauses(isClass: Boolean = false): List<HeritageClause>? {
         val clauses = mutableListOf<HeritageClause>()
         var hasImplements = false
         while (token == SyntaxKind.ExtendsKeyword || token == SyntaxKind.ImplementsKeyword) {
@@ -1470,7 +1470,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             nextToken()
             val types = mutableListOf<ExpressionWithTypeArguments>()
             do {
-                types.add(parseExpressionWithTypeArguments())
+                val typeStartPos = getPos()
+                val typeNode = parseExpressionWithTypeArguments()
+                // TS1174 "Classes can only extend a single class." — for class extending
+                // multiple comma-separated types (e.g. `class C extends A, B`). Only fires
+                // for classes (interfaces legitimately extend multiple). Position at each
+                // extra type after the first.
+                if (isClass && clauseToken == SyntaxKind.ExtendsKeyword && types.isNotEmpty()) {
+                    val typeEnd = scanner.getPrevTokenEnd()
+                    reportError("Classes can only extend a single class.", code = 1174,
+                        overrideStart = typeStartPos, overrideLength = typeEnd - typeStartPos)
+                }
+                types.add(typeNode)
                 val commaPos = getPos() // position of potential comma
                 if (!parseOptional(SyntaxKind.Comma)) break
                 // If comma is followed by `{` (class body), it's a trailing comma error.
@@ -4362,7 +4373,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             reportError("Type parameter list cannot be empty.", code = 1098,
                 overrideStart = ltPos, overrideLength = gtEnd - ltPos)
         }
-        val heritage = parseHeritageClauses()
+        val heritage = parseHeritageClauses(isClass = true)
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseClassMembers()
         parseExpected(SyntaxKind.CloseBrace)

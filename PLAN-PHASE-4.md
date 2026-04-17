@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bk, +1 test: 8149→8150):** TS1174 "Classes can only extend a single class." for comma-separated `extends` lists:
+  - `class C extends B1, B2 { ... }` — parser silently accepted the comma-separated list and produced a multi-type heritage clause. TypeScript emits TS1174 at each type after the first (position = type-start, length = type text).
+  - Added `isClass: Boolean = false` parameter to `parseHeritageClauses` (passed `true` from `parseClassDeclaration` and `parseClassExpression`). Inside the do-while loop over `types`, emit TS1174 only when `isClass && clauseToken == ExtendsKeyword && types.isNotEmpty()` (i.e., any type past the first in a class's `extends` clause). Interfaces are exempt because `interface I extends A, B` is legitimate.
+  - → +1 test: `classExtendsMultipleBaseClasses`. Zero regressions. `multipleInheritance` still fails because it additionally requires TS2425 (method-vs-property shape mismatch in override check) — separate item.
+
   **Session 2026-04-17 (16.4bj, +1 test: 8148→8149):** TS2322 at initializer position (+ TS6212 hint) when RHS is a callable whose return type would satisfy the target:
   - `let x: Dog = getRover;` where `getRover: () => Dog` — TypeScript emits TS2322 at the initializer `getRover` (not the variable name `x`) AND attaches related info `TS6212: Did you mean to call this expression?`. Our TS2322 was at `name.pos` with no related info.
   - Fix in `checkVarDeclAssignability`: added a special-case branch before the `missingProp` path. Fires only when (a) sourceType has call signatures, (b) target has neither call nor construct signatures (not a function/constructor type), (c) the init isn't itself a function literal, and (d) at least one call-signature's resolvedReturnType is assignable to the target (the "calling helps" guard). Emits TS2322 at the initializer position with length = `expressionTrueEnd(init) - init.pos`, plus a `Message`-severity TS6212 `relatedInformation` entry pointing to the same range.
