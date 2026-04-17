@@ -27271,7 +27271,8 @@ interface DataView {
                         ))
                     } else {
                         // TS2741: Property 'X' is missing in type 'Y' but required in type 'Z'.
-                        val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'."
+                        val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, targetType, displayTarget)
+                        val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'."
                         val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                         diagnostics.add(Diagnostic(
                             message = message,
@@ -27397,9 +27398,10 @@ interface DataView {
                             length = propName.text.length,
                         ))
                     } else {
+                        val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, targetType, displayTarget)
                         val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                         diagnostics.add(Diagnostic(
-                            message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                            message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
                             category = DiagnosticCategory.Error,
                             code = 2741,
                             fileName = fileName,
@@ -27630,9 +27632,10 @@ interface DataView {
                                         length = target.text.length,
                                     ))
                                 } else {
+                                    val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, tt, displayTarget)
                                     val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                                     diagnostics.add(Diagnostic(
-                                        message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$displayTarget'.",
+                                        message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
                                         category = DiagnosticCategory.Error,
                                         code = 2741,
                                         fileName = fileName,
@@ -28470,6 +28473,7 @@ interface DataView {
                         val propSymbol = Symbol(SymbolFlags.Property, name)
                         propSymbol.declarations.add(member)
                         propSymbol.valueDeclaration = member
+                        propSymbol.parent = symbol
                         members[name] = propSymbol
                     }
                     is MethodDeclaration -> {
@@ -28519,6 +28523,7 @@ interface DataView {
                         if (methodSymbol.valueDeclaration == null) {
                             methodSymbol.valueDeclaration = member
                         }
+                        if (methodSymbol.parent == null) methodSymbol.parent = symbol
                     }
                     is Constructor -> {
                         val returnType = type as Type
@@ -28538,6 +28543,7 @@ interface DataView {
                                 val propSymbol = Symbol(SymbolFlags.Property, paramName)
                                 propSymbol.declarations.add(param)
                                 propSymbol.valueDeclaration = param
+                                propSymbol.parent = symbol
                                 members[paramName] = propSymbol
                             }
                         }
@@ -28548,6 +28554,7 @@ interface DataView {
                             Symbol(SymbolFlags.Property, name).also {
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
+                                it.parent = symbol
                             }
                         }
                     }
@@ -28557,6 +28564,7 @@ interface DataView {
                             Symbol(SymbolFlags.Property, name).also {
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
+                                it.parent = symbol
                             }
                         }
                     }
@@ -36156,6 +36164,33 @@ interface DataView {
             length = length,
             messageChain = chain,
         ))
+    }
+
+    /**
+     * For TS2741 "required in type 'X'", when the missing property is inherited,
+     * TypeScript displays the DECLARING class/interface name (where the property
+     * was actually declared), not the annotation target type. E.g. `c2 = c` where
+     * `c2: C2 extends A` and `x` comes from A → "required in type 'A'", not 'C2'.
+     *
+     * Conservative: only override when the property symbol has a parent symbol
+     * whose name differs from the target type's symbol — indicating an inherited
+     * property. Keeps the annotation display for directly-declared properties.
+     */
+    private fun getDeclaringTypeDisplay(
+        propSymbol: Symbol?,
+        targetType: Type,
+        fallback: String,
+    ): String {
+        val parent = propSymbol?.parent ?: return fallback
+        val parentName = parent.name
+        if (parentName.isEmpty()) return fallback
+        val targetSym = when (targetType) {
+            is Type.Reference -> targetType.target.symbol
+            is Type.Object -> targetType.symbol
+            else -> null
+        } ?: return fallback
+        if (targetSym === parent) return fallback
+        return parentName
     }
 
     /**

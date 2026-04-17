@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ad, +1 test: 8108→8109):** TS2741 "required in type" uses declaring class for inherited properties:
+  - `resolveInterfaceMembers` now sets `propSymbol.parent = symbol` (the class/interface Symbol) on newly-created member Symbols — PropertyDeclaration, MethodDeclaration (when not inherited override), Constructor parameter properties, GetAccessor, SetAccessor. Inherited members already point at their base's Symbol so they naturally retain the declaring-class parent.
+  - New `getDeclaringTypeDisplay(propSymbol, targetType, fallback)` returns `propSymbol.parent.name` when the parent exists AND differs from the target type's symbol (inherited-property case). Otherwise returns the annotation-based `displayTarget`. Applied at all three TS2741 emission sites (var decl, property init, assignment expression).
+  - Target: `c2 = c` with `class C2 extends A` and `private x` on `A` — TypeScript displays "required in type 'A'" (the declaring class), not "required in type 'C2'" (the assignment target). Previously we displayed 'C2'.
+  - → +1 test: `classImplementsClass4_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ac, +1 test: 8107→8108):** TS1029 "'export' must precede 'default'" for bare `default` declaration:
   - Parser's `DefaultKeyword` top-level branch now emits TS1029 at the `default` keyword (length 7) BEFORE consuming it, then continues with the error-recovery parse of the following declaration.
   - Covers the decorated-class form (`@decorator \n default class {}`) which is the case expected to emit TS1029.
