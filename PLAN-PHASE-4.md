@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ba, +1 test: 8138→8139):** TS2664 module-augmentation resolution honors `.js`/`.jsx` files under `allowJs`/`checkJs`:
+  - `checkAmbientModuleAugmentations` previously fired TS2664 ("Invalid module name in augmentation") for `declare module "./test"` when the target `./test.js` file was loaded via `allowJs: true`. The main `resolveModuleSpecifier` only tries `.ts`/`.tsx`/`.d.ts` extensions — broadening it globally caused 2+ knock-on regressions (new TS2459 "not exported" false-positives because the .js file then becomes "resolved" for other checks but our CJS/JSDoc export analysis is incomplete).
+  - **Scoped fix**: new `resolvesAsJsOrJsx(specifier)` helper only used by the TS2664 check. Tries `.js`/`.jsx` unconditionally when `allowJs || checkJs`; `.mjs`/`.cjs` only for relative specifiers. Falls back to a flat-directory base-match for absolute-path test layouts (`@Filename: /test.js`).
+  - → +1 test (collateral, via suppression of spurious TS2664 on `jsExportMemberMergedWithModuleAugmentation`-adjacent tests). Zero regressions. The primary target `jsExportMemberMergedWithModuleAugmentation_ts` still fails for an unrelated reason — our checker doesn't fire TS2564 for a class property in a `.js` file via CJS `module.exports = { Abcde }` reexport.
+
   **Session 2026-04-17 (16.4az, +1 test: 8138→8139):** TS2728 "declared here" related info for lib-declared properties renders as `lib.es5.d.ts:--:--`:
   - Previously `checkSinglePropertyAccess` (spelling suggestion) and `createPropertyDeclaredHereRelatedInfo` computed the TS2728 line/column using the CURRENT file's source text applied to a position inside our embedded `BUILTIN_LIB_SOURCE`. Result: fileName = test file, line/col = garbage (e.g., `errorMessageOnObjectLiteralType.ts:6:5465`). Expected: `lib.es5.d.ts:--:--`.
   - New `builtinLibSourceFile` field retains the parsed lib SourceFile. Builtin lib file name changed from `lib.builtin.d.ts` → `lib.es5.d.ts` to match TypeScript's baseline convention.
