@@ -315,6 +315,8 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkAbstractAccessorReturnTypes()
         }
+        // 7b'''. TS2669: `declare global { ... }` nested inside a regular namespace.
+        checkInvalidGlobalAugmentations()
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
@@ -6636,6 +6638,71 @@ class Checker(
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
                 is Block -> checkAbstractAccessorInStatements(stmt.statements, source, fileName)
                 else -> {}
+            }
+        }
+    }
+
+    /**
+     * TS2669: Augmentations for the global scope can only be directly nested in
+     * external modules or ambient module declarations.
+     *
+     * Fires for `declare global { ... }` (or `global { ... }`) nested inside a
+     * regular namespace — i.e. a ModuleDeclaration with Identifier name, not
+     * `declare module "X"` (StringLiteralNode name).
+     */
+    private fun checkInvalidGlobalAugmentations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            checkGlobalAugNested(result.sourceFile.statements, source, fileName, insideRegularNamespace = false)
+        }
+    }
+
+    private fun checkGlobalAugNested(
+        stmts: List<Statement>, source: String, fileName: String,
+        insideRegularNamespace: Boolean,
+    ) {
+        for (stmt in stmts) {
+            if (stmt is ModuleDeclaration) {
+                val nameNode = stmt.name
+                val isGlobalBlock = nameNode is Identifier && nameNode.text == "global"
+                if (isGlobalBlock && insideRegularNamespace) {
+                    val start = nameNode.pos
+                    val length = 6  // "global"
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.",
+                        category = DiagnosticCategory.Error,
+                        code = 2669,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    // TS2670 also fires when `global {}` lacks a `declare` modifier.
+                    if (ModifierFlag.Declare !in stmt.modifiers) {
+                        diagnostics.add(Diagnostic(
+                            message = "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context.",
+                            category = DiagnosticCategory.Error,
+                            code = 2670,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+                // Recurse into body; mark nested context.
+                // A ModuleDeclaration is a "regular namespace" if its name is an Identifier
+                // (not a StringLiteralNode for `declare module "X"`).
+                val nowInsideRegular = insideRegularNamespace || (nameNode is Identifier && !isGlobalBlock)
+                when (val body = stmt.body) {
+                    is ModuleBlock -> checkGlobalAugNested(body.statements, source, fileName, nowInsideRegular)
+                    is ModuleDeclaration -> checkGlobalAugNested(listOf(body), source, fileName, nowInsideRegular)
+                    else -> {}
+                }
             }
         }
     }

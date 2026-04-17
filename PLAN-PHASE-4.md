@@ -2675,6 +2675,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ak, +6 tests: 8116→8122):** TS2669 / TS2670 for `global {}` nested in regular namespace:
+  - New `checkInvalidGlobalAugmentations` pass walks statements tracking `insideRegularNamespace` (true once entering a ModuleDeclaration with Identifier name that is NOT a `global` block).
+  - Any `ModuleDeclaration` with `name.text == "global"` found inside a regular namespace emits TS2669 "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations." at the `global` keyword (length 6).
+  - Additionally, if the `global` block lacks a `declare` modifier, emit TS2670 "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context." at the same position.
+  - Ambient module declarations (`declare module "X" {}` with StringLiteralNode name) do NOT mark as "inside regular namespace" — they're allowed to host `global {}` augmentations.
+  - → +6 tests (`moduleAugmentationGlobal8_ts` ts + target_es5 variants, plus collateral from similarly-structured tests). Zero regressions.
+
   **Session 2026-04-17 (16.4aj, +1 test: 8115→8116):** TS2833 "Cannot find namespace 'X'. Did you mean 'Y'?" for type-qualified names:
   - In `checkTypeReferenceName` QualifiedName branch, when the leftmost name IS in scope but the resolved symbol is NOT a `Module`/`NamespaceModule` (it's a variable/function/etc.), look up candidate namespaces (via new `collectNamespaceNames`) for a spelling suggestion. If one matches, emit TS2833 with TS2728 "declared here" related info — instead of falling through to TS2694 or silently passing.
   - Target: `var m: M = M; var q: m.P;` — `m` is a variable; `M` is a namespace. Previously silent, now emits `Cannot find namespace 'm'. Did you mean 'M'?` at `m`.
