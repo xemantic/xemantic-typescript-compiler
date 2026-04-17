@@ -21433,9 +21433,11 @@ interface DataView {
     private fun checkAmbientInitializers() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkAmbientInitInStatements(result.sourceFile.statements, source, fileName, isAmbient = false)
+            // In .d.ts files every top-level declaration is implicitly ambient, so
+            // initializers anywhere must emit TS1039 even without an explicit `declare`.
+            val topLevelAmbient = isDtsFile(fileName)
+            checkAmbientInitInStatements(result.sourceFile.statements, source, fileName, isAmbient = topLevelAmbient)
         }
     }
 
