@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cn, +1 test: 8193→8194):** TS2322 elaboration "Index signature for type 'string' is missing in type 'X'." for class→class assignment:
+  - `class C1 { [i: string]: string; one: string }; class C2 { one: string }; declare var x: C1, a: C2; x = a;` expected TS2322 with the "Index signature... is missing" elaboration chain. Previously `objectTypeRelatedTo` returned true (C2 has `one: string` — matches C1.one), so no diagnostic fired at all for this assignment; only the C3 case (conflicting property types) emitted.
+  - `objectTypeRelatedTo` now checks `target.stringIndexInfo != null && source.stringIndexInfo == null` AFTER the properties/signatures checks. When true AND the source is NOMINAL (Class or Interface via `source.symbol.flags`), it sets `lastMissingIndexSigKind = "string"` and returns false. Named-source gate avoids regressions from anonymous object literals, which have a different index-signature satisfaction rule (properties individually match the index type).
+  - `checkAssignmentExpression` resets `lastMissingIndexSigKind = null` alongside `lastMissingPropertyName`, and the elaboration-chain branch adds `"  Index signature for type 'X' is missing in type 'SOURCE'."` when `lastMissingIndexSigKind != null` and no property-elaboration fired. Lives in the same `if (chain.isEmpty())` ladder as the other chain builders.
+  - → +1 test: `stringIndexerAssignments2`. Zero regressions.
+
   **Session 2026-04-17 (16.4cm, +2 tests: 8191→8193):** TS2310 "Type 'X' recursively references itself as a base type" for interface extends cycles:
   - `interface I5 extends I5 { ... }` (direct self-reference) and `interface i8 extends i9 { } interface i9 extends i8 { }` (mutual 2-cycle) previously emitted no diagnostic — we only had TS2506 for class extends cycles. TypeScript uses TS2310 (not TS2506) for interfaces.
   - New `checkCircularInterfaceBases()` pass runs after `checkCircularBaseClasses`. Walks `InterfaceDeclaration` at each statement-block scope (top-level + inside `ModuleDeclaration` bodies), collects name → extends-base-names via identifier-only lookup (QualifiedName/PropertyAccess base exprs skipped), and runs DFS-reachability: emit TS2310 for each interface `N` where `N` is reachable from itself through the extends graph.
