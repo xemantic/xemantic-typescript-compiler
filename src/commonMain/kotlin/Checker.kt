@@ -6860,6 +6860,7 @@ class Checker(
         statements: List<Statement>,
         source: String,
         fileName: String,
+        inAmbientContext: Boolean = false,
     ) {
         for (stmt in statements) {
             when (stmt) {
@@ -6871,7 +6872,7 @@ class Checker(
                     // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
                 }
                 is ClassDeclaration -> {
-                    val isAmbientClass = ModifierFlag.Declare in stmt.modifiers
+                    val isAmbientClass = ModifierFlag.Declare in stmt.modifiers || inAmbientContext
                     for (member in stmt.members) {
                         if (isAmbientClass) {
                             when (member) {
@@ -6977,8 +6978,10 @@ class Checker(
                     checkImplicitAnyInExpr(stmt.expression, source, fileName)
                 }
                 is ModuleDeclaration -> {
+                    val childAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
                     when (val body = stmt.body) {
-                        is ModuleBlock -> checkImplicitAnyInStatements(body.statements, source, fileName)
+                        is ModuleBlock -> checkImplicitAnyInStatements(body.statements, source, fileName, childAmbient)
+                        is ModuleDeclaration -> checkImplicitAnyInStatements(listOf(body), source, fileName, childAmbient)
                         else -> {}
                     }
                 }
@@ -16924,6 +16927,7 @@ interface DataView {
         source: String,
         fileName: String,
         isAmbientClass: Boolean = false,
+        inAmbientContext: Boolean = false,
     ) {
         for (stmt in statements) {
             when (stmt) {
@@ -16937,7 +16941,7 @@ interface DataView {
                     stmt.body?.let { checkTS7010InStatements(it.statements, source, fileName) }
                 }
                 is ClassDeclaration -> {
-                    val isAmbient = ModifierFlag.Declare in stmt.modifiers
+                    val isAmbient = ModifierFlag.Declare in stmt.modifiers || inAmbientContext
                     // Check methods in class body (recurse with ambient context)
                     for (member in stmt.members) {
                         if (member is MethodDeclaration && member.body == null && member.type == null) {
@@ -16980,11 +16984,12 @@ interface DataView {
                     }
                 }
                 is ModuleDeclaration -> {
+                    val childAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
                     val body = stmt.body
                     if (body is ModuleBlock) {
-                        checkTS7010InStatements(body.statements, source, fileName)
+                        checkTS7010InStatements(body.statements, source, fileName, inAmbientContext = childAmbient)
                     } else if (body is ModuleDeclaration) {
-                        checkTS7010InStatements(listOf(body), source, fileName)
+                        checkTS7010InStatements(listOf(body), source, fileName, inAmbientContext = childAmbient)
                     }
                 }
                 is Block -> checkTS7010InStatements(stmt.statements, source, fileName)

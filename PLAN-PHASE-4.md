@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bs, +1 test: 8161→8162):** Classes inside `declare namespace` treated as ambient for TS7010/TS7006/TS7008:
+  - `declare namespace M { class C { public g(x: any); private h(x); } }` — expected TS7010 on `g` (bodyless method, missing return type) and no TS7006 on `h` (private methods skipped in ambient classes). Our `checkImplicitAnyInStatements` and `checkTS7010InStatements` only set `isAmbient = ModifierFlag.Declare in stmt.modifiers` on the *class* modifier, so a class inside a `declare namespace` (which itself lacks the `declare` modifier on the class node) was treated as non-ambient.
+  - Added `inAmbientContext: Boolean = false` parameter to both passes. `ModuleDeclaration` with `ModifierFlag.Declare` (or nested inside another ambient module) propagates `childAmbient = true` to its body statements. `ClassDeclaration` now computes `isAmbientClass = ModifierFlag.Declare in stmt.modifiers || inAmbientContext`.
+  - → +1 test: `noImplicitAnyModule`. Zero regressions. The private-method TS7006 suppression uses the existing `ModifierFlag.Private !in member.modifiers` guard which now activates via the propagated ambient flag.
+
   **Session 2026-04-17 (16.4br, +1 test: 8160→8161):** TS2365 (not TS18050) for `3 + null` / bitwise-with-null when `strict: false`:
   - Under `@strict: false`, `var z = 3 + null` expected TS2365 "Operator '+' cannot be applied to types '3' and 'null'" spanning the whole binary expression. Our `checkNullUndefinedUsage` always fired TS18050 at the null literal position, and `checkBinaryOperatorTypes` short-circuited on null/undefined operand types — so we emitted the strict-mode diagnostic even when strict was off.
   - Two-line gate: (a) in `checkNullUndefinedInExpr`'s binary-arithmetic/bitwise branch, only run `checkNullUndefinedLiteral` when `strictNullChecks` is true — under strict the TS18050 still fires; (b) in `checkBinaryOperatorTypes`, wrap the `if (rightType.flags.hasAny(Null or Undefined)) return` skip in `if (strictNullChecks) { ... }` so TS2365 fires under non-strict.
