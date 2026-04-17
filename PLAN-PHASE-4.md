@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,104 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+28 tests, 1971 remaining).
+**Status (2026-04-17):** 8,105 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+29 tests, 1970 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4z, +1 test: 8104→8105):** TS2407 for-in RHS type check (syntactic):
+  - Extended `checkForInLhsInStmt` to also emit TS2407 "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type 'X'." for literal RHS expressions: NumericLiteralNode, BigIntLiteralNode, StringLiteralNode (wrapped in `"..."`), Identifier `true`/`false`/`null`/`undefined`, and PrefixUnaryExpression with `+`/`-` operator on a simple-display operand. Complex/unknown expressions are left alone (conservative).
+  - Squiggle covers the literal's true end via `expressionTrueEnd`.
+  - Gated on `inAmbient` flag threaded through recursion — skip inside `declare namespace` blocks because TypeScript emits TS1036 there and suppresses semantic diagnostics. Without this gate, `ambientWithStatements_ts` regresses (it has `for (x in null)` inside a `declare namespace`).
+  - → +1 test: `forIn2_ts`. Zero regressions (flaky `binderBinaryExpressionStress_ts` toggled but stabilized on rerun).
 
   **Session 2026-04-17 (16.4y, +1 test: 8103→8104):** TS1046 for bare top-level declaration in `.d.ts`:
   - New `checkDtsTopLevelDeclarations` emits TS1046 "Top-level declarations in .d.ts files must start with either a 'declare' or 'export' modifier." on the FIRST top-level declaration statement when it lacks a `declare` or `export` modifier.
