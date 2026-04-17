@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cb, +1 test: 8177→8178):** TS1034 "'super' must be followed by an argument list or member access." for bare `super` at statement end:
+  - `var x = () => () => super;` — expected TS1034 at position AFTER the `super` keyword (length 1), spanning the token that should have been `.`/`[`/`(`/`<`. Our parser already had the error-recovery case (wraps the bare `super` in a `PropertyAccessExpression` with an empty name) but silently — no diagnostic was emitted.
+  - Added `reportError` call emitting TS1034 at `getPos()` (start of the NEXT token after `super`) with `overrideLength = 1`. Matches TypeScript's squiggle position which falls on the token position rather than the `super` keyword itself.
+  - → +1 test: `superInLambdas_ts__target_es5__`. The `target=es2015` variant still fails for an unrelated missing TS2855 (class field shadowing via super) which is out of scope here. Zero regressions.
+
   **Session 2026-04-17 (16.4ca, +1 test: 8176→8177):** TS2302 now walks static method/accessor bodies for class-type-parameter references:
   - `static MakeHead(): List<T> { var entry: List<T> = new List<T>(true, null); ... }` — expected TS2302 at the `T` in the return type (9,33), the `var entry: List<T>` (10,29), and `new List<T>` (10,43). Our `checkTS2302InClassMember` only walked parameter types and the return type; the body was skipped. The TypeScript rule is: static members (including their bodies) cannot reference class type parameters.
   - New `findTypeParamRefsInStatement(stmt, ...)` recurses through `VariableStatement`, `ExpressionStatement`, `ReturnStatement`, `Block`, `If/For/ForIn/ForOf/While/Do/Switch/Try/Throw`. Variable declarations check both `type` and `initializer`. Called from the `MethodDeclaration`/`GetAccessor`/`SetAccessor` branches after the existing param/return-type walk.
