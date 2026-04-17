@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bh, +1 test: 8146→8147):** TS2364 for private identifier as assignment target (`[#abc] = ...`):
+  - `#abc` is scanned as a single `Identifier` token with text starting with `#`. Our `isValidAssignmentTarget` accepted `Identifier` unconditionally and also accepted `ArrayLiteralExpression` as a destructuring pattern, so `[#abc] = ...` silently passed the TS2364 check.
+  - Fix: when the outer LHS is a valid destructuring pattern (ArrayLiteral / ObjectLiteral), walk its elements via a new `checkDestructuringPrivateIds` helper. Any bare `#abc` Identifier (as a direct element, shorthand prop name, spread target, or within `[x = 1]` default-value patterns) emits TS2364 at the identifier's position (length = text length) — matching TypeScript's squiggle.
+  - Does not affect valid patterns like `this.#abc = 1` (PropertyAccess target → not walked) or `[a, b] = ...` (Identifier text doesn't start with `#`).
+  - → +1 test: `parserPrivateIdentifierInArrayAssignment` (errors baseline). The paired JS-emit test still fails due to a pre-existing indentation quirk (` ;` vs `;`) that is unrelated to this fix. Zero regressions.
+
   **Session 2026-04-17 (16.4bg, +1 test: 8145→8146):** TS2576 message now includes class type parameters (`List<T>` not `List`):
   - `class List<T>` with a static `Foo()` accessed via `this.Foo()` inside an instance method: the TS2576 "did you mean static" message displayed the bare class name (`type 'List'. Did you mean ... 'List.Foo'`) instead of including the class's type parameters (`type 'List<T>'. Did you mean ... 'List<T>.Foo'`).
   - Fix in `checkMemberAccess` TS2576 emission site: render the class name as `baseName + "<T1, T2, ...>"` when `ClassDeclaration.typeParameters` is non-empty. Uses type-parameter NAMES (not instantiated args) — matches TypeScript's baseline convention for the static-member suggestion form.
