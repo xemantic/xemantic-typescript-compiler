@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,107 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+31 tests, 1968 remaining).
+**Status (2026-04-17):** 8,108 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+32 tests, 1967 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4ac, +1 test: 8107→8108):** TS1029 "'export' must precede 'default'" for bare `default` declaration:
+  - Parser's `DefaultKeyword` top-level branch now emits TS1029 at the `default` keyword (length 7) BEFORE consuming it, then continues with the error-recovery parse of the following declaration.
+  - Covers the decorated-class form (`@decorator \n default class {}`) which is the case expected to emit TS1029.
+  - `defaultKeywordWithoutExport2` (`default function () {}`) still fails because TypeScript's baseline for non-decorated form uses TS1005+TS1003 instead of TS1029, but the test was already failing before this change — no regression.
+  - → +1 test: `defaultKeywordWithoutExport1_ts`. Zero regressions.
 
   **Session 2026-04-17 (16.4ab, +1 test: 8106→8107):** TS1031/TS1039 also for `ClassExpression` members:
   - Extracted the class-member modifier check into `checkClassMemberModifiersForAmbient` so both `ClassDeclaration` and `ClassExpression` reuse the same logic.
