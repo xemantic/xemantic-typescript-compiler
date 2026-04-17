@@ -7419,6 +7419,10 @@ class Checker(
         fun isTypeParam(name: String): Boolean =
             name in typeParamNames || parent?.isTypeParam(name) == true
 
+        /** Returns true if [name] was added via [addType] or [addTypeParam] anywhere in the scope chain. */
+        fun hasType(name: String): Boolean =
+            name in typeNames || name in typeParamNames || parent?.hasType(name) == true
+
         /** Add a type parameter name to both [names] and [typeParamNames]. */
         fun addTypeParam(name: String) {
             names.add(name)
@@ -9114,6 +9118,36 @@ class Checker(
      * If not, emit TS2662/TS2663 (did-you-mean) or TS2304.
      * @param inTypePosition When true, suppress TS2662/TS2663 suggestions (type positions use TS2304)
      */
+    /**
+     * 16.4ct: Returns true if [name] (which is already known to be in [scope])
+     * resolves to a strictly value-only declaration — used as the gate for TS2749
+     * "'X' refers to a value, but is being used as a type here." Conservative:
+     * returns false (suppressing TS2749) whenever ANY type-eligibility signal exists,
+     * to avoid FPs in cases where our scope tracking is incomplete.
+     */
+    private fun isValueOnlyTypeRef(name: String, scope: NameScope): Boolean {
+        // Type params and types added via scope.addType (class/interface/type-alias/enum)
+        // are unambiguously type-eligible.
+        if (scope.hasType(name)) return false
+        // Conservative: most lib.es5.d.ts identifiers (Date/Error/Promise/Map/etc.) are
+        // declaration-merged interface+var pairs, but our binder's `canMerge` doesn't
+        // unify Variable+Interface. The merged "type meaning" is recorded via
+        // KNOWN_GLOBALS — never fire TS2749 for a KNOWN_GLOBALS name unless it's in
+        // VALUE_ONLY_GLOBALS (Math/console/parseInt/…), which truly carry no type meaning.
+        if (name in KNOWN_GLOBALS && name !in VALUE_ONLY_GLOBALS) return false
+        // Look up the binder symbol — if it carries any type/module/alias flag, treat
+        // as type-eligible (alias may resolve to a type cross-file; conservative pass).
+        val sym = currentFileLocals?.get(name) ?: globals[name]
+        if (sym != null) {
+            if (sym.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module or SymbolFlags.Alias)) return false
+            // Only fire when symbol is unambiguously a value (Variable/Function/etc.).
+            return sym.flags.hasAny(SymbolFlags.Value)
+        }
+        // No binder symbol — name comes from KNOWN_GLOBALS or scope.names directly.
+        // VALUE_ONLY_GLOBALS are the only KNOWN_GLOBALS entries that aren't also types.
+        return name in VALUE_ONLY_GLOBALS
+    }
+
     private fun checkIdentifierResolved(
         name: String,
         node: Node,
@@ -9129,7 +9163,26 @@ class Checker(
         // Skip keywords that parse as identifiers in our AST
         if (name in KEYWORD_IDENTIFIERS) return
         // Skip well-known globals that don't need declaration
-        if (scope.has(name)) return
+        if (scope.has(name)) {
+            // 16.4ct: TS2749 — name is in scope but is value-only (var/function/etc.)
+            // and being used in a type position. E.g. `var X: X` self-reference.
+            if (inTypePosition && isValueOnlyTypeRef(name, scope)) {
+                val start = node.pos
+                val length = name.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'$name' refers to a value, but is being used as a type here. Did you mean 'typeof $name'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2749,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            return
+        }
 
         val start = node.pos
         val length = name.length
