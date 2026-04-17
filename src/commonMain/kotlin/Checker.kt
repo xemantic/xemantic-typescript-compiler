@@ -310,6 +310,11 @@ class Checker(
         // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
         // (syntactic type-shape error, not an implicit-any diagnostic).
         checkNonArrayRestParameters()
+        // 7b''. TS7033: Abstract get accessor with no return type annotation → implicit any.
+        // Gated on noImplicitAny/strict.
+        if (options.noImplicitAny || options.strict) {
+            checkAbstractAccessorReturnTypes()
+        }
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
@@ -6587,6 +6592,51 @@ class Checker(
                 start = start,
                 length = length,
             ))
+        }
+    }
+
+    /**
+     * TS7033: Property 'X' implicitly has type 'any', because its get accessor lacks
+     * a return type annotation.
+     *
+     * Conservative: only fires for bodyless get accessors (abstract/interface form)
+     * with no return type annotation. Full TS7033 coverage for getters with bodies
+     * requires body return-type inference (not yet implemented).
+     */
+    private fun checkAbstractAccessorReturnTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            checkAbstractAccessorInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkAbstractAccessorInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    for (m in stmt.members) {
+                        if (m is GetAccessor && m.body == null && m.type == null) {
+                            val nameNode = m.name as? Identifier ?: continue
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '${nameNode.text}' implicitly has type 'any', because its get accessor lacks a return type annotation.",
+                                category = DiagnosticCategory.Error,
+                                code = 7033,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameNode.pos,
+                                length = nameNode.text.length,
+                            ))
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                is Block -> checkAbstractAccessorInStatements(stmt.statements, source, fileName)
+                else -> {}
+            }
         }
     }
 
