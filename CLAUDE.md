@@ -58,6 +58,8 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Helper ordering depends on first usage**: When both `__importStar` and `__exportStar` are needed, TypeScript emits the one used first in the output before the other. Track `importStarUsedFirst` by checking which `needsXxx = true` is set first.
 - **`importHelpers: true` uses tslib**: When set, don't emit inline helper functions. Instead add `const tslib_1 = require("tslib")` (CJS) or `"tslib"` dep + `tslib_1` param (AMD), and use `tslib_1.__helperName(...)` instead of bare `__helperName(...)`. The `helperExpr()` method handles this.
 - **`exprContainsDynamicImport` must mirror `rewriteCjsDynExpr`**: The detection function (used by `isModuleFile`) must handle ALL expression types that the rewriting function handles. Missing `PropertyAccessExpression` caused `import("./foo").then(...)` to not be detected as a module file, so `transformToCommonJS` was never called. Both functions must handle: PropertyAccessExpression, ElementAccessExpression, ConditionalExpression, YieldExpression, NewExpression, SpreadElement, ArrayLiteralExpression, PrefixUnaryExpression, PostfixUnaryExpression.
+- **`resolveModuleSpecifier` intentionally does NOT try `.js`/`.jsx` extensions**: Doing so globally causes TS2459 false-positives (our CJS/`module.exports` export analysis is incomplete) and other cross-file lookup regressions. For a specific check that needs JS-aware resolution under `allowJs`/`checkJs`, add a SCOPED helper (e.g. `resolvesAsJsOrJsx` used by `checkAmbientModuleAugmentations`) rather than modifying the main resolver.
+- **ALL file locals merged into globals at Checker init** (`mergeSymbolTable(globals, result.locals)` for every binderResult): This conflates script-file locals (legitimately global) with module-file locals (should require an explicit import to be visible). Consequence: in file X, an identifier exported from an unrelated module file Y appears in X's scope chain via `scope.has(name)`. This blocks fine-grained module-visibility diagnostics — e.g. TS2663 vs TS2301 distinction for class-initializer-references-ctor-param (in module files where the outer name ISN'T actually visible, we still suppress TS2663). Splitting "true globals" (script locals + lib + KNOWN_GLOBALS) from module-file locals would unblock several tests but has broad regression risk and needs per-file scope construction.
 
 ### Binder gotchas
 
@@ -248,7 +250,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ## AI agent mission
 
-**Phase 16: Fundamental Type System Features.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. 8,077 / 10,077 tests passing (80.2%). Of 2,000 remaining: ~1,133 zero diagnostics (anyType bottleneck), ~660 mixed diffs, ~207 JS emit. Phase 16 builds core type system features: contextual typing, structural comparison, overload resolution, control flow narrowing.
+**Phase 16: Fundamental Type System Features.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. ~8,140 / 10,078 tests passing (80.8%). Of ~1,936 remaining: ~1,059 zero diagnostics (anyType bottleneck + missing checks), remainder mixed diffs and JS emit. Phase 16 builds core type system features: contextual typing, structural comparison, overload resolution, control flow narrowing. See `PLAN-PHASE-4.md` § "Known architectural blockers" for recurring multi-test issues that won't yield to surgical fixes.
 
 ### Execution protocol (MANDATORY — follow exactly)
 
