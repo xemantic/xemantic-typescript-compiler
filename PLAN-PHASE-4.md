@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4aj, +1 test: 8115→8116):** TS2833 "Cannot find namespace 'X'. Did you mean 'Y'?" for type-qualified names:
+  - In `checkTypeReferenceName` QualifiedName branch, when the leftmost name IS in scope but the resolved symbol is NOT a `Module`/`NamespaceModule` (it's a variable/function/etc.), look up candidate namespaces (via new `collectNamespaceNames`) for a spelling suggestion. If one matches, emit TS2833 with TS2728 "declared here" related info — instead of falling through to TS2694 or silently passing.
+  - Target: `var m: M = M; var q: m.P;` — `m` is a variable; `M` is a namespace. Previously silent, now emits `Cannot find namespace 'm'. Did you mean 'M'?` at `m`.
+  - → +1 test: `primaryExpressionMods_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ai, +1 test: 8114→8115):** TS2339 fires on anonymous-object-typed variables:
   - `checkMemberAccessMissing` (non-this branch): the gate `if (typeSym == null || typeSym.flags.hasAny(SymbolFlags.Class)) return` skipped all anonymous-object types. Inverted: only skip when the type's symbol IS a class. Anonymous types (typeSym == null) — e.g. `declare var x: { a: string }` — are now checkable.
   - Rationale for the gate: class-typed variables may be narrowed via `instanceof`, so we historically skip them. But anonymous object types have fully-known members and never benefit from narrowing, so they're safe to check.
