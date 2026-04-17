@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cd, +2 tests: 8180→8182):** TS7041 "The containing arrow function captures the global value of 'this'." for `this` inside arrow at top-level:
+  - Under `@noImplicitThis: true`, `let f5 = () => () => this;` — expected TS7041 (not TS2683) at `this`. Our existing `checkImplicitThis` emitted TS2683 when `insideFunction == true` (set by FunctionDeclaration/FunctionExpression), and `!insideFunction` silently skipped the check. Arrow functions are transparent w.r.t. `this`, so `insideFunction` stays false — leaving us with no diagnostic at all for `this` inside a top-level arrow chain.
+  - Added a new `insideArrowFunction: Boolean = false` parameter threaded through `checkThisInStatement`/`checkThisInStatements`/`checkThisInExpr`. ArrowFunction branches propagate `insideArrowFunction = true`; FunctionDeclaration/FunctionExpression branches reset it to `false` (regular functions shadow the arrow's `this` capture).
+  - In the `Identifier` branch: unchanged TS2683 when `insideFunction && !thisIsTyped`; NEW TS7041 emit path when `!insideFunction && insideArrowFunction && !thisIsTyped`. The two are mutually exclusive.
+  - → +2 tests: `noImplicitThisFunctions`, `thislessFunctionsNotContextSensitive2`. Zero regressions. `thislessFunctionsNotContextSensitive1`/`3` continue to fail on unrelated TS2783/TS2820/TS2345 cases that we don't emit.
+
   **Session 2026-04-17 (16.4cc, +2 tests: 8178→8180):** TS2423 shape-mismatch now fires when the derived accessor has no inferable type:
   - `class b extends a { get x() { return () => "20"; } set x(v) {} }` where `a` has method `x()`. Expected TS2423 "Class 'a' defines instance member function 'x', but extended class 'b' defines it as instance member accessor." Our override loop resolved the derived accessor's type via `getTypeOfMemberDecl` BEFORE the shape check, and `inferReturnTypeFromBody` returns null for arrow-function return expressions (only string/number literals are handled). The `?: continue` then skipped the entire member, including the shape check.
   - Reordered the loop: do the shape-mismatch check BEFORE type resolution — category mismatch (property/method/accessor) is syntactic and doesn't need resolved types. Only the subsequent TS2416 type-assignability check needs `derivedType`/`basePropType`.
