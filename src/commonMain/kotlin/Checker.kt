@@ -11468,7 +11468,7 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
 
-            for (stmt in result.sourceFile.statements) {
+            for (stmt in flattenImportLikeStatements(result.sourceFile.statements)) {
                 val isSideEffectImport = stmt is ImportDeclaration && stmt.importClause == null
                 val specifier = when (stmt) {
                     is ImportDeclaration -> stmt.moduleSpecifier
@@ -11542,6 +11542,31 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * Flatten top-level import/export/import-equals statements plus those nested inside
+     * `declare module "X" { ... }` augmentations (ModuleDeclaration with StringLiteralNode name).
+     * Identifier-named namespaces (`namespace N { ... }`, `declare global { ... }`) are NOT
+     * recursed into because imports there use different diagnostics (TS1147/TS2667/TS1194).
+     */
+    private fun flattenImportLikeStatements(statements: List<Statement>): List<Statement> {
+        val out = mutableListOf<Statement>()
+        for (s in statements) {
+            when (s) {
+                is ImportDeclaration, is ExportDeclaration, is ImportEqualsDeclaration -> out.add(s)
+                is ModuleDeclaration -> {
+                    if (s.name is StringLiteralNode) {
+                        val body = s.body
+                        if (body is ModuleBlock) {
+                            out.addAll(flattenImportLikeStatements(body.statements))
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return out
     }
 
     private fun emitTS2307(specifier: Expression, moduleName: String, source: String, fileName: String) {

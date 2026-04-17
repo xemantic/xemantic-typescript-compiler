@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bl, +1 test: 8150→8151):** TS2307 for `import X = require("...")` nested inside `declare module "..." { ... }` augmentations:
+  - `declare module "m1" { import im2 = require("externalModule"); }` — the inner `require()` specifier is unresolvable but our `checkUnresolvedModules` only iterated top-level `sourceFile.statements`, so the nested import was never checked and TS2307 silently dropped.
+  - Fix: extracted a `flattenImportLikeStatements(statements)` helper that returns top-level import/export/import-equals statements PLUS those nested inside `ModuleDeclaration` bodies whose `name` is a `StringLiteralNode` (module augmentations). Identifier-named namespaces (`namespace N { ... }`, `declare global { ... }`) are deliberately NOT recursed into because imports there use DIFFERENT diagnostics (TS1147 "Import declarations in a namespace cannot reference a module", TS2667 "Imports are not permitted in module augmentations", TS1194 "Export declarations are not permitted in a namespace"). Recursing through identifier-named namespaces in a first attempt caused 3 regressions; restricting to StringLiteralNode-named augmentations kept the win.
+  - → +1 test: `importDeclRefereingExternalModuleWithNoResolve`. Zero regressions.
+
   **Session 2026-04-17 (16.4bk, +1 test: 8149→8150):** TS1174 "Classes can only extend a single class." for comma-separated `extends` lists:
   - `class C extends B1, B2 { ... }` — parser silently accepted the comma-separated list and produced a multi-type heritage clause. TypeScript emits TS1174 at each type after the first (position = type-start, length = type text).
   - Added `isClass: Boolean = false` parameter to `parseHeritageClauses` (passed `true` from `parseClassDeclaration` and `parseClassExpression`). Inside the do-while loop over `types`, emit TS1174 only when `isClass && clauseToken == ExtendsKeyword && types.isNotEmpty()` (i.e., any type past the first in a class's `extends` clause). Interfaces are exempt because `interface I extends A, B` is legitimate.
