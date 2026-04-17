@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cv, +1 test: 8211→8212):** TS2336 + TS17011 for `super.X` referenced inside a constructor parameter default:
+  - Inside `checkClassDerivedSuper`, before the existing TS2377 walk, iterate each Constructor's `parameters[i].initializer` and walk for `Identifier("super")`. Each occurrence emits BOTH TS2336 ("'super' cannot be referenced in constructor arguments.") AND TS17011 ("'super' must be called before accessing a property of 'super' in the constructor of a derived class.") at the super keyword position (length 5).
+  - Helper `collectSuperKeywordPositions` walks an expression tree (CallExpression / PropertyAccessExpression / BinaryExpression / etc.) collecting positions of every `super` reference. Narrow scope: only invoked on constructor parameter initializers, so it never fires on legitimate `super.X` inside a constructor body (the body branch keeps the existing semantics).
+  - Rationale: parameter initializers are evaluated BEFORE the constructor body runs — so `super()` cannot have been called yet, regardless of whether the body itself contains a super call.
+  - → +1 test: `superInConstructorParam1_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cu, +1 test: 8210→8211):** TS2320 multi-base property conflict now fires for qualified base types (`extends NS.Mover`):
   - `checkMultiBaseInStatement` previously only resolved `Identifier` heritage expressions via `globals[name]`. Extended to also handle `PropertyAccessExpression` via existing `resolvePropertyAccessToSymbol` — `NS.Mover` resolves through the namespace's exports table to the inner Class symbol.
   - Display `baseName` uses the rightmost segment (`Mover`/`Shaker`), matching TypeScript's diagnostic format (`"Interface 'X' cannot simultaneously extend types 'Mover' and 'Shaker'."`).

@@ -24412,6 +24412,41 @@ interface DataView {
             return
         }
 
+        // 16.4cv: TS2336/TS17011 — `super.X` referenced in a constructor parameter
+        // default. By definition, parameter initializers run before the constructor
+        // body, so `super()` cannot have been called yet. Both diagnostics fire on
+        // the same `super` keyword. Narrow scope: walks each Constructor's params,
+        // looks for Identifier("super") inside any initializer.
+        for (member in members) {
+            if (member !is Constructor) continue
+            for (param in member.parameters) {
+                val init = param.initializer ?: continue
+                collectSuperKeywordPositions(init).forEach { superPos ->
+                    val (line, character) = getLineAndCharacterOfPosition(source, superPos)
+                    diagnostics.add(Diagnostic(
+                        message = "'super' cannot be referenced in constructor arguments.",
+                        category = DiagnosticCategory.Error,
+                        code = 2336,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = superPos,
+                        length = 5,
+                    ))
+                    diagnostics.add(Diagnostic(
+                        message = "'super' must be called before accessing a property of 'super' in the constructor of a derived class.",
+                        category = DiagnosticCategory.Error,
+                        code = 17011,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = superPos,
+                        length = 5,
+                    ))
+                }
+            }
+        }
+
         // Find constructors with bodies that don't contain super()
         for (member in members) {
             if (member is Constructor && member.body != null) {
@@ -24472,6 +24507,43 @@ interface DataView {
         }
         is ParenthesizedExpression -> findSuperCallInExpr(expr.expression)
         else -> null
+    }
+
+    /**
+     * 16.4cv: Collect the positions of every `super` keyword that appears anywhere
+     * within an expression tree (not just at the head of a property/call chain).
+     * Used by the TS2336/TS17011 check on constructor parameter initializers.
+     */
+    private fun collectSuperKeywordPositions(expr: Expression): List<Int> {
+        val out = mutableListOf<Int>()
+        fun walk(e: Expression?) {
+            e ?: return
+            when (e) {
+                is Identifier -> if (e.text == "super") out.add(e.pos)
+                is PropertyAccessExpression -> walk(e.expression)
+                is ElementAccessExpression -> { walk(e.expression); walk(e.argumentExpression) }
+                is CallExpression -> { walk(e.expression); e.arguments.forEach { walk(it) } }
+                is NewExpression -> { walk(e.expression); e.arguments?.forEach { walk(it) } }
+                is BinaryExpression -> { walk(e.left); walk(e.right) }
+                is ConditionalExpression -> { walk(e.condition); walk(e.whenTrue); walk(e.whenFalse) }
+                is ParenthesizedExpression -> walk(e.expression)
+                is PrefixUnaryExpression -> walk(e.operand)
+                is PostfixUnaryExpression -> walk(e.operand)
+                is TypeAssertionExpression -> walk(e.expression)
+                is AsExpression -> walk(e.expression)
+                is NonNullExpression -> walk(e.expression)
+                is ArrayLiteralExpression -> e.elements.forEach { walk(it) }
+                is SpreadElement -> walk(e.expression)
+                is YieldExpression -> e.expression?.let { walk(it) }
+                is AwaitExpression -> walk(e.expression)
+                is VoidExpression -> walk(e.expression)
+                is TypeOfExpression -> walk(e.expression)
+                is DeleteExpression -> walk(e.expression)
+                else -> {}
+            }
+        }
+        walk(expr)
+        return out
     }
 
     /**
