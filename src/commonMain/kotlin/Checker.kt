@@ -11530,6 +11530,13 @@ class Checker(
                                 emitTS2307(specifier, moduleName, source, fileName)
                             }
                         }
+                    } else if (!options.moduleSuffixes.isNullOrEmpty() && isRelative && !moduleName.endsWith(".json")) {
+                        // Node resolution with moduleSuffixes: relative imports only resolve to a
+                        // file whose name matches one of the configured suffixes. If none match,
+                        // emit TS2307 even though an unsuffixed file with the same base name exists.
+                        if (resolveWithModuleSuffixes(moduleName, fileName, options.moduleSuffixes!!) == null) {
+                            emitTS2307(specifier, moduleName, source, fileName)
+                        }
                     }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs.
@@ -11542,6 +11549,56 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * Resolve a relative specifier using `moduleSuffixes`: for each suffix, look for a file
+     * matching `{path}{suffix}.ts|.tsx|.d.ts|.json`. Suffixes of "" fall back to the plain name.
+     * Returns the first match or null.
+     */
+    private fun resolveWithModuleSuffixes(specifier: String, contextFileName: String, suffixes: List<String>): String? {
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null
+        val dir = contextFileName.substringBeforeLast('/', "")
+        val basePath = if (dir.isEmpty()) specifier else "$dir/${specifier.removePrefix("./")}"
+        val normalized = normalizePath(basePath)
+        // Strip explicit .js/.jsx extension — TypeScript resolves these to .ts/.tsx/.d.ts
+        // (or .js/.jsx under allowJs), so the base used for suffix-matching is without ext.
+        val withoutJs = when {
+            normalized.endsWith(".js") -> normalized.removeSuffix(".js")
+            normalized.endsWith(".jsx") -> normalized.removeSuffix(".jsx")
+            else -> normalized
+        }
+        // Try with and without a leading "/" prefix to match how fileResults keys are stored
+        // (root-file layouts like "@filename: /foo.ts" produce keys starting with "/").
+        val bases = buildList {
+            add(withoutJs)
+            add(withoutJs.removePrefix("./"))
+            if (!withoutJs.startsWith("/")) add("/$withoutJs")
+        }
+        val allowJs = options.allowJs == true || options.checkJs == true
+        for (suffix in suffixes) {
+            for (base in bases) {
+                val candidates = buildList {
+                    add("$base$suffix.ts")
+                    add("$base$suffix.tsx")
+                    add("$base$suffix.d.ts")
+                    add("$base$suffix.json")
+                    add("$base/index$suffix.ts")
+                    add("$base/index$suffix.tsx")
+                    add("$base/index$suffix.d.ts")
+                    if (allowJs) {
+                        add("$base$suffix.js")
+                        add("$base$suffix.jsx")
+                        add("$base/index$suffix.js")
+                        add("$base/index$suffix.jsx")
+                    }
+                }
+                for (c in candidates) {
+                    if (c in fileResults) return c
+                }
+            }
+        }
+        return null
     }
 
     /**
