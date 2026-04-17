@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bq, +1 test: 8159→8160):** TS2732 "Cannot find module 'X.json'. Consider using '--resolveJsonModule' to import module with '.json' extension.":
+  - `import foobar from "foo/bar/foobar.json"` in multi-file under node-style resolution with `resolveJsonModule: false`. TypeScript's node resolution refuses to consult `.json` files without the flag → TS2732, even if the file exists on disk (e.g. at `node_modules/foo/bar/foobar.json`).
+  - New branch in `checkUnresolvedModules`: when `moduleName.endsWith(".json") && !options.resolveJsonModule && !isRelative`, emit TS2732. New `emitTS2732` helper. Restricted to NON-RELATIVE specifiers — relative `.json` imports (e.g. `./b.json` with `b.json` in the multi-file layout) fall back to direct-file parsing, and TypeScript produces different diagnostics (JSON parse errors + object-type TS2339), so we leave them alone.
+  - → +1 test: `requireOfJsonFileWithoutResolveJsonModuleAndPathMapping` (errors baseline). Zero regressions.
+
   **Session 2026-04-17 (16.4bp, +1 test: 8158→8159):** TS2439 "Import or export declaration in an ambient module declaration cannot reference module through relative module name.":
   - Fires when `import Y = require("./Z")` / `import X from "./Z"` / `export ... from "./Z"` is nested inside a `declare module "X" { ... }` augmentation. Test has both the inner TS2307 (from 16.4bl) AND this TS2439 — we had the former, were missing the latter.
   - New `checkRelativeImportsInAmbientModules` pass: iterates top-level `ModuleDeclaration` nodes with `StringLiteralNode` name, walks their `ModuleBlock.statements`, and emits TS2439 at the statement line for any ImportDeclaration/ExportDeclaration/ImportEqualsDeclaration (with ExternalModuleReference) whose specifier starts with `./` or `../`. Uses `emitStatementLineDiagnostic` so the squiggle spans the whole statement up to the `;`.

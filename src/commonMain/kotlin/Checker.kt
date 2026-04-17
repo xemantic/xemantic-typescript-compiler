@@ -11608,6 +11608,12 @@ class Checker(
                         if (resolveWithModuleSuffixes(moduleName, fileName, options.moduleSuffixes!!) == null) {
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
+                    } else if (moduleName.endsWith(".json") && !options.resolveJsonModule && !isRelative) {
+                        // Non-relative .json imports (resolved via node_modules or path mapping)
+                        // require `resolveJsonModule: true`; without it, TypeScript emits TS2732.
+                        // Relative .json imports still fall back to direct-file parsing in the test
+                        // layout, so we leave their handling to downstream type checking.
+                        emitTS2732(specifier, moduleName, source, fileName)
                     }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs.
@@ -11799,6 +11805,27 @@ class Checker(
             message = "Cannot find module or type declarations for side-effect import of '$moduleName'.",
             category = DiagnosticCategory.Error,
             code = 2882,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * TS2732: "Cannot find module 'X.json'. Consider using '--resolveJsonModule' to import
+     * module with '.json' extension." — fires when a `.json` specifier is imported while
+     * `resolveJsonModule` is disabled, regardless of whether the file exists.
+     */
+    private fun emitTS2732(specifier: Expression, moduleName: String, source: String, fileName: String) {
+        val start = specifier.pos
+        val length = moduleName.length + 2 // +2 for quotes
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find module '$moduleName'. Consider using '--resolveJsonModule' to import module with '.json' extension.",
+            category = DiagnosticCategory.Error,
+            code = 2732,
             fileName = fileName,
             line = line,
             character = character,
