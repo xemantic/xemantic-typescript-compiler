@@ -4100,6 +4100,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             // Skip extra commas (error recovery for double commas like `{ x: 0,, }`)
             if (token == SyntaxKind.Comma) {
+                // TS1136 "Property assignment expected." — emitted at the extra comma.
+                reportError("Property assignment expected.", code = 1136,
+                    overrideStart = getPos(), overrideLength = 1)
                 nextToken()
                 // If closing brace follows, treat this as a trailing comma
                 if (token == SyntaxKind.CloseBrace) hasTrailingComma = true
