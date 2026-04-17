@@ -362,6 +362,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
+        checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
         checkAmbientModuleAugmentations()
         // 14aa. Check .d.ts top-level declarations for 'declare'/'export' modifier (TS1046)
@@ -11668,6 +11670,43 @@ class Checker(
             }
         }
         return null
+    }
+
+    /**
+     * TS2439: "Import or export declaration in an ambient module declaration cannot reference
+     * module through relative module name." — fires for `import Y = require("./Z")` or
+     * `import ... from "./Z"` / `export ... from "./Z"` nested inside `declare module "X" { }`.
+     */
+    private fun checkRelativeImportsInAmbientModules() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        for (innerStmt in body.statements) {
+                            val specifier: Expression? = when (innerStmt) {
+                                is ImportDeclaration -> innerStmt.moduleSpecifier
+                                is ExportDeclaration -> innerStmt.moduleSpecifier
+                                is ImportEqualsDeclaration -> {
+                                    val ref = innerStmt.moduleReference
+                                    if (ref is ExternalModuleReference) ref.expression else null
+                                }
+                                else -> null
+                            }
+                            val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
+                            if (moduleName.startsWith("./") || moduleName.startsWith("../")) {
+                                emitStatementLineDiagnostic(
+                                    innerStmt, source, fileName, 2439,
+                                    "Import or export declaration in an ambient module declaration cannot reference module through relative module name.",
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
