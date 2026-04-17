@@ -6433,7 +6433,13 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
         }
     }
 
@@ -7218,6 +7224,25 @@ class Checker(
         return false
     }
 
+    /**
+     * Cheap resolvability check for a call/new expression callee. Used by
+     * checkImplicitAnyInExpr to decide whether to suppress TS7006 on callback
+     * parameters. Conservative: when unsure (non-Identifier callee, property
+     * access, etc.), return true so TS7006 stays suppressed — the current
+     * default. Only a bare Identifier that resolves NOWHERE yields false.
+     */
+    private fun isCalleeResolvable(callee: Expression): Boolean {
+        if (callee !is Identifier) return true
+        val name = callee.text
+        if (name.isEmpty()) return true
+        if (name == "this" || name == "super") return true
+        if (name in KEYWORD_IDENTIFIERS) return true
+        if (globals.containsKey(name)) return true
+        if (currentFileLocals?.containsKey(name) == true) return true
+        if (name in KNOWN_GLOBALS) return true
+        return false
+    }
+
     private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String, contextuallyTyped: Boolean = false) {
         when (expr) {
             is ArrowFunction -> {
@@ -7259,15 +7284,19 @@ class Checker(
                 }
             }
             is CallExpression -> {
-                // All call args get contextual typing from parameter types
+                // Args get contextual typing from parameter types — BUT only if the
+                // callee actually resolves. A call to an unresolved identifier has
+                // no contextual signature, so callback params should still get TS7006.
+                val ctxProp = isCalleeResolvable(expr.expression)
                 for (arg in expr.arguments) {
-                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = true)
+                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = ctxProp)
                 }
             }
             is NewExpression -> {
                 // Same as CallExpression — constructor args get contextual typing
+                val ctxProp = isCalleeResolvable(expr.expression)
                 for (arg in (expr.arguments ?: emptyList())) {
-                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = true)
+                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = ctxProp)
                 }
             }
             is BinaryExpression -> {
@@ -9285,8 +9314,13 @@ class Checker(
      * Returns a TS2728 related diagnostic ("'name' is declared here.") if found, null otherwise.
      */
     private fun findDeclarationRelatedInfo(name: String, fileName: String, source: String): Diagnostic? {
-        val result = fileResults[fileName] ?: return null
-        val symbol = result.locals[name] ?: findSymbolInNestedNamespaces(name, result.locals.values)
+        val result = fileResults[fileName]
+        val localSym = result?.locals?.get(name)
+            ?: result?.let { findSymbolInNestedNamespaces(name, it.locals.values) }
+        // 16.4: fall back to globals for lib-declared names (e.g. `Function`, `Array`) so
+        // that TS2552 "did you mean 'Function'" suggestions also get the TS2728 related info.
+        // The lib path is rendered as `lib.es5.d.ts:--:--` per the BaselineFormatter convention.
+        val symbol = localSym ?: globals[name]
         val declPos = if (symbol != null) {
             val decl = symbol.declarations?.firstOrNull() ?: symbol.valueDeclaration ?: return null
             when (decl) {
@@ -9304,14 +9338,24 @@ class Checker(
             }
         } else {
             // Not in file-level locals — search AST for block-scoped let/const declaration
+            if (result == null) return null
             findBlockScopedDeclPos(name, result.sourceFile.statements) ?: return null
         }
-        val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+        val (resolvedFile, resolvedSource) = resolveDeclarationSourceFile(declPos)
+        val declFile = resolvedFile ?: fileName
+        val declSource = resolvedSource ?: source
+        val isLib = isLibFileName(declFile)
+        val (declLine, declChar) = if (isLib) {
+            Pair(null as Int?, null as Int?)
+        } else {
+            val p = getLineAndCharacterOfPosition(declSource, declPos)
+            Pair(p.first, p.second)
+        }
         return Diagnostic(
             message = "'$name' is declared here.",
             category = DiagnosticCategory.Message,
             code = 2728,
-            fileName = fileName,
+            fileName = declFile,
             line = declLine,
             character = declChar,
             start = declPos,
