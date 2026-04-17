@@ -2519,6 +2519,15 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bt, +4 tests: 8162→8166):** TS2617/TS2596/TS2598 + TS2497 for named imports of `export =` modules without esModuleInterop:
+  - `import { Foo } from "./a"` where `./a` has `export = Foo` and `esModuleInterop: false` — TypeScript cannot synthesize named bindings; emits TS2617/TS2596/TS2598 at the named binding + TS2497 at the module specifier. We had only the `import * as X`/NamespaceImport variant (ESM + allowSyntheticDefaultImports flavor). Added the NamedImports path.
+  - Matrix of the named-binding code + TS2497 message flavor depends on the importer's file kind and module output target:
+      * ESM target (`es2015`+) — TS2596 "can only be imported by turning on the 'esModuleInterop' flag" + TS2497 mentioning `allowSyntheticDefaultImports`.
+      * CJS target, `.js` importer — TS2598 "using a 'require' call or ... esModuleInterop".
+      * CJS target, `.ts` importer — TS2617 "using 'import Foo = require(\"./a\")' or ... esModuleInterop" + TS2497 mentioning `esModuleInterop`.
+  - `options.esModuleInteropExplicitlyFalse` gate keeps the default-true esModuleInterop case (TS7.0 baseline) out of this path — TS2595 (the esModuleInterop:true variant) has different semantics (still-needed default import) and is not wired here yet; `importNonExportedMember7` continues to fail for that reason.
+  - → +4 tests: `importNonExportedMember{4,6,8,10}` (errors baselines). Zero regressions.
+
   **Session 2026-04-17 (16.4bs, +1 test: 8161→8162):** Classes inside `declare namespace` treated as ambient for TS7010/TS7006/TS7008:
   - `declare namespace M { class C { public g(x: any); private h(x); } }` — expected TS7010 on `g` (bodyless method, missing return type) and no TS7006 on `h` (private methods skipped in ambient classes). Our `checkImplicitAnyInStatements` and `checkTS7010InStatements` only set `isAmbient = ModifierFlag.Declare in stmt.modifiers` on the *class* modifier, so a class inside a `declare namespace` (which itself lacks the `declare` modifier on the class node) was treated as non-ambient.
   - Added `inAmbientContext: Boolean = false` parameter to both passes. `ModuleDeclaration` with `ModifierFlag.Declare` (or nested inside another ambient module) propagates `childAmbient = true` to its body statements. `ClassDeclaration` now computes `isAmbientClass = ModifierFlag.Declare in stmt.modifiers || inAmbientContext`.

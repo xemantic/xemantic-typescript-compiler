@@ -12184,6 +12184,64 @@ class Checker(
                     }
                 }
 
+                // TS2617/TS2596/TS2598 + TS2497: `import { X } from "./a"` where "./a" uses
+                // `export =` and esModuleInterop is explicitly false. TypeScript cannot synthesize
+                // named bindings without esModuleInterop, so the named import is invalid.
+                // The specific code + TS2497 message depend on the importer's file kind and module
+                // output target.
+                val namedBindingsEM = importClause.namedBindings
+                if (hasExportEquals && options.esModuleInteropExplicitlyFalse &&
+                    namedBindingsEM is NamedImports) {
+                    val importerIsJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+                    val isEsmTarget = isESModuleFormat(options.effectiveModule, fileName)
+                    for (importSpecifier in namedBindingsEM.elements) {
+                        if (importSpecifier.isTypeOnly) continue
+                        val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                        val importedName = nameNode.text
+                        if (importedName == "default") continue
+                        val nameStart = nameNode.pos
+                        val nameLength = importedName.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                        val (code, message) = when {
+                            isEsmTarget -> 2596 to
+                                "'$importedName' can only be imported by turning on the 'esModuleInterop' flag and using a default import."
+                            importerIsJs -> 2598 to
+                                "'$importedName' can only be imported by using a 'require' call or by turning on the 'esModuleInterop' flag and using a default import."
+                            else -> 2617 to
+                                "'$importedName' can only be imported by using 'import $importedName = require(\"$moduleName\")' or by turning on the 'esModuleInterop' flag and using a default import."
+                        }
+                        diagnostics.add(Diagnostic(
+                            message = message,
+                            category = DiagnosticCategory.Error,
+                            code = code,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameStart,
+                            length = nameLength,
+                        ))
+                    }
+                    val specStart = specifier.pos
+                    val specLength = moduleName.length + 2
+                    val (line, character) = getLineAndCharacterOfPosition(source, specStart)
+                    val ts2497Message = if (isEsmTarget) {
+                        "This module can only be referenced with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag and referencing its default export."
+                    } else {
+                        "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export."
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = ts2497Message,
+                        category = DiagnosticCategory.Error,
+                        code = 2497,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = specStart,
+                        length = specLength,
+                    ))
+                }
+
                 // TS2497: `import * as X from` against an `export =` module in an ESM
                 // output format (ES2015+, ESNext, Preserve) requires
                 // allowSyntheticDefaultImports (already guarded at the top of this
