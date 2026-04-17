@@ -3811,6 +3811,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             Slash, SlashEquals -> {
                 val regexToken = scanner.reScanSlashToken()
                 if (regexToken == RegularExpressionLiteral) {
+                    if (scanner.isTokenUnterminated()) {
+                        // TS1161 "Unterminated regular expression literal." — squiggle on the
+                        // opening `/` (length 1).
+                        reportError("Unterminated regular expression literal.", code = 1161,
+                            overrideStart = pos, overrideLength = 1)
+                    }
                     val text = scanner.getTokenText(); nextToken()
                     RegularExpressionLiteralNode(text = text, pos = pos, end = getEnd())
                 } else {
