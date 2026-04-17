@@ -541,6 +541,8 @@ class Checker(
         checkInterfaceExtendsInterface()
         // 64f3. Check circular base class references (TS2506)
         checkCircularBaseClasses()
+        // 64f3a. Check circular interface extends cycles (TS2310)
+        checkCircularInterfaceBases()
         // 64f3b. Check non-constructor extends (TS2507)
         checkNonConstructorExtends()
         // 64f5. Check interface multi-base property conflicts (TS2320)
@@ -30964,6 +30966,106 @@ interface DataView {
                     break
                 }
                 current = classExtends[current]
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2310: Type 'X' recursively references itself as a base type.
+    //   Fires for interfaces whose extends graph contains a cycle through the
+    //   interface's name. Covers direct self-reference (`interface I extends I`)
+    //   and mutual cycles (`interface A extends B; interface B extends A;`).
+    //   Complements TS2506 which handles class extends cycles.
+    // -----------------------------------------------------------------------
+
+    private fun checkCircularInterfaceBases() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                checkCircularInterfaceBasesInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkCircularInterfaceBasesInStatements(
+        statements: List<Statement>, source: String, fileName: String,
+    ) {
+        // Collect all interface declarations in this scope (including merged ones under the same name)
+        // Map name → list of extends-base-names collected across all declarations.
+        val interfaceExtends = mutableMapOf<String, MutableList<String>>()
+        // Keep one declaration per name for diagnostic positioning; later declarations overwrite
+        // but that's fine for position purposes — TypeScript emits at EACH declaration's name.
+        val interfaceDecls = mutableMapOf<String, MutableList<InterfaceDeclaration>>()
+        for (stmt in statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> {
+                    val name = stmt.name.text
+                    interfaceDecls.getOrPut(name) { mutableListOf() }.add(stmt)
+                    val extList = interfaceExtends.getOrPut(name) { mutableListOf() }
+                    val extendsClauses = stmt.heritageClauses?.filter {
+                        it.token == SyntaxKind.ExtendsKeyword
+                    } ?: continue
+                    for (clause in extendsClauses) {
+                        for (typeExpr in clause.types) {
+                            val baseName = when (val tn = typeExpr.expression) {
+                                is Identifier -> tn.text
+                                else -> null
+                            } ?: continue
+                            extList.add(baseName)
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    (stmt.body as? ModuleBlock)?.let {
+                        checkCircularInterfaceBasesInStatements(it.statements, source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+        if (interfaceExtends.isEmpty()) return
+
+        // For each interface, check whether it is reachable from itself through the extends graph.
+        // Uses DFS with visited set to avoid re-traversing; matches TypeScript's "cycle through self"
+        // semantics: `interface A extends B; interface B extends C` — A cycles only if C → A.
+        fun isSelfReferencing(start: String): Boolean {
+            val visited = mutableSetOf<String>()
+            fun dfs(cur: String): Boolean {
+                val exts = interfaceExtends[cur] ?: return false
+                for (next in exts) {
+                    if (next == start) return true
+                    if (!visited.add(next)) continue
+                    if (dfs(next)) return true
+                }
+                return false
+            }
+            return dfs(start)
+        }
+
+        for ((name, decls) in interfaceDecls) {
+            if (!isSelfReferencing(name)) continue
+            // Emit TS2310 at EACH declaration's name (merged interfaces get one per declaration).
+            for (decl in decls) {
+                val nameNode = decl.name
+                val start = nameNode.pos
+                val length = nameNode.text.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                // Display name: include type parameters if present, matching TypeScript's format.
+                val typeParamText = decl.typeParameters?.takeIf { it.isNotEmpty() }?.joinToString(", ") {
+                    it.name.text
+                }?.let { "<$it>" } ?: ""
+                diagnostics.add(Diagnostic(
+                    message = "Type '$name$typeParamText' recursively references itself as a base type.",
+                    category = DiagnosticCategory.Error,
+                    code = 2310,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
             }
         }
     }
