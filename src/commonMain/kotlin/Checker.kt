@@ -32511,15 +32511,12 @@ interface DataView {
                     // Skip if base member has multiple declarations (overloads)
                     if (basePropSymbol.declarations.size > 1) continue
 
-                    val derivedType = getTypeOfMemberDecl(member) ?: continue
-                    val baseDecl = basePropSymbol.valueDeclaration ?: basePropSymbol.declarations.firstOrNull()
-                    val basePropType = getTypeOfMemberDecl(baseDecl ?: continue) ?: continue
-
-                    if (derivedType === anyType || basePropType === anyType) continue
+                    val baseDecl = basePropSymbol.valueDeclaration ?: basePropSymbol.declarations.firstOrNull() ?: continue
 
                     // Shape-mismatch diagnostics (TS2423/TS2425/TS2426) take priority over TS2416.
                     // These fire when base and derived disagree on member category (property/method/accessor)
-                    // regardless of type assignability.
+                    // regardless of type assignability — emit BEFORE type resolution so cases where we
+                    // can't resolve types (e.g. accessor whose return type we can't infer from body) still fire.
                     val nameNode = when (member) {
                         is PropertyDeclaration -> member.name
                         is MethodDeclaration -> member.name
@@ -32530,7 +32527,11 @@ interface DataView {
                     val shapeDiag = classMemberShapeMismatchDiagnostic(
                         baseDecl, member, memberName, baseTypeName, className
                     )
-                    if (shapeDiag != null) {
+                    // Only emit shape diagnostic ONCE per method (skip for the paired setter when
+                    // the getter already emitted — baseline expects one TS2423 per accessor override).
+                    val isSetAccessorWithGet = member is SetAccessor &&
+                        classDecl.members.any { it is GetAccessor && (it.name as? Identifier)?.text == memberName }
+                    if (shapeDiag != null && !isSetAccessorWithGet) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         diagnostics.add(Diagnostic(
                             message = shapeDiag.second,
@@ -32547,6 +32548,11 @@ interface DataView {
                         // because the declared types are necessarily equal by construction.
                         // Fall through and let TS2416 fire if applicable.
                     }
+
+                    val derivedType = getTypeOfMemberDecl(member) ?: continue
+                    val basePropType = getTypeOfMemberDecl(baseDecl) ?: continue
+
+                    if (derivedType === anyType || basePropType === anyType) continue
 
                     if (!checkTypeRelatedTo(derivedType, basePropType, assignableRelation)) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
