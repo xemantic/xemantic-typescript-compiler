@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4by, +1 test: 8174→8175):** TS7010/TS7006 for bodyless functions and ambient-class constructors in `.d.ts` files when `noImplicitAny`:
+  - `implicitAnyInAmbientDeclaration2.d.ts` under `@noimplicitany: true` expects TS7010 on `declare function foo(x)` and `class C { public publicFunction(x) }`, plus TS7006 on `publicConsParam` inside `declare class D { public constructor(publicConsParam, int: number) }`. We skipped `.d.ts` files wholesale in `checkBodylessFunctionReturnTypesMissing`, and the ambient-class branch in `checkImplicitAnyInStatements` didn't handle `Constructor` members at all.
+  - Two-part fix: (a) `checkBodylessFunctionReturnTypesMissing` now enters `.d.ts` files when `noImplicitAny || strict`, passing `inAmbientContext = true` so nested classes-in-dts still get TS7010 for public bodyless methods; (b) added a `Constructor` branch in the ambient-class loop that runs `checkParamsForImplicitAny` for non-private constructors, mirroring the existing `MethodDeclaration` rule.
+  - → +1 test: `implicitAnyInAmbientDeclaration2_d_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4bx, +2 tests: 8172→8174):** TS2693 for primitive type keyword in NewExpression ctor position when callee is a non-Identifier:
   - `new number[]` parses as `new (ElementAccess(number, missing))`. `checkTypeAsValueInExpr`'s `NewExpression` branch only checked the `ctorExpr` when it was a bare `Identifier`, dropping the type-keyword detection for element-access ctors.
   - Added an `else` branch: when `ctorExpr` isn't an Identifier, recurse into it via `checkTypeAsValueInExpr`, which already handles `ElementAccessExpression` (recursing into its `.expression`). That reaches the nested `number`/`string`/`boolean` Identifier and emits TS2693.
