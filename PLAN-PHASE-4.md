@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4ce, +2 tests: 8182→8184):** TS2320 "Interface cannot simultaneously extend types" now fires for public-method conflicts when return types are structurally incompatible:
+  - `interface i3 extends i1, i2 {}` where `i1.name(): { s: string }` and `i2.name(): { n: number }` — expected TS2320. Our existing check emitted TS2320 only when at least one base's conflicting member was `private`, explicitly skipping the public-public case ("might still conflict on type, but that's TS2430" — wrong: TypeScript emits TS2320 here, not TS2430).
+  - New conflict logic: `hasPrivate` still triggers TS2320 unconditionally. For all-public, compare the two distinct base declarations' type nodes via `checkTypeRelatedTo` in both directions. If neither direction is assignable (and neither type is `errorType`), emit TS2320. Wrapped in `try/catch(StackOverflowError)` for cyclic types.
+  - Own-member guard: added `ownMemberNames` collection from `stmt.members` (PropertyDeclaration/MethodDeclaration names). Skip propName that the interface declares itself — the explicit override resolves the conflict (needed for `interface i4 extends i1, i2 { name(): { s: string; n: number; } }` to NOT fire TS2320).
+  - → +2 tests: `interfaceImplementation7` + 1 collateral. Zero regressions.
+
   **Session 2026-04-17 (16.4cd, +2 tests: 8180→8182):** TS7041 "The containing arrow function captures the global value of 'this'." for `this` inside arrow at top-level:
   - Under `@noImplicitThis: true`, `let f5 = () => () => this;` — expected TS7041 (not TS2683) at `this`. Our existing `checkImplicitThis` emitted TS2683 when `insideFunction == true` (set by FunctionDeclaration/FunctionExpression), and `!insideFunction` silently skipped the check. Arrow functions are transparent w.r.t. `this`, so `insideFunction` stays false — leaving us with no diagnostic at all for `this` inside a top-level arrow chain.
   - Added a new `insideArrowFunction: Boolean = false` parameter threaded through `checkThisInStatement`/`checkThisInStatements`/`checkThisInExpr`. ArrowFunction branches propagate `insideArrowFunction = true`; FunctionDeclaration/FunctionExpression branches reset it to `false` (regular functions shadow the arrow's `this` capture).
