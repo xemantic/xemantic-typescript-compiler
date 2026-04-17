@@ -34260,6 +34260,25 @@ interface DataView {
         val objectType = if (isThisAccess) {
             if (enclosingClassType == null) return
             enclosingClassType
+        } else if (objectExpr is ArrayLiteralExpression) {
+            // 16.4: `[1,2,3].NonexistantMethod()` → TS2339 against `number[]`.
+            val rawArr = try { getTypeOfArrayLiteral(objectExpr) } catch (_: StackOverflowError) { return }
+            if (rawArr === anyType || rawArr === errorType) return
+            if (rawArr !is Type.Reference || rawArr.target !== globalArrayType) return
+            // Widen literal element types for display: [1,2,3] → number[] (not (1|2|3)[]).
+            val args = rawArr.resolvedTypeArguments
+            if (!args.isNullOrEmpty()) {
+                val widened = args.map { t ->
+                    if (t is Type.Union) {
+                        val ws = t.types.map { getWidenedLiteralType(it) }.distinct()
+                        if (ws.size == 1) ws[0] else getUnionType(ws)
+                    } else getWidenedLiteralType(t)
+                }
+                displayTypeOverride = if (widened == args) rawArr else Type.Reference(rawArr.target, widened)
+            } else {
+                displayTypeOverride = rawArr
+            }
+            rawArr
         } else {
             if (objectExpr !is Identifier) return
             val identName = objectExpr.text
