@@ -1386,7 +1386,13 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         parseExpected(SyntaxKind.ClassKeyword)
         // `implements` and `extends` always start heritage clauses, never class names
         val name = if (isIdentifier() && token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword) parseIdentifier() else null
+        val ltPos = if (token == SyntaxKind.LessThan) getPos() else -1
         val typeParams = parseTypeParametersOpt()
+        if (typeParams != null && typeParams.isEmpty() && ltPos >= 0) {
+            val gtEnd = scanner.getPrevTokenEnd()
+            reportError("Type parameter list cannot be empty.", code = 1098,
+                overrideStart = ltPos, overrideLength = gtEnd - ltPos)
+        }
         val heritage = parseHeritageClauses()
         val beforeOpenBrace = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.OpenBrace)
@@ -4284,7 +4290,13 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         parseExpected(SyntaxKind.ClassKeyword)
         // `implements` and `extends` always start heritage clauses, never class names
         val name = if (isIdentifier() && token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword) parseIdentifier() else null
+        val ltPos = if (token == SyntaxKind.LessThan) getPos() else -1
         val typeParams = parseTypeParametersOpt()
+        if (typeParams != null && typeParams.isEmpty() && ltPos >= 0) {
+            val gtEnd = scanner.getPrevTokenEnd()
+            reportError("Type parameter list cannot be empty.", code = 1098,
+                overrideStart = ltPos, overrideLength = gtEnd - ltPos)
+        }
         val heritage = parseHeritageClauses()
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseClassMembers()
