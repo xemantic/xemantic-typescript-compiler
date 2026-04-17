@@ -17481,6 +17481,11 @@ interface DataView {
                     } else if (stmt.heritageClauses.isNullOrEmpty()) {
                         // No explicit constructor and no base class → 0 params
                         classCtorParams[name] = FuncParamInfo(0, 0, hasRest = false, isOverloaded = false)
+                    } else if (classHasCircularBase(stmt)) {
+                        // 16.4cr: Circular base (e.g. `class S18 extends S18<…>`) — the base
+                        // is unresolvable so there's no inherited ctor to defer to. Treat as
+                        // no-arg implicit constructor for TS2554 purposes.
+                        classCtorParams[name] = FuncParamInfo(0, 0, hasRest = false, isOverloaded = false)
                     }
                     // Skip classes with base class but no explicit constructor —
                     // they inherit the base constructor's param count which we can't resolve
