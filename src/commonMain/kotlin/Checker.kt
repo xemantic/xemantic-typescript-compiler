@@ -8582,6 +8582,30 @@ class Checker(
                                 emitTS2833(lname, leftmost, suggestion, source, fileName)
                                 return
                             }
+                            // 16.4cz: TS2702 — leftmost resolves to a type-only entity
+                            // (Class/Interface/TypeAlias) being used as a namespace qualifier.
+                            // Excluded: aliases (an invalid import like `import X from "./y"`
+                            // where y has no default export still resolves to a class via
+                            // fallback; firing TS2702 there double-reports atop TS2613/TS2305).
+                            // Enums allow qualified type access (`E.A` is a literal type), so
+                            // exclude enum-flagged symbols.
+                            val nonNamespaceTypeFlags = SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias
+                            val isTypeOnly = leftSym.flags.hasAny(nonNamespaceTypeFlags) &&
+                                !leftSym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Enum or SymbolFlags.Alias)
+                            if (isTypeOnly) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, leftmost.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "'$lname' only refers to a type, but is being used as a namespace here.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2702,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = leftmost.pos,
+                                    length = lname.length,
+                                ))
+                                return
+                            }
                         }
                     }
                 }
