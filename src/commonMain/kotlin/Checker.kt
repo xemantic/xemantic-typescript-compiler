@@ -8222,9 +8222,22 @@ class Checker(
                     // Only emit for valid identifier starts (skip parser recovery artifacts).
                     val validIdStart = lname.isNotEmpty() &&
                         (lname[0] in 'A'..'Z' || lname[0] in 'a'..'z' || lname[0] == '_' || lname[0] == '$')
-                    if (validIdStart && lname !in KEYWORD_IDENTIFIERS && !scope.has(lname)) {
-                        emitTS2503(lname, leftmost, source, fileName)
-                        return // skip TS2694 check too — leftmost is unresolved
+                    if (validIdStart && lname !in KEYWORD_IDENTIFIERS) {
+                        if (!scope.has(lname)) {
+                            emitTS2503(lname, leftmost, source, fileName)
+                            return
+                        }
+                        // Leftmost IS in scope. If the resolved symbol is NOT a namespace/module,
+                        // look for a similarly-named namespace and emit TS2833.
+                        val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
+                        if (leftSym != null && !leftSym.flags.hasAny(SymbolFlags.Module)) {
+                            val candidates = collectNamespaceNames(fileName)
+                            val suggestion = getSpellingSuggestionFromNames(lname, candidates)
+                            if (suggestion != null) {
+                                emitTS2833(lname, leftmost, suggestion, source, fileName)
+                                return
+                            }
+                        }
                     }
                 }
                 // Check QualifiedName segments for TS2694
@@ -8264,6 +8277,43 @@ class Checker(
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    /** Collect namespace/module names visible from [fileName] (globals + current file locals). */
+    private fun collectNamespaceNames(fileName: String): Set<String> {
+        val result = mutableSetOf<String>()
+        for ((name, sym) in globals) {
+            if (sym.flags.hasAny(SymbolFlags.Module)) result.add(name)
+        }
+        val fileLocals = fileResults[fileName]?.locals
+        if (fileLocals != null) {
+            for ((name, sym) in fileLocals) {
+                if (sym.flags.hasAny(SymbolFlags.Module)) result.add(name)
+            }
+        }
+        return result
+    }
+
+    /** Emit TS2833 "Cannot find namespace 'X'. Did you mean 'Y'?" with TS2728 related info. */
+    private fun emitTS2833(
+        name: String, node: Node, suggestion: String,
+        source: String, fileName: String,
+    ) {
+        val start = node.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val relatedInfo = findDeclarationRelatedInfo(suggestion, fileName, source)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find namespace '$name'. Did you mean '$suggestion'?",
+            category = DiagnosticCategory.Error,
+            code = 2833,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOfNotNull(relatedInfo),
         ))
     }
 
