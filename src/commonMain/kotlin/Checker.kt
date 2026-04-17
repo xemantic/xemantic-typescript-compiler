@@ -11851,8 +11851,18 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
+            val hostIsModule = isModuleFile(result.sourceFile.statements)
             for (stmt in result.sourceFile.statements) {
                 if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                    // A `declare module "X"` with a RELATIVE specifier inside a module file
+                    // is always a module augmentation — any external-module import/export
+                    // inside it gets TS2667. Non-relative names are ambient module
+                    // definitions (or bare-name augmentations of imported modules, which
+                    // we don't currently distinguish); imports inside those are allowed
+                    // at this level — TS2307/TS2664 handle those separately.
+                    val outerName = (stmt.name as StringLiteralNode).text
+                    val isRelativeAugmentation = hostIsModule &&
+                        (outerName.startsWith("./") || outerName.startsWith("../"))
                     val body = stmt.body
                     if (body is ModuleBlock) {
                         for (innerStmt in body.statements) {
@@ -11866,7 +11876,46 @@ class Checker(
                                 else -> null
                             }
                             val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
-                            if (moduleName.startsWith("./") || moduleName.startsWith("../")) {
+                            if (isRelativeAugmentation) {
+                                // Squiggle only the `import` / `export` keyword (6 chars).
+                                var kwStart = innerStmt.pos
+                                while (kwStart < source.length && source[kwStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) kwStart++
+                                val kwLength = when (innerStmt) {
+                                    is ExportDeclaration -> 6
+                                    else -> 6
+                                }
+                                val (kwLine, kwChar) = getLineAndCharacterOfPosition(source, kwStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Imports are not permitted in module augmentations. Consider moving them to the enclosing external module.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2667,
+                                    fileName = fileName,
+                                    line = kwLine,
+                                    character = kwChar,
+                                    start = kwStart,
+                                    length = kwLength,
+                                ))
+                                // TypeScript ALSO emits TS2307 for relative specifiers inside
+                                // augmentations — the augmented module's scope doesn't offer
+                                // normal relative resolution. checkUnresolvedModules won't flag
+                                // this (the file exists on disk in the multi-file layout), so
+                                // emit it here on the specifier.
+                                if (moduleName.startsWith("./") || moduleName.startsWith("../")) {
+                                    val specStart = specifier.pos
+                                    val specLen = moduleName.length + 2 // +2 for quotes
+                                    val (specLine, specChar) = getLineAndCharacterOfPosition(source, specStart)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Cannot find module '$moduleName' or its corresponding type declarations.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2307,
+                                        fileName = fileName,
+                                        line = specLine,
+                                        character = specChar,
+                                        start = specStart,
+                                        length = specLen,
+                                    ))
+                                }
+                            } else if (moduleName.startsWith("./") || moduleName.startsWith("../")) {
                                 emitStatementLineDiagnostic(
                                     innerStmt, source, fileName, 2439,
                                     "Import or export declaration in an ambient module declaration cannot reference module through relative module name.",
