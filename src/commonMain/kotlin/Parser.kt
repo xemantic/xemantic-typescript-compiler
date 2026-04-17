@@ -4402,14 +4402,21 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
             spans.add(TemplateSpan(expression = expr, literal = literal, pos = spanPos, end = getEnd()))
             if (literalKind == SyntaxKind.TemplateTail) break
-            // After a TemplateMiddle, if we're now at EOF there's an unclosed `${` at the end
+            // After a TemplateMiddle, if we're now at EOF there's an unclosed `${` at the end.
+            // TypeScript emits TS1109 "Expression expected." with a zero-length span at the
+            // position right after the `${` — i.e. where the next expression should have been.
             if (token == SyntaxKind.EndOfFile) {
+                reportError("Expression expected.", code = 1109,
+                    overrideStart = scanner.getTokenPos(), overrideLength = 0)
                 isUnterminated = true
                 break
             }
         }
-        // If loop exited immediately (no spans) due to EOF after TemplateHead, the `${` is unclosed
+        // If loop exited immediately (no spans) due to EOF after TemplateHead, the `${` is unclosed.
+        // Emit TS1109 at the position right after `${`, matching TypeScript's behavior.
         if (spans.isEmpty() && token == SyntaxKind.EndOfFile) {
+            reportError("Expression expected.", code = 1109,
+                overrideStart = scanner.getTokenPos(), overrideLength = 0)
             isUnterminated = true
         }
         return TemplateExpression(head = head, templateSpans = spans, isUnterminated = isUnterminated, pos = pos, end = getEnd())

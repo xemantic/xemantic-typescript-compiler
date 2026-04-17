@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bb, +2 tests: 8139→8141):** TS1109 "Expression expected." for unterminated `${` in template literals:
+  - Source `f \`abc${` (TemplateHead → EOF) and `f \`abc${ }${` (TemplateMiddle → EOF) both expect TS1109 with a zero-length span at the position right after the final `${`, indicating where the user should have placed an expression.
+  - Previously `parseTemplateExpression` detected the unterminated case (via `isUnterminated = true`) but emitted NO diagnostic — only propagated the flag to the AST node.
+  - Fix: emit TS1109 at `scanner.getTokenPos()` (start of EOF token = position right after `${`) with `overrideLength = 0` in both branches: (1) after a TemplateMiddle when the loop breaks due to EOF, and (2) when the loop never iterates because TemplateHead was immediately followed by EOF.
+  - → +2 tests: `taggedTemplatesWithIncompleteTemplateExpressions1`, `taggedTemplatesWithIncompleteTemplateExpressions2`. Zero regressions. Tests 3, 5, 6 still fail because they additionally require TS2345 (generic inference for tagged templates); test 4 needs non-EOF trailing-content handling — those are separate items.
+
   **Session 2026-04-17 (16.4ba, +1 test: 8138→8139):** TS2664 module-augmentation resolution honors `.js`/`.jsx` files under `allowJs`/`checkJs`:
   - `checkAmbientModuleAugmentations` previously fired TS2664 ("Invalid module name in augmentation") for `declare module "./test"` when the target `./test.js` file was loaded via `allowJs: true`. The main `resolveModuleSpecifier` only tries `.ts`/`.tsx`/`.d.ts` extensions — broadening it globally caused 2+ knock-on regressions (new TS2459 "not exported" false-positives because the .js file then becomes "resolved" for other checks but our CJS/JSDoc export analysis is incomplete).
   - **Scoped fix**: new `resolvesAsJsOrJsx(specifier)` helper only used by the TS2664 check. Tries `.js`/`.jsx` unconditionally when `allowJs || checkJs`; `.mjs`/`.cjs` only for relative specifiers. Falls back to a flat-directory base-match for absolute-path test layouts (`@Filename: /test.js`).
