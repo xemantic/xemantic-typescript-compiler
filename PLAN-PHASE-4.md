@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cp, +4 tests: 8195→8199):** TS5011 "The common source directory of 'tsconfig.json' is './X'. The 'rootDir' setting must be explicitly set…":
+  - Fires when `outDir` is set AND `rootDir` is unset AND (`declaration` OR `composite`) is true AND the common parent dir of input `.ts`/`.tsx` files is a proper subdirectory of the tsconfig's own directory. TypeScript's rationale: forcing an output layout without a rootDir leaves file-path stripping ambiguous.
+  - New `longestCommonPathPrefix` helper splits paths on `/` and takes the longest segment-wise common prefix. Source-file filter: `.ts`/`.tsx` only, excludes `.d.ts`, excludes anything containing `/node_modules/`, scopes to files under `tsconfigDir/` when `tsconfigDir` is non-empty.
+  - Relativization: when `tsconfigDir` is empty (root-anchored `/tsconfig.json`), strip the leading `/` from `commonDir` and prepend `./`. When `tsconfigDir` is non-empty, require `commonDir.startsWith("$tsconfigDir/")` then take the tail. If `commonDir == tsconfigDir`, no mismatch — skip.
+  - Diagnostic at the `outDir` key position (keyLength 8 including quotes) with `messageChain = ["  Visit https://aka.ms/ts6 for migration information."]` matching TypeScript's format.
+  - → +4 tests: `declarationEmitMonorepoBaseUrl` (errors), `declarationEmitPathMappingMonorepo` (errors), `declarationEmitPathMappingMonorepo2` (errors) + 1 collateral. Zero regressions.
+
   **Session 2026-04-17 (16.4co, +1 test: 8194→8195):** tsconfig.json `"extends"` chain (string and array forms):
   - `// @Filename: /tsconfig.json` with `{"extends": ["./tsconfig1.json", "./tsconfig2.json"]}` previously applied ZERO options — our `applyTsconfigOptions` bailed on missing `"compilerOptions"` key. The test needed `noImplicitAny` (from tsconfig2) to enable TS7006 on `function f(x)`.
   - New `collectExtendedTsconfigs(entry, fileEntries, visited)` helper walks the extends key BEFORE applying the main tsconfig. Supports both forms: string (`"extends": "./base"`) and array (`"extends": [...]`). Paths are resolved relative to the current tsconfig's directory via `resolveTsconfigPath` (handles `./`, `../`, and bare names; auto-appends `.json` if missing). Recursion handled with a `visited` set to avoid cycles. Non-relative specifiers (package-style) return the raw path and silently skip if no file entry matches.

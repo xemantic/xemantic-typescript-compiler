@@ -364,6 +364,51 @@ class TypeScriptCompiler {
             ))
         }
 
+        // TS5011: outDir + (declaration|composite) + common source dir != tsconfig dir + rootDir unset
+        //   Fires when the output-layout-affecting options force a directory structure but the
+        //   source files span more than the tsconfig's own directory. Without rootDir, the
+        //   compiler can't unambiguously decide how to strip paths for outDir.
+        //   Position: outDir key (8-char squiggle including quotes).
+        if (options.outDir != null && options.rootDir == null && (options.declaration || options.composite)) {
+            val outDirPos = tsconfigPos["outdir"]
+            if (outDirPos != null) {
+                val tsconfigDir = outDirPos.fileName.substringBeforeLast('/', "")
+                val sourceFiles = parsed.files.filter { f ->
+                    val n = f.fileName
+                    (n.endsWith(".ts") || n.endsWith(".tsx")) && !n.endsWith(".d.ts") &&
+                        "/node_modules/" !in n && !n.startsWith("node_modules/") &&
+                        (tsconfigDir.isEmpty() || n.startsWith("$tsconfigDir/"))
+                }
+                if (sourceFiles.isNotEmpty()) {
+                    val parentDirs = sourceFiles.map { it.fileName.substringBeforeLast('/', "") }
+                    val commonDir = longestCommonPathPrefix(parentDirs)
+                    val relative: String? = if (tsconfigDir.isEmpty()) {
+                        val stripped = commonDir.removePrefix("/")
+                        if (stripped.isEmpty()) null else "./$stripped"
+                    } else {
+                        when {
+                            commonDir == tsconfigDir -> null
+                            commonDir.startsWith("$tsconfigDir/") -> "./${commonDir.substring(tsconfigDir.length + 1)}"
+                            else -> null
+                        }
+                    }
+                    if (relative != null) {
+                        diagnostics.add(Diagnostic(
+                            message = "The common source directory of 'tsconfig.json' is '$relative'. The 'rootDir' setting must be explicitly set to this or another path to adjust your output's file layout.",
+                            category = DiagnosticCategory.Error,
+                            code = 5011,
+                            fileName = outDirPos.fileName,
+                            line = outDirPos.keyLine,
+                            character = outDirPos.keyCharacter,
+                            start = outDirPos.keyStart,
+                            length = outDirPos.keyLength,
+                            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information."),
+                        ))
+                    }
+                }
+            }
+        }
+
         // TS5070: resolveJsonModule with classic moduleResolution
         // Classic is the default for module=none/amd/umd/system
         var emitted5070 = false
@@ -1222,6 +1267,22 @@ private fun topologicalSort(
 private val trailingCommaRegex = Regex(",(?=\\s*[}\\]])")
 private val emptyObjectRegex = Regex("\\{\\s+\\}")
 private val emptyArrayRegex = Regex("\\[\\s+\\]")
+
+/** Longest common path prefix across directory paths. Splits on '/' and takes the
+ *  longest segment-wise common prefix. Returns empty string when paths don't share
+ *  any leading segment. Example: ["/a/b/c", "/a/b/d"] → "/a/b". */
+private fun longestCommonPathPrefix(paths: List<String>): String {
+    if (paths.isEmpty()) return ""
+    if (paths.size == 1) return paths[0]
+    val segmentsLists = paths.map { it.split('/') }
+    val minSize = segmentsLists.minOf { it.size }
+    val common = mutableListOf<String>()
+    for (i in 0 until minSize) {
+        val seg = segmentsLists[0][i]
+        if (segmentsLists.all { it[i] == seg }) common.add(seg) else break
+    }
+    return common.joinToString("/")
+}
 
 private fun stripJsonTrailingCommas(content: String): String =
     content.replace(trailingCommaRegex, "")
