@@ -29370,6 +29370,7 @@ interface DataView {
                 is ClassDeclaration -> {
                     // Check method overloads in classes
                     checkMethodOverloadsInClass(stmt.members, source, fileName)
+                    checkMultipleConstructorImpls(stmt.members, source, fileName)
                 }
                 is Block -> checkOverloadsInStatements(stmt.statements, source, fileName)
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
@@ -29377,6 +29378,32 @@ interface DataView {
                 }
                 else -> {}
             }
+        }
+    }
+
+    /**
+     * Emit TS2392 "Multiple constructor implementations are not allowed." when a class has 2+
+     * constructors with bodies. TypeScript allows 1 implementation + N overload signatures
+     * (signatures have no body). All implementations get the diagnostic.
+     * Squiggle covers the `constructor` keyword.
+     */
+    private fun checkMultipleConstructorImpls(members: List<ClassElement>, source: String, fileName: String) {
+        val impls = members.filterIsInstance<Constructor>().filter { it.body != null }
+        if (impls.size < 2) return
+        val keyword = "constructor"
+        for (ctor in impls) {
+            val kwStart = source.indexOf(keyword, startIndex = ctor.pos).takeIf { it >= 0 && it < ctor.end } ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, kwStart)
+            diagnostics.add(Diagnostic(
+                message = "Multiple constructor implementations are not allowed.",
+                category = DiagnosticCategory.Error,
+                code = 2392,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = kwStart,
+                length = keyword.length,
+            ))
         }
     }
 

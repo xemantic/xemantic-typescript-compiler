@@ -1601,7 +1601,21 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseConstructor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int): Constructor {
         nextToken() // skip 'constructor'
-        parseTypeParametersOpt() // skip type params if present (error recovery for constructor<T>())
+        // Constructors cannot have type parameters. Emit TS1092 when `<...>` is present, and TS1098
+        // when the list is empty (e.g. `constructor<>()`).
+        if (token == SyntaxKind.LessThan) {
+            val ltPos = getPos()
+            val typeParams = parseTypeParametersOpt()
+            if (typeParams != null) {
+                val gtEnd = scanner.getPrevTokenEnd()
+                if (typeParams.isEmpty()) {
+                    reportError("Type parameter list cannot be empty.", code = 1098,
+                        overrideStart = ltPos, overrideLength = gtEnd - ltPos)
+                }
+                reportError("Type parameters cannot appear on a constructor declaration.",
+                    code = 1092, overrideStart = ltPos + 1, overrideLength = 0)
+            }
+        }
         val params = parseParameterList()
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
