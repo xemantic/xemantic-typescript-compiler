@@ -6907,7 +6907,7 @@ class Checker(
                                 else -> {}
                             }
                         } else {
-                            checkImplicitAnyInClassElement(member, source, fileName)
+                            checkImplicitAnyInClassElement(member, source, fileName, stmt.members)
                         }
                     }
                 }
@@ -7011,6 +7011,7 @@ class Checker(
         element: ClassElement,
         source: String,
         fileName: String,
+        siblings: List<ClassElement> = emptyList(),
     ) {
         when (element) {
             is MethodDeclaration -> {
@@ -7043,21 +7044,89 @@ class Checker(
                     && !element.exclamationToken) {
                     val name = element.name
                     if (name is Identifier && name.text.isNotEmpty()) {
-                        val start = name.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Member '${name.text}' implicitly has an 'any' type.",
-                            category = DiagnosticCategory.Error,
-                            code = 7008,
-                            fileName = fileName,
-                            line = line, character = character,
-                            start = start, length = name.text.length,
-                        ))
+                        // Skip if a static initializer block assigns to this property via `this.<name> = ...`
+                        // (flow analysis approximation — any assignment suffices).
+                        val assignedInStaticBlock = siblings.any { sib ->
+                            sib is ClassStaticBlockDeclaration &&
+                                blockAssignsToThisProperty(sib.body.statements, name.text)
+                        }
+                        if (!assignedInStaticBlock) {
+                            val start = name.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Member '${name.text}' implicitly has an 'any' type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7008,
+                                fileName = fileName,
+                                line = line, character = character,
+                                start = start, length = name.text.length,
+                            ))
+                        }
                     }
                 }
             }
             else -> {}
         }
+    }
+
+    /**
+     * Does any statement in [statements] contain a `this.<propName> = ...` or `this.<propName> op= ...`
+     * assignment? Used to suppress TS7008 for static class props when a sibling static initializer
+     * block performs the assignment.
+     */
+    private fun blockAssignsToThisProperty(statements: List<Statement>, propName: String): Boolean {
+        for (stmt in statements) {
+            if (statementAssignsToThisProperty(stmt, propName)) return true
+        }
+        return false
+    }
+
+    private fun statementAssignsToThisProperty(stmt: Statement, propName: String): Boolean {
+        return when (stmt) {
+            is ExpressionStatement -> exprAssignsToThisProperty(stmt.expression, propName)
+            is IfStatement -> statementAssignsToThisProperty(stmt.thenStatement, propName)
+                || (stmt.elseStatement?.let { statementAssignsToThisProperty(it, propName) } == true)
+            is Block -> blockAssignsToThisProperty(stmt.statements, propName)
+            is ForStatement -> statementAssignsToThisProperty(stmt.statement, propName)
+            is ForInStatement -> statementAssignsToThisProperty(stmt.statement, propName)
+            is ForOfStatement -> statementAssignsToThisProperty(stmt.statement, propName)
+            is WhileStatement -> statementAssignsToThisProperty(stmt.statement, propName)
+            is DoStatement -> statementAssignsToThisProperty(stmt.statement, propName)
+            is TryStatement -> blockAssignsToThisProperty(stmt.tryBlock.statements, propName)
+                || (stmt.catchClause?.block?.statements?.let { blockAssignsToThisProperty(it, propName) } == true)
+                || (stmt.finallyBlock?.statements?.let { blockAssignsToThisProperty(it, propName) } == true)
+            else -> false
+        }
+    }
+
+    private fun exprAssignsToThisProperty(expr: Expression, propName: String): Boolean {
+        if (expr is BinaryExpression) {
+            val op = expr.operator
+            val isAssign = op == SyntaxKind.Equals
+                || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals
+                || op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals
+                || op == SyntaxKind.PercentEquals
+                || op == SyntaxKind.AmpersandEquals || op == SyntaxKind.BarEquals
+                || op == SyntaxKind.CaretEquals
+                || op == SyntaxKind.LessThanLessThanEquals
+                || op == SyntaxKind.GreaterThanGreaterThanEquals
+                || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+                || op == SyntaxKind.AsteriskAsteriskEquals
+                || op == SyntaxKind.AmpersandAmpersandEquals
+                || op == SyntaxKind.BarBarEquals
+                || op == SyntaxKind.QuestionQuestionEquals
+            if (isAssign) {
+                val target = expr.left
+                if (target is PropertyAccessExpression
+                    && target.expression is Identifier
+                    && (target.expression as Identifier).text == "this"
+                    && target.name is Identifier
+                    && (target.name as Identifier).text == propName) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String, contextuallyTyped: Boolean = false) {
