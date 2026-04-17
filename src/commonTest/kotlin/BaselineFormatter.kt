@@ -632,12 +632,19 @@ fun formatErrorBaseline(
                         +"!!! related TS"
                         +related.code.toString()
                         +" "
-                        if (related.fileName != null) {
-                            +related.fileName!!
+                        val relFile = related.fileName
+                        if (relFile != null) {
+                            +relFile
                             +":"
-                            +(related.line ?: 0).toString()
-                            +":"
-                            +(related.character ?: 0).toString()
+                            val base = relFile.substringAfterLast('/').substringAfterLast('\\')
+                            val isLib = base.startsWith("lib.") && base.endsWith(".d.ts")
+                            if (isLib && related.line == null) {
+                                +"--:--"
+                            } else {
+                                +(related.line ?: 0).toString()
+                                +":"
+                                +(related.character ?: 0).toString()
+                            }
                         }
                         +": "
                         +related.message
