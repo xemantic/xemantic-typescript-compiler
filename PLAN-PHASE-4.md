@@ -2826,6 +2826,12 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `namespaceDisambiguationInUnion_ts` → `Foo.Yep | Bar.Yep` needs namespace-qualified display; otherwise both render as `Yep`.
 - `unionTypeWithRecursiveSubtypeReduction3_ts` → recursive type display `{ prop: { prop: number } | any }` vs our `{ prop: error }`.
 
+**Additional tests investigated this session that ended up in blocker/feature buckets:**
+- `booleanAssignment_ts` → EXTRA TS2322 for `true`/`boolean` → `Boolean` wrapper. Primitive-to-wrapper assignability (blocker-adjacent — see "Wrapper/display tweaks" below). Test also needs `{} → Boolean` elaboration via `valueOf()` structural comparison.
+- `assignmentIndexedToPrimitives_ts` → SWAP. `{ "0": number; }` vs our `{ 0: number; }` — numeric-looking string literal keys need quoted display. Display-only issue but coupled with duplicate-message elaboration on every line (12 redundant elaborations our walker emits). Two-bug fix required.
+- `genericClassWithStaticFactory_ts` → MISSING TS2345 `Argument of type 'null' is not assignable to parameter of type 'T'`. Blocker #1 — generic parameter-type substitution.
+- `promiseDefinitionTest_ts__target_es5__` → MISSING TS2300 `Duplicate identifier 'Promise'`. Needs binder-level conflict detection between user class declaration and lib-declared var. Non-trivial — risk of regressing many tests that legitimately shadow lib names.
+
 **Wrapper/display tweaks (tried, zero-gain alone — deferred):**
 - Primitive → boxed wrapper (`boolean → Boolean` etc.) assignability in `isSimpleTypeRelatedTo`: drops the TS2322 FP but misses `valueOf()` mismatch elaboration. Net-zero.
 - Wrapper-interface → primitive elaboration (`'number' is a primitive, but 'Number' is a wrapper object. Prefer using 'number' when possible.`): helper ready but emits require-chain elaborations elsewhere. `nativeToBoxedTypes_ts` still short one TS2322 for `sym = Sym` (Symbol interface → `symbol` primitive) because the relation comparison unexpectedly passes — reason not isolated. Deferred.

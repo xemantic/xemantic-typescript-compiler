@@ -14,10 +14,18 @@ Continue Phase 4 of the TypeScript compiler port.
 Before picking any work:
 - read STATUS.md for the current test count
 - read CLAUDE.md's "AI agent mission" and "Execution protocol" sections
-- open PLAN-PHASE-4.md and read the "Known architectural blockers" and
-  "Candidate-picking workflow" sections near the bottom. These tell you
-  which candidates are reachable with surgical fixes and which are
-  multi-session investigations you should skip.
+- open PLAN-PHASE-4.md and read THESE three sections near the bottom,
+  in order:
+    1. "Explored-but-skipped tests" — every test already examined and
+       classified by root cause. If a test you're considering is listed
+       here, read its skip reason BEFORE re-investigating — the failure
+       mode is already characterized. Do not repeat the analysis.
+    2. "What's left in the surgical fix pool" — concrete guidance on
+       whether the surgical pool still has wins or whether the session
+       should instead attempt an architectural blocker.
+    3. "Known architectural blockers" — multi-session investigations
+       with yield/risk ratings. Read the retry plan for blocker #1 if
+       you intend to tackle one.
 - `PLAN-PHASE-4-HISTORY.md` holds archived session notes from completed
   items. Only read it if you need to understand why a past fix was made.
 
@@ -33,12 +41,20 @@ Your loop (per CLAUDE.md § Execution protocol):
    16.4 in PLAN-PHASE-4.md (search for "Session 2026-04") to see what has
    been tried lately and avoid re-treading.
 
-3. Once XMLs are fresh, use the Python-parse-plus-filter approach from the
-   "Candidate-picking workflow" section to find tests with:
-     - 1-2 EXTRA diagnostic lines (we're too aggressive — look for a guard)
-     - 1 MISSING diagnostic at a specific position (simple new check)
-     - Code-swap patterns: expected TS####A at position P vs actual
-       TS####B at the same P (wrong code choice at one call site)
+3. Once XMLs are fresh, run the candidate finder:
+
+       python3 scripts/find_candidates.py --fresh
+
+   `--fresh` hides tests already in the "Explored-but-skipped" log. Drop
+   the flag to see all buckets with `[SKIP]` markers — useful when
+   spot-checking whether a previous skip decision still applies. The
+   script auto-parses the skipped-log from PLAN-PHASE-4.md, so once a
+   test lands in that section future sessions skip it automatically.
+
+   The three output buckets are:
+     - EXTRA — we emit N extra diagnostic lines (add a guard)
+     - MISSING — expected has N extra lines (add a new check)
+     - SWAP — same position, different TS code (change emission site)
 
 4. For each candidate you plan to attempt, READ BOTH the source in
    `typescript-repo/tests/cases/compiler/<name>.ts` AND the expected
@@ -46,36 +62,40 @@ Your loop (per CLAUDE.md § Execution protocol):
    before making any change. The full source often explains why TypeScript
    chose a particular diagnostic and at which position.
 
-5. SKIP candidates whose root cause is listed under "Known architectural
-   blockers" in PLAN-PHASE-4.md:
-     - cross-file global scope conflation (module-file locals leaking
-       into other files' scopes)
-     - structural comparison of generic type references
-     - TS7006 over-suppression for callback parameters
-     - JSDoc @type / @this / @typedef handling
-     - parser error-recovery asymmetry for `declare class foo();`-style
-       inputs
+5. If you investigate a candidate and decide to skip it without a fix,
+   LOG IT under "Explored-but-skipped tests" in PLAN-PHASE-4.md with a
+   one-line skip reason (root cause or which blocker). This is how we
+   stop the next session from re-treading the same path.
 
-   Those are multi-session investigations with broad regression risk, not
-   surgical wins.
+6. If `--fresh` returns mostly empty or the remaining candidates are all
+   "needs new diagnostic / feature" items, it's time to either:
+     (a) implement one of the small new-diagnostic items grouped under
+         "Needs a new diagnostic / feature" (each is 1-3 tests, but they
+         add up), or
+     (b) take on an architectural blocker — read blocker #1's "Retry
+         plan" first and size the work honestly against remaining context
+         budget. Blocker #1 is ~30+ tests but consumes most of a session.
 
-6. Commit each fix as its own `feat(16.4X): ...` commit and push. Re-run
+7. Commit each fix as its own `feat(16.4X): ...` commit and push. Re-run
    the full suite between fixes to catch regressions immediately. A
    reasonable cadence is 2-4 commits per session when items yield +1 to
    +5 tests each.
 
-7. After each commit:
+8. After each commit:
      - append a session note under item 16.4 in PLAN-PHASE-4.md
        describing what changed, the test-count delta, and any surprising
        constraint the fix revealed;
      - add a CLAUDE.md gotcha if the fix exposed a non-obvious invariant
        that a future agent would otherwise re-discover the hard way.
 
-8. If you get stuck — a fix regresses repeatedly, or every remaining
+9. If you get stuck — a fix regresses repeatedly, or every remaining
    low-hanging candidate turns out to be an architectural-blocker case —
-   STOP cleanly after committing any in-progress work. Don't burn context
-   chasing a fix that keeps regressing; document what you tried in the
-   session note and end the session.
+   STOP cleanly after committing any in-progress work. Before ending:
+     - log any newly investigated tests under "Explored-but-skipped" so
+       the next session benefits from your analysis;
+     - update the "What's left in the surgical fix pool" recommendation
+       if the situation has shifted (e.g. new diagnostic implemented,
+       blocker partially unblocked).
 
 Begin.
 ```
