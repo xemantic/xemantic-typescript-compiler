@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ae, +1 test: 8109→8110):** TS2370 "A rest parameter must be of an array type":
+  - New `checkNonArrayRestParameters()` pass (always-on, not gated on strict/noImplicitAny) walks all function-like declarations and emits TS2370 when a rest parameter's type annotation is a clearly-non-array keyword (number, string, boolean, bigint, symbol, void, never, null, undefined). Conservative: does not resolve TypeReferences, so `function f(...x: Foo)` where `type Foo = number[]` stays silent.
+  - Squiggle covers `...name: Type` — length computed as `typeNode.pos + keywordText.length - (name.pos - 3)`. Keyword text length is known from the SyntaxKind (no reliance on `node.end` which overshoots).
+  - **FP suppression for downstream checks**: in both local-type populators (`checkTypeAssignabilityInStatements` param loop at 27112 and `populateParameterLocalTypes` at 33003), skip rest params whose annotation is non-array. Otherwise `function f(...rest: number) { rest[0] }` would also emit TS2339 "Property '0' does not exist on type 'number'", which TypeScript does NOT emit once TS2370 fires.
+  - → +1 test: `nonArrayRestArgs_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ad, +1 test: 8108→8109):** TS2741 "required in type" uses declaring class for inherited properties:
   - `resolveInterfaceMembers` now sets `propSymbol.parent = symbol` (the class/interface Symbol) on newly-created member Symbols — PropertyDeclaration, MethodDeclaration (when not inherited override), Constructor parameter properties, GetAccessor, SetAccessor. Inherited members already point at their base's Symbol so they naturally retain the declaring-class parent.
   - New `getDeclaringTypeDisplay(propSymbol, targetType, fallback)` returns `propSymbol.parent.name` when the parent exists AND differs from the target type's symbol (inherited-property case). Otherwise returns the annotation-based `displayTarget`. Applied at all three TS2741 emission sites (var decl, property init, assignment expression).
