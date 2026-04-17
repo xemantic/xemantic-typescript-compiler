@@ -3824,9 +3824,13 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             FunctionKeyword -> parseFunctionExpression()
             ClassKeyword -> parseClassExpression()
             At -> {
-                // @decorator class C {} in expression position (TypeScript reports TS1206 but still parses/emits)
+                // @decorator class C {} in expression position — TS1206 "Decorators are
+                // not valid here." but we still parse so downstream checks continue.
+                val atPos = getPos()
                 val decorators = parseDecorators()
                 if (token == SyntaxKind.ClassKeyword) {
+                    reportError("Decorators are not valid here.", code = 1206,
+                        overrideStart = atPos, overrideLength = 1)
                     parseClassExpression().copy(decorators = decorators)
                 } else {
                     parseIdentifier()
