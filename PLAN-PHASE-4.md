@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bd, +1 test: 8142→8143):** TS1005 "';' expected." when `:` follows an expression statement without a line break:
+  - Source `this.foo: any;` inside a constructor body (mis-typed class-field): our parser previously parsed `this.foo` as an expression statement, called `parseSemicolon` (which silently accepted when ASI didn't apply), then treated `:` as a statement start and emitted TS1109 "Expression expected." at the `:` position. TypeScript emits TS1005 "';' expected." instead.
+  - Fix: in `parseSemicolon`, when the current token is `Colon` and there is no preceding line break, emit TS1005 with a 1-char squiggle at the colon position. Narrow to `:` only — broadening to "any non-ASI token" regresses 8+ tests in error-recovery paths (tried first, reverted).
+  - → +1 test: `autoLift2`. Zero regressions. Sibling tests (`arrowFunctionsMissingTokens`, `fatarrowfunctionsErrors`, `parseErrorIncorrectReturnToken`, `parserUnparsedTokenCrash1`) expect TS1005 at different syntax points (`,`/`)`/`=>`) and remain unchanged.
+
   **Session 2026-04-17 (16.4bc, +1 test: 8141→8142):** TS1005/TS1003 for bare `default X` without `export` (differentiated from `@decorator default X`):
   - Previously the `DefaultKeyword` branch in `parseStatement` ALWAYS emitted TS1029 "'export' modifier must precede 'default' modifier." for `default`-started statements, regardless of whether decorators preceded.
   - TypeScript's actual behavior: `@decorator default class {}` (decorated context) → TS1029; bare `default function () {}` → TS1005 "'export' expected." at the `default` keyword + TS1003 "Identifier expected." at the missing function name.

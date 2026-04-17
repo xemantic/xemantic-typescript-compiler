@@ -137,7 +137,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         if (token == SyntaxKind.Semicolon) {
             nextToken(); return
         }
-        // ASI: implicit at }, EOF, or after line break
+        // ASI: implicit at }, EOF, or after line break. In a few well-defined cases
+        // the current token unambiguously cannot continue a statement — TypeScript
+        // emits TS1005 "';' expected." at that position. Restrict to `:` for now to
+        // avoid noisy regressions in broader error-recovery paths. Covers patterns
+        // like `this.foo: any;` (mis-typed class-field declaration inside a body).
+        if (token == SyntaxKind.Colon && !scanner.hasPrecedingLineBreak()) {
+            reportError("';' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(), overrideLength = 1)
+        }
     }
 
     /**
