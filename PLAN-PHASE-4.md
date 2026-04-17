@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bg, +1 test: 8145→8146):** TS2576 message now includes class type parameters (`List<T>` not `List`):
+  - `class List<T>` with a static `Foo()` accessed via `this.Foo()` inside an instance method: the TS2576 "did you mean static" message displayed the bare class name (`type 'List'. Did you mean ... 'List.Foo'`) instead of including the class's type parameters (`type 'List<T>'. Did you mean ... 'List<T>.Foo'`).
+  - Fix in `checkMemberAccess` TS2576 emission site: render the class name as `baseName + "<T1, T2, ...>"` when `ClassDeclaration.typeParameters` is non-empty. Uses type-parameter NAMES (not instantiated args) — matches TypeScript's baseline convention for the static-member suggestion form.
+  - → +1 test: `staticOffOfInstance2`. Zero regressions.
+
   **Session 2026-04-17 (16.4bf, +1 test: 8144→8145):** Assignment TS2741/TS2739/TS2740 survive relation-cache hits:
   - `x = y; x = y;` where the RHS is missing a required property: TypeScript emits the same TS2741 on both statements. Our `checkAssignmentExpression` path gated the property-listing variant on `lastMissingPropertyName != null` — a side-effect set by `checkTypeRelatedTo`. The second `x = y` hits the relation cache (Ternary.False), skipping the side-effect setter, so `lastMissingPropertyName` stays null and the check falls through to a plain TS2322 "Type X is not assignable to Y." (correct diagnostic family, wrong code and missing elaboration).
   - Fix: compute the missing-property set directly via `collectMissingProperties(sourceType, tt)` whenever the assignment fails structural-comparison, instead of relying on the side-effect. Falls back to `lastMissingPropertySymbol` for the TS2728 "declared here" related info; if that is also nulled by caching, looks up the first missing property symbol directly from the target's properties. Consistent with how 16.4ba and earlier sessions handle cache-insensitive detection.

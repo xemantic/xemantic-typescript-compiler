@@ -33637,8 +33637,12 @@ interface DataView {
                     && isStaticMemberOfClass(classDecl, propName)
                     && !hasInstanceMemberNamed(classDecl, propName)
                 ) {
-                    val className = classDecl.name?.text ?: objectType.symbol?.name
-                    if (className != null) {
+                    val baseName = classDecl.name?.text ?: objectType.symbol?.name
+                    if (baseName != null) {
+                        val tps = classDecl.typeParameters
+                        val className = if (!tps.isNullOrEmpty())
+                            "$baseName<${tps.joinToString(", ") { it.name.text }}>"
+                        else baseName
                         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                         diagnostics.add(Diagnostic(
                             message = "Property '$propName' does not exist on type '$className'. Did you mean to access the static member '$className.$propName' instead?",
