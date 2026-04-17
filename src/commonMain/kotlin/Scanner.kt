@@ -334,6 +334,7 @@ class Scanner(private val text: String) {
     fun reScanSlashToken(): SyntaxKind {
         // Reset to the start of the slash token
         pos = tokenPos
+        tokenIsUnterminated = false
         if (pos < end && text[pos] == '/') {
             pos++ // skip opening /
             var inCharClass = false
@@ -369,6 +370,9 @@ class Scanner(private val text: String) {
                         break
                     }
                 }
+            } else {
+                // Regex stopped at EOF or line break before finding closing `/` — unterminated.
+                tokenIsUnterminated = true
             }
             tokenValue = text.substring(tokenPos, pos)
             token = SyntaxKind.RegularExpressionLiteral
