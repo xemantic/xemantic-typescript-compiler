@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bp, +1 test: 8158→8159):** TS2439 "Import or export declaration in an ambient module declaration cannot reference module through relative module name.":
+  - Fires when `import Y = require("./Z")` / `import X from "./Z"` / `export ... from "./Z"` is nested inside a `declare module "X" { ... }` augmentation. Test has both the inner TS2307 (from 16.4bl) AND this TS2439 — we had the former, were missing the latter.
+  - New `checkRelativeImportsInAmbientModules` pass: iterates top-level `ModuleDeclaration` nodes with `StringLiteralNode` name, walks their `ModuleBlock.statements`, and emits TS2439 at the statement line for any ImportDeclaration/ExportDeclaration/ImportEqualsDeclaration (with ExternalModuleReference) whose specifier starts with `./` or `../`. Uses `emitStatementLineDiagnostic` so the squiggle spans the whole statement up to the `;`.
+  - → +1 test: `ambientExternalModuleWithRelativeExternalImportDeclaration` (errors baseline). Zero regressions.
+
   **Session 2026-04-17 (16.4bo, +4 tests: 8154→8158):** TS2423/TS2425/TS2426 shape-mismatch diagnostics for class-member overrides (property/method/accessor disagree):
   - Previously only TS2416 "Property 'X' in type 'D' is not assignable to the same property in base type 'B'" fired when a derived class's member was type-incompatible with the base. TypeScript additionally emits a more specific diagnostic when the member *category* differs: TS2423 (base function→derived accessor), TS2425 (base property→derived function), TS2426 (base accessor→derived function).
   - Added `classMemberShapeMismatchDiagnostic(baseDecl, derivedMember, name, baseTypeName, derivedClassName)` helper returning `(code, message)?` based on the (base-kind, derived-kind) pair. Wired into the existing TS2416 loop before the `checkTypeRelatedTo` call.
