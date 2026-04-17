@@ -10658,6 +10658,61 @@ class Checker(
                 }
             }
         }
+        checkEnumMemberInitializers(decl, source, fileName)
+    }
+
+    /**
+     * TS1061: "Enum member must have initializer."
+     * Fires for a member with no initializer when the previous member's value
+     * cannot be evaluated as a numeric constant (auto-increment impossible).
+     * Matches TypeScript's behavior: skip `declare enum` (ambient, all members
+     * must have initializers separately enforced).
+     */
+    private fun checkEnumMemberInitializers(
+        decl: EnumDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        if (ModifierFlag.Declare in decl.modifiers) return
+        // Track computed values from earlier members for reference resolution.
+        val syntheticSymbol = Symbol(SymbolFlags.RegularEnum, decl.name.text)
+        val localValues = mutableMapOf<String, ConstantValue>()
+        var canAutoIncrement = true
+        for (member in decl.members) {
+            val memberName = when (val n = member.name) {
+                is Identifier -> n.text
+                is StringLiteralNode -> n.text
+                is NumericLiteralNode -> n.text
+                else -> null
+            }
+            if (member.initializer != null) {
+                val v = evaluateEnumInitializer(member.initializer, localValues, syntheticSymbol)
+                canAutoIncrement = v is ConstantValue.NumberValue
+                if (v != null && memberName != null) localValues[memberName] = v
+            } else {
+                if (!canAutoIncrement) {
+                    val nameNode = member.name
+                    val (pos, length) = when (nameNode) {
+                        is Identifier -> nameNode.pos to nameNode.text.length
+                        is StringLiteralNode -> nameNode.pos to ((nameNode.rawText?.length ?: nameNode.text.length) + 2)
+                        is NumericLiteralNode -> nameNode.pos to nameNode.text.length
+                        else -> nameNode.pos to 1
+                    }
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Enum member must have initializer.",
+                        category = DiagnosticCategory.Error, code = 1061,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = length,
+                    ))
+                } else if (memberName != null) {
+                    // Record the implicit auto-increment value for downstream references.
+                    val last = localValues.values.lastOrNull()
+                    val base = if (last is ConstantValue.NumberValue) last.value + 1 else 0.0
+                    localValues[memberName] = ConstantValue.NumberValue(base)
+                }
+            }
+        }
     }
 
     /**
