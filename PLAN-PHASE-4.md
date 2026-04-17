@@ -2675,6 +2675,17 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4am, +2 tests: 8123→8125):** TS2709 for `import X = require(...)` used as type:
+  - Previously `checkTypeRefForNamespace` skipped local aliases unconditionally. Now when a TypeReference's identifier resolves to an Alias symbol whose first declaration is an `ImportEqualsDeclaration` with `ExternalModuleReference` (i.e. `import X = require("mod")`), we resolve the target module via `resolveModuleSpecifier` and check whether its statements include an `ExportAssignment` with `isExportEquals`. If NOT, `X` is a namespace alias and using it as a type emits TS2709 "Cannot use namespace 'X' as a type." at the type name.
+  - Also extended `checkNamespaceAsTypeInStmt` to recurse into `VariableStatement.initializer`, `ExpressionStatement`, `ReturnStatement`, `IfStatement`, `Block`, and into function/arrow bodies. Added `checkTypeRefsInExpr` that walks `ArrowFunction`/`FunctionExpression` parameter+return types, plus recurses through `CallExpression`/`ParenthesizedExpression`/`BinaryExpression`. Without this, `var x = (w1: WinJS) => { }` wouldn't be inspected because WinJS appears on an ArrowFunction parameter inside the initializer.
+  - → +2 tests: `moduleInTypePosition1_ts` plus 1 collateral. Zero regressions.
+
+  **Session 2026-04-17 (16.4al, +1 test: 8122→8123):** TS2576 FP suppression when class has BOTH instance and static member:
+  - `checkMemberAccessMissing` TS2576 branch (16.4af) fired for `this.X` whenever the class had a static X, ignoring whether the class ALSO had an instance X. For `class T { constructor(private field: string) {} ; static field: number }`, `this.field` is valid (resolves to the parameter property), but we flagged it as a static-access typo.
+  - New `hasInstanceMemberNamed(classDecl, name)` helper checks non-static `PropertyDeclaration`/`MethodDeclaration`/`GetAccessor`/`SetAccessor` AND `Constructor` parameter properties (parameters with any modifier). Walks the `extends` chain like `isStaticMemberOfClass`.
+  - TS2576 now gated on `isStaticMemberOfClass && !hasInstanceMemberNamed`.
+  - → +1 test: `classMemberInitializerWithLamdaScoping_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ak, +6 tests: 8116→8122):** TS2669 / TS2670 for `global {}` nested in regular namespace:
   - New `checkInvalidGlobalAugmentations` pass walks statements tracking `insideRegularNamespace` (true once entering a ModuleDeclaration with Identifier name that is NOT a `global` block).
   - Any `ModuleDeclaration` with `name.text == "global"` found inside a regular namespace emits TS2669 "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations." at the `global` keyword (length 6).

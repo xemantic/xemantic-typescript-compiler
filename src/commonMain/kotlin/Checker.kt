@@ -37366,6 +37366,7 @@ interface DataView {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     checkTypeRefForNamespace(decl.type, source, fileName)
+                    decl.initializer?.let { checkTypeRefsInExpr(it, source, fileName) }
                 }
             }
             is FunctionDeclaration -> {
@@ -37373,6 +37374,7 @@ interface DataView {
                     checkTypeRefForNamespace(param.type, source, fileName)
                 }
                 checkTypeRefForNamespace(stmt.type, source, fileName)
+                stmt.body?.statements?.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
@@ -37392,6 +37394,45 @@ interface DataView {
                     }
                 }
             }
+            is ExpressionStatement -> checkTypeRefsInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkTypeRefsInExpr(it, source, fileName) }
+            is IfStatement -> {
+                checkTypeRefsInExpr(stmt.expression, source, fileName)
+                checkNamespaceAsTypeInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkNamespaceAsTypeInStmt(it, source, fileName) }
+            }
+            is Block -> stmt.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk an expression looking for ArrowFunction / FunctionExpression and check their
+     * parameter/return type annotations for namespace-used-as-type.
+     */
+    private fun checkTypeRefsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                for (p in expr.parameters) checkTypeRefForNamespace(p.type, source, fileName)
+                checkTypeRefForNamespace(expr.type, source, fileName)
+                val body = expr.body
+                if (body is Block) body.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+                else if (body is Expression) checkTypeRefsInExpr(body, source, fileName)
+            }
+            is FunctionExpression -> {
+                for (p in expr.parameters) checkTypeRefForNamespace(p.type, source, fileName)
+                checkTypeRefForNamespace(expr.type, source, fileName)
+                expr.body.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+            }
+            is CallExpression -> {
+                checkTypeRefsInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkTypeRefsInExpr(arg, source, fileName)
+            }
+            is ParenthesizedExpression -> checkTypeRefsInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                checkTypeRefsInExpr(expr.left, source, fileName)
+                checkTypeRefsInExpr(expr.right, source, fileName)
+            }
             else -> {}
         }
     }
@@ -37402,9 +37443,43 @@ interface DataView {
         if (typeNode == null) return
         if (typeNode !is TypeReference) return
         val name = (typeNode.typeName as? Identifier)?.text ?: return
-        // Skip if name is imported locally (imported types may shadow namespace-only globals)
+        // Check if name is imported locally via `import X = require("mod")`.
+        // If the target module has no `export =`, X is a namespace alias and
+        // using it as a type is TS2709.
         val localSym = currentCheckLocals?.get(name)
-        if (localSym != null && localSym.flags.hasAny(SymbolFlags.Alias)) return
+        if (localSym != null && localSym.flags.hasAny(SymbolFlags.Alias)) {
+            val decl = localSym.declarations.firstOrNull()
+            if (decl is ImportEqualsDeclaration) {
+                val modRef = decl.moduleReference
+                if (modRef is ExternalModuleReference) {
+                    val specifierExpr = modRef.expression
+                    val moduleSpecifier = (specifierExpr as? StringLiteralNode)?.text
+                    if (moduleSpecifier != null) {
+                        val targetFile = resolveModuleSpecifier(moduleSpecifier, decl)
+                        val targetResult = targetFile?.let { fileResults[it] }
+                        if (targetResult != null) {
+                            val hasExportEquals = targetResult.sourceFile.statements.any {
+                                it is ExportAssignment && it.isExportEquals
+                            }
+                            if (!hasExportEquals) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, typeNode.typeName.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot use namespace '$name' as a type.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2709,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = typeNode.typeName.pos,
+                                    length = name.length,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
         val symbol = globals[name] ?: return
         // Check if symbol is ONLY a namespace (no Class, Interface, TypeAlias, Enum)
         if (!symbol.flags.hasAny(SymbolFlags.Module)) return
