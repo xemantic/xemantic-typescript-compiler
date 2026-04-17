@@ -21449,9 +21449,11 @@ interface DataView {
                     }
                 }
                 is ClassDeclaration -> {
-                    if (ambient) {
-                        for (m in stmt.members) {
-                            if (m is PropertyDeclaration && m.initializer != null) {
+                    for (m in stmt.members) {
+                        if (m is PropertyDeclaration && m.initializer != null) {
+                            // Emit TS1039 when the class is ambient OR the property itself is `declare`.
+                            val memberAmbient = ambient || ModifierFlag.Declare in m.modifiers
+                            if (memberAmbient) {
                                 val init = m.initializer!!
                                 val start = init.pos
                                 val length = (init.end - 1 - start).coerceAtLeast(1)
@@ -21468,6 +21470,19 @@ interface DataView {
                                 ))
                             }
                         }
+                        // TS1031: `export` modifier is not allowed on class members.
+                        val exportStart = getModifierKeywordStart(m, "export", source) ?: continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, exportStart)
+                        diagnostics.add(Diagnostic(
+                            message = "'export' modifier cannot appear on class elements of this kind.",
+                            category = DiagnosticCategory.Error,
+                            code = 1031,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = exportStart,
+                            length = 6, // "export".length
+                        ))
                     }
                 }
                 is ModuleDeclaration -> {
@@ -21480,6 +21495,30 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    /**
+     * If the class element has the given modifier flag, return the source position of the
+     * modifier keyword (located by scanning backwards from the element's `pos` through the source
+     * text). Returns null if the modifier isn't present or can't be located.
+     */
+    private fun getModifierKeywordStart(element: ClassElement, keyword: String, source: String): Int? {
+        val mods = when (element) {
+            is PropertyDeclaration -> element.modifiers
+            is MethodDeclaration -> element.modifiers
+            is Constructor -> element.modifiers
+            is GetAccessor -> element.modifiers
+            is SetAccessor -> element.modifiers
+            else -> return null
+        }
+        val flag = when (keyword) {
+            "export" -> ModifierFlag.Export
+            "declare" -> ModifierFlag.Declare
+            else -> return null
+        }
+        if (flag !in mods) return null
+        val idx = source.indexOf(keyword, startIndex = element.pos)
+        return if (idx in element.pos..<element.end) idx else null
     }
 
     // -----------------------------------------------------------------------
