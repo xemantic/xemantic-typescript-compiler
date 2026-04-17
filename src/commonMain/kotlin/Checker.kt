@@ -30980,6 +30980,32 @@ interface DataView {
         }
     }
 
+    /** Returns true when the class declaration's own name is reachable through its `extends`
+     *  chain (self-reference or mutual cycle). Used by TS2339-on-NewExpression to decide
+     *  whether to treat the class as having "no usable base members" — a safe approximation
+     *  matching TypeScript's behavior of TS2506-flagged classes being unresolvable structurally.
+     *  Walks only class extends (not interface implements). */
+    private fun classHasCircularBase(classDecl: ClassDeclaration): Boolean {
+        val startName = classDecl.name?.text ?: return false
+        val visited = mutableSetOf<String>()
+        fun baseName(name: String): String? {
+            val sym = globals[name] ?: return null
+            val decl = sym.declarations.firstOrNull() as? ClassDeclaration ?: return null
+            val extClause = decl.heritageClauses?.firstOrNull {
+                it.token == SyntaxKind.ExtendsKeyword
+            } ?: return null
+            val baseExpr = extClause.types.firstOrNull()?.expression ?: return null
+            return (baseExpr as? Identifier)?.text
+        }
+        var current: String? = baseName(startName)
+        while (current != null) {
+            if (current == startName) return true
+            if (!visited.add(current)) return false
+            current = baseName(current)
+        }
+        return false
+    }
+
     // -----------------------------------------------------------------------
     // TS2310: Type 'X' recursively references itself as a base type.
     //   Fires for interfaces whose extends graph contains a cycle through the
@@ -34410,7 +34436,7 @@ interface DataView {
 
         // === TS2339/TS2551: Property does not exist check ===
         checkMemberAccessMissing(
-            objectExpr = expr.expression,
+            objectExprIn = expr.expression,
             propName = expr.name.text,
             diagStart = expr.name.pos,
             diagLength = expr.name.text.length,
@@ -34430,7 +34456,7 @@ interface DataView {
      * access, not for element access.
      */
     private fun checkMemberAccessMissing(
-        objectExpr: Expression,
+        objectExprIn: Expression,
         propName: String,
         diagStart: Int,
         diagLength: Int,
@@ -34442,6 +34468,10 @@ interface DataView {
         ts2576SquiggleStart: Int = diagStart,
         ts2576SquiggleLength: Int = diagLength,
     ) {
+        // Unwrap ParenthesizedExpression wrappers so `(new X).blah` / `(x).blah` reach the
+        // same branches as their un-parenthesized forms. Parens only affect precedence.
+        var objectExpr = objectExprIn
+        while (objectExpr is ParenthesizedExpression) objectExpr = objectExpr.expression
         // For the TS2576 "did you mean static member 'A.Y'" message, the suffix depends on
         // the access form — `.y` for property access, `["y"]`/`['y']` for element access.
         // Default to `.propName` if not supplied.
@@ -34449,6 +34479,59 @@ interface DataView {
         val ts2576Start = ts2576SquiggleStart
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
+
+        // 16.4cq: `new ClassName(...).prop` or `(new ClassName(...)).prop` — emit TS2339 when
+        // the class is declared locally and neither declares the property itself nor inherits
+        // a satisfying declaration. Narrow gate: handles the simple "empty class + circular
+        // or empty base" pattern. Display uses `ClassName<unknown, unknown, …>` based on the
+        // class's type-parameter count, matching TypeScript's format for un-instantiated news.
+        if (objectExpr is NewExpression) {
+            val ctor = objectExpr.expression
+            if (ctor is Identifier) {
+                val ctorSym = globals[ctor.text]
+                if (ctorSym != null && ctorSym.flags.hasAny(SymbolFlags.Class)) {
+                    val classDecl = ctorSym.declarations.firstOrNull() as? ClassDeclaration
+                    if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
+                        // Only fire when the class has NO declared member with this name.
+                        // Inherited/implemented members: if ANY heritage clause is present,
+                        // bail to avoid FPs (we can't reliably resolve recursive bases).
+                        val hasOwnMember = classDecl.members.any { m ->
+                            val name = when (m) {
+                                is PropertyDeclaration -> (m.name as? Identifier)?.text
+                                is MethodDeclaration -> (m.name as? Identifier)?.text
+                                is GetAccessor -> (m.name as? Identifier)?.text
+                                is SetAccessor -> (m.name as? Identifier)?.text
+                                else -> null
+                            }
+                            name == propName
+                        }
+                        if (!hasOwnMember) {
+                            // For TS2310/TS2506-flagged classes (circular base), treat as if
+                            // no inheritance is possible. For simple non-generic classes with
+                            // no base and no members named propName, also fire.
+                            val hasBase = classDecl.heritageClauses?.any {
+                                it.token == SyntaxKind.ExtendsKeyword
+                            } ?: false
+                            val isCircular = classHasCircularBase(classDecl)
+                            if (!hasBase || isCircular) {
+                                val typeArgs = classDecl.typeParameters?.size ?: 0
+                                val display = if (typeArgs > 0) {
+                                    ctor.text + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
+                                } else ctor.text
+                                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$propName' does not exist on type '$display'.",
+                                    category = DiagnosticCategory.Error, code = 2339,
+                                    fileName = fileName, line = line, character = character,
+                                    start = diagStart, length = diagLength,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
 
         // === Static method "this" access ===
         // In static methods, "this" refers to the constructor type (typeof C).
@@ -34812,7 +34895,7 @@ interface DataView {
         }
         val fullLength = fullEnd - fullStart
         checkMemberAccessMissing(
-            objectExpr = expr.expression,
+            objectExprIn = expr.expression,
             propName = propName,
             diagStart = diagStart,
             diagLength = diagLength,
