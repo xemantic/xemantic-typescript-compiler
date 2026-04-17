@@ -478,20 +478,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             nextToken()
             null
         }
-        DefaultKeyword -> {
-            // `default` without `export` — emit TS1029 and then parse the declaration.
-            val defaultStart = getPos()
-            reportError("'export' modifier must precede 'default' modifier.", code = 1029,
-                overrideStart = defaultStart, overrideLength = "default".length)
-            nextToken()
-            val mods = setOf(ModifierFlag.Default)
-            when (token) {
-                FunctionKeyword -> parseFunctionDeclarationOrExpression(mods)
-                ClassKeyword -> parseClassDeclaration(mods)
-                AsyncKeyword -> { nextToken(); parseFunctionDeclarationOrExpression(mods + ModifierFlag.Async) }
-                else -> parseExpressionStatement()
-            }
-        }
+        DefaultKeyword -> parseDefaultStartedStatement(fromDecorated = false)
         At -> {
             // Capture leading comments (e.g. JSDoc) that appear before the first decorator.
             // They would otherwise be lost since parseDecorators() doesn't call leadingComments().
@@ -549,11 +536,50 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
      * decorators are attached after parsing.
      */
     private fun parseDecoratedStatement(decorators: List<Decorator>?): Statement? {
-        val stmt = parseStatement()
+        // `@decorator default class {}` — in decorator context, treat `default` as a
+        // present-but-misordered modifier (TS1029). Without decorators, bare `default`
+        // at statement start is a missing-export syntax error — handled in parseStatement.
+        val stmt = if (token == SyntaxKind.DefaultKeyword) {
+            parseDefaultStartedStatement(fromDecorated = true)
+        } else parseStatement()
         if (stmt is ClassDeclaration && decorators != null) {
             return stmt.copy(decorators = decorators)
         }
         return stmt
+    }
+
+    /**
+     * Parses a statement that begins with `default` (where `export` is missing).
+     * - [fromDecorated] = true: decorators precede (e.g. `@decorator default class {}`) —
+     *   emit TS1029 "'export' modifier must precede 'default' modifier." and parse as
+     *   an anonymous default-exported declaration.
+     * - [fromDecorated] = false: bare `default` at statement start — emit TS1005
+     *   "'export' expected." at the `default` keyword and parse the trailing declaration
+     *   WITHOUT the Default modifier, so a missing function/class name naturally fires
+     *   TS1003 "Identifier expected." (mirroring TypeScript's behavior).
+     */
+    private fun parseDefaultStartedStatement(fromDecorated: Boolean): Statement? {
+        val defaultStart = getPos()
+        if (fromDecorated) {
+            reportError("'export' modifier must precede 'default' modifier.", code = 1029,
+                overrideStart = defaultStart, overrideLength = "default".length)
+        } else {
+            reportError("'export' expected.", code = 1005,
+                overrideStart = defaultStart, overrideLength = "default".length)
+        }
+        nextToken()
+        val mods = if (fromDecorated) setOf(ModifierFlag.Default) else emptySet()
+        return when (token) {
+            FunctionKeyword -> parseFunctionDeclarationOrExpression(mods)
+            ClassKeyword -> parseClassDeclaration(mods)
+            AsyncKeyword -> {
+                nextToken()
+                parseFunctionDeclarationOrExpression(
+                    if (fromDecorated) mods + ModifierFlag.Async else setOf(ModifierFlag.Async)
+                )
+            }
+            else -> parseExpressionStatement()
+        }
     }
 
     private fun parseBlock(): Block {
@@ -1359,7 +1385,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val comments = outerComments ?: leadingComments()
         parseExpected(SyntaxKind.FunctionKeyword)
         val asterisk = parseOptional(SyntaxKind.Asterisk)
-        val name = if (isIdentifier()) parseIdentifier() else null
+        val name = if (isIdentifier()) parseIdentifier() else {
+            // Function declarations (statement form) require a name unless marked as
+            // `export default` (Default modifier). Emit TS1003 "Identifier expected."
+            // at the current position with a 1-char squiggle, mirroring TypeScript.
+            if (ModifierFlag.Default !in modifiers && token == SyntaxKind.OpenParen) {
+                reportError("Identifier expected.", code = 1003,
+                    overrideStart = scanner.getTokenPos(), overrideLength = 1)
+            }
+            null
+        }
         val typeParams = parseTypeParametersOpt()
         val params = parseParameterList()
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
