@@ -33178,12 +33178,12 @@ interface DataView {
                 val exprType = getTypeOfSymbol(identSymbol)
                 if (exprType === anyType || exprType === errorType || exprType === unknownType) return
                 if (exprType !is Type.Object) return
-                // For variables, only check property access when the type is an interface
-                // (not a class) — class-typed variables may be narrowed via instanceof,
-                // causing FPs without control flow analysis.
+                // For variables, skip class-typed access (may be narrowed via instanceof).
+                // Anonymous object types (typeSym == null) ARE checkable — e.g.
+                // `declare var x: { a: string }; x.missing` → TS2339.
                 if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
                     val typeSym = exprType.symbol
-                    if (typeSym == null || typeSym.flags.hasAny(SymbolFlags.Class)) return
+                    if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) return
                 }
                 exprType
             } else {
