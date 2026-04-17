@@ -295,9 +295,13 @@ rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "te
 
 # Single test (get expected vs actual diff):
 rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest --tests '*.<TestName>*' 2>&1 | grep -a -A 40 "message" | head -50
+
+# Candidate finder (must have fresh full-suite XMLs first):
+python3 scripts/find_candidates.py --fresh      # hide tests already in skipped log
+python3 scripts/find_candidates.py              # show all, with [SKIP] markers
 ```
 
-**Note:** All failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability.
+**Note:** All failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability. **Gradle wipes XMLs when run with `--tests '*Name*'`** — the full suite must be re-run before `find_candidates.py` can report accurate results; the script warns if the XML count is below the expected ~27.
 
 ## Anti-patterns to avoid
 
