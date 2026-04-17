@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ap, +1 test: 8127→8128):** TS1259 + TS2594 for default import of `export =` module without esModuleInterop:
+  - `checkDefaultImports` previously always emitted TS1192 "Module has no default export" when the default binding referenced a module lacking a `default` export. For modules declared with `export =`, TypeScript instead emits TS1259 "Module 'X' can only be default-imported using the 'esModuleInterop' flag" with a TS2594 related-info "This module is declared with 'export =', and can only be used with a default import when using the 'esModuleInterop' flag." pointing to the `export =` statement.
+  - Gate: `hasExportEquals && !esModuleInteropActive` → emit TS1259 (not TS1192/TS2613). The existing carve-out `hasExportEquals && esModuleInteropActive` (suppress entirely) is preserved.
+  - Related-info: `Diagnostic(category=Message, code=2594, fileName=resolvedFile, start=exportEqStmt.pos, length=1)`. The baseline formatter handles the `!!! related TS2594 ...` rendering.
+  - → +1 test: `allowSyntheticDefaultImports6_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ao, +1 test: 8126→8127):** TS2417 for `class X extends null` with declaration-merged interface:
   - In `checkClassDerivedSuper`, the `extendsNull` branch already handled TS17005 (super-call ban). Added TS2417 "Class static side 'typeof X' incorrectly extends base class static side 'null'." fired ONLY when the class is declaration-merged with a same-name interface. Detection: `currentFileLocals[className].declarations.any { it is InterfaceDeclaration }`.
   - **Critical narrow gate**: without the merged-interface requirement, TypeScript suppresses this error — see `classExtendsNull.ts` / `classExtendsNull3.ts` baselines which emit only TS17005 / TS2531, no TS2417. Firing TS2417 unconditionally regresses those tests.

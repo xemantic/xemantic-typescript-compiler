@@ -11697,32 +11697,67 @@ class Checker(
                     val nameStart = defaultBinding.pos
                     val nameLength = defaultBinding.text.length
                     val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-                    // TS2613: Module has no default export. Did you mean to use named import?
-                    // Fires when the default binding name matches a named export of the module.
-                    val importName = defaultBinding.text
-                    val moduleNamedExports = getModuleNamedExports(targetFile)
-                    if (importName in moduleNamedExports) {
+                    // TS1259: fires when the target module has `export = X` and neither
+                    // esModuleInterop nor allowSyntheticDefaultImports allow a default import.
+                    // TypeScript emits TS1259 (not TS1192) with a TS2594 related-info pointing
+                    // to the `export =` statement.
+                    if (hasExportEquals && !esModuleInteropActive) {
+                        val exportEqStmt = targetFile.statements
+                            .firstOrNull { it is ExportAssignment && it.isExportEquals }
+                        val relatedInfos: List<Diagnostic> = if (exportEqStmt != null) {
+                            val (rLine, rChar) = getLineAndCharacterOfPosition(targetFile.text, exportEqStmt.pos)
+                            listOf(
+                                Diagnostic(
+                                    message = "This module is declared with 'export =', and can only be used with a default import when using the 'esModuleInterop' flag.",
+                                    category = DiagnosticCategory.Message,
+                                    code = 2594,
+                                    fileName = resolvedFile,
+                                    line = rLine,
+                                    character = rChar,
+                                    start = exportEqStmt.pos,
+                                    length = 1,
+                                )
+                            )
+                        } else emptyList()
                         diagnostics.add(Diagnostic(
-                            message = "Module '\"$displayName\"' has no default export. Did you mean to use 'import { $importName } from \"$displayName\"' instead?",
+                            message = "Module '\"$displayName\"' can only be default-imported using the 'esModuleInterop' flag",
                             category = DiagnosticCategory.Error,
-                            code = 2613,
+                            code = 1259,
                             fileName = fileName,
                             line = line,
                             character = character,
                             start = nameStart,
                             length = nameLength,
+                            relatedInformation = relatedInfos,
                         ))
                     } else {
-                        diagnostics.add(Diagnostic(
-                            message = "Module '\"$displayName\"' has no default export.",
-                            category = DiagnosticCategory.Error,
-                            code = 1192,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = nameStart,
-                            length = nameLength,
-                        ))
+                        // TS2613: Module has no default export. Did you mean to use named import?
+                        // Fires when the default binding name matches a named export of the module.
+                        val importName = defaultBinding.text
+                        val moduleNamedExports = getModuleNamedExports(targetFile)
+                        if (importName in moduleNamedExports) {
+                            diagnostics.add(Diagnostic(
+                                message = "Module '\"$displayName\"' has no default export. Did you mean to use 'import { $importName } from \"$displayName\"' instead?",
+                                category = DiagnosticCategory.Error,
+                                code = 2613,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameStart,
+                                length = nameLength,
+                            ))
+                        } else {
+                            diagnostics.add(Diagnostic(
+                                message = "Module '\"$displayName\"' has no default export.",
+                                category = DiagnosticCategory.Error,
+                                code = 1192,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameStart,
+                                length = nameLength,
+                            ))
+                        }
                     }
                 }
 
