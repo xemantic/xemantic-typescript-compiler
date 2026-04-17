@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4an, +1 test: 8125→8126):** TS2882 FP suppression for bare side-effect imports resolvable via node_modules:
+  - New helper `hasNodeModulesPackage(pkgName)` checks `fileResults.keys` for any path containing `/node_modules/<pkgName>/` (also accepts leading `node_modules/...`). TypeScript resolves bare specifiers like `import "A"` to `/node_modules/A/index.ts` via node_modules lookup; our simplified resolver doesn't, so TS2882 was emitted spuriously for such cases.
+  - Guard added to the bare-specifier TS2882 branch alongside existing `ambientModuleNames`/`dtsFileBaseNames` checks. Doesn't affect the relative-path branch.
+  - → +1 test: `moduleAugmentationInDependency2_ts`. Zero regressions. The companion JS-emit test still fails (we don't emit `/node_modules/A/index.js` alongside `app.js` — separate multi-file emit-all-files issue).
+
   **Session 2026-04-17 (16.4am, +2 tests: 8123→8125):** TS2709 for `import X = require(...)` used as type:
   - Previously `checkTypeRefForNamespace` skipped local aliases unconditionally. Now when a TypeReference's identifier resolves to an Alias symbol whose first declaration is an `ImportEqualsDeclaration` with `ExternalModuleReference` (i.e. `import X = require("mod")`), we resolve the target module via `resolveModuleSpecifier` and check whether its statements include an `ExportAssignment` with `isExportEquals`. If NOT, `X` is a namespace alias and using it as a type emits TS2709 "Cannot use namespace 'X' as a type." at the type name.
   - Also extended `checkNamespaceAsTypeInStmt` to recurse into `VariableStatement.initializer`, `ExpressionStatement`, `ReturnStatement`, `IfStatement`, `Block`, and into function/arrow bodies. Added `checkTypeRefsInExpr` that walks `ArrowFunction`/`FunctionExpression` parameter+return types, plus recurses through `CallExpression`/`ParenthesizedExpression`/`BinaryExpression`. Without this, `var x = (w1: WinJS) => { }` wouldn't be inspected because WinJS appears on an ArrowFunction parameter inside the initializer.

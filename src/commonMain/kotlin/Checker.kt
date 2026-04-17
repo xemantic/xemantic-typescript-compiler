@@ -11369,7 +11369,10 @@ class Checker(
                             if (resolveModuleSpecifier(moduleName) == null) {
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
-                        } else if (moduleName !in ambientModuleNames && moduleName !in dtsFileBaseNames) {
+                        } else if (moduleName !in ambientModuleNames
+                            && moduleName !in dtsFileBaseNames
+                            && !hasNodeModulesPackage(moduleName)
+                        ) {
                             val mod = options.module
                             if (mod != ModuleKind.AMD && mod != ModuleKind.System && mod != ModuleKind.UMD) {
                                 emitTS2882(specifier, moduleName, source, fileName)
@@ -11446,6 +11449,21 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * Checks whether the test-file layout contains a package matching [pkgName]
+     * under a node_modules directory — i.e. any file in `fileResults.keys` whose
+     * path contains `/node_modules/<pkgName>/` (with any depth of nesting before
+     * `node_modules`). Used to suppress TS2307/TS2882 for bare specifiers that
+     * TypeScript would resolve via node_modules.
+     */
+    private fun hasNodeModulesPackage(pkgName: String): Boolean {
+        val needle = "/node_modules/$pkgName/"
+        for (fn in fileResults.keys) {
+            if (needle in fn || fn.startsWith("node_modules/$pkgName/")) return true
+        }
+        return false
     }
 
     private fun emitTS2882(specifier: Expression, moduleName: String, source: String, fileName: String) {
