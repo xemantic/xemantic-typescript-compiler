@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bi, +1 test: 8147→8148):** TS7008 for static class properties without type annotation or initializer:
+  - `class Square { static sideLength; }` under `noImplicitAny`: TypeScript emits TS7008 "Member 'sideLength' implicitly has an 'any' type." at the property name. Our `checkImplicitAnyInClassElement` only fired TS7008 for ambient classes and interfaces, never for non-ambient classes.
+  - Narrow fix in the non-ambient `PropertyDeclaration` branch: fire TS7008 when `type == null && initializer == null && Static in modifiers && Private !in modifiers && !exclamationToken`. Static-only because instance properties may be assigned in the constructor (can't flag without flow analysis). Private-excluded because TypeScript never fires TS7008 for private members. `!` (definite-assignment) skipped because it has its own TS7008 path (via TS1264 "must also have type annotations").
+  - → +1 test: `staticVisibility2` (TS7008 at `static sideLength` plus the existing TS2576 at `this.sideLength`). Zero regressions.
+
   **Session 2026-04-17 (16.4bh, +1 test: 8146→8147):** TS2364 for private identifier as assignment target (`[#abc] = ...`):
   - `#abc` is scanned as a single `Identifier` token with text starting with `#`. Our `isValidAssignmentTarget` accepted `Identifier` unconditionally and also accepted `ArrayLiteralExpression` as a destructuring pattern, so `[#abc] = ...` silently passed the TS2364 check.
   - Fix: when the outer LHS is a valid destructuring pattern (ArrayLiteral / ObjectLiteral), walk its elements via a new `checkDestructuringPrivateIds` helper. Any bare `#abc` Identifier (as a direct element, shorthand prop name, spread target, or within `[x = 1]` default-value patterns) emits TS2364 at the identifier's position (length = text length) — matching TypeScript's squiggle.

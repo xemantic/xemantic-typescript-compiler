@@ -7033,6 +7033,28 @@ class Checker(
                 // Check function type annotation: `pub_f10: (x) => string` → TS7006 for `x`
                 checkImplicitAnyInTypeAnnotation(element.type, source, fileName)
                 element.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                // TS7008: Static property without type annotation or initializer has implicit any.
+                // Only static — instance properties may be assigned in the constructor, so we can't
+                // flag them without flow analysis. Private is also skipped (TypeScript does not
+                // emit TS7008 for private members). The caller gates on noImplicitAny.
+                if (element.type == null && element.initializer == null
+                    && ModifierFlag.Static in element.modifiers
+                    && ModifierFlag.Private !in element.modifiers
+                    && !element.exclamationToken) {
+                    val name = element.name
+                    if (name is Identifier && name.text.isNotEmpty()) {
+                        val start = name.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Member '${name.text}' implicitly has an 'any' type.",
+                            category = DiagnosticCategory.Error,
+                            code = 7008,
+                            fileName = fileName,
+                            line = line, character = character,
+                            start = start, length = name.text.length,
+                        ))
+                    }
+                }
             }
             else -> {}
         }
