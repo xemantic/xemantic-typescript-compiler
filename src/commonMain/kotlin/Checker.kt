@@ -32141,21 +32141,43 @@ interface DataView {
                     if (basePropSymbol.declarations.size > 1) continue
 
                     val derivedType = getTypeOfMemberDecl(member) ?: continue
-                    val basePropType = getTypeOfMemberDecl(
-                        basePropSymbol.valueDeclaration ?: basePropSymbol.declarations.firstOrNull() ?: continue
-                    ) ?: continue
+                    val baseDecl = basePropSymbol.valueDeclaration ?: basePropSymbol.declarations.firstOrNull()
+                    val basePropType = getTypeOfMemberDecl(baseDecl ?: continue) ?: continue
 
                     if (derivedType === anyType || basePropType === anyType) continue
 
-                    if (!checkTypeRelatedTo(derivedType, basePropType, assignableRelation)) {
-                        val nameNode = when (member) {
-                            is PropertyDeclaration -> member.name
-                            is MethodDeclaration -> member.name
-                            is GetAccessor -> member.name
-                            is SetAccessor -> member.name
-                            else -> null
-                        } ?: continue
+                    // Shape-mismatch diagnostics (TS2423/TS2425/TS2426) take priority over TS2416.
+                    // These fire when base and derived disagree on member category (property/method/accessor)
+                    // regardless of type assignability.
+                    val nameNode = when (member) {
+                        is PropertyDeclaration -> member.name
+                        is MethodDeclaration -> member.name
+                        is GetAccessor -> member.name
+                        is SetAccessor -> member.name
+                        else -> null
+                    } ?: continue
+                    val shapeDiag = classMemberShapeMismatchDiagnostic(
+                        baseDecl, member, memberName, baseTypeName, className
+                    )
+                    if (shapeDiag != null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = shapeDiag.second,
+                            category = DiagnosticCategory.Error,
+                            code = shapeDiag.first,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = memberName.length,
+                        ))
+                        // TS2423/TS2426 allow TS2416 to fire in parallel when types also disagree
+                        // (e.g. accessor→method overrides). TS2425 (property→method) suppresses TS2416
+                        // because the declared types are necessarily equal by construction.
+                        // Fall through and let TS2416 fire if applicable.
+                    }
 
+                    if (!checkTypeRelatedTo(derivedType, basePropType, assignableRelation)) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         val message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'."
                         val chain = mutableListOf<String>()
@@ -32184,6 +32206,51 @@ interface DataView {
                 }
             }
         }
+    }
+
+    /**
+     * Determine whether a member in the derived class disagrees with the base's declaration on
+     * member category (property / method / accessor). Returns the (code, message) pair, or null
+     * when no shape mismatch applies. Takes priority over TS2416 because TypeScript emits these
+     * specific codes instead of the generic "not assignable" message.
+     */
+    private fun classMemberShapeMismatchDiagnostic(
+        baseDecl: Node,
+        derivedMember: ClassElement,
+        memberName: String,
+        baseTypeName: String,
+        derivedClassName: String,
+    ): Pair<Int, String>? {
+        val baseKind = when (baseDecl) {
+            // Property with function-type annotation counts as "property", not "function"
+            is PropertyDeclaration -> "property"
+            is MethodDeclaration -> "function"
+            is GetAccessor, is SetAccessor -> "accessor"
+            else -> return null
+        }
+        val derivedKind = when (derivedMember) {
+            is PropertyDeclaration -> "property"
+            is MethodDeclaration -> "function"
+            is GetAccessor, is SetAccessor -> "accessor"
+            else -> return null
+        }
+        if (baseKind == derivedKind) return null
+
+        // TS2423: base function → derived accessor
+        // TS2425: base property → derived function
+        // TS2426: base accessor → derived function
+        // TS2610/TS2611: related but different (get-only vs set-only override) — not handled here.
+        val code = when {
+            baseKind == "function" && derivedKind == "accessor" -> 2423
+            baseKind == "property" && derivedKind == "function" -> 2425
+            baseKind == "accessor" && derivedKind == "function" -> 2426
+            else -> return null
+        }
+        val baseWord = "instance member $baseKind"
+        val derivedWord = "instance member $derivedKind"
+        val msg = "Class '$baseTypeName' defines $baseWord '$memberName', " +
+            "but extended class '$derivedClassName' defines it as $derivedWord."
+        return code to msg
     }
 
     /**
