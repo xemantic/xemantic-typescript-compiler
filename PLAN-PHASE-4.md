@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4br, +1 test: 8160→8161):** TS2365 (not TS18050) for `3 + null` / bitwise-with-null when `strict: false`:
+  - Under `@strict: false`, `var z = 3 + null` expected TS2365 "Operator '+' cannot be applied to types '3' and 'null'" spanning the whole binary expression. Our `checkNullUndefinedUsage` always fired TS18050 at the null literal position, and `checkBinaryOperatorTypes` short-circuited on null/undefined operand types — so we emitted the strict-mode diagnostic even when strict was off.
+  - Two-line gate: (a) in `checkNullUndefinedInExpr`'s binary-arithmetic/bitwise branch, only run `checkNullUndefinedLiteral` when `strictNullChecks` is true — under strict the TS18050 still fires; (b) in `checkBinaryOperatorTypes`, wrap the `if (rightType.flags.hasAny(Null or Undefined)) return` skip in `if (strictNullChecks) { ... }` so TS2365 fires under non-strict.
+  - Secondary fix: TS2365 display now uses literal forms (`'3'`, `'null'`, `'undefined'`) via new `ts2365OperandDisplay(expr, type)` helper, rather than widened `'number'`. NumericLiteral → raw text; Identifier("null"/"undefined") → the keyword; else → `typeToString(type)`.
+  - → +1 test: `null` (errors baseline, `@strict: false`). Zero regressions: strict-mode tests (`binaryArithmatic1-4`, `operatorAddNullUndefined`) still expect TS18050 and continue to pass.
+
   **Session 2026-04-17 (16.4bq, +1 test: 8159→8160):** TS2732 "Cannot find module 'X.json'. Consider using '--resolveJsonModule' to import module with '.json' extension.":
   - `import foobar from "foo/bar/foobar.json"` in multi-file under node-style resolution with `resolveJsonModule: false`. TypeScript's node resolution refuses to consult `.json` files without the flag → TS2732, even if the file exists on disk (e.g. at `node_modules/foo/bar/foobar.json`).
   - New branch in `checkUnresolvedModules`: when `moduleName.endsWith(".json") && !options.resolveJsonModule && !isRelative`, emit TS2732. New `emitTS2732` helper. Restricted to NON-RELATIVE specifiers — relative `.json` imports (e.g. `./b.json` with `b.json` in the multi-file layout) fall back to direct-file parsing, and TypeScript produces different diagnostics (JSON parse errors + object-type TS2339), so we leave them alone.

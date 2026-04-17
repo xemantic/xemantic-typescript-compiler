@@ -15796,7 +15796,9 @@ interface DataView {
                     SyntaxKind.GreaterThanGreaterThanEquals,
                     SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
                 )
-                if (isArithmeticOrBitwise) {
+                if (isArithmeticOrBitwise && strictNullChecks) {
+                    // Under non-strict, TS2365 ("Operator cannot be applied to types 'X' and 'null'")
+                    // takes over from TS18050 for arithmetic-with-null/undefined.
                     // For '+' operator, null/undefined is valid when other side is a string
                     val isPlus = op == SyntaxKind.Plus || op == SyntaxKind.PlusEquals
                     val leftIsString = expr.left is StringLiteralNode || expr.left is TemplateExpression ||
@@ -37514,9 +37516,12 @@ interface DataView {
         if (rightType === anyType || rightType === errorType) return
         // Skip unknown type
         if (leftType === unknownType || rightType === unknownType) return
-        // Skip null/undefined operands — only checked with strictNullChecks
-        if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
-        if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+        // Null/undefined operands: under strictNullChecks, TS18050 fires (checkNullUndefinedUsage)
+        // so we skip here. Under non-strict, let TS2365 fire for `3 + null` etc.
+        if (strictNullChecks) {
+            if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+            if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+        }
         // Skip when either side is a non-wrapper Object type (class, interface, etc.)
         // TypeScript handles these via other checks (TS2629 etc.), not arithmetic checks.
         // Only wrapper types (Number, Boolean, String) get arithmetic errors.
@@ -37645,10 +37650,25 @@ interface DataView {
         return false
     }
 
+    /** For TS2365 "Operator X cannot be applied to types 'A' and 'B'", display the
+     *  LITERAL form of literal operands (number `3`, null, undefined) rather than
+     *  the widened type. Matches TypeScript's baseline behavior. */
+    private fun ts2365OperandDisplay(operand: Expression, type: Type): String {
+        return when (operand) {
+            is NumericLiteralNode -> operand.text
+            is Identifier -> when (operand.text) {
+                "null" -> "null"
+                "undefined" -> "undefined"
+                else -> typeToString(type)
+            }
+            else -> typeToString(type)
+        }
+    }
+
     private fun emitTs2365(expr: BinaryExpression, op: SyntaxKind, leftType: Type, rightType: Type, source: String, fileName: String) {
         val opText = getOperatorText(op)
-        val leftStr = typeToString(leftType)
-        val rightStr = typeToString(rightType)
+        val leftStr = ts2365OperandDisplay(expr.left, leftType)
+        val rightStr = ts2365OperandDisplay(expr.right, rightType)
         val start = expr.left.pos
         val length = expressionTrueEnd(expr.right) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
