@@ -23470,7 +23470,12 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            walkForDerivedSuper(result.sourceFile.statements, source, fileName)
+            currentFileLocals = result.locals
+            try {
+                walkForDerivedSuper(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = null
+            }
         }
     }
 
@@ -23478,7 +23483,7 @@ interface DataView {
         for (stmt in stmts) {
             when (stmt) {
                 is ClassDeclaration -> {
-                    checkClassDerivedSuper(stmt.heritageClauses, stmt.members, source, fileName)
+                    checkClassDerivedSuper(stmt.heritageClauses, stmt.members, source, fileName, stmt.name)
                     // Recurse into class members for nested classes
                     for (m in stmt.members) {
                         when (m) {
@@ -23493,7 +23498,7 @@ interface DataView {
                     for (d in stmt.declarationList.declarations) {
                         when (val init = d.initializer) {
                             is ClassExpression -> {
-                                checkClassDerivedSuper(init.heritageClauses, init.members, source, fileName)
+                                checkClassDerivedSuper(init.heritageClauses, init.members, source, fileName, init.name)
                             }
                             is FunctionExpression -> walkForDerivedSuper(init.body.statements, source, fileName)
                             else -> {}
@@ -23512,6 +23517,7 @@ interface DataView {
         members: List<ClassElement>,
         source: String,
         fileName: String,
+        classNameNode: Identifier? = null,
     ) {
         // Check if class extends something (skip null extends — `class X extends null` is special)
         val extendsClause = heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
@@ -23536,6 +23542,29 @@ interface DataView {
                             length = len,
                         ))
                     }
+                }
+            }
+            // TS2417: "Class static side 'typeof C' incorrectly extends base class static side 'null'"
+            // fires only when the class is declaration-merged with an interface of the same name.
+            // Without the merged interface, TypeScript suppresses this error (see classExtendsNull /
+            // classExtendsNull3 baselines which only emit TS17005 / TS2531 without TS2417).
+            if (classNameNode != null) {
+                val className = classNameNode.text
+                val hasMergedInterface = currentFileLocals?.get(className)?.declarations?.any {
+                    it is InterfaceDeclaration
+                } == true
+                if (hasMergedInterface) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Class static side 'typeof $className' incorrectly extends base class static side 'null'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2417,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = classNameNode.pos,
+                        length = className.length,
+                    ))
                 }
             }
             return
