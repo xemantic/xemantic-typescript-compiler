@@ -8557,6 +8557,23 @@ class Checker(
 
     /**
      * Check that each segment of a QualifiedName resolves through namespace exports.
+     * Given a root QualifiedName `Root` and a 0-based segment index `segIdx` (0=leftmost
+     * Identifier, 1..N=successive `.right` identifiers), return the Identifier node at that
+     * index. Used for TS2694 squiggle placement at a specific intermediate segment.
+     */
+    private fun findQualifiedNameSegment(root: QualifiedName, segIdx: Int): Identifier? {
+        // Walk down-left to collect the chain of rights: [innermost Identifier, right1, right2, ..., root.right]
+        val chain = mutableListOf<Identifier>()
+        var node: Node = root
+        while (node is QualifiedName) {
+            chain.add(0, node.right)
+            node = node.left
+        }
+        if (node is Identifier) chain.add(0, node) else return null
+        return chain.getOrNull(segIdx)
+    }
+
+     /**
      * Emits TS2694: "Namespace 'X' has no exported member 'Y'."
      */
     private fun checkQualifiedNameExports(
@@ -8604,6 +8621,22 @@ class Checker(
                 // Use resolved symbol's qualified name, not source-level alias
                 val namespacePath = symbolToQualifiedName(symbol!!, fileName)
                 emitTS2694(namespacePath, segments[i], rightId, source, fileName, exports = exports)
+                return
+            }
+            // Intermediate segment is present but may not actually be EXPORTED from the
+            // namespace (e.g. a local `import inner = ...` inside a regular namespace): the
+            // member is in `exports` (how the binder tracks namespace-local symbols) but
+            // isn't accessible externally. Emit TS2694 at the inaccessible segment.
+            // Sub-namespace symbols (Module flag) are always accessible via dotted access,
+            // including implicit-export forms like `namespace A.B.C {}`.
+            val isIntermediateAccessible = next.flags.hasAny(SymbolFlags.Module) ||
+                isMemberAccessible(next, symbol!!)
+            if (!isIntermediateAccessible) {
+                val namespacePath = symbolToQualifiedName(symbol!!, fileName)
+                // Locate the specific Identifier for segments[i] in the QualifiedName so
+                // the squiggle points to that segment, not the rightId.
+                val segmentIdent = findQualifiedNameSegment(qn, i) ?: rightId
+                emitTS2694(namespacePath, segments[i], segmentIdent, source, fileName)
                 return
             }
             symbol = resolveAlias(next)
