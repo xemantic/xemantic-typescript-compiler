@@ -36993,6 +36993,11 @@ interface DataView {
         val properties = mutableListOf<Symbol>()
         val callSignatures = mutableListOf<Signature>()
         val constructSignatures = mutableListOf<Signature>()
+        // Detect mapped-type placeholder — the parser emits PropertyDeclaration(name="")
+        // for `[K in T]:` constructs inside a TypeLiteral (see parseIndexSignatureOrProperty).
+        // When present, treat the entire literal as an opaque mapped type (→ anyType)
+        // because we can't enumerate members precisely.
+        var sawMappedTypePlaceholder = false
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> {
@@ -37001,6 +37006,11 @@ interface DataView {
                         is StringLiteralNode -> n.text
                         is NumericLiteralNode -> n.text
                         else -> continue
+                    }
+                    if (name.isEmpty()) {
+                        // Parser placeholder for `[K in T]: V` — skip; emit anyType for the literal.
+                        sawMappedTypePlaceholder = true
+                        continue
                     }
                     val propType = if (member.type != null) getTypeFromTypeNode(member.type!!) else anyType
                     val sym = Symbol(SymbolFlags.Property, name)
@@ -37080,6 +37090,11 @@ interface DataView {
                 if (isNumber) numberIndexInfo = info else stringIndexInfo = info
             }
         }
+        // If the literal was purely a mapped-type placeholder, return anyType —
+        // enumerable members aren't known, so suppress member-level diagnostics.
+        if (sawMappedTypePlaceholder && members.isEmpty() && callSignatures.isEmpty() &&
+            constructSignatures.isEmpty() && stringIndexInfo == null && numberIndexInfo == null
+        ) return anyType
         val objType = Type.Object()
         objType.members = members
         objType.properties = properties

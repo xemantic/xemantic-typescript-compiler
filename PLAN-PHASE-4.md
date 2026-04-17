@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cf, +1 test: 8184→8185):** Suppress TS2339 FP on type aliases whose body is a mapped type (`{ [K in T]: V }`):
+  - The parser emits these inside a TypeLiteral as a `PropertyDeclaration(name=Identifier(""))` placeholder (see `parseIndexSignatureOrProperty` → `isMappedType` branch). `getTypeFromTypeLiteral` then built a Type.Object with a single empty-named property of type `any`, producing an FP display `Type '{ : any; }'` and a bogus property-access check that couldn't resolve any name.
+  - Skip empty-name `PropertyDeclaration` in `getTypeFromTypeLiteral` and, when the placeholder was the literal's only member (no index sig / call sig / real properties), return `anyType` so downstream member-existence checks bail out. Preserves behavior for mixed literals like `{ [K in T]: V, x: number }` (the `x` property still resolves; mapped-type semantics for key enumeration are still not handled).
+  - → +1 test: `deleteExpressionMustBeOptional_ts__strict_false__` (the `a: AA` and `b: BB` `delete b.a`/`delete b.b` branches stopped emitting TS2339 FPs on the `{ : any; }` phantom type). Zero regressions.
+
   **Session 2026-04-17 (16.4ce, +2 tests: 8182→8184):** TS2320 "Interface cannot simultaneously extend types" now fires for public-method conflicts when return types are structurally incompatible:
   - `interface i3 extends i1, i2 {}` where `i1.name(): { s: string }` and `i2.name(): { n: number }` — expected TS2320. Our existing check emitted TS2320 only when at least one base's conflicting member was `private`, explicitly skipping the public-public case ("might still conflict on type, but that's TS2430" — wrong: TypeScript emits TS2320 here, not TS2430).
   - New conflict logic: `hasPrivate` still triggers TS2320 unconditionally. For all-public, compare the two distinct base declarations' type nodes via `checkTypeRelatedTo` in both directions. If neither direction is assignable (and neither type is `errorType`), emit TS2320. Wrapped in `try/catch(StackOverflowError)` for cyclic types.
