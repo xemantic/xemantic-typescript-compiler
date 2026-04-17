@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bu, +3 tests: 8166→8169):** TS2576 for instance-of-class access to a static-only member (property *and* element access):
+  - `class A { static y: number } const a: A = new A(); a.y; a["y"]; a["\""]` — expected TS2576 "Property 'y' does not exist on type 'A'. Did you mean to access the static member 'A.y' instead?" (and `'A["y"]'`/`'A["\""]'` for element access). Our code had TS2576 only for `this.X` in an instance method. For `variable.X` where `variable` is class-typed, the existing guard `typeSym.flags.hasAny(SymbolFlags.Class) → return` bailed out silently to avoid narrowing FPs.
+  - Carved out a narrow branch before each bail: `tryEmitStaticAccessTs2576(typeSym, propName, ...)` checks `isStaticMemberOfClass(classDecl, propName) && !hasInstanceMemberNamed(classDecl, propName)` and emits TS2576; caller still returns early either way. Zero regressions because the check is strictly additive — no existing passing test was suppressing TS2576 for this pattern.
+  - New `classMemberNameText(node)` helper so `isStaticMemberOfClass`/`hasInstanceMemberNamed` match string-literal member names (`public static "\""() {}` → name node is `StringLiteralNode`, text `"`).
+  - Added `keySuggestion` + `ts2576SquiggleStart/Length` parameters to `checkMemberAccessMissing`. `checkSingleElementAccess` computes the full `receiver[key]` span and the raw source key syntax (`["\""]`, `['y']`, `[0]`) by scanning backward from `arg.pos` to the `[` and forward past `]`.
+  - → +3 tests: `classStaticPropertyAccess` (target=es5, target=es2015) + 1 collateral. Zero regressions.
+
   **Session 2026-04-17 (16.4bt, +4 tests: 8162→8166):** TS2617/TS2596/TS2598 + TS2497 for named imports of `export =` modules without esModuleInterop:
   - `import { Foo } from "./a"` where `./a` has `export = Foo` and `esModuleInterop: false` — TypeScript cannot synthesize named bindings; emits TS2617/TS2596/TS2598 at the named binding + TS2497 at the module specifier. We had only the `import * as X`/NamespaceImport variant (ESM + allowSyntheticDefaultImports flavor). Added the NamedImports path.
   - Matrix of the named-binding code + TS2497 message flavor depends on the importer's file kind and module output target:
