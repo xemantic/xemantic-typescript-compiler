@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bc, +1 test: 8141→8142):** TS1005/TS1003 for bare `default X` without `export` (differentiated from `@decorator default X`):
+  - Previously the `DefaultKeyword` branch in `parseStatement` ALWAYS emitted TS1029 "'export' modifier must precede 'default' modifier." for `default`-started statements, regardless of whether decorators preceded.
+  - TypeScript's actual behavior: `@decorator default class {}` (decorated context) → TS1029; bare `default function () {}` → TS1005 "'export' expected." at the `default` keyword + TS1003 "Identifier expected." at the missing function name.
+  - Refactored the `default` handling into a shared `parseDefaultStartedStatement(fromDecorated: Boolean)` helper. `parseDecoratedStatement` now intercepts `DefaultKeyword` explicitly and calls the helper with `fromDecorated=true` (keeping TS1029 + the `Default` modifier so the function/class can be anonymous). The direct `parseStatement` path calls with `fromDecorated=false` (emitting TS1005 and parsing WITHOUT the `Default` modifier, so the declaration requires a name).
+  - Also added TS1003 emission in `parseFunctionDeclarationOrExpression` when `Default !in modifiers` and the token after `function` is `(` — statement-form function declarations require a name unless marked `export default`.
+  - → +1 test: `defaultKeywordWithoutExport2`. Zero regressions. `defaultKeywordWithoutExport1` (the decorator case, already passing) remains green.
+
   **Session 2026-04-17 (16.4bb, +2 tests: 8139→8141):** TS1109 "Expression expected." for unterminated `${` in template literals:
   - Source `f \`abc${` (TemplateHead → EOF) and `f \`abc${ }${` (TemplateMiddle → EOF) both expect TS1109 with a zero-length span at the position right after the final `${`, indicating where the user should have placed an expression.
   - Previously `parseTemplateExpression` detected the unterminated case (via `isUnterminated = true`) but emitted NO diagnostic — only propagated the flag to the AST node.
