@@ -28181,11 +28181,18 @@ interface DataView {
                             val displaySource = typeToString(sourceType)
                             val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
                             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                            val missingProp = lastMissingPropertyName
+                            // 16.4bf: Compute missing-property set directly rather than relying on
+                            // `lastMissingPropertyName` side-effect — a cached Ternary.False result
+                            // from `checkTypeRelatedTo` skips setting it, causing second+ occurrences
+                            // of the same comparison to fall through to TS2322 instead of TS2741.
+                            val allMissing = if (sourceType is Type.Object && tt is Type.Object) {
+                                collectMissingProperties(sourceType, tt)
+                            } else emptyList()
                             val missingPropSym = lastMissingPropertySymbol
-                            if (missingProp != null) {
-                                // Collect all missing properties to decide TS2741 vs TS2740
-                                val allMissing = collectMissingProperties(sourceType, tt)
+                                ?: if (allMissing.isNotEmpty() && tt is Type.Object) {
+                                    tt.properties?.find { it.name == allMissing[0] }
+                                } else null
+                            if (allMissing.isNotEmpty()) {
                                 if (allMissing.size >= 2) {
                                     diagnostics.add(Diagnostic(
                                         message = formatTs2740Message(displaySource, displayTarget, allMissing),
@@ -28198,6 +28205,7 @@ interface DataView {
                                         length = target.text.length,
                                     ))
                                 } else {
+                                    val missingProp = allMissing[0]
                                     val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, tt, displayTarget)
                                     val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                                     diagnostics.add(Diagnostic(
