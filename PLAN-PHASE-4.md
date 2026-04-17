@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cy, +1 test: 8214→8215):** TS2717 now fires for interfaces with same-name properties of different types:
+  - `checkDuplicateInterfaceMembers` previously only emitted TS2300 (duplicate identifier). Class-side TS2717 already existed in `checkDuplicateClassMembers` — extracted the same logic into the interface path: compare each subsequent property's type-string to the first; emit TS2717 + related TS6203 when they differ.
+  - Reuses `getPropertyTypeString` for the type-string comparison and the existing `getMemberNameText`/squiggle-length pattern.
+  - → +1 test: `interfaceDeclaration1_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cx, +1 test: 8213→8214):** TS2709 "Cannot use namespace 'X' as a type." now fires for heritage clauses (interface `extends`, class `implements`):
   - `checkNamespaceAsTypeInStmt` previously only checked variable/function/method type annotations. Extended to walk InterfaceDeclaration's `extends` clause and ClassDeclaration's `implements` clause — for each `ExpressionWithTypeArguments`, if the expression is an Identifier resolving to a namespace-only symbol, emit TS2709 at the identifier position.
   - New helper `checkHeritageExprForNamespace` is the heritage-clause variant of `checkTypeRefForNamespace` (heritage uses `Expression` not `TypeNode`, so the existing helper couldn't be reused directly).

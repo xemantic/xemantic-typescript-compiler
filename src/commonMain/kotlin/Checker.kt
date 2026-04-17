@@ -11051,13 +11051,13 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        data class PropInfo(val name: String, val nameNode: Node)
+        data class PropInfo(val name: String, val nameNode: Node, val prop: PropertyDeclaration)
         val props = mutableListOf<PropInfo>()
         for (member in members) {
             if (member is PropertyDeclaration) {
                 val name = member.name
                 val text = getMemberNameText(name) ?: continue
-                props.add(PropInfo(text, name))
+                props.add(PropInfo(text, name, member))
             }
         }
         val byName = props.groupBy { it.name }
@@ -11065,6 +11065,56 @@ class Checker(
             if (group.size >= 2) {
                 for (prop in group) {
                     emitDuplicate2300(prop.name, prop.nameNode, source, fileName)
+                }
+                // 16.4cy: TS2717 — subsequent property declarations must have the same type.
+                // Mirror the class-side TS2717 logic: compare each subsequent property's type
+                // string to the first; emit at the subsequent's name with related TS6203.
+                val firstType = getPropertyTypeString(group[0].prop)
+                if (firstType != null) {
+                    val firstName = group[0].nameNode
+                    val firstStart = firstName.pos
+                    val firstLength = when (firstName) {
+                        is StringLiteralNode -> firstName.text.length + 2
+                        is NumericLiteralNode -> firstName.text.length
+                        is Identifier -> firstName.text.length
+                        else -> group[0].name.length
+                    }
+                    val (firstLine, firstChar) = getLineAndCharacterOfPosition(source, firstStart)
+                    for (i in 1 until group.size) {
+                        val info = group[i]
+                        val laterType = getPropertyTypeString(info.prop) ?: continue
+                        if (laterType == firstType) continue
+                        val name = info.name
+                        val nameNode = info.nameNode
+                        val start = nameNode.pos
+                        val length = when (nameNode) {
+                            is StringLiteralNode -> nameNode.text.length + 2
+                            is NumericLiteralNode -> nameNode.text.length
+                            is Identifier -> nameNode.text.length
+                            else -> name.length
+                        }
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Subsequent property declarations must have the same type.  Property '$name' must be of type '$firstType', but here has type '$laterType'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2717,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                            relatedInformation = listOf(Diagnostic(
+                                message = "'$name' was also declared here.",
+                                category = DiagnosticCategory.Message,
+                                code = 6203,
+                                fileName = fileName,
+                                line = firstLine,
+                                character = firstChar,
+                                start = firstStart,
+                                length = firstLength,
+                            )),
+                        ))
+                    }
                 }
             }
         }
