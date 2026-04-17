@@ -2519,6 +2519,10 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4ch, +2 tests: 8185→8187):** TS2339 for property access on array literal (`[1,2,3].NonexistantMethod()`):
+  - `checkMemberAccessMissing` short-circuited when `objectExpr !is Identifier`, leaving non-Identifier receivers unchecked. Added an `ArrayLiteralExpression` branch that infers the array type via `getTypeOfArrayLiteral`, widens literal element types for display (`1|2|3` → `number` so the message says `number[]` not `(1 | 2 | 3)[]`), and seeds `displayTypeOverride` so the `numberIndexInfo` bail-out no longer suppresses non-numeric names. Uses the same gate as the primitive-apparent-type path (already keyed on `displayTypeOverride != null`).
+  - → +2 tests including `undefinedSymbolReferencedInArrayLiteral1_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cg, +1 test: 8185→8186):** TS2693 in `extends` heritage expressions + single-signature display as arrow form:
   - `class C extends factory(A) {}` where `A` is an `interface` — expected TS2693 on `A`. Our `checkTypeAsValueInStatement` ClassDeclaration branch only recursed into members, never visiting `heritageClauses`, so type-only names in the `extends` expression were silently accepted. Added a pass over `stmt.heritageClauses` and, for `extends` clauses only, called `checkTypeAsValueInExpr` on each `ewta.expression`. `implements` clauses are type positions — skipped.
   - `formatTypeForDisplay(TypeLiteral)` always built `"{ ...; }"` format, producing `'{ new(): Object; }'` where TypeScript formats single-call / single-construct literals as arrow form (`'new () => Object'`). Added a single-member fast path: when the sole member is a MethodDeclaration with name `""` (call sig) or `"new"` (ctor sig), emit `(params) => ret` / `new (params) => ret`. Multi-member literals keep the `{ }` format.
