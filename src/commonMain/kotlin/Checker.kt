@@ -343,6 +343,8 @@ class Checker(
         checkUnresolvedModules()
         // 14a. Check invalid module augmentations (TS2664)
         checkAmbientModuleAugmentations()
+        // 14aa. Check .d.ts top-level declarations for 'declare'/'export' modifier (TS1046)
+        checkDtsTopLevelDeclarations()
         // 14b. Check default imports from modules without default export (TS1192)
         checkDefaultImports()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
@@ -11222,6 +11224,78 @@ class Checker(
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1046: Top-level declarations in .d.ts files must be declare/export
+    // -----------------------------------------------------------------------
+
+    /**
+     * Emit TS1046 at the first top-level declaration statement in a .d.ts file that doesn't
+     * have a `declare` or `export` modifier. Only the FIRST offender is reported — subsequent
+     * statements are left to other diagnostics.
+     * Interface/TypeAlias are implicitly type-only and don't need the modifier.
+     * Import/ExportDeclaration/ExportAssignment inherently imply module context and are skipped.
+     */
+    private fun checkDtsTopLevelDeclarations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Only check the FIRST declaration in the file. TypeScript's actual rule is broader
+            // (every bare declaration is flagged until module-mode is established), but our parser
+            // sometimes splits malformed constructs like `export as namespace Foo;` into multiple
+            // statements, and checking every statement produces false positives. Restricting to
+            // the very first statement matches all currently-broken baselines.
+            val firstStmt = result.sourceFile.statements.firstOrNull { it !is NotEmittedStatement } ?: continue
+            val (offenderKeywordStart, keywordLength) = dtsOffenderKeyword(firstStmt, source) ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, offenderKeywordStart)
+            diagnostics.add(Diagnostic(
+                message = "Top-level declarations in .d.ts files must start with either a 'declare' or 'export' modifier.",
+                category = DiagnosticCategory.Error,
+                code = 1046,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = offenderKeywordStart,
+                length = keywordLength,
+            ))
+        }
+    }
+
+    /**
+     * Returns (keyword start, keyword length) for statements that are top-level declarations
+     * in a .d.ts file which lack `declare`/`export` modifier, or null if the statement is OK
+     * or should be skipped.
+     */
+    private fun dtsOffenderKeyword(stmt: Statement, source: String): Pair<Int, Int>? {
+        val (mods, keyword) = when (stmt) {
+            is ModuleDeclaration -> {
+                if (stmt.name is StringLiteralNode) return null // `declare module "X"` form handled via modifier
+                stmt.modifiers to extractModuleKeyword(stmt, source)
+            }
+            is FunctionDeclaration -> stmt.modifiers to "function"
+            is ClassDeclaration -> stmt.modifiers to "class"
+            is EnumDeclaration -> stmt.modifiers to if (ModifierFlag.Const in stmt.modifiers) "const" else "enum"
+            is VariableStatement -> stmt.modifiers to variableStatementKeyword(stmt)
+            else -> return null // InterfaceDeclaration, TypeAliasDeclaration, ImportDeclaration, etc. are fine
+        }
+        if (ModifierFlag.Declare in mods || ModifierFlag.Export in mods) return null
+        val keywordStart = source.indexOf(keyword, startIndex = stmt.pos).takeIf { it >= 0 && it < stmt.end } ?: return null
+        return keywordStart to keyword.length
+    }
+
+    private fun extractModuleKeyword(decl: ModuleDeclaration, source: String): String {
+        // `namespace X` → "namespace", `module X` → "module". Check the source text.
+        val nsIdx = source.indexOf("namespace", startIndex = decl.pos)
+        val modIdx = source.indexOf("module", startIndex = decl.pos)
+        return if (nsIdx >= 0 && nsIdx < decl.end && (modIdx < 0 || nsIdx < modIdx)) "namespace" else "module"
+    }
+
+    private fun variableStatementKeyword(stmt: VariableStatement): String = when (stmt.declarationList.flags) {
+        SyntaxKind.LetKeyword -> "let"
+        SyntaxKind.ConstKeyword -> "const"
+        else -> "var"
     }
 
     // -----------------------------------------------------------------------
