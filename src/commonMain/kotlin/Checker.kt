@@ -33911,7 +33911,16 @@ interface DataView {
         fileName: String,
         enclosingClassType: Type?,
         emitTs2728RelatedInfo: Boolean,
+        keySuggestion: String? = null,
+        ts2576SquiggleStart: Int = diagStart,
+        ts2576SquiggleLength: Int = diagLength,
     ) {
+        // For the TS2576 "did you mean static member 'A.Y'" message, the suffix depends on
+        // the access form — `.y` for property access, `["y"]`/`['y']` for element access.
+        // Default to `.propName` if not supplied.
+        val suggestionKey: String = keySuggestion ?: ".$propName"
+        val ts2576Start = ts2576SquiggleStart
+        val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
 
         // === Static method "this" access ===
@@ -33990,7 +33999,11 @@ interface DataView {
                 // `declare var x: { a: string }; x.missing` → TS2339.
                 if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
                     val typeSym = exprType.symbol
-                    if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) return
+                    if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
+                        // TS2576: instance-of-class access to a static-only member.
+                        if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName)) return
+                        return
+                    }
                 }
                 exprType
             } else {
@@ -34006,7 +34019,10 @@ interface DataView {
                 if (exprType !is Type.Object) return
                 // For local variables, skip class-typed (may be narrowed)
                 val typeSym = exprType.symbol
-                if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) return
+                if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
+                    if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName)) return
+                    return
+                }
                 // Skip malformed types (e.g., unresolved mapped types with empty property names)
                 resolveStructuredTypeMembers(exprType)
                 if (exprType.properties != null && exprType.properties!!.any { it.name.isEmpty() }) return
@@ -34171,6 +34187,9 @@ interface DataView {
         val propName: String
         val diagStart: Int
         val diagLength: Int
+        // Squiggle covers the whole `receiver[key]` expression (TS2576 convention).
+        // For TS2339/TS2551 element access, `propName` is set but the squiggle length
+        // we pass stays narrow (key+brackets) to match existing element-access behavior.
         when (arg) {
             is StringLiteralNode -> {
                 propName = arg.text
@@ -34184,6 +34203,37 @@ interface DataView {
             }
             else -> return
         }
+        // Build the raw suggestion syntax for TS2576 from the source text:
+        // - StringLiteral key keeps original quoting: a["\""] → `["\""]`
+        // - Numeric key: a[0] → `[0]`
+        // Position: from `[` (just before arg.pos) to end of key.
+        val keySuggestion: String = run {
+            val keyEnd = when (arg) {
+                is StringLiteralNode -> arg.pos + (arg.rawText?.length ?: arg.text.length) + 2
+                is NumericLiteralNode -> arg.pos + arg.text.length
+                else -> return@run ".$propName"
+            }
+            // Find opening `[` by scanning backwards from arg.pos.
+            var openBracket = arg.pos - 1
+            while (openBracket >= 0 && source[openBracket] != '[') openBracket--
+            if (openBracket < 0) return@run ".$propName"
+            // Expected layout: `[keySrc]` — closing bracket just after keyEnd (possibly with whitespace).
+            var closeBracket = keyEnd
+            while (closeBracket < source.length && source[closeBracket] != ']') closeBracket++
+            if (closeBracket >= source.length) return@run ".$propName"
+            source.substring(openBracket, closeBracket + 1)
+        }
+        // TS2576 squiggle covers the whole `receiver[key]` expression. For compat with the
+        // existing TS2339 path, pass a SEPARATE squiggle range via the TS2576 helper — we
+        // only widen when TS2576 actually fires (in tryEmitStaticAccessTs2576).
+        // Compute the full expression span (receiver.pos .. closeBracket+1):
+        val fullStart = expr.expression.pos
+        val fullEnd = run {
+            var cb = diagStart + diagLength
+            while (cb < source.length && source[cb] != ']') cb++
+            if (cb < source.length) cb + 1 else diagStart + diagLength
+        }
+        val fullLength = fullEnd - fullStart
         checkMemberAccessMissing(
             objectExpr = expr.expression,
             propName = propName,
@@ -34193,6 +34243,9 @@ interface DataView {
             fileName = fileName,
             enclosingClassType = enclosingClassType,
             emitTs2728RelatedInfo = false,
+            keySuggestion = keySuggestion,
+            ts2576SquiggleStart = fullStart,
+            ts2576SquiggleLength = fullLength,
         )
     }
 
@@ -34247,16 +34300,16 @@ interface DataView {
         for (m in classDecl.members) {
             when (m) {
                 is PropertyDeclaration -> {
-                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
                 }
                 is MethodDeclaration -> {
-                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
                 }
                 is GetAccessor -> {
-                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
                 }
                 is SetAccessor -> {
-                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == name) return true
                 }
                 is Constructor -> {
                     for (p in m.parameters) {
@@ -34280,16 +34333,45 @@ interface DataView {
         return false
     }
 
+    /** TS2576 when `instance.X` / `instance["X"]` accesses a STATIC-only member of the class.
+     *  Returns true if emitted (caller should return early). */
+    private fun tryEmitStaticAccessTs2576(
+        typeSym: Symbol, propName: String, diagStart: Int, diagLength: Int,
+        suggestionKey: String, source: String, fileName: String,
+    ): Boolean {
+        if (propName.isEmpty()) return false
+        if (propName in RUNTIME_PROPERTIES) return false
+        val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return false
+        if (!isStaticMemberOfClass(classDecl, propName)) return false
+        if (hasInstanceMemberNamed(classDecl, propName)) return false
+        val baseName = classDecl.name?.text ?: typeSym.name
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$baseName'. Did you mean to access the static member '$baseName$suggestionKey' instead?",
+            category = DiagnosticCategory.Error, code = 2576,
+            fileName = fileName, line = line, character = character,
+            start = diagStart, length = diagLength,
+        ))
+        return true
+    }
+
+    private fun classMemberNameText(nameNode: Node?): String? = when (nameNode) {
+        is Identifier -> nameNode.text
+        is StringLiteralNode -> nameNode.text
+        is NumericLiteralNode -> nameNode.text
+        else -> null
+    }
+
     private fun isStaticMemberOfClass(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
         val v = visited ?: mutableSetOf()
         val className = classDecl.name?.text ?: return false
         if (!v.add(className)) return false
         for (m in classDecl.members) {
             val memberName = when (m) {
-                is PropertyDeclaration -> (m.name as? Identifier)?.text
-                is MethodDeclaration -> (m.name as? Identifier)?.text
-                is GetAccessor -> (m.name as? Identifier)?.text
-                is SetAccessor -> (m.name as? Identifier)?.text
+                is PropertyDeclaration -> classMemberNameText(m.name)
+                is MethodDeclaration -> classMemberNameText(m.name)
+                is GetAccessor -> classMemberNameText(m.name)
+                is SetAccessor -> classMemberNameText(m.name)
                 else -> null
             }
             if (memberName != name) continue
