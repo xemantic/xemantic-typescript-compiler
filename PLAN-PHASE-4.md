@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cu, +1 test: 8210→8211):** TS2320 multi-base property conflict now fires for qualified base types (`extends NS.Mover`):
+  - `checkMultiBaseInStatement` previously only resolved `Identifier` heritage expressions via `globals[name]`. Extended to also handle `PropertyAccessExpression` via existing `resolvePropertyAccessToSymbol` — `NS.Mover` resolves through the namespace's exports table to the inner Class symbol.
+  - Display `baseName` uses the rightmost segment (`Mover`/`Shaker`), matching TypeScript's diagnostic format (`"Interface 'X' cannot simultaneously extend types 'Mover' and 'Shaker'."`).
+  - → +1 test: `interfacePropertiesWithSameName2_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ct, +5 tests: 8205→8210):** TS2749 "'X' refers to a value, but is being used as a type here. Did you mean 'typeof X'?" for `var X: X` self-referential annotations:
   - In `checkIdentifierResolved`, when an in-scope name is referenced in type position and resolves to a value-only declaration (var/function/etc.), emit TS2749 instead of staying silent. Squiggle covers the type-name identifier (`name.length` chars from `node.pos`).
   - Helper `isValueOnlyTypeRef`: returns true only when (a) name has no type meaning anywhere in the scope chain (`hasType` walks `typeNames` + `typeParamNames`), AND (b) name is NOT a `KNOWN_GLOBALS` interface, AND (c) the binder symbol (if any) carries `Value` flag without `Type|Module|Alias`. Falls back to `name in VALUE_ONLY_GLOBALS` when no binder symbol exists.
