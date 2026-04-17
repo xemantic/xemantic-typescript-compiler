@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,105 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+29 tests, 1970 remaining).
+**Status (2026-04-17):** 8,106 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+30 tests, 1969 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4aa, +1 test: 8105→8106):** TS1031/TS1039 for class-member modifiers:
+  - In `checkAmbientInitInStatements` ClassDeclaration branch: emit TS1039 "Initializers are not allowed in ambient contexts." when a `PropertyDeclaration` has an initializer AND either the class is ambient OR the property itself has `declare` modifier. Previously only checked class-level ambient.
+  - Added TS1031 "'export' modifier cannot appear on class elements of this kind." for any `ClassElement` with `ModifierFlag.Export`. Squiggle on the `export` keyword (length 6), located via `getModifierKeywordStart` helper that scans source text from `element.pos`.
+  - → +1 test: `illegalModifiersOnClassElements_ts`. Zero regressions.
 
   **Session 2026-04-17 (16.4z, +1 test: 8104→8105):** TS2407 for-in RHS type check (syntactic):
   - Extended `checkForInLhsInStmt` to also emit TS2407 "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type 'X'." for literal RHS expressions: NumericLiteralNode, BigIntLiteralNode, StringLiteralNode (wrapped in `"..."`), Identifier `true`/`false`/`null`/`undefined`, and PrefixUnaryExpression with `+`/`-` operator on a simple-display operand. Complex/unknown expressions are left alone (conservative).
