@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cw, +1 test: 8212→8213):** TS2351 + TS17011 for `new super(...)` inside a constructor body:
+  - Inside `checkClassDerivedSuper`, walk each Constructor body for `NewExpression` with `expression = Identifier("super")`. Each occurrence emits BOTH TS2351 ("This expression is not constructable.") AND TS17011 ("'super' must be called before accessing a property of 'super' in the constructor of a derived class.") at the super keyword position (length 5).
+  - TS2351 chain displays the resolved base type (`A<number, string>`), built from the heritage clause's `expression.text` + formatted `typeArguments` via existing `formatTypeForDisplay`.
+  - Helper `collectNewSuperPositions(stmt)` walks an entire statement subtree (including nested expressions, control flow, try/catch) collecting every `new super(...)` callee position. Mirrors `collectSuperKeywordPositions` but specifically for `NewExpression` with super callee.
+  - Rationale: `super` (without `()`) refers to the prototype, which has no construct signatures; AND we're accessing a property of `super` before `super()` is called (TS17011 invariant).
+  - → +1 test: `superNewCall1_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cv, +1 test: 8211→8212):** TS2336 + TS17011 for `super.X` referenced inside a constructor parameter default:
   - Inside `checkClassDerivedSuper`, before the existing TS2377 walk, iterate each Constructor's `parameters[i].initializer` and walk for `Identifier("super")`. Each occurrence emits BOTH TS2336 ("'super' cannot be referenced in constructor arguments.") AND TS17011 ("'super' must be called before accessing a property of 'super' in the constructor of a derived class.") at the super keyword position (length 5).
   - Helper `collectSuperKeywordPositions` walks an expression tree (CallExpression / PropertyAccessExpression / BinaryExpression / etc.) collecting positions of every `super` reference. Narrow scope: only invoked on constructor parameter initializers, so it never fires on legitimate `super.X` inside a constructor body (the body branch keeps the existing semantics).

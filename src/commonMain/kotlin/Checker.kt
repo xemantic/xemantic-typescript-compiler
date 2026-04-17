@@ -24447,6 +24447,57 @@ interface DataView {
             }
         }
 
+        // 16.4cw: `new super(...)` inside a constructor body. `super` (without `()`)
+        // refers to the prototype, which has no construct signatures — TS2351. And
+        // since this is a property-style access on `super`, TS17011 applies as well
+        // (the call to `super()` proper hasn't happened yet at this point in eval).
+        // Emits both at the `super` keyword position (length 5), with a chain on
+        // TS2351 displaying the resolved base type (e.g. `A<number, string>`).
+        val baseDisplay = run {
+            val first = extendsClause.types.firstOrNull() ?: return@run null
+            val baseName = (first.expression as? Identifier)?.text ?: return@run null
+            val typeArgs = first.typeArguments
+            if (typeArgs.isNullOrEmpty()) baseName
+            else {
+                val argNames = typeArgs.map { formatTypeForDisplay(it) }
+                if (argNames.any { it == null }) baseName
+                else "$baseName<${argNames.joinToString(", ")}>"
+            }
+        }
+        for (member in members) {
+            if (member !is Constructor) continue
+            val body = member.body ?: continue
+            for (stmt in body.statements) {
+                collectNewSuperPositions(stmt).forEach { superPos ->
+                    val (line, character) = getLineAndCharacterOfPosition(source, superPos)
+                    val chain = if (baseDisplay != null) {
+                        listOf("  Type '$baseDisplay' has no construct signatures.")
+                    } else emptyList()
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error,
+                        code = 2351,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = superPos,
+                        length = 5,
+                        messageChain = chain,
+                    ))
+                    diagnostics.add(Diagnostic(
+                        message = "'super' must be called before accessing a property of 'super' in the constructor of a derived class.",
+                        category = DiagnosticCategory.Error,
+                        code = 17011,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = superPos,
+                        length = 5,
+                    ))
+                }
+            }
+        }
+
         // Find constructors with bodies that don't contain super()
         for (member in members) {
             if (member is Constructor && member.body != null) {
@@ -24507,6 +24558,85 @@ interface DataView {
         }
         is ParenthesizedExpression -> findSuperCallInExpr(expr.expression)
         else -> null
+    }
+
+    /**
+     * 16.4cw: Collect positions of every `new super(...)` callee anywhere within a
+     * statement subtree. Returns the position of the `super` identifier (length 5).
+     * Used for TS2351/TS17011 in constructor bodies.
+     */
+    private fun collectNewSuperPositions(stmt: Statement): List<Int> {
+        val out = mutableListOf<Int>()
+        fun walkExpr(e: Expression?) {
+            e ?: return
+            when (e) {
+                is NewExpression -> {
+                    val callee = e.expression
+                    if (callee is Identifier && callee.text == "super") {
+                        out.add(callee.pos)
+                    } else walkExpr(callee)
+                    e.arguments?.forEach { walkExpr(it) }
+                }
+                is CallExpression -> { walkExpr(e.expression); e.arguments.forEach { walkExpr(it) } }
+                is PropertyAccessExpression -> walkExpr(e.expression)
+                is ElementAccessExpression -> { walkExpr(e.expression); walkExpr(e.argumentExpression) }
+                is BinaryExpression -> { walkExpr(e.left); walkExpr(e.right) }
+                is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
+                is ParenthesizedExpression -> walkExpr(e.expression)
+                is PrefixUnaryExpression -> walkExpr(e.operand)
+                is PostfixUnaryExpression -> walkExpr(e.operand)
+                is TypeAssertionExpression -> walkExpr(e.expression)
+                is AsExpression -> walkExpr(e.expression)
+                is NonNullExpression -> walkExpr(e.expression)
+                is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
+                is SpreadElement -> walkExpr(e.expression)
+                is YieldExpression -> e.expression?.let { walkExpr(it) }
+                is AwaitExpression -> walkExpr(e.expression)
+                is VoidExpression -> walkExpr(e.expression)
+                is TypeOfExpression -> walkExpr(e.expression)
+                is DeleteExpression -> walkExpr(e.expression)
+                else -> {}
+            }
+        }
+        fun walkStmt(s: Statement?) {
+            s ?: return
+            when (s) {
+                is ExpressionStatement -> walkExpr(s.expression)
+                is VariableStatement -> for (d in s.declarationList.declarations) walkExpr(d.initializer)
+                is ReturnStatement -> walkExpr(s.expression)
+                is IfStatement -> { walkExpr(s.expression); walkStmt(s.thenStatement); walkStmt(s.elseStatement) }
+                is Block -> s.statements.forEach { walkStmt(it) }
+                is ForStatement -> {
+                    when (val init = s.initializer) {
+                        is VariableDeclarationList -> for (d in init.declarations) walkExpr(d.initializer)
+                        is Expression -> walkExpr(init)
+                        else -> {}
+                    }
+                    walkExpr(s.condition); walkExpr(s.incrementor); walkStmt(s.statement)
+                }
+                is WhileStatement -> { walkExpr(s.expression); walkStmt(s.statement) }
+                is DoStatement -> { walkStmt(s.statement); walkExpr(s.expression) }
+                is ThrowStatement -> walkExpr(s.expression)
+                is SwitchStatement -> {
+                    walkExpr(s.expression)
+                    for (c in s.caseBlock) {
+                        when (c) {
+                            is CaseClause -> { walkExpr(c.expression); c.statements.forEach { walkStmt(it) } }
+                            is DefaultClause -> c.statements.forEach { walkStmt(it) }
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    s.tryBlock.statements.forEach { walkStmt(it) }
+                    s.catchClause?.block?.statements?.forEach { walkStmt(it) }
+                    s.finallyBlock?.statements?.forEach { walkStmt(it) }
+                }
+                else -> {}
+            }
+        }
+        walkStmt(stmt)
+        return out
     }
 
     /**
