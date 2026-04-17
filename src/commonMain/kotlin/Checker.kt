@@ -209,6 +209,11 @@ class Checker(
     private var lastMissingPropertyName: String? = null
     private var lastMissingPropertySymbol: Symbol? = null
 
+    /** Tracks when structural comparison fails due to target having an index signature
+     *  that the source (a named class/interface) lacks. Consumed by TS2322 elaboration
+     *  to produce "Index signature for type 'string|number' is missing in type 'X'." */
+    private var lastMissingIndexSigKind: String? = null
+
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
     private fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
@@ -28756,6 +28761,7 @@ interface DataView {
                         val sourceType = getTypeOfExpression(expr.right)
                         contextualType = savedContextual
                         lastMissingPropertyName = null
+                        lastMissingIndexSigKind = null
                         val canUse = canUseTypeEngine(sourceType, tt)
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
                         // Excess property check for object literal assignments (TS2353)
@@ -28850,6 +28856,10 @@ interface DataView {
                                 if (sourceType is Type.Object && tt is Type.Object) {
                                     val propElab = getPropertyElaborationChain(sourceType, tt)
                                     if (propElab != null) chain.addAll(propElab)
+                                }
+                                // 16.4cn: Missing index signature elaboration
+                                if (chain.isEmpty() && lastMissingIndexSigKind != null) {
+                                    chain.add("  Index signature for type '$lastMissingIndexSigKind' is missing in type '$displaySource'.")
                                 }
                                 if (chain.isEmpty()) {
                                 if (tt is Type.TypeParam) {
@@ -36358,6 +36368,19 @@ interface DataView {
             target.symbol!!.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
         if (!isClassInstance) {
             if (!signaturesRelatedTo(source, target, relation, isConstruct = true)) return false
+        }
+        // Check index signatures: if target has a string index signature but source (a named
+        // class/interface) doesn't declare one, TypeScript rejects the assignment with
+        // "Index signature for type 'string' is missing in type 'X'." This only applies to
+        // NOMINAL source types (named class/interface) — anonymous object literals use
+        // a different rule where properties individually satisfy the index type.
+        if (target.stringIndexInfo != null && source.stringIndexInfo == null) {
+            val srcSym = source.symbol
+            val isNominalSource = srcSym != null && srcSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+            if (isNominalSource) {
+                lastMissingIndexSigKind = "string"
+                return false
+            }
         }
         return true
     }
