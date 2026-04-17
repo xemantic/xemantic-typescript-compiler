@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cz, +1 test: 8215→8216):** TS2702 "'X' only refers to a type, but is being used as a namespace here." for `X.Y` in type position when X is a type-only declaration (Class/Interface/TypeAlias):
+  - In `checkTypeNameResolved` (QualifiedName branch), after the existing TS2833 spelling-suggestion path, check if the leftmost symbol has any of `Class|Interface|TypeAlias` flags AND none of `Module|Enum|Alias`. If so, emit TS2702 at the leftmost identifier.
+  - Excluded:
+    - **Enums**: `E.A` IS valid type syntax (literal enum member type) — without this exclusion, every `let x: E.A = …` would FP.
+    - **Aliases**: An invalid default-import (`import X from "./y"` where y has no default export) still resolves through `resolveAlias` to a class via fallback. Firing TS2702 there would double-report atop TS2613/TS2305. Restricting to non-aliases keeps the diagnostic safe; the alias case can be revisited once import-validity tracking exists.
+  - → +1 test net (no regressions). Note: this lays groundwork without claiming any single specific target test — `decoratorMetadataWithImportDeclarationNameCollision7_ts` was the candidate, but its `db` is an alias so the conservative version doesn't fire there.
+
   **Session 2026-04-17 (16.4cy, +1 test: 8214→8215):** TS2717 now fires for interfaces with same-name properties of different types:
   - `checkDuplicateInterfaceMembers` previously only emitted TS2300 (duplicate identifier). Class-side TS2717 already existed in `checkDuplicateClassMembers` — extracted the same logic into the interface path: compare each subsequent property's type-string to the first; emit TS2717 + related TS6203 when they differ.
   - Reuses `getPropertyTypeString` for the type-string comparison and the existing `getMemberNameText`/squiggle-length pattern.
