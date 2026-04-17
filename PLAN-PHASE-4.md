@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,103 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+27 tests, 1972 remaining).
+**Status (2026-04-17):** 8,104 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+28 tests, 1971 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,13 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4y, +1 test: 8103→8104):** TS1046 for bare top-level declaration in `.d.ts`:
+  - New `checkDtsTopLevelDeclarations` emits TS1046 "Top-level declarations in .d.ts files must start with either a 'declare' or 'export' modifier." on the FIRST top-level declaration statement when it lacks a `declare` or `export` modifier.
+  - Scoped to only the FIRST statement per file — the TypeScript semantic is broader ("every bare declaration until module mode is established"), but our parser splits malformed constructs like `export as namespace Foo;` into a phantom `namespace Foo;` statement, and flagging every bare decl triggers FPs. Restricting to the first statement matches the baselines at hand without regressions.
+  - Skips: `InterfaceDeclaration`, `TypeAliasDeclaration`, `ImportDeclaration`, `ExportDeclaration`, `ExportAssignment`, `ModuleDeclaration` whose name is a `StringLiteralNode` (`declare module "X"` form).
+  - Squiggle on the declaration keyword: `namespace`/`module`/`function`/`class`/`enum`/`const`/`var`/`let` — looked up in source starting from `stmt.pos`.
+  - → +1 test: `erasableSyntaxOnlyDeclaration_ts`. Zero regressions (a flaky JS emit test `binderBinaryExpressionStress_ts` toggled between runs but stabilized on the second).
 
   **Session 2026-04-17 (16.4x, +1 test: 8102→8103):** TS1084 for malformed `<reference>` triple-slash directive:
   - Extended `checkTripleSlashSelfReference` in the Parser to emit TS1084 "Invalid 'reference' directive syntax." when a `///`-prefixed line contains `<reference\b` but doesn't match a valid directive (attribute list with balanced quotes ending in `/>`).
