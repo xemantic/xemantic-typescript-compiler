@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cx, +1 test: 8213→8214):** TS2709 "Cannot use namespace 'X' as a type." now fires for heritage clauses (interface `extends`, class `implements`):
+  - `checkNamespaceAsTypeInStmt` previously only checked variable/function/method type annotations. Extended to walk InterfaceDeclaration's `extends` clause and ClassDeclaration's `implements` clause — for each `ExpressionWithTypeArguments`, if the expression is an Identifier resolving to a namespace-only symbol, emit TS2709 at the identifier position.
+  - New helper `checkHeritageExprForNamespace` is the heritage-clause variant of `checkTypeRefForNamespace` (heritage uses `Expression` not `TypeNode`, so the existing helper couldn't be reused directly).
+  - Symbol filter mirrors the existing TS2709 logic: `Module` flag set AND none of `Class|Interface|TypeAlias|Enum` (otherwise the merged symbol IS a valid type).
+  - `class C extends M` is a value position (constructor) — already handled by the TS2708 path.
+  - → +1 test: `moduleAsBaseType_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cw, +1 test: 8212→8213):** TS2351 + TS17011 for `new super(...)` inside a constructor body:
   - Inside `checkClassDerivedSuper`, walk each Constructor body for `NewExpression` with `expression = Identifier("super")`. Each occurrence emits BOTH TS2351 ("This expression is not constructable.") AND TS17011 ("'super' must be called before accessing a property of 'super' in the constructor of a derived class.") at the super keyword position (length 5).
   - TS2351 chain displays the resolved base type (`A<number, string>`), built from the heritage clause's `expression.text` + formatted `typeArguments` via existing `formatTypeForDisplay`.
