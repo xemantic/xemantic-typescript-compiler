@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bx, +2 tests: 8172→8174):** TS2693 for primitive type keyword in NewExpression ctor position when callee is a non-Identifier:
+  - `new number[]` parses as `new (ElementAccess(number, missing))`. `checkTypeAsValueInExpr`'s `NewExpression` branch only checked the `ctorExpr` when it was a bare `Identifier`, dropping the type-keyword detection for element-access ctors.
+  - Added an `else` branch: when `ctorExpr` isn't an Identifier, recurse into it via `checkTypeAsValueInExpr`, which already handles `ElementAccessExpression` (recursing into its `.expression`). That reaches the nested `number`/`string`/`boolean` Identifier and emits TS2693.
+  - → +2 tests: `createArray` + 1 collateral. Zero regressions.
+
   **Session 2026-04-17 (16.4bw, +2 tests: 8170→8172):** TS2694 for intermediate qualified-name segment that isn't exported from its namespace:
   - `var c: D.inner.Class1` where `D` is a regular namespace and `inner = A.B.C` is a local `import` inside `D` — expected TS2694 at `inner` ("Namespace 'D' has no exported member 'inner'"). Our `checkQualifiedNameExports` only applied `isMemberAccessible` to the FINAL segment; intermediate segments passed through if present in `exports` regardless of accessibility, so the local-only import was silently walked past.
   - Added accessibility check on intermediate segments in the `for (i in 1 until segments.size)` loop. To avoid FPs for dotted-namespace declarations like `namespace MsPortalFx.ViewModels.Dialogs { ... }` (where nested namespace symbols don't have explicit `ExportValue` flag), relax the check: `SymbolFlags.Module || isMemberAccessible(next, symbol)`. Matches the invariant already documented elsewhere in the checker: sub-namespace symbols are accessible via dotted qualified access.

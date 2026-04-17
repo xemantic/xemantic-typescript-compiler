@@ -16170,6 +16170,11 @@ interface DataView {
                     if (name !in valueNames && (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames)) {
                         emitTS2693(name, ctorExpr, source, fileName)
                     }
+                } else {
+                    // Non-Identifier ctor expressions may still contain type-only names
+                    // in value positions (e.g. `new number[]` parses as
+                    // `new (ElementAccess(number, missing))` — the `number` is value-pos).
+                    checkTypeAsValueInExpr(ctorExpr, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                 }
                 // Recurse into arguments
                 expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
