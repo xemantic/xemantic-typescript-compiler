@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ag, +2 tests: 8111→8113):** TS1039 "Initializers are not allowed in ambient contexts" fires in `.d.ts` files:
+  - `checkAmbientInitializers` previously skipped `.d.ts` files entirely. Now `.d.ts` files are processed with `isAmbient = true` at the top level, so declarations inside `.d.ts` (which are implicitly ambient even without `declare`) emit TS1039 for any initializer.
+  - Covers tests like `var x = 1;` in a bare `.d.ts` file where TS1046 (missing declare/export) AND TS1039 (initializer) both fire.
+  - → +2 tests: `missingRequiredDeclare_d_ts` + 1 collateral. Zero regressions.
+
   **Session 2026-04-17 (16.4af, +1 test: 8110→8111):** TS2576 for `this.X` where X is a static member of the enclosing class:
   - In `checkMemberAccessMissing`, when the resolved property `prop` is non-null AND the access is `this.X` in an instance method (`isThisAccess && !inStaticClassMethod`), re-check the declaration modifier via existing `isStaticMemberOfClass`. If the property is static, emit TS2576 "Property 'X' does not exist on type 'C'. Did you mean to access the static member 'C.X' instead?" and return, overriding the normal success path.
   - Rationale: `resolveInterfaceMembers` stores static and instance members in the same `members` table, so `getPropertyOfType` returns a static member as a hit for a `this.` access. The modifier check distinguishes.
