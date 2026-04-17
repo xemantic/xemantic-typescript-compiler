@@ -530,6 +530,8 @@ class Checker(
         checkStaticMembersReferenceTypeParams()
         // 65. Check invalid assignment targets (TS2364)
         checkInvalidAssignmentTargets()
+        // 65a. Check for-in LHS type (TS2405: must be 'string' or 'any')
+        checkForInLhsTypes()
         // 65b. Check subsequent var declaration type mismatch (TS2403)
         checkSubsequentVarTypes()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
@@ -36631,6 +36633,104 @@ interface DataView {
             is ArrayLiteralExpression -> true
             is ObjectLiteralExpression -> true
             else -> false
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2405: for-in LHS must be 'string' or 'any'
+    // -----------------------------------------------------------------------
+
+    private fun checkForInLhsTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            try {
+                checkForInLhsInStatements(result.sourceFile.statements, result.locals, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun checkForInLhsInStatements(
+        stmts: List<Statement>, locals: SymbolTable, source: String, fileName: String,
+    ) {
+        for (stmt in stmts) checkForInLhsInStmt(stmt, locals, source, fileName)
+    }
+
+    private fun checkForInLhsInStmt(
+        stmt: Statement, locals: SymbolTable, source: String, fileName: String,
+    ) {
+        when (stmt) {
+            is ForInStatement -> {
+                val lhs = stmt.initializer
+                if (lhs is Identifier) {
+                    val sym = locals[lhs.text]
+                    val decl = sym?.valueDeclaration
+                    if (decl is VariableDeclaration) {
+                        val typeNode = decl.type
+                        if (typeNode != null && !isForInLhsCompatible(typeNode)) {
+                            val start = lhs.pos
+                            val length = lhs.text.length
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2405,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                    }
+                }
+                checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            }
+            is Block -> checkForInLhsInStatements(stmt.statements, locals, source, fileName)
+            is IfStatement -> {
+                checkForInLhsInStmt(stmt.thenStatement, locals, source, fileName)
+                stmt.elseStatement?.let { checkForInLhsInStmt(it, locals, source, fileName) }
+            }
+            is ForStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is ForOfStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is WhileStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is DoStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkForInLhsInStatements(clause.statements, locals, source, fileName)
+                        is DefaultClause -> checkForInLhsInStatements(clause.statements, locals, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                checkForInLhsInStatements(stmt.tryBlock.statements, locals, source, fileName)
+                stmt.catchClause?.block?.let { checkForInLhsInStatements(it.statements, locals, source, fileName) }
+                stmt.finallyBlock?.let { checkForInLhsInStatements(it.statements, locals, source, fileName) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName) }
+            is LabeledStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                checkForInLhsInStatements(it.statements, locals, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Returns true if the annotated type can appear on the LHS of `for..in`: string/any/unknown. */
+    private fun isForInLhsCompatible(typeNode: TypeNode): Boolean {
+        return when (typeNode) {
+            is KeywordTypeNode -> when (typeNode.kind) {
+                SyntaxKind.StringKeyword, SyntaxKind.AnyKeyword, SyntaxKind.UnknownKeyword -> true
+                else -> false
+            }
+            is UnionType -> typeNode.types.all { isForInLhsCompatible(it) }
+            is ParenthesizedType -> isForInLhsCompatible(typeNode.type)
+            // Unknown type forms (type references, literal types, etc.) — conservative: accept.
+            else -> true
         }
     }
 

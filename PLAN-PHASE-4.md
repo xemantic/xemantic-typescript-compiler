@@ -1,6 +1,6 @@
 # Phase 4 — Structural Type Checker
 
-**Status (2026-04-17):** 8,101 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+25 tests, 1974 remaining).
+**Status (2026-04-17):** 8,102 / 10,078 tests passing (80.4%). Active queue: **Phase 16 — Fundamental Type System Features**. 16.0 done, 16.1 done, 16.2 done, 16.3 partial (+14 tests), 16.4 in progress (+26 tests, 1973 remaining).
 
 ## Goal
 
@@ -2674,6 +2674,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 ---
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
+
+  **Session 2026-04-17 (16.4w, +1 test: 8101→8102):** TS2405 for-in LHS type check:
+  - New `checkForInLhsTypes` pass walks statements and emits TS2405 "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'." when the initializer is a bare `Identifier` (not a VariableDeclarationList) whose resolved symbol has a value-declaration with an incompatible type annotation.
+  - Compatible type nodes: `StringKeyword`, `AnyKeyword`, `UnknownKeyword`, union of compatibles, parenthesized wrapper. Unknown forms (type references, literal types) default to compatible — conservative to avoid FPs.
+  - Lookup via `locals[name].valueDeclaration` (top-level scope only for now). Squiggle on the identifier. `.js`/`.jsx`/`.d.ts` files skipped.
+  - → +1 test: `forInStatement7_ts`. Zero regressions.
 
   **Session 2026-04-17 (16.4v, +3 tests: 8098→8101):** TS1092/TS1098/TS2392 for constructor overload edge cases:
   - Parser (TS1092/TS1098): `parseConstructor` now inspects the `<...>` type parameter list that was previously silently consumed for error recovery. Emits TS1098 "Type parameter list cannot be empty." (squiggle = `<>` span) when empty, and ALWAYS emits TS1092 "Type parameters cannot appear on a constructor declaration." at position `<+1` with length 0 (matches TypeScript's zero-length span after the `<`).
