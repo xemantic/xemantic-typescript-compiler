@@ -37477,6 +37477,11 @@ interface DataView {
                             start = start,
                             length = length,
                         ))
+                    } else {
+                        // Destructuring patterns: check for private identifiers as direct elements.
+                        // E.g. `[#abc] = x` — `#abc` (Identifier whose text starts with `#`) is not
+                        // a valid assignment target outside of a `this.#abc` member-access chain.
+                        checkDestructuringPrivateIds(expr.left, source, fileName)
                     }
                 }
                 checkInvalidAssignInExpr(expr.left, source, fileName)
@@ -37535,6 +37540,68 @@ interface DataView {
             is ArrayLiteralExpression -> true
             is ObjectLiteralExpression -> true
             else -> false
+        }
+    }
+
+    /**
+     * Walk a destructuring pattern (ArrayLiteralExpression / ObjectLiteralExpression) on
+     * the LHS of an assignment and emit TS2364 at any private-identifier element. A bare
+     * `#abc` (Identifier scanned as a single token with leading `#`) is never a valid
+     * assignment target — private fields require `this.#abc` or `obj.#abc` syntax.
+     */
+    private fun checkDestructuringPrivateIds(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is Identifier -> {
+                if (expr.text.startsWith("#")) {
+                    val start = expr.pos
+                    val length = expr.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "The left-hand side of an assignment expression must be a variable or a property access.",
+                        category = DiagnosticCategory.Error,
+                        code = 2364,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                }
+            }
+            is ArrayLiteralExpression -> {
+                for (el in expr.elements) {
+                    val target = if (el is SpreadElement) el.expression else el
+                    checkDestructuringPrivateIds(target, source, fileName)
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> checkDestructuringPrivateIds(prop.initializer, source, fileName)
+                        is ShorthandPropertyAssignment -> {
+                            if (prop.name.text.startsWith("#")) {
+                                val start = prop.name.pos
+                                val length = prop.name.text.length
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "The left-hand side of an assignment expression must be a variable or a property access.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2364,
+                                    fileName = fileName, line = line, character = character,
+                                    start = start, length = length,
+                                ))
+                            }
+                        }
+                        is SpreadAssignment -> checkDestructuringPrivateIds(prop.expression, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ParenthesizedExpression -> checkDestructuringPrivateIds(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                // Default value: `[x = 1] = ...` — recurse into LHS only.
+                if (expr.operator == SyntaxKind.Equals) {
+                    checkDestructuringPrivateIds(expr.left, source, fileName)
+                }
+            }
+            else -> {}
         }
     }
 
