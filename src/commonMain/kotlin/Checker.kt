@@ -33343,7 +33343,10 @@ interface DataView {
             // on the resolved symbol to distinguish.
             if (isThisAccess && !inStaticClassMethod) {
                 val classDecl = objectType.symbol?.declarations?.firstOrNull() as? ClassDeclaration
-                if (classDecl != null && isStaticMemberOfClass(classDecl, propName)) {
+                if (classDecl != null
+                    && isStaticMemberOfClass(classDecl, propName)
+                    && !hasInstanceMemberNamed(classDecl, propName)
+                ) {
                     val className = classDecl.name?.text ?: objectType.symbol?.name
                     if (className != null) {
                         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
@@ -33516,6 +33519,55 @@ interface DataView {
     }
 
     /** Check if `name` is a static member of `classDecl` (including inherited). */
+    /**
+     * Returns true if [classDecl] (or a base class) declares an INSTANCE member named [name].
+     * Instance members include:
+     *  - non-static PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor
+     *  - Constructor parameter properties (parameters with an access modifier or readonly)
+     * Used to suppress TS2576 "did you mean static" for `this.X` when the class has
+     * BOTH an instance member X and a static member X. `this.X` in an instance method
+     * legitimately resolves to the instance member.
+     */
+    private fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
+        val v = visited ?: mutableSetOf()
+        val className = classDecl.name?.text ?: return false
+        if (!v.add(className)) return false
+        for (m in classDecl.members) {
+            when (m) {
+                is PropertyDeclaration -> {
+                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                }
+                is MethodDeclaration -> {
+                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                }
+                is GetAccessor -> {
+                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                }
+                is SetAccessor -> {
+                    if (ModifierFlag.Static !in m.modifiers && (m.name as? Identifier)?.text == name) return true
+                }
+                is Constructor -> {
+                    for (p in m.parameters) {
+                        if (p.modifiers.isEmpty()) continue
+                        if ((p.name as? Identifier)?.text == name) return true
+                    }
+                }
+                else -> {}
+            }
+        }
+        val baseExpr = classDecl.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()?.expression
+        if (baseExpr is Identifier) {
+            val baseSym = globals[baseExpr.text]
+            if (baseSym != null) {
+                val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration
+                if (baseDecl != null && hasInstanceMemberNamed(baseDecl, name, v)) return true
+            }
+        }
+        return false
+    }
+
     private fun isStaticMemberOfClass(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
         val v = visited ?: mutableSetOf()
         val className = classDecl.name?.text ?: return false
