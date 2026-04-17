@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ah, +1 test: 8113→8114):** TS7033 for bodyless get accessor without return type annotation:
+  - New `checkAbstractAccessorReturnTypes` pass, gated on `noImplicitAny || strict`. Walks class bodies; for any `GetAccessor` whose `body == null` and `type == null` (abstract/interface form), emits TS7033 "Property 'X' implicitly has type 'any', because its get accessor lacks a return type annotation." at the accessor's name identifier.
+  - Conservative: does NOT fire for getters with bodies (would need body return-type inference).
+  - → +1 test: `noImplicitAnyMissingSetAccessor_ts__target_es5` (plus the base `target_es2015` was already passing). Zero regressions.
+
   **Session 2026-04-17 (16.4ag, +2 tests: 8111→8113):** TS1039 "Initializers are not allowed in ambient contexts" fires in `.d.ts` files:
   - `checkAmbientInitializers` previously skipped `.d.ts` files entirely. Now `.d.ts` files are processed with `isAmbient = true` at the top level, so declarations inside `.d.ts` (which are implicitly ambient even without `declare`) emit TS1039 for any initializer.
   - Covers tests like `var x = 1;` in a bare `.d.ts` file where TS1046 (missing declare/export) AND TS1039 (initializer) both fire.
