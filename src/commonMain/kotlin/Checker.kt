@@ -31280,6 +31280,15 @@ interface DataView {
                 if (baseTypeExprs.size < 2) return // Need 2+ base types
                 val ifaceName = stmt.name.text
 
+                // Own members override base member conflicts — skip names this interface declares itself.
+                val ownMemberNames = stmt.members.mapNotNull {
+                    when (it) {
+                        is PropertyDeclaration -> (it.name as? Identifier)?.text
+                        is MethodDeclaration -> (it.name as? Identifier)?.text
+                        else -> null
+                    }
+                }.toSet()
+
                 // Collect properties from each base type
                 data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?)
                 val propSources = mutableMapOf<String, MutableList<BaseProperty>>()
@@ -31317,15 +31326,38 @@ interface DataView {
                     }
                 }
 
-                // Check for conflicts: same property from different bases where at least one is private
+                // Check for conflicts: same property from different bases
                 for ((propName, sources) in propSources) {
+                    // Skip names this interface declares itself — own declaration resolves the conflict.
+                    if (propName in ownMemberNames) continue
                     val distinctBases = sources.map { it.baseName }.distinct()
                     if (distinctBases.size < 2) continue // Same base — no conflict
                     val hasPrivate = sources.any { it.isPrivate }
-                    if (!hasPrivate) continue // Both public — might still conflict on type, but that's TS2430
 
                     val base1 = distinctBases[0]
                     val base2 = distinctBases[1]
+
+                    // Conflict reason:
+                    // - Any-private sources → always conflict (distinct privacy).
+                    // - All-public → conflict ONLY when types differ (neither direction assignable).
+                    val conflict = if (hasPrivate) {
+                        true
+                    } else {
+                        // Compare two distinct bases' first-declaration types.
+                        val t0Node = sources.first { it.baseName == base1 }.propType
+                        val t1Node = sources.first { it.baseName == base2 }.propType
+                        if (t0Node != null && t1Node != null) {
+                            try {
+                                val t0 = getTypeFromTypeNode(t0Node)
+                                val t1 = getTypeFromTypeNode(t1Node)
+                                if (t0 === errorType || t1 === errorType) false
+                                else !checkTypeRelatedTo(t0, t1, assignableRelation) &&
+                                    !checkTypeRelatedTo(t1, t0, assignableRelation)
+                            } catch (_: StackOverflowError) { false }
+                        } else false
+                    }
+                    if (!conflict) continue
+
                     val nameNode = stmt.name
                     val start = nameNode.pos
                     val length = nameNode.text.length
