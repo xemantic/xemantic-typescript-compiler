@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cg, +1 test: 8185→8186):** TS2693 in `extends` heritage expressions + single-signature display as arrow form:
+  - `class C extends factory(A) {}` where `A` is an `interface` — expected TS2693 on `A`. Our `checkTypeAsValueInStatement` ClassDeclaration branch only recursed into members, never visiting `heritageClauses`, so type-only names in the `extends` expression were silently accepted. Added a pass over `stmt.heritageClauses` and, for `extends` clauses only, called `checkTypeAsValueInExpr` on each `ewta.expression`. `implements` clauses are type positions — skipped.
+  - `formatTypeForDisplay(TypeLiteral)` always built `"{ ...; }"` format, producing `'{ new(): Object; }'` where TypeScript formats single-call / single-construct literals as arrow form (`'new () => Object'`). Added a single-member fast path: when the sole member is a MethodDeclaration with name `""` (call sig) or `"new"` (ctor sig), emit `(params) => ret` / `new (params) => ret`. Multi-member literals keep the `{ }` format.
+  - → +1 test: `classExtendsInterfaceInExpression_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cf, +1 test: 8184→8185):** Suppress TS2339 FP on type aliases whose body is a mapped type (`{ [K in T]: V }`):
   - The parser emits these inside a TypeLiteral as a `PropertyDeclaration(name=Identifier(""))` placeholder (see `parseIndexSignatureOrProperty` → `isMappedType` branch). `getTypeFromTypeLiteral` then built a Type.Object with a single empty-named property of type `any`, producing an FP display `Type '{ : any; }'` and a bogus property-access check that couldn't resolve any name.
   - Skip empty-name `PropertyDeclaration` in `getTypeFromTypeLiteral` and, when the placeholder was the literal's only member (no index sig / call sig / real properties), return `anyType` so downstream member-existence checks bail out. Preserves behavior for mixed literals like `{ [K in T]: V, x: number }` (the `x` property still resolves; mapped-type semantics for key enumeration are still not handled).

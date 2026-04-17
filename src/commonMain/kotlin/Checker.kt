@@ -16195,6 +16195,15 @@ interface DataView {
                 stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues) }
             }
             is ClassDeclaration -> {
+                // `extends X` takes a value expression, so type-only names in it are TS2693.
+                // `implements X` is a type position and is handled elsewhere.
+                stmt.heritageClauses?.forEach { clause ->
+                    if (clause.token == SyntaxKind.ExtendsKeyword) {
+                        clause.types.forEach { ewta ->
+                            checkTypeAsValueInExpr(ewta.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                        }
+                    }
+                }
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
@@ -37527,6 +37536,24 @@ interface DataView {
                 "[${elements.joinToString(", ")}]"
             }
             is TypeLiteral -> {
+                // Single call/construct signature: display as arrow form
+                // `{(): T}` → `() => T` and `{new(): T}` → `new () => T`
+                if (typeNode.members.size == 1) {
+                    val only = typeNode.members[0]
+                    if (only is MethodDeclaration) {
+                        val name = (only.name as? Identifier)?.text
+                        if (name == "" || name == "new") {
+                            val params = only.parameters.joinToString(", ") { p ->
+                                val pName = (p.name as? Identifier)?.text ?: "_"
+                                val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+                                "$pName: $pType"
+                            }
+                            val retType = only.type?.let { formatTypeForDisplay(it) } ?: "any"
+                            val prefix = if (name == "new") "new " else ""
+                            return "$prefix($params) => $retType"
+                        }
+                    }
+                }
                 val parts = mutableListOf<String>()
                 for (member in typeNode.members) {
                     when (member) {
