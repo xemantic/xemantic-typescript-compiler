@@ -479,7 +479,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             null
         }
         DefaultKeyword -> {
-            // `default` without `export` — error recovery: skip and parse the declaration
+            // `default` without `export` — emit TS1029 and then parse the declaration.
+            val defaultStart = getPos()
+            reportError("'export' modifier must precede 'default' modifier.", code = 1029,
+                overrideStart = defaultStart, overrideLength = "default".length)
             nextToken()
             val mods = setOf(ModifierFlag.Default)
             when (token) {
