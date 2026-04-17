@@ -6907,6 +6907,13 @@ class Checker(
                                     // e.g. `pub_f10: (x) => string` and `priv_f10: (x) => string`
                                     checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
                                 }
+                                is Constructor -> {
+                                    // Public (or unqualified) ambient constructors get TS7006 for untyped params.
+                                    // Private constructors are skipped (TypeScript doesn't check them).
+                                    if (ModifierFlag.Private !in member.modifiers) {
+                                        checkParamsForImplicitAny(member.parameters, source, fileName)
+                                    }
+                                }
                                 else -> {}
                             }
                         } else {
@@ -17010,11 +17017,13 @@ interface DataView {
     private fun checkBodylessFunctionReturnTypesMissing() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
+            // .d.ts files are checked only when noImplicitAny is on — TS7010 requires
+            // noImplicitAny/strict for implicit-any diagnostics in ambient contexts.
+            if (isDtsFile(fileName) && !(options.noImplicitAny || options.strict)) continue
             // Skip JS files — TS8017 handles bodiless functions
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
-            checkTS7010InStatements(result.sourceFile.statements, source, fileName)
+            checkTS7010InStatements(result.sourceFile.statements, source, fileName, inAmbientContext = isDtsFile(fileName))
         }
     }
 
