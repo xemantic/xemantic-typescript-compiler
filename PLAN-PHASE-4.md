@@ -2675,6 +2675,11 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4af, +1 test: 8110→8111):** TS2576 for `this.X` where X is a static member of the enclosing class:
+  - In `checkMemberAccessMissing`, when the resolved property `prop` is non-null AND the access is `this.X` in an instance method (`isThisAccess && !inStaticClassMethod`), re-check the declaration modifier via existing `isStaticMemberOfClass`. If the property is static, emit TS2576 "Property 'X' does not exist on type 'C'. Did you mean to access the static member 'C.X' instead?" and return, overriding the normal success path.
+  - Rationale: `resolveInterfaceMembers` stores static and instance members in the same `members` table, so `getPropertyOfType` returns a static member as a hit for a `this.` access. The modifier check distinguishes.
+  - → +1 test: `thisInOuterClassBody_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ae, +1 test: 8109→8110):** TS2370 "A rest parameter must be of an array type":
   - New `checkNonArrayRestParameters()` pass (always-on, not gated on strict/noImplicitAny) walks all function-like declarations and emits TS2370 when a rest parameter's type annotation is a clearly-non-array keyword (number, string, boolean, bigint, symbol, void, never, null, undefined). Conservative: does not resolve TypeReferences, so `function f(...x: Foo)` where `type Foo = number[]` stays silent.
   - Squiggle covers `...name: Type` — length computed as `typeNode.pos + keywordText.length - (name.pos - 3)`. Keyword text length is known from the SyntaxKind (no reliance on `node.end` which overshoots).

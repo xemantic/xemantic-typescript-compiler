@@ -33167,7 +33167,29 @@ interface DataView {
         if (propName in RUNTIME_PROPERTIES) return
         // Check if property exists in type members
         val prop = getPropertyOfType(objectType, propName)
-        if (prop != null) return
+        if (prop != null) {
+            // TS2576: `this.X` in an instance method where X is a STATIC member of the
+            // enclosing class. `resolveInterfaceMembers` stores statics and instance
+            // members in the same table, so we need to re-check the declaration modifier
+            // on the resolved symbol to distinguish.
+            if (isThisAccess && !inStaticClassMethod) {
+                val classDecl = objectType.symbol?.declarations?.firstOrNull() as? ClassDeclaration
+                if (classDecl != null && isStaticMemberOfClass(classDecl, propName)) {
+                    val className = classDecl.name?.text ?: objectType.symbol?.name
+                    if (className != null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '$className'. Did you mean to access the static member '$className.$propName' instead?",
+                            category = DiagnosticCategory.Error, code = 2576,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
+                }
+            }
+            return
+        }
         // Check namespace exports (for merged class+namespace symbols like `Observable.someValue`)
         val sym = objectType.symbol
         if (sym != null && sym.flags.hasAny(SymbolFlags.Module) && sym.exports?.containsKey(propName) == true) return
