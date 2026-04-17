@@ -2675,6 +2675,45 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ay, +1 test: 8137→8138):** Cross-file TS2588 for `const` in script (non-module) files:
+  - Script files (no imports/exports) share a global scope — `const x = 0` in file1 and `x++` in file2 must fire TS2588 on file2 despite being different files.
+  - New pre-pass collects top-level immutable bindings from ALL script files (skipping .d.ts and module files) into `sharedConsts: Map<String, Int>` (name → diagnostic code: 2588 const, 2629 class, 2628 enum, 2630 func, 2708 namespace). Each script file's per-file check is seeded with a copy of this map; module files start with an empty seed as before.
+  - `putIfAbsent` preserves the first declaration's code. File-local checks still re-add their own declarations so duplicates are harmless.
+  - → +1 test: `constDeclarations-access`. Zero regressions.
+
+  **Session 2026-04-17 (16.4ax, +1 test: 8136→8137):** TS1161 "Unterminated regular expression literal." for `var a = /` at EOF:
+  - Scanner's `reScanSlashToken` now sets `tokenIsUnterminated = true` when the regex body ends at EOF or a line break without a closing `/`.
+  - Parser's `Slash, SlashEquals` branch in `parsePrimaryExpression` checks `scanner.isTokenUnterminated()` after `reScanSlashToken` returns `RegularExpressionLiteral`, and emits TS1161 (squiggle length 1 at opening `/`).
+  - → +1 test: `unterminatedRegexAtEndOfSource1_ts`. Zero regressions (flaky `binderBinaryExpressionStress_ts` toggled on first run but stabilized on second).
+
+  **Session 2026-04-17 (16.4aw, +1 test: 8135→8136):** TS1136 "Property assignment expected." on extra comma in object literal:
+  - Object-literal parser silently skipped extra commas (error recovery for `{ x: 0,, }`). Now emits TS1136 at the extra comma position (length 1) before continuing recovery.
+  - → +1 test: `parseErrorDoubleCommaInCall_ts`. Zero regressions.
+
+  **Session 2026-04-17 (16.4av, +1 test: 8134→8135):** TS1206 "Decorators are not valid here." for `@decorator class C {}` in expression position:
+  - Captured `atPos` before `parseDecorators()` in the expression-position `At` branch. If followed by `ClassKeyword`, emit TS1206 with squiggle length 1 at the `@` keyword. Parser still constructs the decorated ClassExpression so downstream checks can proceed.
+  - → +1 test: `classExpressionWithDecorator1_ts`. Zero regressions.
+
+  **Session 2026-04-17 (16.4au, +1 test: 8133→8134):** TS1009 "Trailing comma not allowed." for dynamic `import(spec,)`:
+  - Previously `parseOptional(Comma)` silently consumed trailing commas. Now captures `commaPos`, consumes the comma, and if the next token is `CloseParen`, emits TS1009 (squiggle length 1). The TS 5.3+ second-argument (options) form is unaffected since the diagnostic only fires when `)` follows.
+  - → +1 test: `dynamicImportTrailingComma_ts`. Zero regressions.
+
+  **Session 2026-04-17 (16.4at, +1 test: 8132→8133):** TS1061 "Enum member must have initializer." after computed/string predecessor:
+  - New `checkEnumMemberInitializers` pass walks each enum's members tracking `canAutoIncrement`. If a member has no initializer and the previous member's initializer resolved to a non-numeric constant (string, computed), emit TS1061. Local `localValues` map mirrors `computeEnumSymbolValues` so references (`Y = X`) propagate correctly.
+  - Skips `declare enum`.
+  - → +1 test: `enumWithComputedMember_ts`. Zero regressions.
+
+  **Session 2026-04-17 (16.4as, +2 tests: 8130→8132):** TS2339 on primitive-typed globals (`declare var foo: number` → `foo.toBAZ()`):
+  - `checkMemberAccessMissing`'s `globals[identName]` branch previously bailed out for non-Object types, missing TS2339 on primitive-typed globals. Now mirrors the fallback branch's primitive handling: set `displayTypeOverride = rawType` and resolve via `getApparentType(rawType)` for the wrapper interface (Number/String/Boolean), so property existence is checked against wrapper members while the diagnostic displays the primitive name.
+  - **Narrow gate** against FPs: require `valueDeclaration is VariableDeclaration && type != null` (explicit annotation, not inferred), require `SymbolFlags.Variable`, and skip when `propName.isEmpty()` (trailing-dot parser recovery like `bar.` already covered by TS1003 Identifier expected).
+  - First attempt without the narrow gate regressed `functionOverloads43` (destructured param `[x]` with inferred primitive) and `parse1` (empty-name trailing-dot access emitting TS2339 "Property '' does not exist").
+  - → +2 tests: `propertyAccess2` (number), `propertyAccess3` (boolean). Zero regressions.
+
+  **Session 2026-04-17 (16.4ar, +1 test: 8129→8130):** TS1098 "Type parameter list cannot be empty." for `class C<> {}` / `class <>{}`:
+  - Extended the empty-type-parameter-list check (previously only in `parseConstructor`) to `parseClassDeclaration` and `parseClassExpression`. After `parseTypeParametersOpt()`, if the returned list is empty, emit TS1098 at `ltPos` with length `scanner.getPrevTokenEnd() - ltPos` so the squiggle covers `<>`.
+  - `ltPos` captured pre-call only when the current token is `<` (otherwise left as -1 to signal "no type param list attempted").
+  - → +1 test: `classWithEmptyTypeParameter_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4aq, +1 test: 8128→8129):** TS18045 for `accessor` modifier on class property with target < ES2015:
   - New `checkAccessorModifierTarget` pass, early-return when `options.target >= ScriptTarget.ES2015`. Walks class/module statements tracking `inAmbient` (set by `declare` modifier on class or namespace). For any `PropertyDeclaration` in a non-ambient class with `ModifierFlag.Accessor`, emits TS18045 "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher." at the property name.
   - **Gotcha**: MUST use `options.target` not `options.effectiveTarget` for the comparison — `effectiveTarget` maps ES3/ES5 → ES2015, so the check would never fire. Adding to CLAUDE.md.
