@@ -2675,6 +2675,15 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4az, +1 test: 8138→8139):** TS2728 "declared here" related info for lib-declared properties renders as `lib.es5.d.ts:--:--`:
+  - Previously `checkSinglePropertyAccess` (spelling suggestion) and `createPropertyDeclaredHereRelatedInfo` computed the TS2728 line/column using the CURRENT file's source text applied to a position inside our embedded `BUILTIN_LIB_SOURCE`. Result: fileName = test file, line/col = garbage (e.g., `errorMessageOnObjectLiteralType.ts:6:5465`). Expected: `lib.es5.d.ts:--:--`.
+  - New `builtinLibSourceFile` field retains the parsed lib SourceFile. Builtin lib file name changed from `lib.builtin.d.ts` → `lib.es5.d.ts` to match TypeScript's baseline convention.
+  - New `resolveDeclarationSourceFile(pos)` helper finds the source file (user or builtin lib) whose `text` range contains `pos`, returning `(fileName, text)` or `(null, null)` if none match.
+  - New `isLibFileName(name)` helper checks whether basename matches `lib.*.d.ts`.
+  - TS2728 emission in both sites: resolve the correct source file, then set `line=null, character=null` when the file is a lib file (position info is elided for lib baselines). For user files, compute line/col against the correct source.
+  - BaselineFormatter: when rendering related info with a lib-pattern fileName AND `line == null`, emit `--:--` instead of `0:0`. Only affects the non-pretty section (pretty section requires line/col to render the squiggle block).
+  - → +1 test: `errorMessageOnObjectLiteralType`. Zero regressions.
+
   **Session 2026-04-17 (16.4ay, +1 test: 8137→8138):** Cross-file TS2588 for `const` in script (non-module) files:
   - Script files (no imports/exports) share a global scope — `const x = 0` in file1 and `x++` in file2 must fire TS2588 on file2 despite being different files.
   - New pre-pass collects top-level immutable bindings from ALL script files (skipping .d.ts and module files) into `sharedConsts: Map<String, Int>` (name → diagnostic code: 2588 const, 2629 class, 2628 enum, 2630 func, 2708 namespace). Each script file's per-file check is seeded with a copy of this map; module files start with an empty seed as before.

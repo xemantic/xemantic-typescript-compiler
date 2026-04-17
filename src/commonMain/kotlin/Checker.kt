@@ -238,13 +238,22 @@ class Checker(
     private var booleanWrapperType: Type? = null
 
     /**
+     * Parsed source file for the built-in type declarations — retained so that
+     * TS2728 "declared here" related info can look up positions inside lib stubs.
+     * TypeScript baselines render these as `lib.es5.d.ts:--:--` regardless of the
+     * actual lib file (different lib.*.d.ts are concatenated by the TS build).
+     */
+    private var builtinLibSourceFile: SourceFile? = null
+
+    /**
      * Parse and bind the built-in type declarations, returning the symbol table.
      * These are merged into globals BEFORE user files so that user declarations
      * can augment/override them (matching TypeScript's behavior).
      */
     private fun parseBuiltinLib(): SymbolTable {
         val source = BUILTIN_LIB_SOURCE
-        val ast = Parser(source, "lib.builtin.d.ts").parse()
+        val ast = Parser(source, "lib.es5.d.ts").parse()
+        builtinLibSourceFile = ast
         return Binder(options).bind(ast).locals
     }
 
@@ -33636,12 +33645,21 @@ interface DataView {
                         else -> decl.pos
                     }
                     val declLength = suggestion.length
-                    val (declLine, declChar) = getLineAndCharacterOfPosition(source, declPos)
+                    val (declFile, declSource) = resolveDeclarationSourceFile(declPos)
+                    val resolvedFile = declFile ?: fileName
+                    val resolvedSource = declSource ?: source
+                    val isLib = isLibFileName(resolvedFile)
+                    val (declLine, declChar) = if (isLib) {
+                        Pair(null as Int?, null as Int?)
+                    } else {
+                        val p = getLineAndCharacterOfPosition(resolvedSource, declPos)
+                        Pair(p.first, p.second)
+                    }
                     listOf(Diagnostic(
                         message = "'$suggestion' is declared here.",
                         category = DiagnosticCategory.Message,
                         code = 2728,
-                        fileName = fileName,
+                        fileName = resolvedFile,
                         line = declLine,
                         character = declChar,
                         start = declPos,
@@ -36820,25 +36838,60 @@ interface DataView {
             else -> decl.pos
         }
         if (declPos < 0) return null
-        // Find the source file containing this declaration
+        val (declFile, declSource) = resolveDeclarationSourceFile(declPos)
+        if (declFile == null || declSource == null) return null
+        val declLength = propSymbol.name.length
+        val isLib = isLibFileName(declFile)
+        val declLine: Int?
+        val declChar: Int?
+        if (isLib) {
+            declLine = null
+            declChar = null
+        } else {
+            val p = getLineAndCharacterOfPosition(declSource, declPos)
+            declLine = p.first
+            declChar = p.second
+        }
+        return Diagnostic(
+            message = "'${propSymbol.name}' is declared here.",
+            category = DiagnosticCategory.Message,
+            code = 2728,
+            fileName = declFile,
+            line = declLine,
+            character = declChar,
+            start = declPos,
+            length = declLength,
+        )
+    }
+
+    /**
+     * Resolve the source file containing [declPos]. Checks user files in [binderResults]
+     * first, then falls back to the built-in lib source file. Returns `(fileName, text)`
+     * of the matching source, or `(null, null)` if not found.
+     */
+    private fun resolveDeclarationSourceFile(declPos: Int): Pair<String?, String?> {
+        if (declPos < 0) return Pair(null, null)
         for (result in binderResults) {
             val sf = result.sourceFile
             if (declPos in 0 until sf.text.length) {
-                val (declLine, declChar) = getLineAndCharacterOfPosition(sf.text, declPos)
-                val declLength = propSymbol.name.length
-                return Diagnostic(
-                    message = "'${propSymbol.name}' is declared here.",
-                    category = DiagnosticCategory.Message,
-                    code = 2728,
-                    fileName = sf.fileName,
-                    line = declLine,
-                    character = declChar,
-                    start = declPos,
-                    length = declLength,
-                )
+                return Pair(sf.fileName, sf.text)
             }
         }
-        return null
+        val builtin = builtinLibSourceFile
+        if (builtin != null && declPos in 0 until builtin.text.length) {
+            return Pair(builtin.fileName, builtin.text)
+        }
+        return Pair(null, null)
+    }
+
+    /**
+     * True when [fileName] matches the TypeScript `lib.*.d.ts` convention. Such diagnostics
+     * are rendered with `:--:--` in TypeScript's error baselines (line/column hidden because
+     * lib line numbers shift between TS versions).
+     */
+    private fun isLibFileName(fileName: String): Boolean {
+        val base = fileName.substringAfterLast('/').substringAfterLast('\\')
+        return base.startsWith("lib.") && base.endsWith(".d.ts")
     }
 
     // -----------------------------------------------------------------------

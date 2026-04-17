@@ -189,6 +189,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 ### Checker diagnostic gotchas (TS18004/TS1103)
 
 - **Shorthand property diagnostics**: `ShorthandPropertyAssignment` without `objectAssignmentInitializer` should emit **TS18004** ("No value exists in scope..."), not **TS2304** ("Cannot find name..."). Handled by `checkShorthandPropertyResolved` in Checker.kt.
+- **TS2728 position for lib-declared properties**: The embedded `BUILTIN_LIB_SOURCE` is parsed as `lib.es5.d.ts` and its SourceFile is retained in `builtinLibSourceFile`. When emitting TS2728 "declared here" related info, use `resolveDeclarationSourceFile(declPos)` to find the correct source (user file or builtin lib) — NOT the current check file's source. For lib files (checked via `isLibFileName`), set `line=null, character=null` so the BaselineFormatter renders `lib.es5.d.ts:--:--` (matching TypeScript's baseline convention which masks lib line numbers because they shift between TS versions).
 - **`for await` in non-async (TS1103)**: `ForOfStatement` with `awaitModifier` in non-async functions gets TS1103. The related TS1356 uses `FuncRef(pos, length)` to track enclosing function position — supports named functions, anonymous function expressions, and arrow functions.
 - **`verbatimModuleSyntax` suppresses const enum inlining**: When set, skip `collectConstEnumValues`, skip checker's `resolveConstEnumMemberAccess`, keep const enum IIFE bodies, and don't treat const enums as type-only.
 
