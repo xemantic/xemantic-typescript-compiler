@@ -34490,6 +34490,10 @@ interface DataView {
             if (ctor is Identifier) {
                 val ctorSym = globals[ctor.text]
                 if (ctorSym != null && ctorSym.flags.hasAny(SymbolFlags.Class)) {
+                    // Skip when the class symbol has multiple declarations — interface or
+                    // namespace merging (including module augmentation) may contribute
+                    // properties that the ClassDeclaration alone doesn't show.
+                    if (ctorSym.declarations.size > 1) return
                     val classDecl = ctorSym.declarations.firstOrNull() as? ClassDeclaration
                     if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
                         // Only fire when the class has NO declared member with this name.
