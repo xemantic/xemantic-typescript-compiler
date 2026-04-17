@@ -35116,9 +35116,51 @@ interface DataView {
      * For overloaded functions: try each overload in order, skip if any matches,
      * report TS2345 against the last overload if none match (TypeScript convention).
      */
+    /**
+     * True when `expr` is a (possibly nested) property-access chain whose root is
+     * a plain Identifier resolving to a `var`/`let`/`const` declaration without a
+     * type annotation AND without an initializer — i.e. definitively implicit-any.
+     * Used as a narrow gate for TS2347 emission.
+     */
+    private fun isImplicitAnyVarChain(expr: Expression): Boolean {
+        var cur: Expression = expr
+        while (cur is PropertyAccessExpression) cur = cur.expression
+        if (cur !is Identifier) return false
+        val name = cur.text
+        val symbol = currentFileLocals?.get(name) ?: globals[name] ?: return false
+        if (!symbol.flags.hasAny(SymbolFlags.Variable)) return false
+        val decl = symbol.valueDeclaration as? VariableDeclaration ?: return false
+        // Definitively implicit-any only when BOTH annotation and initializer are absent.
+        return decl.type == null && decl.initializer == null
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // Resolve callee to get its type
         val calleeType = getCalleeType(expr.expression)
+        // TS2347: "Untyped function calls may not accept type arguments." Fires when a
+        // call like `untypedVar.method<T>(arg)` has explicit type args on a callee that
+        // resolves to `any`. Narrowly gated on the chain root being an Identifier that
+        // refers to a `var`/`let` declared without a type annotation AND without an
+        // initializer — definitively implicit-any. Broader "calleeType === anyType" is
+        // unsafe: our checker resolves many callees to `any` due to incomplete inference,
+        // so a universal emission would regress heavily.
+        if (!expr.typeArguments.isNullOrEmpty() && isImplicitAnyVarChain(expr.expression)) {
+            val start = expr.pos
+            val length = expressionTrueEnd(expr) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Untyped function calls may not accept type arguments.",
+                    category = DiagnosticCategory.Error,
+                    code = 2347,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
         if (calleeType === anyType || calleeType === errorType) return
         // Get call signatures
         val signatures = getCallSignaturesOfType(calleeType)
