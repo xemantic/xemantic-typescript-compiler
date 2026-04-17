@@ -315,6 +315,8 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkAbstractAccessorReturnTypes()
         }
+        // 7b'''. TS18045: 'accessor' modifier requires target ES2015+.
+        checkAccessorModifierTarget()
         // 7b'''. TS2669: `declare global { ... }` nested inside a regular namespace.
         checkInvalidGlobalAugmentations()
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
@@ -6637,6 +6639,53 @@ class Checker(
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
                 is Block -> checkAbstractAccessorInStatements(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * TS18045: Properties with the 'accessor' modifier require target ES2015+.
+     * Only fires in non-ambient contexts (ambient classes / declare namespaces suppress it).
+     */
+    private fun checkAccessorModifierTarget() {
+        if (options.target >= ScriptTarget.ES2015) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkAccessorModifierInStatements(result.sourceFile.statements, source, fileName, inAmbient = false)
+        }
+    }
+
+    private fun checkAccessorModifierInStatements(stmts: List<Statement>, source: String, fileName: String, inAmbient: Boolean) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val classAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
+                    if (classAmbient) continue
+                    for (m in stmt.members) {
+                        if (m is PropertyDeclaration && ModifierFlag.Accessor in m.modifiers) {
+                            val nameNode = m.name as? Identifier ?: continue
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.",
+                                category = DiagnosticCategory.Error,
+                                code = 18045,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameNode.pos,
+                                length = nameNode.text.length,
+                            ))
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val modAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
+                    (stmt.body as? ModuleBlock)?.let { checkAccessorModifierInStatements(it.statements, source, fileName, modAmbient) }
+                }
+                is Block -> checkAccessorModifierInStatements(stmt.statements, source, fileName, inAmbient)
                 else -> {}
             }
         }

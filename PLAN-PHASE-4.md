@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4aq, +1 test: 8128→8129):** TS18045 for `accessor` modifier on class property with target < ES2015:
+  - New `checkAccessorModifierTarget` pass, early-return when `options.target >= ScriptTarget.ES2015`. Walks class/module statements tracking `inAmbient` (set by `declare` modifier on class or namespace). For any `PropertyDeclaration` in a non-ambient class with `ModifierFlag.Accessor`, emits TS18045 "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher." at the property name.
+  - **Gotcha**: MUST use `options.target` not `options.effectiveTarget` for the comparison — `effectiveTarget` maps ES3/ES5 → ES2015, so the check would never fire. Adding to CLAUDE.md.
+  - Factored out from `checkAbstractAccessorReturnTypes` (which is gated on `noImplicitAny/strict`), since the test doesn't enable those options.
+  - → +1 test: `accessorInAmbientContextES5_ts__target_es5`. Zero regressions. The companion `target_es2015` JS emit test still fails for an unrelated reason (we don't emit the `__classPrivateFieldGet/Set` + WeakMap transform for `accessor` properties).
+
   **Session 2026-04-17 (16.4ap, +1 test: 8127→8128):** TS1259 + TS2594 for default import of `export =` module without esModuleInterop:
   - `checkDefaultImports` previously always emitted TS1192 "Module has no default export" when the default binding referenced a module lacking a `default` export. For modules declared with `export =`, TypeScript instead emits TS1259 "Module 'X' can only be default-imported using the 'esModuleInterop' flag" with a TS2594 related-info "This module is declared with 'export =', and can only be used with a default import when using the 'esModuleInterop' flag." pointing to the `export =` statement.
   - Gate: `hasExportEquals && !esModuleInteropActive` → emit TS1259 (not TS1192/TS2613). The existing carve-out `hasExportEquals && esModuleInteropActive` (suppress entirely) is preserved.
