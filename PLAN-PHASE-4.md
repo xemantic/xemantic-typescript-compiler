@@ -2519,7 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-04-17 (16.4cq, +3 tests: 8199→8202):** TS2339 for `new ClassName(...).prop` / `(new ClassName(...)).prop` on classes with circular or no `extends` base:
+  **Session 2026-04-17 (16.4cr, +1 test: 8203→8204):** TS2554 for `new S18(123)` where S18 has circular `extends` base:
+  - `class S18<B,A,C> extends S18<A[], {...}, C[]> { }; (new S18(123))` expected TS2554 "Expected 0 arguments, but got 1." — the circular extends makes the inherited constructor unresolvable, so TypeScript treats the class as having an implicit 0-arg constructor.
+  - `collectFuncDecls` previously skipped classes with heritage clauses entirely ("they inherit the base constructor's param count which we can't resolve"). Added a third branch: when `classHasCircularBase(stmt)` (reusing 16.4cq helper), register `FuncParamInfo(0, 0, hasRest = false, isOverloaded = false)` — treat as no-inheritance. This lets the existing TS2554 path emit on excess args.
+  - Narrow scope: only circular-base classes. Non-circular extends keeps the current "skip — defer to inherited ctor" behavior to avoid regressions.
+  - → +1 test: `complicatedGenericRecursiveBaseClassReference_ts`. Zero regressions.
+
+  **Session 2026-04-17 (16.4cq, +4 tests net: 8199→8203):** TS2339 for `new ClassName(...).prop` / `(new ClassName(...)).prop` on classes with circular or no `extends` base:
   - Tests like `recursiveBaseCheck4_ts` (`class M<T> extends M<string>; (new M).blah`) and `recursiveBaseCheck5_ts` (`class X<T,U> implements I2<T>; (new X).blah`) previously emitted NO diagnostic for the `.blah` access — `checkMemberAccessMissing` short-circuited on `objectExpr !is Identifier` for NewExpression receivers and parenthesized wrappers.
   - Two changes: (a) unwrap `ParenthesizedExpression` at the top of `checkMemberAccessMissing` so `(new X).prop` and `(x).prop` hit the same branches as unparenthesized forms — parens only affect precedence. (b) new `NewExpression` branch that resolves the constructor identifier as a `Class` symbol and fires TS2339 when the class declares NO own member named `propName` AND (`!hasBase` OR `classHasCircularBase(classDecl)`). Display uses `ClassName<unknown, unknown, …>` with `typeParameters.size` unknowns.
   - `classHasCircularBase` walks the `extends` chain with a visited set and returns true when the class's own name is reachable — covers direct self-reference (`class M extends M<...>`), mutual 2-cycles (`A extends C; C extends A`), and longer chains. Narrow: treats only extends cycles (not implements); doesn't attempt to walk interfaces.
