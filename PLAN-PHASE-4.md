@@ -2769,6 +2769,76 @@ the live plan focused. Quick reference:
 
 ---
 
+### Explored-but-skipped tests (2026-04-17, 8186 passing)
+
+Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
+
+**Blocker #1 — structural comparison of generic refs (architectural, see below):**
+- `genericCloneReturnTypes_ts`, `genericCloneReturnTypes2_ts`: `Bar<string>` vs `Bar<number>` passes trivially.
+- `generics4_ts`: `C<Y>` vs `C<X>` — named type references with distinct type args.
+- `genericConstraintSatisfaction1_ts`: generic parameter type `T` not specialized when comparing arg.
+- `genericDerivedTypeWithSpecializedBase_ts`: `class B<T> extends A<T>` structural gap.
+- `genericPrototypeProperty3_ts` / `genericSpecializations3_ts`: TS2416 property-type mismatch across specialized generic bases.
+- `arrayAssignmentTest5_ts` / `typeMatch2_ts`: `IToken[]` vs `IStateToken[]` (array element variance).
+- `noStrictGenericChecks_ts`: `<T,U>(…) => [T,U]` vs `<S>(…) => [S,S]` signature-param generic variance.
+- `inferFromNestedSameShapeTuple_ts`: display `[number, error]` instead of `T1<U>` (type-param leakage into ref display).
+- `invalidConstraint1_ts`: constraint `{ a: T }` needs inter-type-arg substitution for display `{ a: string }`. Attempted `instantiateType(Type.Object, mapper)` — net-zero without the squiggle-length + property-elaboration companion fixes.
+
+**Blocker #3 — TS7006 over-suppression (contextual typing, see below):**
+- `subtypeReductionWithAnyFunctionType_ts`, `intraBindingPatternReferences_ts`, `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`: we over-emit TS7006 because we don't distinguish "context present but param-less" from "context provides param type."
+
+**Blocker #2 — JSDoc `@this`/`@type` (see below):**
+- `thisInFunctionCallJs_ts`: TS2683 FP inside `.js` file; needs JSDoc `@this {T}` parsing.
+
+**Blocker #5 — cross-file global conflation / module-visibility:**
+- `classMemberInitializerWithLamdaScoping4_ts`: we emit TS2301 instead of TS2663 ("Did you mean `this.field1`?").
+- `moduleAugmentationsImports4_ts`: TS2339 FP on nested `module "a"` augmentation inside `declare module "D"`.
+- `moduleVisibilityTest2_ts`: non-exported `var x` in first namespace block leaks into second namespace block; expected TS2304.
+- `errorsOnImportedSymbol_ts`: `import Sammy = require("./mod")` where `mod` has `export = Sammy` (type-only interface) — need to flag `Sammy` as type-only across files.
+
+**Needs a new diagnostic / feature (non-blocker, but non-surgical):**
+- `accessorAccidentalCallDiagnostic_ts` → TS6234 ("This expression is not callable because it is a 'get' accessor"). Not implemented; needs call-site accessor detection + primary "not callable" (TS2349) elaboration.
+- `genericArrayAssignmentCompatErrors_ts` → TS2351 ("This expression is not constructable"). Not implemented.
+- `aliasUsageInGenericFunction_ts` → TS2352 ("Conversion of type X to Y may be a mistake…"). Not implemented (type-assertion compatibility check).
+- `argumentsObjectIterator02_ES5_ts` → TS2802 ("can only be iterated through when using `--downlevelIteration`"). Not implemented.
+- `promiseDefinitionTest_ts__target_es5__` → TS2300 duplicate identifier against lib. Needs class-vs-lib-var conflict detection at binder level.
+- `simpleRecursionWithBaseCase1_ts` / `trivialSubtypeReductionNoStructuralCheck_ts` → TS7023 (recursive function needs return-type annotation). Not implemented.
+- `narrowByEquality_ts` → TS2839 ("This condition will always return 'false'…"). Narrowing (blocker-adjacent).
+- `nestedLoopTypeGuards_ts` → TS2454 per-loop-scope narrowing; control-flow narrowing.
+- `typeGuardConstructorDerivedClass_ts` → TS2339 on narrowed `never`; control-flow narrowing.
+- `noImplicitReturnsExclusions_ts` → TS7030 with nuanced exclusions for `void`/`any`/`undefined` return types.
+- `typeParameterCompatibilityAccrossDeclarations_ts` → generic-signature compat, `<T>(y:T)=>T` vs `(y:any)=>any`.
+- `superCallArgsMustMatch_ts` → TS2345 for `super()` after `extends T5<number>`; generic base-class instantiation.
+- `complicatedPrivacy_ts` → TS2693 on `[number]` computed-property-name inside type-literal (`[number]: C1`). Not handled by current TS2693 walker (only value expressions, not type annotations).
+- `taggedTemplatesWithIncompleteTemplateExpressions6_ts` → TS2345 for tagged template argument checking. Not implemented.
+- `pathMappingBasedModuleResolution6_classic_ts` → false-positive TS2792 because `rootDirs` config is not honored.
+- `pathMappingBasedModuleResolution_withExtension_failedLookup_ts` → missing TS2307 when `paths` points to a non-existent file; our resolver treats `paths`-mapped specifiers as resolved.
+- `shorthand-property-es5-es6_ts` / `nodeNextModuleResolution1_ts` → TS2307 skipped in multi-file node-resolution mode (see `checkUnresolvedModules`; adding TS2307 unconditionally here would FP on index-file/symlink/json patterns our resolver doesn't handle).
+- `privacyCheckAnonymousFunctionParameter2_ts` → TS2345 through a function-type parameter; requires structural comparison of function types.
+- `aliasDoesNotDuplicateSignatures_ts` → TS2322 `() => void` to `string`; simple but behind elaboration formatting.
+- `assignmentCompatWithOverloads_ts` → `typeof C` vs `new (x:number)=>void`; needs construct-signature elaboration.
+- `assignmentCompatability44_ts` / `assignmentCompatability45_ts` → source-side `typeof X` display for class-as-value + construct-sig mismatch elaboration.
+- `mutuallyRecursiveCallbacks_ts` → generic signature display + recursive-type cycle (renders `Bar<{ ; }>`).
+- `contextualTyping24_ts` → signature with `this` parameter (`(this: void, ...)`) in display.
+- `errorMessagesIntersectionTypes01/02_ts` → intersection elaboration; generic inference.
+- `errorMessageOnIntersectionsWithDiscriminants01_ts` → intersection display `A` vs full unfolded form.
+- `genericArrayExtenstions_ts` → TS2420 needs class generic name `ObservableArray<T>` and `T[]` display for the `Array<T>` target (the class implements an `Array<T>` with type-param `T[]` flattening for array-ref display).
+- `namespaceDisambiguationInUnion_ts` → `Foo.Yep | Bar.Yep` needs namespace-qualified display; otherwise both render as `Yep`.
+- `unionTypeWithRecursiveSubtypeReduction3_ts` → recursive type display `{ prop: { prop: number } | any }` vs our `{ prop: error }`.
+
+**Wrapper/display tweaks (tried, zero-gain alone — deferred):**
+- Primitive → boxed wrapper (`boolean → Boolean` etc.) assignability in `isSimpleTypeRelatedTo`: drops the TS2322 FP but misses `valueOf()` mismatch elaboration. Net-zero.
+- Wrapper-interface → primitive elaboration (`'number' is a primitive, but 'Number' is a wrapper object. Prefer using 'number' when possible.`): helper ready but emits require-chain elaborations elsewhere. `nativeToBoxedTypes_ts` still short one TS2322 for `sym = Sym` (Symbol interface → `symbol` primitive) because the relation comparison unexpectedly passes — reason not isolated. Deferred.
+- `instantiateType(Type.Object, mapper)` for anonymous literals (substitute property types with type-arg mapper): net-zero alone. Would need to be combined with TS2344 elaboration + squiggle-length rewrite to land any test.
+
+### What's left in the "surgical fix" pool
+
+After this session, the low-hanging pool is largely exhausted — most 1-line-diff failing tests fall into one of the blocker categories above. The next +N gains either come from:
+1. **Implementing new diagnostics** (TS6234 / TS2351 / TS2352 / TS2300-vs-lib / TS7023 / TS2802 / TS2744): each is 1-3 tests on its own but together could net +15-20. Each is self-contained (contained to a specific emission site) but individually small.
+2. **Taking on a blocker** (structural generic comparison #1 for ~30+ tests, JSDoc #2 for ~5-10, etc.). Blocker #1 is by far the highest-yield single investment.
+
+**Recommendation**: before starting more 1-off diagnostic implementations, consider attempting blocker #1 (structural generic comparison) with the retry plan below. It dwarfs any surgical gain.
+
 ### Known architectural blockers (as of 2026-04-17, 8145 passing)
 
 These blockers recur across multiple "close-to-passing" tests and cannot be fixed with surgical changes in a single session. Any agent attempting these should plan for a multi-session investigation with regression budget.
