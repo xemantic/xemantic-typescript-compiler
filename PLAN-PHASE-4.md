@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cl, +1 test: 8190→8191):** TS2347 "Untyped function calls may not accept type arguments":
+  - `var nake; ... nake.fileSetSync<number, number, any>(folder)` — the callee is `any`, so explicit type args are not allowed. New `isImplicitAnyVarChain(expr)` helper walks any PropertyAccess chain to the root Identifier and returns true only when that name resolves to a `VariableDeclaration` with BOTH `type == null` AND `initializer == null` (definitively implicit-any). `checkSingleCallExpressionTypes` emits TS2347 at the full call-expression span (via `expressionTrueEnd`) when typeArguments is non-empty and the gate holds. Running BEFORE the existing `calleeType === anyType` early-return so the diagnostic actually fires for `any` callees.
+  - Gate rationale: broader "calleeType === anyType" gating would regress heavily because our checker resolves many callees to `any` due to incomplete inference; the var-chain gate is narrow enough to catch the intended pattern without FP risk.
+  - → +1 test: `crashIntypeCheckInvocationExpression_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ck, +1 test: 8189→8190):** TS2667 for relative-path module augmentations + TS2307 alongside:
   - `declare module "./f1" { import {B} from "./f2"; }` now emits both TS2667 "Imports are not permitted in module augmentations..." (on the `import` keyword, length 6) AND TS2307 on the specifier "./f2". TypeScript's rule: inside a module augmentation, the augmented module's scope doesn't provide normal relative resolution, so the specifier is unresolvable even when the target file exists on disk. `checkUnresolvedModules` bails on this case (its resolver sees the file), so we emit TS2307 directly in the augmentation branch.
   - Gate: only emit TS2667 when the OUTER `declare module "X"` name is itself relative (`./` / `../`) AND the containing file is a module file. This avoids FP on `importDeclRefereingExternalModuleWithNoResolve_ts` where `declare module "m1"` is a bare-name ambient module DEFINITION (not augmentation) and its inner `import im2 = require("externalModule")` should only get TS2307, not TS2667.
