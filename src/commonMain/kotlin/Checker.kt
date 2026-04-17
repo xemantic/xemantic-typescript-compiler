@@ -4645,13 +4645,16 @@ class Checker(
             for (stmt in bodyStatements) {
                 collectUnusedReferences(stmt, scope)
             }
-            // Also collect references from parameter defaults and types
+            // Also collect references from parameter defaults and types.
+            // For VALUE param scope, type annotations only contribute `typeof X` refs
+            // (value namespace) — bare `T` in type position is a TYPE namespace ref and
+            // does NOT count as a use of a value param with the same name.
             for (param in parameters) {
                 param.initializer?.let { collectRefsFromExpr(it, scope) }
-                param.type?.let { collectTypeRefs(it, scope) }
+                param.type?.let { collectTypeQueryValueRefs(it, scope) }
             }
             // Scan return type for typeof references
-            returnType?.let { collectTypeRefs(it, scope) }
+            returnType?.let { collectTypeQueryValueRefs(it, scope) }
             // Report unused parameters
             // First check for TS6198: if ALL elements from a destructuring pattern are unused,
             // emit a single "All destructured elements are unused" instead of individual TS6133
@@ -4872,6 +4875,80 @@ class Checker(
                 type.templateSpans.forEach { span ->
                     collectTypeRefs(span.type, scope)
                 }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Collect ONLY `typeof X` references from within a TypeNode tree. Unlike [collectTypeRefs],
+     * bare TypeReference identifiers are NOT added — they belong to the TYPE namespace and do
+     * not count as value-param uses for TS6133 purposes. Needed for cases like
+     * `function f<T>(T: T)` where the second `T` in type position references the type param,
+     * not the value param of the same name.
+     */
+    private fun collectTypeQueryValueRefs(type: TypeNode, scope: UnusedScope) {
+        when (type) {
+            is TypeQuery -> {
+                when (val name = type.exprName) {
+                    is Identifier -> scope.referencedNames.add(name.text)
+                    is QualifiedName -> {
+                        var current: Node = name
+                        while (current is QualifiedName) current = current.left
+                        if (current is Identifier) scope.referencedNames.add(current.text)
+                    }
+                    else -> {}
+                }
+            }
+            is ArrayType -> collectTypeQueryValueRefs(type.elementType, scope)
+            is TupleType -> type.elements.forEach {
+                if (it is TypeNode) collectTypeQueryValueRefs(it, scope)
+            }
+            is UnionType -> type.types.forEach { collectTypeQueryValueRefs(it, scope) }
+            is IntersectionType -> type.types.forEach { collectTypeQueryValueRefs(it, scope) }
+            is ParenthesizedType -> collectTypeQueryValueRefs(type.type, scope)
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { collectTypeQueryValueRefs(it, scope) } }
+                type.type?.let { collectTypeQueryValueRefs(it, scope) }
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { collectTypeQueryValueRefs(it, scope) } }
+                type.type?.let { collectTypeQueryValueRefs(it, scope) }
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is PropertyDeclaration -> member.type?.let { collectTypeQueryValueRefs(it, scope) }
+                        is MethodDeclaration -> {
+                            member.parameters.forEach { p -> p.type?.let { collectTypeQueryValueRefs(it, scope) } }
+                            member.type?.let { collectTypeQueryValueRefs(it, scope) }
+                        }
+                        is IndexSignature -> member.type?.let { collectTypeQueryValueRefs(it, scope) }
+                        else -> {}
+                    }
+                }
+            }
+            is ConditionalType -> {
+                collectTypeQueryValueRefs(type.checkType, scope)
+                collectTypeQueryValueRefs(type.extendsType, scope)
+                collectTypeQueryValueRefs(type.trueType, scope)
+                collectTypeQueryValueRefs(type.falseType, scope)
+            }
+            is MappedType -> type.type?.let { collectTypeQueryValueRefs(it, scope) }
+            is IndexedAccessType -> {
+                collectTypeQueryValueRefs(type.objectType, scope)
+                collectTypeQueryValueRefs(type.indexType, scope)
+            }
+            is TypeOperator -> collectTypeQueryValueRefs(type.type, scope)
+            is RestType -> collectTypeQueryValueRefs(type.type, scope)
+            is OptionalType -> collectTypeQueryValueRefs(type.type, scope)
+            is TypeReference -> {
+                // Bare type reference is TYPE namespace, not value; skip.
+                // But type arguments can still contain nested TypeQuery.
+                type.typeArguments?.forEach { collectTypeQueryValueRefs(it, scope) }
+            }
+            is TemplateLiteralType -> type.templateSpans.forEach { span ->
+                collectTypeQueryValueRefs(span.type, scope)
             }
             else -> {}
         }

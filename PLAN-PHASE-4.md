@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bz, +1 test: 8175→8176):** TS6133 for value parameters shadowed by same-named type parameters:
+  - `function useTypeParam<T>(T: T) {}` — the value parameter `T` is unused (the `: T` in the annotation references the TYPE parameter `T`, not the value). Expected TS6133 at (7,26). Our `noUnusedParameters` check called `collectTypeRefs` on parameter types, which added bare `TypeReference` identifiers to `scope.referencedNames`, incorrectly marking the value param as "used" when a same-named type was referenced in any parameter type annotation.
+  - Fix: new `collectTypeQueryValueRefs(type, scope)` helper that walks a `TypeNode` tree but only extracts identifiers from `TypeQuery` (`typeof X`) — the only form where a type-position expression genuinely references the value namespace. Bare `TypeReference` identifiers are skipped. Type arguments of `TypeReference` still recurse (to catch `typeof` nested inside generic args).
+  - Replaced the two `collectTypeRefs` calls in the `noUnusedParameters` branch (parameter types + return type) with the new helper. The TYPE parameter scope still uses `collectTypeRefs` unchanged, because type-namespace refs DO count toward type-param usage.
+  - → +1 test: `noUnusedLocals_typeParameterMergedWithParameter`. Zero regressions.
+
   **Session 2026-04-17 (16.4by, +1 test: 8174→8175):** TS7010/TS7006 for bodyless functions and ambient-class constructors in `.d.ts` files when `noImplicitAny`:
   - `implicitAnyInAmbientDeclaration2.d.ts` under `@noimplicitany: true` expects TS7010 on `declare function foo(x)` and `class C { public publicFunction(x) }`, plus TS7006 on `publicConsParam` inside `declare class D { public constructor(publicConsParam, int: number) }`. We skipped `.d.ts` files wholesale in `checkBodylessFunctionReturnTypesMissing`, and the ambient-class branch in `checkImplicitAnyInStatements` didn't handle `Constructor` members at all.
   - Two-part fix: (a) `checkBodylessFunctionReturnTypesMissing` now enters `.d.ts` files when `noImplicitAny || strict`, passing `inAmbientContext = true` so nested classes-in-dts still get TS7010 for public bodyless methods; (b) added a `Constructor` branch in the ambient-class loop that runs `checkParamsForImplicitAny` for non-private constructors, mirroring the existing `MethodDeclaration` rule.
