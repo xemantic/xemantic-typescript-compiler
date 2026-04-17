@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4cc, +2 tests: 8178→8180):** TS2423 shape-mismatch now fires when the derived accessor has no inferable type:
+  - `class b extends a { get x() { return () => "20"; } set x(v) {} }` where `a` has method `x()`. Expected TS2423 "Class 'a' defines instance member function 'x', but extended class 'b' defines it as instance member accessor." Our override loop resolved the derived accessor's type via `getTypeOfMemberDecl` BEFORE the shape check, and `inferReturnTypeFromBody` returns null for arrow-function return expressions (only string/number literals are handled). The `?: continue` then skipped the entire member, including the shape check.
+  - Reordered the loop: do the shape-mismatch check BEFORE type resolution — category mismatch (property/method/accessor) is syntactic and doesn't need resolved types. Only the subsequent TS2416 type-assignability check needs `derivedType`/`basePropType`.
+  - Added a paired-setter guard: `member is SetAccessor && <sibling GetAccessor with same name>` skips the shape diagnostic for the setter, matching TypeScript's "one TS2423 per accessor override" convention (the getter emission covers the pair).
+  - → +2 tests: `inheritanceMemberAccessorOverridingMethod__target_es5__`, `inheritanceMemberAccessorOverridingMethod__target_es2015__`. Zero regressions. `inheritanceMemberFuncOverridingAccessor` (the accessor→method direction) continues to pass — types ARE resolvable there, so the check ran correctly before this reordering.
+
   **Session 2026-04-17 (16.4cb, +1 test: 8177→8178):** TS1034 "'super' must be followed by an argument list or member access." for bare `super` at statement end:
   - `var x = () => () => super;` — expected TS1034 at position AFTER the `super` keyword (length 1), spanning the token that should have been `.`/`[`/`(`/`<`. Our parser already had the error-recovery case (wraps the bare `super` in a `PropertyAccessExpression` with an empty name) but silently — no diagnostic was emitted.
   - Added `reportError` call emitting TS1034 at `getPos()` (start of the NEXT token after `super`) with `overrideLength = 1`. Matches TypeScript's squiggle position which falls on the token position rather than the `super` keyword itself.
