@@ -307,6 +307,9 @@ class Checker(
         if (!options.strictExplicitlyFalse) {
             checkImplicitAnyRestParameters()
         }
+        // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
+        // (syntactic type-shape error, not an implicit-any diagnostic).
+        checkNonArrayRestParameters()
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
@@ -6471,6 +6474,136 @@ class Checker(
                     length = length,
                 ))
             }
+        }
+    }
+
+    /**
+     * TS2370: A rest parameter must be of an array type.
+     *
+     * Fires for a rest parameter whose type annotation is clearly not array-like
+     * (primitive keyword types: number, string, boolean, bigint, symbol, void,
+     * never, null, undefined). Conservative — does not resolve TypeReferences
+     * (which could be array-like via type aliases).
+     *
+     * Unlike TS7019, fires regardless of strict/noImplicitAny — it's a syntactic
+     * error about the type shape, not an implicit-any diagnostic.
+     */
+    private fun checkNonArrayRestParameters() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            checkNonArrayRestInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkNonArrayRestInStatements(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    checkNonArrayRestParams(stmt.parameters, source, fileName)
+                    stmt.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> {
+                                checkNonArrayRestParams(member.parameters, source, fileName)
+                                member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                            }
+                            is Constructor -> {
+                                checkNonArrayRestParams(member.parameters, source, fileName)
+                                member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration) checkNonArrayRestParams(member.parameters, source, fileName)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkNonArrayRestInStatements(body.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is Block -> checkNonArrayRestInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkNonArrayRestInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkNonArrayRestInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                is ReturnStatement -> stmt.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                is ExpressionStatement -> checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkNonArrayRestInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                checkNonArrayRestParams(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkNonArrayRestInStatements(body.statements, source, fileName)
+                    is Expression -> checkNonArrayRestInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                checkNonArrayRestParams(expr.parameters, source, fileName)
+                checkNonArrayRestInStatements(expr.body.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkNonArrayRestParams(parameters: List<Parameter>, source: String, fileName: String) {
+        for (param in parameters) {
+            if (!param.dotDotDotToken) continue
+            if (param.isCommentPlaceholder) continue
+            val typeNode = param.type ?: continue
+            val keywordText = nonArrayKeywordText(typeNode) ?: continue
+            val name = param.name
+            if (name !is Identifier) continue
+            val start = name.pos - 3  // position of `...`
+            val length = (typeNode.pos + keywordText.length) - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "A rest parameter must be of an array type.",
+                category = DiagnosticCategory.Error,
+                code = 2370,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /** Returns the keyword text if the type node is clearly not array-like; null otherwise. */
+    private fun nonArrayKeywordText(typeNode: TypeNode): String? {
+        if (typeNode !is KeywordTypeNode) return null
+        return when (typeNode.kind) {
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            SyntaxKind.SymbolKeyword -> "symbol"
+            SyntaxKind.VoidKeyword -> "void"
+            SyntaxKind.NeverKeyword -> "never"
+            SyntaxKind.NullKeyword -> "null"
+            SyntaxKind.UndefinedKeyword -> "undefined"
+            else -> null
         }
     }
 
@@ -26980,6 +27113,11 @@ interface DataView {
                 val paramType = param.type
                 val paramName = param.name
                 if (paramType != null && paramName is Identifier) {
+                    // Rest parameter with clearly-non-array type annotation: TS2370 fires
+                    // but the parameter's runtime type is effectively any[] — skip local
+                    // type so downstream checks (TS2339 element access, TS2345 argument)
+                    // treat it as any[].
+                    if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
                     val t = resolveSimpleTypeName(paramType)
                     if (t != null) innerTypes[paramName.text] = t
                     // Also populate Type engine local type map
@@ -32872,6 +33010,10 @@ interface DataView {
             val paramName = param.name
             val paramType = param.type
             if (paramType != null && paramName is Identifier) {
+                // Rest parameter with clearly-non-array type: skip (TS2370 fires at declaration;
+                // runtime type is effectively any[] so downstream checks should not use the
+                // erroneous annotation).
+                if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
                 try {
                     val resolvedType = getTypeFromTypeNode(paramType)
                     if (resolvedType !== anyType && resolvedType !== errorType) {
