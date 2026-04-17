@@ -2675,6 +2675,12 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
+  **Session 2026-04-17 (16.4ao, +1 test: 8126→8127):** TS2417 for `class X extends null` with declaration-merged interface:
+  - In `checkClassDerivedSuper`, the `extendsNull` branch already handled TS17005 (super-call ban). Added TS2417 "Class static side 'typeof X' incorrectly extends base class static side 'null'." fired ONLY when the class is declaration-merged with a same-name interface. Detection: `currentFileLocals[className].declarations.any { it is InterfaceDeclaration }`.
+  - **Critical narrow gate**: without the merged-interface requirement, TypeScript suppresses this error — see `classExtendsNull.ts` / `classExtendsNull3.ts` baselines which emit only TS17005 / TS2531, no TS2417. Firing TS2417 unconditionally regresses those tests.
+  - Added `classNameNode: Identifier?` parameter to `checkClassDerivedSuper`, passing `stmt.name` from ClassDeclaration and `init.name` from ClassExpression call sites. Set `currentFileLocals` around `walkForDerivedSuper` (with try/finally cleanup) so the merged-interface lookup has file-scoped symbol access.
+  - → +1 test: `classExtendsNull2_ts`. Zero regressions across classExtendsNull/classExtendsNull3 variants.
+
   **Session 2026-04-17 (16.4an, +1 test: 8125→8126):** TS2882 FP suppression for bare side-effect imports resolvable via node_modules:
   - New helper `hasNodeModulesPackage(pkgName)` checks `fileResults.keys` for any path containing `/node_modules/<pkgName>/` (also accepts leading `node_modules/...`). TypeScript resolves bare specifiers like `import "A"` to `/node_modules/A/index.ts` via node_modules lookup; our simplified resolver doesn't, so TS2882 was emitted spuriously for such cases.
   - Guard added to the bare-specifier TS2882 branch alongside existing `ambientModuleNames`/`dtsFileBaseNames` checks. Doesn't affect the relative-path branch.
