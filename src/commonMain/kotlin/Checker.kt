@@ -27839,6 +27839,44 @@ interface DataView {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                // Special case: source has call signatures, target does not (non-function target).
+                // TypeScript emits TS2322 AT the initializer position (not the variable name) and
+                // attaches related TS6212 "Did you mean to call this expression?" — this is the
+                // "you probably forgot `()`" hint, e.g. `let x: Dog = getRover;` where `getRover`
+                // is `() => Dog`. The hint does NOT apply when the target is also function-like
+                // (handled by the function→function elaboration path below).
+                val srcIsFunc = sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty()
+                val tgtIsFunc = targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()
+                val tgtIsNewable = targetType is Type.Object && !targetType.constructSignatures.isNullOrEmpty()
+                // Only emit TS6212 if calling `source()` would produce a value assignable to
+                // the target — i.e., one of the call signatures' return types is assignable.
+                // Without this guard, tests like `let b: [string] = () => void` get a bogus
+                // "Did you mean to call this expression?" (calling would give void, still incompatible).
+                val callingHelps = srcIsFunc && (sourceType as Type.Object).callSignatures?.any { sig ->
+                    val rt = sig.resolvedReturnType ?: return@any false
+                    checkTypeRelatedTo(rt, targetType, assignableRelation)
+                } == true
+                if (srcIsFunc && !tgtIsFunc && !tgtIsNewable && callingHelps &&
+                    init !is ArrowFunction && init !is FunctionExpression) {
+                    val initStart = init.pos
+                    val initEnd = expressionTrueEnd(init)
+                    val (iLine, iCol) = getLineAndCharacterOfPosition(source, initStart)
+                    val msg = "Type '$displaySource' is not assignable to type '$displayTarget'."
+                    val related = Diagnostic(
+                        message = "Did you mean to call this expression?",
+                        category = DiagnosticCategory.Message, code = 6212,
+                        fileName = fileName, line = iLine, character = iCol,
+                        start = initStart, length = initEnd - initStart,
+                    )
+                    diagnostics.add(Diagnostic(
+                        message = msg,
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = iLine, character = iCol,
+                        start = initStart, length = initEnd - initStart,
+                        relatedInformation = listOf(related),
+                    ))
+                    return
+                }
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
                 val missingProp = lastMissingPropertyName
                 val missingPropSym = lastMissingPropertySymbol

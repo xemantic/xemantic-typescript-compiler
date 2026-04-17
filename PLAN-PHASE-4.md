@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4bj, +1 test: 8148→8149):** TS2322 at initializer position (+ TS6212 hint) when RHS is a callable whose return type would satisfy the target:
+  - `let x: Dog = getRover;` where `getRover: () => Dog` — TypeScript emits TS2322 at the initializer `getRover` (not the variable name `x`) AND attaches related info `TS6212: Did you mean to call this expression?`. Our TS2322 was at `name.pos` with no related info.
+  - Fix in `checkVarDeclAssignability`: added a special-case branch before the `missingProp` path. Fires only when (a) sourceType has call signatures, (b) target has neither call nor construct signatures (not a function/constructor type), (c) the init isn't itself a function literal, and (d) at least one call-signature's resolvedReturnType is assignable to the target (the "calling helps" guard). Emits TS2322 at the initializer position with length = `expressionTrueEnd(init) - init.pos`, plus a `Message`-severity TS6212 `relatedInformation` entry pointing to the same range.
+  - The "calling helps" guard is load-bearing: without it, tests like `let b: [string] = a` where `a: () => void` regressed — TS never emits TS6212 because calling `a` gives `void` which still isn't `[string]`. Restricting to cases where the return type would fix the error matches TypeScript's actual behavior.
+  - → +1 test: `avoidListingPropertiesForTypesWithOnlyCallOrConstructSignatures`. Zero regressions.
+
   **Session 2026-04-17 (16.4bi, +1 test: 8147→8148):** TS7008 for static class properties without type annotation or initializer:
   - `class Square { static sideLength; }` under `noImplicitAny`: TypeScript emits TS7008 "Member 'sideLength' implicitly has an 'any' type." at the property name. Our `checkImplicitAnyInClassElement` only fired TS7008 for ambient classes and interfaces, never for non-ambient classes.
   - Narrow fix in the non-ambient `PropertyDeclaration` branch: fire TS7008 when `type == null && initializer == null && Static in modifiers && Private !in modifiers && !exclamationToken`. Static-only because instance properties may be assigned in the constructor (can't flag without flow analysis). Private-excluded because TypeScript never fires TS7008 for private members. `!` (definite-assignment) skipped because it has its own TS7008 path (via TS1264 "must also have type annotations").
