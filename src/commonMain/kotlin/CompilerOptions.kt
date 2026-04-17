@@ -365,6 +365,15 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     // Test directives (// @target: etc.) are applied AFTER and take precedence.
     val tsconfigEntry = fileEntries.find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
     if (tsconfigEntry != null) {
+        // Resolve and apply `extends` chain (string or array of strings) before applying the
+        // main tsconfig. Extended configs are loaded by path relative to the current tsconfig's
+        // directory and are matched against file entries in the test's virtual filesystem.
+        // Only direct (non-recursive) extends is handled; applying in declaration order so later
+        // entries override earlier ones, then the main tsconfig overrides everything.
+        val extendedContents = collectExtendedTsconfigs(tsconfigEntry, fileEntries, mutableSetOf())
+        for ((extContent, extFileName) in extendedContents) {
+            options = applyTsconfigOptions(options, extContent, extFileName)
+        }
         options = applyTsconfigOptions(options, tsconfigEntry.content, tsconfigEntry.fileName)
     }
 
@@ -479,6 +488,76 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "typescriptversion" -> options.copy(simulatedTypeScriptVersion = value.trim())
         else -> options
     }
+}
+
+/**
+ * Resolves the `extends` chain of a tsconfig.json by walking referenced files in the test's
+ * virtual filesystem. Supports both string form (`"extends": "./base"`) and array form
+ * (`"extends": ["./a.json", "./b.json"]`). Paths are resolved relative to the current
+ * tsconfig's directory. Returns `(content, fileName)` pairs in APPLICATION order — later
+ * entries override earlier ones. Recursion is bounded by `visited` to avoid cycles.
+ */
+private fun collectExtendedTsconfigs(
+    tsconfigEntry: SourceFileEntry,
+    fileEntries: List<SourceFileEntry>,
+    visited: MutableSet<String>,
+): List<Pair<String, String>> {
+    if (!visited.add(tsconfigEntry.fileName)) return emptyList()
+    val json = tsconfigEntry.content
+    val extendsIdx = json.indexOf("\"extends\"")
+    if (extendsIdx < 0) return emptyList()
+    // Find the value after `"extends"` — skip `:` and whitespace.
+    var valueStart = extendsIdx + "\"extends\"".length
+    while (valueStart < json.length && (json[valueStart].isWhitespace() || json[valueStart] == ':')) valueStart++
+    if (valueStart >= json.length) return emptyList()
+    val specifiers = mutableListOf<String>()
+    when (json[valueStart]) {
+        '"' -> {
+            val end = json.indexOf('"', valueStart + 1)
+            if (end > valueStart) specifiers.add(json.substring(valueStart + 1, end))
+        }
+        '[' -> {
+            val end = json.indexOf(']', valueStart)
+            if (end > valueStart) {
+                val arrayContent = json.substring(valueStart + 1, end)
+                val itemPattern = Regex(""""([^"]*)"""")
+                for (m in itemPattern.findAll(arrayContent)) specifiers.add(m.groupValues[1])
+            }
+        }
+    }
+    if (specifiers.isEmpty()) return emptyList()
+    val currentDir = tsconfigEntry.fileName.substringBeforeLast('/', "")
+    val result = mutableListOf<Pair<String, String>>()
+    for (spec in specifiers) {
+        val normalized = resolveTsconfigPath(currentDir, spec)
+        // Try to find the extended tsconfig in fileEntries. Match by exact name, then by basename.
+        val extEntry = fileEntries.firstOrNull { it.fileName == normalized }
+            ?: fileEntries.firstOrNull { it.fileName.substringAfterLast('/') == normalized.substringAfterLast('/') }
+            ?: continue
+        // Recursive extends: apply the grand-parent's options first.
+        result.addAll(collectExtendedTsconfigs(extEntry, fileEntries, visited))
+        result.add(extEntry.content to extEntry.fileName)
+    }
+    return result
+}
+
+private fun resolveTsconfigPath(baseDir: String, spec: String): String {
+    // Strip leading `./`; collapse `../` against baseDir. Non-relative specifiers (package-style)
+    // are returned as-is — they won't match any file entry and will be silently skipped.
+    val specWithJson = if (spec.endsWith(".json")) spec else "$spec.json"
+    if (!specWithJson.startsWith("./") && !specWithJson.startsWith("../")) return specWithJson
+    val parts = mutableListOf<String>()
+    if (baseDir.isNotEmpty()) parts.addAll(baseDir.split('/').filter { it.isNotEmpty() })
+    val trimmed = specWithJson.removePrefix("./")
+    for (segment in trimmed.split('/')) {
+        when (segment) {
+            "" -> {}
+            "." -> {}
+            ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.size - 1)
+            else -> parts.add(segment)
+        }
+    }
+    return "/" + parts.joinToString("/")
 }
 
 /**
