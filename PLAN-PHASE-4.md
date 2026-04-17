@@ -2519,6 +2519,10 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-17 (16.4ci, +1 test: 8187→8188):** TS2314 through import-equals alias:
+  - `import a = require("./file0")` where `file0.ts` exports a generic class `C<T>` → `var v: a` should report TS2314 against `C<T>`, not silently accept. `getTypeParamInfo` walks `symbol.declarations`, and an alias symbol only has `ImportEqualsDeclaration` — not class-like — so the lookup returned `null`. Now: if the symbol is an Alias and the direct lookup fails, call `resolveAlias(symbol)` and retry against the resolved symbol. The baseline uses the resolved class's name (`C<T>`) not the alias name, so the returned `TypeParamInfo.displayName` is already correct. Wrapped in `try/catch(StackOverflowError)` for cyclic aliases.
+  - → +1 test: `externalModuleExportingGenericClass_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4ch, +2 tests: 8185→8187):** TS2339 for property access on array literal (`[1,2,3].NonexistantMethod()`):
   - `checkMemberAccessMissing` short-circuited when `objectExpr !is Identifier`, leaving non-Identifier receivers unchecked. Added an `ArrayLiteralExpression` branch that infers the array type via `getTypeOfArrayLiteral`, widens literal element types for display (`1|2|3` → `number` so the message says `number[]` not `(1 | 2 | 3)[]`), and seeds `displayTypeOverride` so the `numberIndexInfo` bail-out no longer suppresses non-numeric names. Uses the same gate as the primitive-apparent-type path (already keyed on `displayTypeOverride != null`).
   - → +2 tests including `undefinedSymbolReferencedInArrayLiteral1_ts`. Zero regressions.
