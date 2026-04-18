@@ -3056,16 +3056,20 @@ These blockers recur across multiple "close-to-passing" tests and cannot be fixe
 
 ---
 
-#### 1. Structural comparison of generic type references — HIGH yield, MEDIUM risk
+#### 1. Structural comparison of generic type references — MEDIUM yield (was HIGH), MEDIUM risk
 
-`objectTypeRelatedTo` passes trivially for many generic-reference pairs (e.g. `Bar<string>` vs `Bar<number>`) because member types resolve to `errorType` when the type parameter isn't in scope at resolution time. Array has a special-case in `structuredTypeRelatedTo` (direct element-type comparison); other generics fall through to full structural comparison which passes incorrectly.
+**Status (2026-04-18, 8220 passing):** Step (a) of the retry plan landed in commit 16.4dc (+2 tests, zero regressions). Step (b) attempted in-session, reverted — 6 regressions in recursive generic types (`infinitelyExpandingBaseTypes2`, `recursiveTypeComparison`, etc.) because `resolveGenericPropertyType` creates FRESH `Type.Reference` instances per instantiation, defeating the id-based cycle detection in `relationComparisonStack`. The id-based approach was adequate for step (a) because arg-level comparison doesn't instantiate new types; step (b) needs logical-key cycle detection (keyed on `(target.id, args-fingerprint)` or Type.Reference interning) before the scope push is safe.
 
-Full fix requires either variance annotations or consistent per-class type-parameter scope during symbol-type resolution (setting `currentTypeParamScope` everywhere `getTypeOfSymbol` fires on a class/interface member). Attempt 16.4j showed +5 regressions from a partial scope push.
+`objectTypeRelatedTo` still passes trivially for cases that step (a) can't catch:
+- Ref vs Ref with DIFFERENT targets (e.g. `Derived<string>` vs `Base<number>` where D extends B)
+- Method return types that lack T→arg substitution (e.g. `a.clone()` on `a: MyList<string>` returns un-substituted `MyList<T>` when the method has no return-type annotation — `genericCloneReturnTypes2_ts` is stuck on this, since return-type-from-body inference isn't implemented).
 
-- **Yield**: ~30+ TS2322 tests involving generic assignment.
+- **Yield**: ~10-20 TS2322 tests remaining after step (a)'s +2.
 - **Scope**: contained to the checker (no binder/parser changes).
-- **Why first**: highest test-unblock count of any blocker; infrastructure stays in checker; the regression burst from 16.4j is understood (partial scope push without variance-respecting ref comparison).
-- **Retry plan**: (a) generalize the Array ref-element comparison in `structuredTypeRelatedTo` to all `Type.Reference` pairs with matching target + resolved type arguments (invariant comparison of args by default, widen to covariant for known-readonly shapes); (b) push `currentTypeParamScope` in every `getTypeOfSymbol` call that fires on a class/interface member (not just at declaration-site resolution); (c) add a cycle-break guard for self-referential generics like `List<T> { next: List<T> }` before expanding the engine.
+- **Why first (was)**: step (a) delivered cheap wins. Remaining unblocks need deeper infrastructure (logical cycle keys, return-type-from-body inference).
+- **Retry plan (remaining)**: (b) add Type.Reference interning or logical-key cycle detection in `relationComparisonStack`, THEN push `currentTypeParamScope` / use `resolveGenericPropertyType` in `propertiesRelatedTo` — this way recursive self-referential generics like `interface Observable<T> { needThisOne: Observable<T> }` cycle-break correctly even when member instantiation creates fresh Reference ids; (c) implement return-type-from-body inference for un-annotated methods so `a.clone()` on `a: MyList<string>` returns `MyList<string>` not `anyType`; (d) widen the comparison engine to handle named→named generic refs with different targets (walk base chain + instantiate via target mapper).
+
+**Session 2026-04-18 (16.4dd — attempted step (b), reverted):** Added `getPropertyTypeForRelation` helper that calls `resolveGenericPropertyType(ref, prop)` in `propertiesRelatedTo` before falling back to raw `getTypeOfSymbol`. Zero gains, 6 regressions — all recursive-type tests: `infinitelyExpandingBaseTypes2`, `infinitelyExpandingTypes4`, `nestedInfinitelyExpandedRecursiveTypes`, `promisePermutations` (JS emit), `recursiveIdenticalAssignment`, `recursiveTypeComparison`. Root cause: `instantiateType` creates new `Type.Reference` instances with fresh ids, so the id-pair-based cycle detection in `relationComparisonStack` never matches; recursion through `needThisOne: Observable<T>` unfolds into structurally-different Refs at each level. Reverted without commit. Next attempt must either (1) intern Type.Reference by `(target.id, arg-ids)` in `instantiateType`, or (2) change `relationComparisonStack` to key on logical fingerprint rather than numeric ids.
 
 #### 2. JSDoc type annotations — LOW yield, LOW risk
 
