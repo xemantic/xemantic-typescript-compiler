@@ -33962,6 +33962,17 @@ interface DataView {
                     stmt.heritageClauses?.forEach { clause ->
                         clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName) }
                     }
+                    if (extendsClauseIsNonGeneric(stmt) && classMergedWithInterface(stmt, stmts)) {
+                        for (member in stmt.members) {
+                            if (member is Constructor) {
+                                member.body?.let { body ->
+                                    for (s in body.statements) {
+                                        emitTs2346ForSuperCallsInStmt(s, source, fileName)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     for (member in stmt.members) {
                         when (member) {
                             is PropertyDeclaration -> member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
@@ -34028,6 +34039,115 @@ interface DataView {
             }
         }
         checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
+    }
+
+    /**
+     * 16.4db: True iff the class is merged with a same-name InterfaceDeclaration. Combined
+     * with `extendsClauseIsNonGeneric` to gate TS2346: TS only emits TS2346 on super() in
+     * this pattern when the merged class+interface produces an unresolvable construct
+     * signature; bare `class B extends NonGeneric<T>` (no interface merge) keeps the base
+     * ctor sig and super() resolves normally.
+     */
+    private fun classMergedWithInterface(cls: ClassDeclaration, siblings: List<Statement>): Boolean {
+        val name = cls.name?.text ?: return false
+        return siblings.any { it is InterfaceDeclaration && it.name.text == name }
+    }
+
+    /**
+     * 16.4db: Mirrors the TS2315 condition in `checkConstraintsInExprWithTypeArgs` for the
+     * `extends` clause of a class. Used to gate TS2346 emission on `super()` calls when the
+     * declared base type is non-generic but type arguments were provided.
+     */
+    private fun extendsClauseIsNonGeneric(cls: ClassDeclaration): Boolean {
+        val extendsClause = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return false
+        val baseExpr = extendsClause.types.firstOrNull() ?: return false
+        val typeArgs = baseExpr.typeArguments ?: return false
+        if (typeArgs.isEmpty()) return false
+        val name = (baseExpr.expression as? Identifier)?.text ?: return false
+        if (name in BUILTIN_GENERICS) return false
+        val symbol = globals[name] ?: return false
+        if (!symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) return false
+        val typeParams = getTypeParametersOfSymbol(symbol)
+        return typeParams == null || typeParams.isEmpty()
+    }
+
+    /**
+     * 16.4db: Walk a statement subtree for `super(...)` CallExpressions and emit TS2346
+     * "Call target does not contain any signatures." at the `super` identifier (length 5).
+     * Fires only from `extendsClauseIsNonGeneric`-gated path — the resolved base ctor signature
+     * is unavailable when the declared base is non-generic-with-typeargs.
+     */
+    private fun emitTs2346ForSuperCallsInStmt(stmt: Statement, source: String, fileName: String) {
+        fun walkExpr(e: Expression?) {
+            e ?: return
+            when (e) {
+                is CallExpression -> {
+                    val callee = e.expression
+                    if (callee is Identifier && callee.text == "super" && callee.pos >= 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Call target does not contain any signatures.",
+                            category = DiagnosticCategory.Error,
+                            code = 2346,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = callee.pos,
+                            length = 5,
+                        ))
+                    } else {
+                        walkExpr(callee)
+                    }
+                    e.arguments.forEach { walkExpr(it) }
+                }
+                is PropertyAccessExpression -> walkExpr(e.expression)
+                is ElementAccessExpression -> { walkExpr(e.expression); walkExpr(e.argumentExpression) }
+                is BinaryExpression -> { walkExpr(e.left); walkExpr(e.right) }
+                is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
+                is ParenthesizedExpression -> walkExpr(e.expression)
+                is PrefixUnaryExpression -> walkExpr(e.operand)
+                is PostfixUnaryExpression -> walkExpr(e.operand)
+                is NewExpression -> { walkExpr(e.expression); e.arguments?.forEach { walkExpr(it) } }
+                is TypeAssertionExpression -> walkExpr(e.expression)
+                is AsExpression -> walkExpr(e.expression)
+                is NonNullExpression -> walkExpr(e.expression)
+                is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
+                is SpreadElement -> walkExpr(e.expression)
+                is YieldExpression -> e.expression?.let { walkExpr(it) }
+                is AwaitExpression -> walkExpr(e.expression)
+                is VoidExpression -> walkExpr(e.expression)
+                is TypeOfExpression -> walkExpr(e.expression)
+                is DeleteExpression -> walkExpr(e.expression)
+                else -> {}
+            }
+        }
+        fun walkStmt(s: Statement?) {
+            s ?: return
+            when (s) {
+                is ExpressionStatement -> walkExpr(s.expression)
+                is Block -> s.statements.forEach { walkStmt(it) }
+                is IfStatement -> { walkExpr(s.expression); walkStmt(s.thenStatement); walkStmt(s.elseStatement) }
+                is ForStatement -> walkStmt(s.statement)
+                is WhileStatement -> walkStmt(s.statement)
+                is DoStatement -> walkStmt(s.statement)
+                is ReturnStatement -> walkExpr(s.expression)
+                is VariableStatement -> s.declarationList.declarations.forEach { walkExpr(it.initializer) }
+                is TryStatement -> {
+                    walkStmt(s.tryBlock)
+                    s.catchClause?.block?.let { walkStmt(it) }
+                    s.finallyBlock?.let { walkStmt(it) }
+                }
+                is SwitchStatement -> s.caseBlock.forEach { c ->
+                    when (c) {
+                        is CaseClause -> c.statements.forEach { walkStmt(it) }
+                        is DefaultClause -> c.statements.forEach { walkStmt(it) }
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+        }
+        walkStmt(stmt)
     }
 
     private fun checkConstraintsInTypeNode(node: TypeNode, source: String, fileName: String) {
