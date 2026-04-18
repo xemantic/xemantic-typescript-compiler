@@ -37084,18 +37084,29 @@ interface DataView {
         if (source is Type.Intersection) {
             return source.types.any { checkTypeRelatedTo(it, target, relation) }
         }
-        // Array types: compare element types directly.
-        // For Array<A> vs Array<B>, check A → B covariance instead of full
-        // structural comparison (which would pass trivially since Array methods
-        // resolve to anyType in our built-in lib).
-        // Only for Array — other generics need full structural comparison
-        // because interface type parameters may be covariant in practice.
+        // Generic type references with matching target: compare type arguments directly.
+        // For Ref<A> vs Ref<B> (same target), check A → B instead of full structural
+        // comparison. Structural comparison would otherwise pass trivially because our
+        // built-in lib methods resolve to anyType and property types containing type
+        // parameters resolve to errorType when the param isn't in scope. Covariant
+        // arg comparison (each source arg assignable to the matching target arg) matches
+        // Array's existing behavior and is the pragmatic default for built-in generic
+        // containers (Array, Map, Promise, etc.). Cycle detection for self-referential
+        // generics like `interface List<T> { next: List<T> }` is handled by
+        // `relationComparisonStack` in `checkTypeRelatedTo`.
+        //
+        // Skip the shortcut when any target arg is `void`: the void-return-type rule
+        // (a signature returning T is assignable to one returning void) applies
+        // transitively when a type arg appears in a covariant return position inside
+        // the generic (e.g. `B<T> { x(): T }` — `B<number>` should be assignable to
+        // `B<void>`). We don't have variance info, so fall back to structural
+        // comparison in this case — it preserves the prior trivial-pass behavior.
         if (source is Type.Reference && target is Type.Reference &&
-            source.target === target.target &&
-            source.target?.symbol?.name == "Array") {
+            source.target === target.target) {
             val sourceArgs = source.resolvedTypeArguments
             val targetArgs = target.resolvedTypeArguments
-            if (sourceArgs != null && targetArgs != null && sourceArgs.size == targetArgs.size) {
+            if (sourceArgs != null && targetArgs != null && sourceArgs.size == targetArgs.size &&
+                targetArgs.none { it.flags.hasAny(TypeFlags.Void) }) {
                 for (i in sourceArgs.indices) {
                     if (!checkTypeRelatedTo(sourceArgs[i], targetArgs[i], relation)) return false
                 }
@@ -37724,6 +37735,26 @@ interface DataView {
         if (pairKey in state.elaborationStack) return null
         state.elaborationStack.add(pairKey)
         try {
+            // Generic ref mismatch: when source and target share a target interface but
+            // differ in type arguments (e.g. `Bar<string>` vs `Bar<number>`), elaborate
+            // with the first failing arg pair rather than property-level output, matching
+            // TypeScript's "Type 'string' is not assignable to type 'number'." form.
+            if (source is Type.Reference && target is Type.Reference &&
+                source.target === target.target) {
+                val sourceArgs = source.resolvedTypeArguments
+                val targetArgs = target.resolvedTypeArguments
+                if (sourceArgs != null && targetArgs != null && sourceArgs.size == targetArgs.size) {
+                    for (i in sourceArgs.indices) {
+                        val sa = sourceArgs[i]
+                        val ta = targetArgs[i]
+                        if (!checkTypeRelatedTo(sa, ta, assignableRelation)) {
+                            return listOf(
+                                "  Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'."
+                            )
+                        }
+                    }
+                }
+            }
             resolveStructuredTypeMembers(source)
             resolveStructuredTypeMembers(target)
             val targetProps = target.properties ?: return null
