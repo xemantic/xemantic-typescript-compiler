@@ -37490,6 +37490,56 @@ interface DataView {
     }
 
     /**
+     * TS2367: "This comparison appears to be unintentional because the types
+     * 'A' and 'B' have no overlap."
+     *
+     * Narrow scope: both sides must be `Type.Reference` sharing the same
+     * target interface with incompatible type arguments (e.g. `l == l2`
+     * where `l: List<number>`, `l2: List<string>`). Broader overlap rules
+     * (primitives, unions, literal members) are intentionally NOT checked
+     * here — each carries its own FP risk and would need a wider
+     * investigation. Mutual-assignability tests piggyback on the existing
+     * step (a) infrastructure in `structuredTypeRelatedTo`.
+     */
+    private fun checkEqualityComparisonNoOverlap(
+        expr: BinaryExpression, source: String, fileName: String,
+    ) {
+        try {
+            val leftType = getTypeOfExpression(expr.left)
+            val rightType = getTypeOfExpression(expr.right)
+            if (leftType === anyType || leftType === errorType) return
+            if (rightType === anyType || rightType === errorType) return
+            if (leftType === unknownType || rightType === unknownType) return
+            if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            if (leftType !is Type.Reference || rightType !is Type.Reference) return
+            if (leftType.target !== rightType.target) return
+            val leftArgs = leftType.resolvedTypeArguments ?: return
+            val rightArgs = rightType.resolvedTypeArguments ?: return
+            if (leftArgs.size != rightArgs.size) return
+            if (leftArgs == rightArgs) return
+            if (checkTypeRelatedTo(leftType, rightType, assignableRelation)) return
+            if (checkTypeRelatedTo(rightType, leftType, assignableRelation)) return
+            val leftDisp = typeToString(leftType)
+            val rightDisp = typeToString(rightType)
+            val start = expr.pos
+            val length = expressionTrueEnd(expr.right) - start
+            if (length <= 0) return
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "This comparison appears to be unintentional because the types '$leftDisp' and '$rightDisp' have no overlap.",
+                category = DiagnosticCategory.Error,
+                code = 2367,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
      * 16.0: Traverse a chained assignment right-hand side to find the innermost
      * ObjectLiteralExpression. Returns null if the chain doesn't end in a literal.
      * E.g. for `obj2 = obj3 = { a: 1 }`, returns the `{a: 1}` node.
@@ -39271,6 +39321,16 @@ interface DataView {
         if (op == SyntaxKind.InKeyword) {
             checkInOperatorRhs(expr.right, source, fileName)
             return
+        }
+        // TS2367: "This comparison appears to be unintentional because the
+        // types 'A' and 'B' have no overlap." — narrow scope: both sides
+        // are Type.Reference with the same target and incompatible type
+        // args (e.g. `l == l2` where `l: List<number>`, `l2: List<string>`).
+        if (op == SyntaxKind.EqualsEquals || op == SyntaxKind.ExclamationEquals ||
+            op == SyntaxKind.EqualsEqualsEquals || op == SyntaxKind.ExclamationEqualsEquals) {
+            checkEqualityComparisonNoOverlap(expr, source, fileName)
+            // Fall through — there's no arithmetic check for equality ops, so the
+            // rest of this function won't double-emit.
         }
         // Only check arithmetic and comparison operators
         val isArithmetic = op == SyntaxKind.Minus || op == SyntaxKind.Asterisk ||
