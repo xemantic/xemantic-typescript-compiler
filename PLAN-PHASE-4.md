@@ -3007,6 +3007,15 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `narrowingUnionToNeverAssigment_ts` → SWAP TS2322 expects narrowed `"c" | "d"` (we emit full `"a" | "b" | "c" | "d"`). Control-flow narrowing.
 - `taggedTemplatesWithIncompleteTemplateExpressions3_ts` → MISS TS2345 in tagged template; tagged template arg checking not implemented (already noted in 16.4cz session).
 
+**Session 2026-04-18 (16.4db) additional explored-but-skipped:**
+- `isolatedDeclarationsAllowJs_ts` → MISS TS9010 "Variable must have an explicit type annotation with --isolatedDeclarations" + related TS9027 + config-level TS5053 ("`allowJs` cannot be specified with `isolatedDeclarations`") + TS5055 (overwrite warning). Three new diagnostics + a new compiler option (`isolatedDeclarations`); not surgical for +1 test alone.
+- `arrayIterationLibES5TargetDifferent_ts` (target=es5/es2015) → MISS TS2495 "Type 'X' is not an array type or a string type." for `for (const x of n)` where n is `number` or `{ foo: string }`. New diagnostic for for-of on non-iterable type — needs iterable-vs-array-like type checks gated on lib.
+- `genericSpecializations1_ts` → MISS TS2416 elaboration for class implementing `IFoo<number>` with method `foo(x: string): string`. Needs full generic interface-method comparison with elaboration chain. Blocker #1.
+- `aliasAssignments_ts` → MISS 2× TS2322 for `x = 1` / `y = moduleA` where x/y are `import x = require(...)` aliases, expecting `typeof import("path")` display. Needs cross-module type tracking + `typeof import("...")` display formatting.
+- `augmentExportEquals1_1_ts` / `augmentExportEquals2_1_ts` → MISS TS2671 "Cannot augment module 'X' because it resolves to a non-module entity" + MISS TS2503 "Cannot find namespace 'x'". Cross-file augmentation when target module has `export = var`. Blocker #5 territory.
+- `instanceofWithStructurallyIdenticalTypes_ts` → MISS TS2339 on narrowed `never` (after `instanceof` chain exhaustively narrows). Blocker #3 (control-flow narrowing).
+- `inferFromGenericFunctionReturnTypes1_ts` → MISS TS2339 `toUpperCase` on `number` after generic inference through `compose(filter(...), map(...))`. Blocker #1.
+
 **Wrapper/display tweaks (tried, zero-gain alone — deferred):**
 - Primitive → boxed wrapper (`boolean → Boolean` etc.) assignability in `isSimpleTypeRelatedTo`: drops the TS2322 FP but misses `valueOf()` mismatch elaboration. Net-zero.
 - Wrapper-interface → primitive elaboration (`'number' is a primitive, but 'Number' is a wrapper object. Prefer using 'number' when possible.`): helper ready but emits require-chain elaborations elsewhere. `nativeToBoxedTypes_ts` still short one TS2322 for `sym = Sym` (Symbol interface → `symbol` primitive) because the relation comparison unexpectedly passes — reason not isolated. Deferred.
@@ -3014,7 +3023,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 
 ### What's left in the "surgical fix" pool
 
-After 2026-04-18 (16.4da), the low-hanging pool is **effectively empty**. `find_candidates.py --fresh` returns ~20 candidates and **every one** has been classified as a blocker or feature gap:
+After 2026-04-18 (16.4db, 8218 passing), the low-hanging pool is **effectively empty**. `find_candidates.py --fresh` returns ~20 candidates and **every one** has been classified as a blocker or feature gap:
 - Generic inference (Blocker #1): widenToAny1/2, declarationEmitBundleWithAmbientReferences, recursiveTypeRelations, lambdaArgCrash
 - Cross-file scope (Blocker #5): jsFileCompilationLetDeclarationOrder2, jsFileCompilationDuplicateVariableErrorReported
 - JSDoc (Blocker #2): jsExportMemberMergedWithModuleAugmentation, jsFunctionWithPrototypeNoErrorTruncationNoCrash
