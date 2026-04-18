@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-18 (16.4dl, +1 test: 8226→8227) — TS2344 primitive constraint check via apparent type:** `class A<T extends { length: number }> {}` followed by `class B<U> extends A<string>` previously emitted a spurious TS2344 on `A<string>` because `checkConstraintsForTypeArgs` compared `string` (Type.Intrinsic with TypeFlags.String) to the object-shaped constraint `{ length: number }` (Type.Object) directly — `structuredTypeRelatedTo` returned false since neither branch matched (not Union/Intersection/Ref/Object/TypeParam). TypeScript's rule: for primitive type arguments, the constraint check uses the apparent type (wrapper interface) which does have `length`/`toString`/etc.
+
+  - In `checkConstraintsForTypeArgs`, added a bail-out BEFORE diagnostic emission: when the outer `checkTypeRelatedTo` fails, constraint is `Type.Object`, and arg has `StringLike | NumberLike | BooleanLike` flag, re-run the relation check using `getApparentType(argType)`. If it now passes, `continue` and skip the diagnostic.
+  - Deliberately NOT applied globally in `structuredTypeRelatedTo`: a naïve "primitive source → apparent type for any Object target" fallback there regresses 2 tests (probably via unrelated TS2322/TS2345 paths that had been passing incorrectly via the simple-check guard; investigation left for a future session if needed). Narrowing to the TS2344 emission site is surgical and zero-regression.
+  - → +1 test: `genericDerivedTypeWithSpecializedBase2_ts` (was in the EXTRA bucket — removes the spurious TS2344 while preserving the legitimate TS2564/TS2322 diagnostics). Zero regressions.
+
   **Session 2026-04-18 (16.4dk, +2 tests: 8224→8226) — private-brand mismatch elaboration (TS2322 + TS2345):** Structural comparison between two named class types with same-named `private` properties declared in different parent classes now fails with "Types have separate declarations of a private property 'X'." — TypeScript's nominal brand check that prevents accidental structural equivalence between nominally distinct classes.
 
   - New `isPropPrivateBrandMismatch(sourceProp, targetProp)`: both declared `private` AND `findParentClassOrInterface` returns different class/interface declarations. Shares `findPrivateBrandMismatchName` for elaboration-chain and conservative-guard uses.

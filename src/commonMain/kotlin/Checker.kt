@@ -34360,6 +34360,19 @@ interface DataView {
             if (constraintType === anyType || constraintType === errorType) continue
 
             if (!checkTypeRelatedTo(argType, constraintType, assignableRelation)) {
+                // TS allows primitive type arguments to satisfy object-shape constraints
+                // via apparent type: `string` has the String wrapper's members (`length`,
+                // `charAt`, etc.), so `A<string>` where A's param extends `{ length: number }`
+                // is fine. Only apply this bail-out at the TS2344 emission site to avoid
+                // affecting other relation-based checks.
+                if (constraintType is Type.Object &&
+                    argType.flags.hasAny(TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BooleanLike)) {
+                    val apparent = getApparentType(argType)
+                    if (apparent !== argType && apparent is Type.Object &&
+                        checkTypeRelatedTo(apparent, constraintType, assignableRelation)) {
+                        continue
+                    }
+                }
                 val argNode = typeArgs[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
                 val constraintDisplay = typeToString(constraintType)
