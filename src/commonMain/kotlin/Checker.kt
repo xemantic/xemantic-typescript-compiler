@@ -29551,7 +29551,9 @@ interface DataView {
                                                  else instantiateType(raw, mapper)
                                 }
                             }
-                            val rawReturn = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            val rawReturn = md.type?.let { getTypeFromTypeNode(it) }
+                                ?: inferSimpleReturnTypeFromBody(md)
+                                ?: anyType
                             val returnType = if (rawReturn === errorType) anyType
                                              else instantiateType(rawReturn, mapper)
                             val params = md.parameters.mapNotNull { p ->
@@ -29590,6 +29592,46 @@ interface DataView {
             null
         } finally {
             currentTypeParamScope = saved
+        }
+    }
+
+    /**
+     * Blocker #1 step (c): narrow return-type-from-body inference for methods
+     * with no return annotation. Only handles the simplest pattern: the body
+     * is a single `return new X<...>(...)` statement where X is a resolvable
+     * class/interface type. Caller must have set up `currentTypeParamScope`
+     * so type-arg references like `T` resolve to the enclosing class's
+     * canonical Type.TypeParam (subsequent `instantiateType` then substitutes
+     * the target's concrete args). Returns null for anything other than this
+     * pattern — callers fall back to `anyType`.
+     *
+     * Unblocks cases like `a.clone()` on `a: MyList<string>` where `clone()`
+     * in `class MyList<T>` returns `new MyList<T>(…)`, so the inferred return
+     * type is `MyList<T>` which substitutes to `MyList<string>` at the call
+     * site. `a.clone()` assigned to `var d: MyList<number>` then hits step (a)
+     * same-target-ref comparison → TS2322.
+     */
+    private fun inferSimpleReturnTypeFromBody(md: MethodDeclaration): Type? {
+        val stmts = md.body?.statements ?: return null
+        if (stmts.size != 1) return null
+        val retStmt = stmts[0] as? ReturnStatement ?: return null
+        val retExpr = retStmt.expression as? NewExpression ?: return null
+        val callee = retExpr.expression as? Identifier ?: return null
+        return try {
+            val calleeType = getTypeOfIdentifier(callee)
+            if (calleeType !is Type.Interface) return null
+            val typeParams = calleeType.typeParameters
+            val typeArgs = retExpr.typeArguments
+            // Non-generic target: return the interface itself (only when no typeArgs were supplied).
+            if (typeParams.isNullOrEmpty()) {
+                return if (typeArgs.isNullOrEmpty()) calleeType else null
+            }
+            if (typeArgs == null || typeArgs.size != typeParams.size) return null
+            val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+            if (resolvedArgs.any { it === errorType }) return null
+            getOrInternReference(calleeType, resolvedArgs)
+        } catch (_: StackOverflowError) {
+            null
         }
     }
 
