@@ -106,6 +106,11 @@ class Checker(
         // In TypeScript/tsgo, symbol.target is set by the checker — storing it
         // here instead keeps binder output immutable for parallel checking.
         val symbolTargets = HashMap<Int, Symbol>()
+        /** Interning cache for Type.Reference, keyed on `target.id|arg1.id,arg2.id,...`.
+         *  Identical instantiations share an instance (and `Type.id`), enabling the
+         *  id-based cycle detection in `relationComparisonStack` to catch logically
+         *  identical recursive references like `interface List<T> { next: List<T> }`. */
+        val referenceCache = HashMap<String, Type.Reference>()
     }
 
     private val state = CheckerState()
@@ -29713,7 +29718,7 @@ interface DataView {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                     // Only create Reference if all args resolved (no errorType)
                     if (resolvedArgs.none { it === errorType }) {
-                        return Type.Reference(declaredType, resolvedTypeArguments = resolvedArgs)
+                        return getOrInternReference(declaredType, resolvedArgs)
                     }
                 }
             }
@@ -29861,7 +29866,7 @@ interface DataView {
             if (!typeArgs.isNullOrEmpty()) {
                 val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                 if (resolvedArgs.none { it === errorType }) {
-                    return Type.Reference(declared, resolvedTypeArguments = resolvedArgs)
+                    return getOrInternReference(declared, resolvedArgs)
                 }
             }
         }
@@ -30819,7 +30824,7 @@ interface DataView {
                 try {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                     if (resolvedArgs.none { it === errorType }) {
-                        return Type.Reference(calleeType, resolvedTypeArguments = resolvedArgs)
+                        return getOrInternReference(calleeType, resolvedArgs)
                     }
                 } catch (_: StackOverflowError) { /* circular */ }
             }
@@ -35200,7 +35205,7 @@ interface DataView {
                         if (ws.size == 1) ws[0] else getUnionType(ws)
                     } else getWidenedLiteralType(t)
                 }
-                displayTypeOverride = if (widened == args) rawArr else Type.Reference(rawArr.target, widened)
+                displayTypeOverride = if (widened == args) rawArr else getOrInternReference(rawArr.target, widened)
             } else {
                 displayTypeOverride = rawArr
             }
@@ -37868,11 +37873,7 @@ interface DataView {
                 val args = type.resolvedTypeArguments ?: return type
                 val mapped = args.map { instantiateType(it, mapper) }
                 if (mapped.zip(args).all { (a, b) -> a === b }) type
-                else {
-                    val ref = Type.Reference(type.target)
-                    ref.resolvedTypeArguments = mapped
-                    ref
-                }
+                else getOrInternReference(type.target, mapped)
             }
             is Type.Object -> {
                 // For anonymous object types, we'd need to instantiate members
@@ -37911,9 +37912,31 @@ interface DataView {
         )
     }
 
+    /**
+     * Return an interned `Type.Reference` for `(target, args)`. Two calls with the same
+     * target and the same arg ids return the SAME instance, so the resulting `Type.id`
+     * is stable across instantiations. Cycle detection in `relationComparisonStack`
+     * keys on `(source.id, target.id)` and relies on this identity to catch
+     * self-referential generics like `interface List<T> { next: List<T> }` whose
+     * member instantiation would otherwise mint fresh Ref ids per recursion level.
+     *
+     * Pass `args = null` to denote a Reference with no resolved arguments (e.g. a raw
+     * generic with no instantiation). This is rare; most call sites pass an actual list.
+     */
+    private fun getOrInternReference(target: Type.Interface, args: List<Type>?): Type.Reference {
+        val key = buildString {
+            append(target.id)
+            append('|')
+            if (args != null) args.joinTo(this, ",") { it.id.toString() }
+        }
+        return state.referenceCache.getOrPut(key) {
+            Type.Reference(target, resolvedTypeArguments = args)
+        }
+    }
+
     /** Create an array type: `Type.Reference(globalArrayType, [elementType])`. */
     private fun getArrayType(elementType: Type): Type {
-        return Type.Reference(globalArrayType, resolvedTypeArguments = listOf(elementType))
+        return getOrInternReference(globalArrayType, listOf(elementType))
     }
 
     /** Create a tuple type from a TupleType node. */
