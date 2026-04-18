@@ -2519,6 +2519,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-18 (16.4dk, +2 tests: 8224→8226) — private-brand mismatch elaboration (TS2322 + TS2345):** Structural comparison between two named class types with same-named `private` properties declared in different parent classes now fails with "Types have separate declarations of a private property 'X'." — TypeScript's nominal brand check that prevents accidental structural equivalence between nominally distinct classes.
+
+  - New `isPropPrivateBrandMismatch(sourceProp, targetProp)`: both declared `private` AND `findParentClassOrInterface` returns different class/interface declarations. Shares `findPrivateBrandMismatchName` for elaboration-chain and conservative-guard uses.
+  - `propertiesRelatedTo`: before comparing prop types, check private-brand mismatch and return false (setting `lastPrivateBrandMismatchName`). Without this, `string` vs `string` passes trivially and TS2322 never fires.
+  - `getPropertyElaborationChain`: produces the "  Types have separate declarations of a private property 'X'." chain line.
+  - TS2345 guard extension in `checkArgumentsAgainstSignature`: the conservative `isSimpleCheckableType(paramType)` guard now also admits `argIsNamed && paramIsNamed && hasPrivateBrandMismatchBetween(…)` so the brand check fires for `foo2(a2)` (named→named). `findPrivateBrandMismatchName` also appends the matching elaboration chain line.
+  - → +2 tests: `typeIdentityConsidersBrands_ts`, `classImplementsClass5_ts`. Zero regressions.
+
   **Session 2026-04-18 (16.4dj, +1 test: 8223→8224) — TS2416 via class-type-param scope + TS2208 related info:** Generic-class property overrides now emit TS2416 when the derived property's type references a class type parameter that isn't assignable to the base's type. Previously `class MyEvent<T> extends BaseEvent { target: T; }` (where BaseEvent.target is `{}`) had `derivedType = errorType` because T wasn't in scope during `getTypeOfMemberDecl` — errorType trivially passes via the `TypeFlags.Any` shortcut in `isSimpleTypeRelatedTo`, so TS2416 never fired.
 
   - In `checkClassPropertyOverrides`, push class type params into `currentTypeParamScope` before walking members. Canonical `Type.TypeParam` objects come from `getDeclaredTypeOfSymbol(globals[rawClassName]) as Type.Interface`; scope map keys are the source-level param names so `getTypeFromTypeNode` resolves them. Restore scope in a `finally`.
