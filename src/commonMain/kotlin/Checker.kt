@@ -29470,16 +29470,27 @@ interface DataView {
             classMembers.any { it === decl }
         }
         if (!isDirectMember) {
-            // Inherited: safe only if every base-type's type arguments are type parameters
-            // (not concretized). That way, mapping target's T → typeArg propagates unchanged
-            // through the base chain.
+            // Blocker #1 step (d): Inherited property — walk base chain.
+            // Instantiate each base via ref's type-param mapper (mapping target's T →
+            // ref's typeArg), then recurse into resolveGenericPropertyType on the
+            // concrete base. This handles both passthrough (`Array<T> extends IFoo<T>`)
+            // and specialized (`class B<U> extends A<string>`) inheritance uniformly:
+            // each step applies its own class's mapper to the base's type args, so the
+            // property's declared type is resolved in the scope where it was actually
+            // declared (A's scope for B extends A).
             val bases = target.baseTypes
             if (bases.isNullOrEmpty()) return null
-            val allBasesPassthrough = bases.all { b ->
-                if (b !is Type.Reference) return@all false
-                b.resolvedTypeArguments?.all { it is Type.TypeParam } ?: true
+            val outerMapper = createTypeMapper(typeParams, typeArgs)
+            for (base in bases) {
+                if (base !is Type.Reference) continue
+                val concreteBase = try {
+                    instantiateType(base, outerMapper) as? Type.Reference ?: continue
+                } catch (_: StackOverflowError) { continue }
+                if (concreteBase.id == ref.id) continue
+                val result = resolveGenericPropertyType(concreteBase, propSym)
+                if (result != null) return result
             }
-            if (!allBasesPassthrough) return null
+            return null
         }
         val scope = mutableMapOf<String, Type.TypeParam>()
         currentTypeParamScope?.let { scope.putAll(it) }
@@ -37967,8 +37978,12 @@ interface DataView {
             for (targetProp in targetProps) {
                 val targetName = targetProp.name
                 val sourceProp = sourceMembers[targetName] ?: continue
-                val sourcePropType = getTypeOfSymbol(sourceProp)
-                val targetPropType = getTypeOfSymbol(targetProp)
+                // Use substituted property types (Blocker #1 step (b)/(d)) so generic
+                // inheritance mismatches like `B<number> extends A<string>` produce
+                // "Types of property 'x' are incompatible. Type 'string' is not
+                // assignable to type 'number'." instead of falling out silently.
+                val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
+                val targetPropType = getPropertyTypeForRelation(target, targetProp)
                 if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
                     incompatible.add(IncompatibleProp(targetName, sourcePropType, targetPropType))
                 }
