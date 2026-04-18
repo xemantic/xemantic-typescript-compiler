@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** ~8,216 / 10,078 tests passing (~81%).
+**Phase 4 — Checker buildout.** ~8,217 / 10,078 tests passing (~81%).
 Current queue: item 16.4 "Generic type instantiation and inference" (IN PROGRESS).
 
 See `PLAN-PHASE-4.md` for the live queue, known architectural blockers, and
