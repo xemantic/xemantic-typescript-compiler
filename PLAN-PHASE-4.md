@@ -2978,6 +2978,29 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `genericTypeWithNonGenericBaseMisMatch_ts` → SWAP TS2416 vs our TS2425 + full elaboration chain. Class-with-generic-param `X<T extends {a: string}>` overriding interface `I.f: (a: {a:number}) => void`. Requires function-parameter contravariance + parameter-property type-substitution elaboration. Blocker-adjacent.
 - `moduleAugmentationImportsAndExports1/4/5/6_ts` → MISS TS2322 for `A.prototype.foo = function(){return undefined;}` where a module augmentation declares `foo(): B`. Needs prototype-augmentation-aware assignment checking. Blocker-adjacent.
 
+**Session 2026-04-18 (16.4da) additional explored-but-skipped:**
+- `widenToAny1_ts` / `widenToAny2_ts` → MISS TS2322 `Type 'string | undefined' is not assignable to type 'number'` for `var z: number = foo({x: undefined, y: "def"})` where `foo<T>` infers T = string|undefined. Blocker #1 — generic type inference (best-common-type from arg literals).
+- `jsFileCompilationLetDeclarationOrder2_ts` → MISS TS2448 across files: `a.ts` references `a` declared as `let a` in `b.js`. Blocker #5 — cross-file block-scoped resolution and use-before-declaration tracking.
+- `jsFileCompilationDuplicateVariableErrorReported_ts` → MISS TS2403 across files: `var x = "hello"` in `b.js` + `var x = 10` in `a.ts`. Blocker #5 — cross-file `var` merge with type incompatibility check.
+- `jsExportMemberMergedWithModuleAugmentation_ts` → MISS TS2564 for `class Abcde { /** @type {string} */ x; }` in `.js`. Blocker #2 — JSDoc `@type` annotation parsing required to give the property a type for TS2564 to fire.
+- `jsFunctionWithPrototypeNoErrorTruncationNoCrash_ts` → MISS TS2339 for `this.rgb()` inside method on `Color.prototype = { ... }`. Blocker #2 — JS prototype assignment pattern + `this` typing inside prototype-method.
+- `optionalPropertiesTest_ts` → MISS TS2322 `Type 'i2' is not assignable to type 'i1'` with elaboration `Types of property 'M' are incompatible. Type '(() => void) | undefined' is not assignable to type '() => void'.`. Optional-property → required-property structural assignability + elaboration chain. Blocker-adjacent.
+- `optionalChainWithInstantiationExpression1_ts` (es2019/es2020) → MISS TS2532 "Object is possibly 'undefined'" for `a?.b<c>.d` where the trailing `.d` chains off the optional result without optional chain. Narrowing/optional-chain flow analysis needed.
+- `importHelpersWithLocalCollisions_ts__module_amd/system__` → MISS TS2354 "module 'tslib' cannot be found" for `@dec export class A` under module=AMD/System even though `node_modules/tslib/index.d.ts` exists. AMD/System-specific tslib resolution path; not a surgical fix.
+- `implementsIncorrectlyNoAssertion_ts` → MISS TS2416 for `class Baz implements Wrapper` where `Wrapper = Foo & Bar` (intersection of two declare-classes). Needs intersection-of-classes member walk for the implements check.
+- `importAliasFromNamespace_ts` → MISS TS2845 "This condition will always return 'false'." for `Internal.WhichThing.A ? "foo" : "bar"` where `Internal.WhichThing.A` resolves through an alias chain to const enum value `0`. New TS2845 diagnostic + namespace-alias chain + const enum value resolution.
+- `lambdaArgCrash_ts` → MISS TS2345 for `super.add(listener)` where listener is `(items: ItemSet) => void` and base expects `() => any`. Function-to-function structural arity comparison; blocker-adjacent.
+- `recursiveTypeRelations_ts` → MISS TS2345 for `(obj, key: keyof S) => obj` callback. Generic function-to-function with `keyof S` parameter-type substitution.
+- `declarationEmitBundleWithAmbientReferences_ts` → MISS TS2322 for `null` to `T<string>` (generic). Blocker #1.
+- `crashInEmitTokenWithComment_ts` → SWAP TS2345 with destructured arrow-param display `({[foo.bar]: c}: {}) => any` (we emit `() => undefined`) + MISS TS2537. Function-display with destructured/computed-key params not implemented.
+- `conditionalAnyCheckTypePicksBothBranches_ts` → SWAP TS2322 same code; needs conditional type evaluation (`type T = any extends number ? 1 : 0` resolves to `1 | 0`). Conditional types not implemented.
+- `errorWithSameNameType_ts` → SWAP TS2741 expects qualified `import("a").F` display (we emit `F`). Cross-module type display needs source-file-of-symbol tracking.
+- `deeplyNestedAssignabilityErrorsCombined_ts` → SWAP TS2322 second error: expects `f: typeof Ctor2` (we emit `f: Ctor2`) + elaboration `(new a.b.c.d.e.f()).g` (we emit `a.b.c.d.e.f.g`). Class-as-value contextual `typeof` display + `new` wrapping in elaboration. Test ALSO needs the FIRST error (method return-type chain through `f().g`) which we don't emit at all — so two distinct gaps required.
+- `relationComplexityError_ts` → SWAP TS2859 vs our TS2322. Needs explicit complexity-budget detection in `checkTypeRelatedTo`.
+- `intersectionWithConflictingPrivates_ts` → SWAP TS2322 expects `Type '{}' is not assignable to type 'never'` (we emit `'A & B'`). Intersection-of-classes-with-conflicting-private-properties → reduce to `never` (intersection-reduction not implemented).
+- `narrowingUnionToNeverAssigment_ts` → SWAP TS2322 expects narrowed `"c" | "d"` (we emit full `"a" | "b" | "c" | "d"`). Control-flow narrowing.
+- `taggedTemplatesWithIncompleteTemplateExpressions3_ts` → MISS TS2345 in tagged template; tagged template arg checking not implemented (already noted in 16.4cz session).
+
 **Wrapper/display tweaks (tried, zero-gain alone — deferred):**
 - Primitive → boxed wrapper (`boolean → Boolean` etc.) assignability in `isSimpleTypeRelatedTo`: drops the TS2322 FP but misses `valueOf()` mismatch elaboration. Net-zero.
 - Wrapper-interface → primitive elaboration (`'number' is a primitive, but 'Number' is a wrapper object. Prefer using 'number' when possible.`): helper ready but emits require-chain elaborations elsewhere. `nativeToBoxedTypes_ts` still short one TS2322 for `sym = Sym` (Symbol interface → `symbol` primitive) because the relation comparison unexpectedly passes — reason not isolated. Deferred.
@@ -2985,11 +3008,23 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 
 ### What's left in the "surgical fix" pool
 
-After this session, the low-hanging pool is largely exhausted — most 1-line-diff failing tests fall into one of the blocker categories above. The next +N gains either come from:
-1. **Implementing new diagnostics** (TS6234 / TS2351 / TS2352 / TS2300-vs-lib / TS7023 / TS2802 / TS2744): each is 1-3 tests on its own but together could net +15-20. Each is self-contained (contained to a specific emission site) but individually small.
+After 2026-04-18 (16.4da), the low-hanging pool is **effectively empty**. `find_candidates.py --fresh` returns ~20 candidates and **every one** has been classified as a blocker or feature gap:
+- Generic inference (Blocker #1): widenToAny1/2, declarationEmitBundleWithAmbientReferences, recursiveTypeRelations, lambdaArgCrash
+- Cross-file scope (Blocker #5): jsFileCompilationLetDeclarationOrder2, jsFileCompilationDuplicateVariableErrorReported
+- JSDoc (Blocker #2): jsExportMemberMergedWithModuleAugmentation, jsFunctionWithPrototypeNoErrorTruncationNoCrash
+- Conditional types: conditionalAnyCheckTypePicksBothBranches
+- Control-flow narrowing: narrowingUnionToNeverAssigment, optionalChainWithInstantiationExpression1 (es2019/es2020)
+- Intersection privacy reduction: intersectionWithConflictingPrivates
+- Display: errorWithSameNameType (cross-module qualified), deeplyNestedAssignabilityErrorsCombined (typeof-of-class-value), crashInEmitTokenWithComment (destructured arrow params)
+- TS2859 complexity budget: relationComplexityError
+- Standalone new diagnostic: importAliasFromNamespace (TS2845), taggedTemplatesWithIncompleteTemplateExpressions3 (TS2345 for tagged templates), importHelpersWithLocalCollisions (TS2354 for AMD/System tslib resolution)
+- Structural elaboration: optionalPropertiesTest (optional→required), implementsIncorrectlyNoAssertion (TS2416 with intersection-of-classes)
+
+The next +N gains either come from:
+1. **Implementing new diagnostics** (TS6234 / TS2351 / TS2352 / TS2300-vs-lib / TS7023 / TS2802 / TS2744 / TS2845 / TS4081 / TS2354-AMD): each is 1-3 tests on its own but together could net +15-20. Each is self-contained (contained to a specific emission site) but individually small.
 2. **Taking on a blocker** (structural generic comparison #1 for ~30+ tests, JSDoc #2 for ~5-10, etc.). Blocker #1 is by far the highest-yield single investment.
 
-**Recommendation**: before starting more 1-off diagnostic implementations, consider attempting blocker #1 (structural generic comparison) with the retry plan below. It dwarfs any surgical gain.
+**Recommendation**: surgical pool is **exhausted**. Next session should commit to either (a) a new-diagnostic batch (pick 2-3 low-risk ones in a single session), or (b) blocker #1 (structural generic comparison) with the retry plan below. Continuing to look for +1 surgical wins via `find_candidates.py --fresh` will yield nothing.
 
 ### Known architectural blockers (as of 2026-04-17, 8145 passing)
 
