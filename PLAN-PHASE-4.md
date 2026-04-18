@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-18 (16.4da, +1 test: 8216→8217):** TS2719 "Two different types with this name exist, but they are unrelated." for `this.x = a` where the property is typed as a class type parameter and the source identifier is annotated with a same-named top-level interface/type-alias:
+  - Added a dedicated walker `checkIdenticallyNamedTypeAssignment` (new top-level check). Per file → per class with type parameters → collects `propsTypedAsTypeParam` (props whose type annotation is a bare class type-param name). Walks each method/accessor/constructor body for `this.prop = identifier` assignments, resolves the source identifier's annotated type via `globals[…].declarations`, and emits TS2719 when the type-name matches a class type param AND the global symbol resolves to an Interface/TypeAlias (not the type parameter).
+  - Walker is fully self-contained — does NOT touch the existing `checkAssignmentExpression` / `varTypes` path. No risk of unrelated TS2322 regressions for `this.prop = …` patterns, since the new check only emits TS2719 (a new code) under tightly gated conditions.
+  - → +1 test: `incompatibleAssignmentOfIdenticallyNamedTypes_ts`. Zero regressions.
+
   **Session 2026-04-17 (16.4cz, +1 test: 8215→8216):** TS2702 "'X' only refers to a type, but is being used as a namespace here." for `X.Y` in type position when X is a type-only declaration (Class/Interface/TypeAlias):
   - In `checkTypeNameResolved` (QualifiedName branch), after the existing TS2833 spelling-suggestion path, check if the leftmost symbol has any of `Class|Interface|TypeAlias` flags AND none of `Module|Enum|Alias`. If so, emit TS2702 at the leftmost identifier.
   - Excluded:

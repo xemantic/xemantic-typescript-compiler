@@ -312,6 +312,10 @@ class Checker(
         if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
             checkPropertyInitialization()
         }
+        // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
+        // and source identifier is annotated with a top-level interface/type-alias also
+        // named `T`. Same display name, unrelated identities. (16.4da)
+        checkIdenticallyNamedTypeAssignment()
         // 7. Check for implicit any parameters (TS7006)
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyParameters()
@@ -5828,6 +5832,160 @@ class Checker(
             val source = result.sourceFile.text
             checkPropertyInitInStatements(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    /**
+     * 16.4da: TS2719 "Two different types with this name exist, but they are unrelated."
+     *
+     * Walks each class with type parameters and looks for `this.prop = identifier` where:
+     * - `prop` is declared as type `T` (a class type parameter)
+     * - `identifier` is a file-level binding annotated with the same name `T`
+     * - That outer `T` resolves to an Interface/TypeAlias (NOT the class type parameter)
+     */
+    private fun checkIdenticallyNamedTypeAssignment() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkTs2719InStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkTs2719InStatements(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> checkTs2719InClass(stmt, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) checkTs2719InStatements(body.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkTs2719InClass(classDecl: ClassDeclaration, source: String, fileName: String) {
+        val classTypeParamNames = collectTypeParamNames(classDecl.typeParameters)
+        if (classTypeParamNames.isEmpty()) return
+        // Map prop name → class type-param name (only when prop type is a bare class type param)
+        val propsTypedAsTypeParam = mutableMapOf<String, String>()
+        for (m in classDecl.members) {
+            if (m is PropertyDeclaration) {
+                val tn = m.type as? TypeReference ?: continue
+                val tname = (tn.typeName as? Identifier)?.text ?: continue
+                if (tname !in classTypeParamNames) continue
+                val pname = (m.name as? Identifier)?.text ?: continue
+                propsTypedAsTypeParam[pname] = tname
+            }
+        }
+        if (propsTypedAsTypeParam.isEmpty()) return
+        for (m in classDecl.members) {
+            val body: Block? = when (m) {
+                is MethodDeclaration -> m.body
+                is GetAccessor -> m.body
+                is SetAccessor -> m.body
+                is Constructor -> m.body
+                else -> null
+            }
+            if (body != null) walkTs2719Assignments(body, propsTypedAsTypeParam, source, fileName)
+        }
+    }
+
+    private fun walkTs2719Assignments(
+        node: Node,
+        propsTypedAsTypeParam: Map<String, String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (node) {
+            is BinaryExpression -> {
+                if (node.operator == SyntaxKind.Equals) {
+                    emitTs2719IfApplicable(node, propsTypedAsTypeParam, source, fileName)
+                }
+                walkTs2719Assignments(node.left, propsTypedAsTypeParam, source, fileName)
+                walkTs2719Assignments(node.right, propsTypedAsTypeParam, source, fileName)
+            }
+            is Block -> for (s in node.statements) walkTs2719Assignments(s, propsTypedAsTypeParam, source, fileName)
+            is ExpressionStatement -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is IfStatement -> {
+                walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+                walkTs2719Assignments(node.thenStatement, propsTypedAsTypeParam, source, fileName)
+                node.elseStatement?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            }
+            is ForStatement -> {
+                node.initializer?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                node.condition?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                node.incrementor?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                walkTs2719Assignments(node.statement, propsTypedAsTypeParam, source, fileName)
+            }
+            is ForInStatement -> walkTs2719Assignments(node.statement, propsTypedAsTypeParam, source, fileName)
+            is ForOfStatement -> walkTs2719Assignments(node.statement, propsTypedAsTypeParam, source, fileName)
+            is WhileStatement -> {
+                walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+                walkTs2719Assignments(node.statement, propsTypedAsTypeParam, source, fileName)
+            }
+            is DoStatement -> {
+                walkTs2719Assignments(node.statement, propsTypedAsTypeParam, source, fileName)
+                walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            }
+            is TryStatement -> {
+                walkTs2719Assignments(node.tryBlock, propsTypedAsTypeParam, source, fileName)
+                node.catchClause?.block?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                node.finallyBlock?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            }
+            is SwitchStatement -> {
+                for (clause in node.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> for (s in clause.statements) walkTs2719Assignments(s, propsTypedAsTypeParam, source, fileName)
+                        is DefaultClause -> for (s in clause.statements) walkTs2719Assignments(s, propsTypedAsTypeParam, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ReturnStatement -> node.expression?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            is ThrowStatement -> node.expression?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            is LabeledStatement -> walkTs2719Assignments(node.statement, propsTypedAsTypeParam, source, fileName)
+            is VariableStatement -> for (decl in node.declarationList.declarations) {
+                decl.initializer?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            }
+            is ParenthesizedExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun emitTs2719IfApplicable(
+        binExpr: BinaryExpression,
+        propsTypedAsTypeParam: Map<String, String>,
+        source: String,
+        fileName: String,
+    ) {
+        val target = binExpr.left as? PropertyAccessExpression ?: return
+        if ((target.expression as? Identifier)?.text != "this") return
+        val propName = target.name.text
+        val typeParamName = propsTypedAsTypeParam[propName] ?: return
+        val rhs = binExpr.right as? Identifier ?: return
+        val srcSym = globals[rhs.text] ?: return
+        val srcDecl = srcSym.valueDeclaration ?: srcSym.declarations.firstOrNull()
+        val srcTypeNode = (srcDecl as? VariableDeclaration)?.type as? TypeReference ?: return
+        val srcTypeName = (srcTypeNode.typeName as? Identifier)?.text ?: return
+        if (srcTypeName != typeParamName) return
+        val typeNameSym = globals[srcTypeName] ?: return
+        if (typeNameSym.flags.hasAny(SymbolFlags.TypeParameter)) return
+        if (!typeNameSym.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration }) return
+        val squiggleStart = target.expression.pos
+        val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
+        val (line, character) = getLineAndCharacterOfPosition(source, squiggleStart)
+        diagnostics.add(Diagnostic(
+            message = "Type '$typeParamName' is not assignable to type '$typeParamName'. Two different types with this name exist, but they are unrelated.",
+            category = DiagnosticCategory.Error,
+            code = 2719,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = squiggleStart,
+            length = squiggleLength,
+            messageChain = listOf("  '$typeParamName' could be instantiated with an arbitrary type which could be unrelated to '$typeParamName'."),
+        ))
     }
 
     private fun checkPropertyInitInStatements(
