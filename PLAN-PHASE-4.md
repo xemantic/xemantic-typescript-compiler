@@ -3087,7 +3087,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 
 ### What's left in the "surgical fix" pool
 
-After 2026-04-18 (16.4db, 8218 passing), the low-hanging pool is **effectively empty**. `find_candidates.py --fresh` returns ~20 candidates and **every one** has been classified as a blocker or feature gap:
+After 2026-04-18 (16.4dk, 8226 passing), the low-hanging pool is nearly empty. The 16.4di–dk line landed targeted wins on the inheritance-chain side of blocker #1 (generic property chain walk + TS2416 class-type-param scope + private-brand elaboration for TS2322/TS2345). `find_candidates.py --fresh` still returns ~20 candidates; **every one remaining** is classified as a blocker or feature gap:
 - Generic inference (Blocker #1): widenToAny1/2, declarationEmitBundleWithAmbientReferences, recursiveTypeRelations, lambdaArgCrash
 - Cross-file scope (Blocker #5): jsFileCompilationLetDeclarationOrder2, jsFileCompilationDuplicateVariableErrorReported
 - JSDoc (Blocker #2): jsExportMemberMergedWithModuleAugmentation, jsFunctionWithPrototypeNoErrorTruncationNoCrash
