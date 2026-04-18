@@ -99,61 +99,28 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**SESSION OVERRIDE — continue blocker #1, focus on cycle-detection
-infrastructure BEFORE step (b).**
+**Status (2026-04-18, 8220 passing):** Blocker #1 step (b) infrastructure
+is COMPLETE — interning (16.4de), cycle/depth heuristic + step (b)
+framework + TypeParam-vs-TypeParam comparison + `resolveGenericPropertyType`
+caching (16.4df). Net 0 gain currently because step (b)'s gains are gated
+on (c) return-type-from-body inference and (d) named→named cross-target
+comparison. **Do NOT re-attempt step (b) again** — read 16.4df session note
+in PLAN-PHASE-4.md first if tempted. Default workflow (steps 1-9 above)
+applies, with these candidates as the next concrete moves:
 
-Step (a) of blocker #1 landed as commit 16.4dc (+2, 8220 passing).
-Step (b) was attempted and reverted in the same session — pushing
-`resolveGenericPropertyType` into `propertiesRelatedTo` caused 6
-regressions in recursive-type tests because `instantiateType` creates
-FRESH `Type.Reference` instances per instantiation, defeating the
-id-based cycle detection in `relationComparisonStack`. See blocker #1
-notes in PLAN-PHASE-4.md and session note 16.4dd.
+- (c) **Return-type-from-body inference**: when an un-annotated method has
+  `return expr` statements, infer the return type from `expr` instead of
+  defaulting to `void`/`any`. Unblocks `genericCloneReturnTypes2_ts`-style
+  tests where `a.clone()` on `a: MyList<string>` should return `MyList<string>`.
+- (d) **Named→named cross-target Reference comparison**: walk the source's
+  base chain for the target's type, instantiate via target mapper, compare.
+  Unblocks tests like `Derived<X>` vs `Base<Y>` where structural comparison
+  with substituted properties needs both sides resolved through their
+  base hierarchies.
 
-This session's goal: unblock step (b) by fixing cycle detection. Skip
-steps 1-7 above. Instead:
-
-1. Read PLAN-PHASE-4.md "Known architectural blockers" → blocker #1 in
-   full, including the 16.4dd revert note. Also the CLAUDE.md gotchas:
-     - "Type system gotchas" — `Type.Reference` interning is NOT done,
-       `resolveGenericPropertyType` creates fresh Refs
-     - "Overload resolution gotchas" — generalized ref-arg comparison
-     - "Checker gotchas" — relation cache cycle-break invalidation
-2. Pick ONE of these infrastructure approaches (both land cheaply if
-   they work; each has its own risk):
-     (i) **Type.Reference interning**: cache `Type.Reference` by
-         `(target.id, arg-ids)` inside `instantiateType`. Identical
-         instantiations share an instance (and id), so the existing
-         `packRelationKey(source.id, target.id)` cycle stack catches
-         self-reference. Risk: Refs created outside `instantiateType`
-         (e.g. in `getTypeFromTypeReference`, heritage resolution) won't
-         be interned — the cycle may still slip through. Mitigate by
-         routing all Reference creation through an intern helper.
-     (ii) **Logical-key cycle detection**: change
-         `relationComparisonStack` from `MutableSet<Long>` to
-         `MutableSet<String>` and key on a type fingerprint that
-         collapses logically-identical Refs
-         (`R{target.id}[{args-fingerprint}]`). More invasive in the hot
-         path but doesn't depend on catching every Reference-creation
-         site.
-3. With cycle detection fixed, re-apply the step (b) change:
-   `getPropertyTypeForRelation(obj, prop)` that calls
-   `resolveGenericPropertyType(ref, prop)` for Ref sources/targets in
-   `propertiesRelatedTo`. Run the full suite. Expected gains per the
-   blocker notes: +5 to +15 tests; tolerable regression budget is ~0-3.
-4. If the recursive-type tests still regress, you picked the wrong
-   approach — try the OTHER one before giving up.
-5. **Stop conditions:**
-     - Both approaches tried, both regress >5 tests you can't triage.
-     - Context budget below ~30%.
-   Whenever you stop, leave the codebase compiling and green. Push
-   every committed step. Document under a new 16.4de/... note.
-6. Do NOT pivot to surgical hunting — the pool is still empty.
-7. (c) "widen to named→named with different targets" is unblocked by
-   the same infrastructure; attempt only if (b) lands cleanly and
-   context remains.
-
-Begin.
+Both leverage the now-installed cycle/depth infra (`relationSourceTargets`/
+`relationTargetTargets` stacks, `isDeeplyNested` 5+ heuristic, TypeParam
+apparent-type comparison, `resolvedPropertyTypes` cache).
 ```
 
 ---

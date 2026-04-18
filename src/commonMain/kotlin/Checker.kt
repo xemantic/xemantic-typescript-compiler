@@ -111,6 +111,20 @@ class Checker(
          *  id-based cycle detection in `relationComparisonStack` to catch logically
          *  identical recursive references like `interface List<T> { next: List<T> }`. */
         val referenceCache = HashMap<String, Type.Reference>()
+        /** Stack of `target.id` for each `Type.Reference` SOURCE active in the
+         *  comparison stack (parallel to `relationComparisonStack`). Used by
+         *  `isDeeplyNested` to bail out of infinitely-expanding generic comparisons
+         *  like `interface A<T> { x: A<()=>T> }` vs `B<T> { x: B<()=>T> }` and to
+         *  decide when step-(a) arg-shortcut should defer to structural with cycle
+         *  detection. */
+        val relationSourceTargets = ArrayList<Int>()
+        val relationTargetTargets = ArrayList<Int>()
+        /** Cache for `resolveGenericPropertyType(objType, propSym)` keyed on
+         *  packed `(objType.id, propSym.id)`. Combined with `Type.Reference` interning
+         *  (which makes logically-identical Refs share an id), this avoids the
+         *  Symbol/Signature/Type.Object reallocation that OOMs Promise/IPromise-style
+         *  deep generic-method comparisons. */
+        val resolvedPropertyTypes = HashMap<Long, Type>()
     }
 
     private val state = CheckerState()
@@ -29425,6 +29439,18 @@ interface DataView {
      */
     private fun resolveGenericPropertyType(objType: Type.Object, propSym: Symbol): Type? {
         val ref = objType as? Type.Reference ?: return null
+        // Cache result per (objType.id, propSym.id). With Type.Reference interning,
+        // logically-identical Refs share an id, so repeated calls during deep generic
+        // recursion hit the cache instead of re-allocating Symbols/Signatures/Type.Object
+        // (matters for Promise/IPromise overload-permutation comparisons).
+        val cacheKey = packRelationKey(ref.id, propSym.id)
+        state.resolvedPropertyTypes[cacheKey]?.let { return it }
+        val computed = resolveGenericPropertyTypeWorker(ref, propSym)
+        if (computed != null) state.resolvedPropertyTypes[cacheKey] = computed
+        return computed
+    }
+
+    private fun resolveGenericPropertyTypeWorker(ref: Type.Reference, propSym: Symbol): Type? {
         val target = ref.target as? Type.Interface ?: return null
         val typeParams = target.typeParameters ?: return null
         val typeArgs = ref.resolvedTypeArguments ?: return null
@@ -37041,7 +37067,24 @@ interface DataView {
             relationUsedCycleBreak = true
             return true
         }
+        // Deeply-nested heuristic (matches TypeScript's `isDeeplyNestedType`): when
+        // either side's `target.id` already appears 5+ times on its respective stack,
+        // assume compatibility. Catches infinitely-expanding generic comparisons like
+        // `A<T> { x: A<()=>T> }` vs `B<T> { x: B<()=>T> }` whose Refs grow unboundedly
+        // and never re-occur identically (so id-based cycle detection alone never fires).
+        val srcRef = source as? Type.Reference
+        val tgtRef = target as? Type.Reference
+        if (srcRef != null && countOccurrences(state.relationSourceTargets, srcRef.target.id) >= 5) {
+            relationUsedCycleBreak = true
+            return true
+        }
+        if (tgtRef != null && countOccurrences(state.relationTargetTargets, tgtRef.target.id) >= 5) {
+            relationUsedCycleBreak = true
+            return true
+        }
         state.relationComparisonStack.add(pairKey)
+        if (srcRef != null) state.relationSourceTargets.add(srcRef.target.id)
+        if (tgtRef != null) state.relationTargetTargets.add(tgtRef.target.id)
         relationDepth++
         val savedCycleBreak = relationUsedCycleBreak
         relationUsedCycleBreak = false
@@ -37049,6 +37092,8 @@ interface DataView {
         val usedCycle = relationUsedCycleBreak
         relationUsedCycleBreak = savedCycleBreak || usedCycle
         relationDepth--
+        if (tgtRef != null) state.relationTargetTargets.removeAt(state.relationTargetTargets.lastIndex)
+        if (srcRef != null) state.relationSourceTargets.removeAt(state.relationSourceTargets.lastIndex)
         state.relationComparisonStack.remove(pairKey)
         // Only cache "true" results that were NOT influenced by cycle assumptions.
         // A "true" result from cycle detection is speculative — it may be wrong
@@ -37064,6 +37109,12 @@ interface DataView {
 
     private fun packRelationKey(a: Int, b: Int): Long =
         (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
+
+    private fun countOccurrences(stack: List<Int>, id: Int): Int {
+        var n = 0
+        for (e in stack) if (e == id) n++
+        return n
+    }
 
     /**
      * 4c. Core structural comparison — handles unions, intersections, and objects.
@@ -37112,15 +37163,38 @@ interface DataView {
             val targetArgs = target.resolvedTypeArguments
             if (sourceArgs != null && targetArgs != null && sourceArgs.size == targetArgs.size &&
                 targetArgs.none { it.flags.hasAny(TypeFlags.Void) }) {
-                for (i in sourceArgs.indices) {
-                    if (!checkTypeRelatedTo(sourceArgs[i], targetArgs[i], relation)) return false
+                // Skip the arg-shortcut on re-entry: when this target already appears
+                // earlier on the comparison stacks, an eager false here would prevent
+                // structural recursion from reaching the cycle-break or deeply-nested
+                // bail-out (regresses recursiveTypeComparison, infinitelyExpandingTypes,
+                // etc. — Observable<{}> vs Observable<number> reached via propertiesRelatedTo
+                // must defer to structural so the inner needThisOne self-reference cycle-breaks).
+                // count > 1 because the current pair was already pushed by checkTypeRelatedTo.
+                val tid = source.target.id
+                val isReentry = countOccurrences(state.relationSourceTargets, tid) > 1 ||
+                    countOccurrences(state.relationTargetTargets, tid) > 1
+                if (!isReentry) {
+                    for (i in sourceArgs.indices) {
+                        if (!checkTypeRelatedTo(sourceArgs[i], targetArgs[i], relation)) return false
+                    }
+                    return true
                 }
-                return true
             }
         }
         // Object types: structural comparison
         if (source is Type.Object && target is Type.Object) {
             return objectTypeRelatedTo(source, target, relation)
+        }
+        // TypeParam vs TypeParam: relate via apparent types (constraint, or {} when
+        // unconstrained). Matters for generic-method signature comparison where source's
+        // K and target's K (separate fresh params from `resolveGenericPropertyType`) would
+        // otherwise compare as opaque-and-distinct → spurious TS2322 in tests like
+        // `infinitelyExpandingTypes4` (Promise<Q.then<U_src>> vs Promise<Q.then<U_tgt>>).
+        if (source is Type.TypeParam && target is Type.TypeParam) {
+            val srcConstraint = source.constraint
+            val tgtConstraint = target.constraint
+            if (srcConstraint == null || tgtConstraint == null) return true
+            return checkTypeRelatedTo(srcConstraint, tgtConstraint, relation)
         }
         return false
     }
@@ -37185,7 +37259,7 @@ interface DataView {
                 // Check index signature
                 val indexInfo = source.stringIndexInfo
                 if (indexInfo != null) {
-                    val targetPropType = getTypeOfSymbol(targetProp)
+                    val targetPropType = getPropertyTypeForRelation(target, targetProp)
                     if (!checkTypeRelatedTo(indexInfo.type, targetPropType, relation)) return false
                     continue
                 }
@@ -37197,11 +37271,41 @@ interface DataView {
                 continue
             }
             // Compare property types
-            val sourcePropType = getTypeOfSymbol(sourceProp)
-            val targetPropType = getTypeOfSymbol(targetProp)
+            val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
+            val targetPropType = getPropertyTypeForRelation(target, targetProp)
             if (!checkTypeRelatedTo(sourcePropType, targetPropType, relation)) return false
         }
         return true
+    }
+
+    /**
+     * 16.4df step (b): For Type.Reference sources/targets, substitute the property's
+     * declared type via the reference's type-arg mapper (`resolveGenericPropertyType`)
+     * before comparison. This prevents trivial-pass on raw `T` for cases that step (a)
+     * cannot catch — e.g. `Derived<string>` vs `Base<number>` where source/target have
+     * DIFFERENT target interfaces. Self-referential generics (`List<T> { next: List<T> }`)
+     * are now safe because Type.Reference interning makes logically-identical Refs share
+     * an id, so `relationComparisonStack` catches the cycle.
+     *
+     * Method handling relies on `resolvedPropertyTypes` caching to avoid OOM in
+     * Promise/IPromise-style deep overload-permutation comparisons (each level would
+     * otherwise allocate fresh Symbols/Signatures/Type.Object instances).
+     *
+     * Falls back to raw `getTypeOfSymbol` when the helper returns null (non-passthrough
+     * inherited property or non-Reference object type).
+     */
+    private fun getPropertyTypeForRelation(obj: Type.Object, prop: Symbol): Type {
+        if (obj is Type.Reference && relationDepth < 4) {
+            // Skip when we're already deep in a comparison: deep generic-method
+            // recursion (Promise/IPromise overload permutations, bluebird-style)
+            // allocates a fresh Symbol/Signature/Type.Object per call, OOMing
+            // before the deeply-nested heuristic can bail. Outer layers still
+            // benefit from substituted property types; inner layers fall back
+            // to raw `getTypeOfSymbol` (errorType for unbound T) which the
+            // existing trivial-pass path handles.
+            resolveGenericPropertyType(obj, prop)?.let { return it }
+        }
+        return getTypeOfSymbol(prop)
     }
 
     /**
