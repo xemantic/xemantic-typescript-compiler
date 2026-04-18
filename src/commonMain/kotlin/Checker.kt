@@ -233,6 +233,11 @@ class Checker(
      *  to produce "Index signature for type 'string|number' is missing in type 'X'." */
     private var lastMissingIndexSigKind: String? = null
 
+    /** Tracks private-brand mismatch: source and target both declare a private property
+     *  of the given name, but on different parent classes. Consumed by the TS2322/TS2345
+     *  elaboration path to produce "Types have separate declarations of a private property 'X'." */
+    private var lastPrivateBrandMismatchName: String? = null
+
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
     private fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
@@ -36925,10 +36930,16 @@ interface DataView {
             // intersection types which need deeper structural comparison or generics.
             // 16.4: Also check when arg is a primitive type and param is a named class/interface
             // (primitives are never structurally assignable to class instances with members).
+            // 16.4dk: Additionally check when both sides are named class interfaces AND the
+            // structural comparison would fail on a private-brand mismatch — that's a nominal
+            // brand check with no FP risk (same-class private props pass trivially).
             if (!isSimpleCheckableType(paramType)) {
                 val argIsPrimitive = isSimpleCheckableType(argType)
                 val paramIsNamedType = paramType is Type.Interface && paramType.symbol != null
-                if (!(argIsPrimitive && paramIsNamedType)) continue
+                val argIsNamedType = argType is Type.Interface && argType.symbol != null
+                val hasPrivateBrand = argIsNamedType && paramIsNamedType &&
+                    hasPrivateBrandMismatchBetween(argType as Type.Object, paramType as Type.Object)
+                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand) continue
             }
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
@@ -36974,6 +36985,13 @@ interface DataView {
                     if (lastFailing != null) {
                         val constStr = typeToString(lastFailing)
                         chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
+                    }
+                }
+                // Private-brand elaboration: "Types have separate declarations of a private property 'X'."
+                if (argType is Type.Object && paramType is Type.Object) {
+                    val mismatchName = findPrivateBrandMismatchName(argType, paramType)
+                    if (mismatchName != null) {
+                        chain.add("  Types have separate declarations of a private property '$mismatchName'.")
                     }
                 }
                 diagnostics.add(Diagnostic(
@@ -37371,12 +37389,86 @@ interface DataView {
                 }
                 continue
             }
+            // Private-brand mismatch: if both source and target declare this property as
+            // `private` but on different parent classes, TypeScript treats them as unrelated
+            // nominal shapes even though the declared types are structurally equal.
+            // Matches `typeIdentityConsidersBrands_ts` etc.
+            if (isPropPrivateBrandMismatch(sourceProp, targetProp)) {
+                lastPrivateBrandMismatchName = targetName
+                return false
+            }
             // Compare property types
             val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
             val targetPropType = getPropertyTypeForRelation(target, targetProp)
             if (!checkTypeRelatedTo(sourcePropType, targetPropType, relation)) return false
         }
         return true
+    }
+
+    /**
+     * Scan source and target's own members for any shared property name where both sides
+     * declare it as `private` on different parent classes. Used to opt the conservative
+     * TS2345 guard into running a full assignability check for named→named class args.
+     */
+    private fun hasPrivateBrandMismatchBetween(source: Type.Object, target: Type.Object): Boolean {
+        return findPrivateBrandMismatchName(source, target) != null
+    }
+
+    /**
+     * Return the first property name where both source and target declare a private property
+     * on different parent classes, or null when no such nominal mismatch exists.
+     */
+    private fun findPrivateBrandMismatchName(source: Type.Object, target: Type.Object): String? {
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        val sMembers = source.members ?: return null
+        val tMembers = target.members ?: return null
+        for ((name, tProp) in tMembers) {
+            val sProp = sMembers[name] ?: continue
+            if (isPropPrivateBrandMismatch(sProp, tProp)) return name
+        }
+        return null
+    }
+
+    /**
+     * Detect TypeScript's "separate declarations of a private property" nominal brand check.
+     * Two properties are brand-incompatible when both are declared `private` AND their
+     * declaring parent classes differ by identity. Properties that share a single declaration
+     * (e.g. inherited from the same base class) remain compatible.
+     */
+    private fun isPropPrivateBrandMismatch(sourceProp: Symbol, targetProp: Symbol): Boolean {
+        val sDecl = sourceProp.valueDeclaration ?: sourceProp.declarations.firstOrNull() ?: return false
+        val tDecl = targetProp.valueDeclaration ?: targetProp.declarations.firstOrNull() ?: return false
+        if (sDecl === tDecl) return false
+        if (!isMemberPrivate(sDecl) || !isMemberPrivate(tDecl)) return false
+        val sParent = findParentClassOrInterface(sDecl)
+        val tParent = findParentClassOrInterface(tDecl)
+        return sParent != null && tParent != null && sParent !== tParent
+    }
+
+    private fun findParentClassOrInterface(node: Node): Node? {
+        // The parent isn't stored on the AST; look up via the property symbol's parent's
+        // declarations to find the enclosing class.
+        val propName = when (node) {
+            is PropertyDeclaration -> (node.name as? Identifier)?.text
+            is MethodDeclaration -> (node.name as? Identifier)?.text
+            is GetAccessor -> (node.name as? Identifier)?.text
+            is SetAccessor -> (node.name as? Identifier)?.text
+            else -> null
+        } ?: return null
+        // Walk all class declarations looking for one whose members contain `node` by identity.
+        for (sym in globals.values) {
+            if (!sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) continue
+            for (decl in sym.declarations) {
+                val members = when (decl) {
+                    is ClassDeclaration -> decl.members
+                    is InterfaceDeclaration -> decl.members
+                    else -> continue
+                }
+                if (members.any { it === node }) return decl
+            }
+        }
+        return null
     }
 
     /**
@@ -38019,6 +38111,15 @@ interface DataView {
             resolveStructuredTypeMembers(target)
             val targetProps = target.properties ?: return null
             val sourceMembers = source.members ?: return null
+
+            // Private-brand mismatch: emit the nominal-brand elaboration for the first
+            // property that's declared private on both sides in different classes.
+            for (targetProp in targetProps) {
+                val sourceProp = sourceMembers[targetProp.name] ?: continue
+                if (isPropPrivateBrandMismatch(sourceProp, targetProp)) {
+                    return listOf("  Types have separate declarations of a private property '${targetProp.name}'.")
+                }
+            }
 
             // Collect all incompatible properties
             data class IncompatibleProp(val name: String, val sourceType: Type, val targetType: Type)
