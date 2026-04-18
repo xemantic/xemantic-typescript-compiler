@@ -33346,6 +33346,27 @@ interface DataView {
             "$rawClassName<${classTypeParams.joinToString(", ") { it.name.text }}>"
         } else rawClassName
 
+        // Push class type params into scope so member declarations like `target: T` resolve
+        // T to the class's canonical Type.TypeParam instead of errorType. Without this,
+        // `class MyEvent<T> extends BaseEvent { target: T; }` would have `derivedType = errorType`
+        // which trivially passes the TS2416 check.
+        val savedScope = currentTypeParamScope
+        if (classTypeParams != null && classTypeParams.isNotEmpty()) {
+            val classSymbol = globals[rawClassName]
+            val classType = classSymbol?.let {
+                try { getDeclaredTypeOfSymbol(it) as? Type.Interface } catch (_: StackOverflowError) { null }
+            }
+            val canonicalTypeParams = classType?.typeParameters
+            if (canonicalTypeParams != null && canonicalTypeParams.size == classTypeParams.size) {
+                val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                canonicalTypeParams.forEachIndexed { i, tp ->
+                    scope[classTypeParams[i].name.text] = tp
+                }
+                currentTypeParamScope = scope
+            }
+        }
+        try {
+
         for (clause in heritageClauses) {
             for (typeExpr in clause.types) {
                 val baseName = when (val tn = typeExpr.expression) {
@@ -33458,6 +33479,29 @@ interface DataView {
                         // Add signature elaboration for function types
                         addSignatureElaboration(derivedType, basePropType, chain)
 
+                        // TS2208 related info: when derived is an unconstrained TypeParam declared
+                        // on this class, hint that adding `extends {}` might resolve the mismatch.
+                        val relatedInfo = mutableListOf<Diagnostic>()
+                        if (derivedType is Type.TypeParam && derivedType.constraint == null &&
+                            classTypeParams != null) {
+                            val tpName = derivedType.symbol?.name
+                            val tpDecl = classTypeParams.firstOrNull { it.name.text == tpName }
+                            if (tpDecl != null) {
+                                val tpPos = tpDecl.name.pos
+                                val (tpLine, tpChar) = getLineAndCharacterOfPosition(source, tpPos)
+                                relatedInfo.add(Diagnostic(
+                                    message = "This type parameter might need an `extends {}` constraint.",
+                                    category = DiagnosticCategory.Message,
+                                    code = 2208,
+                                    fileName = fileName,
+                                    line = tpLine,
+                                    character = tpChar,
+                                    start = tpPos,
+                                    length = tpDecl.name.text.length,
+                                ))
+                            }
+                        }
+
                         diagnostics.add(Diagnostic(
                             message = message,
                             category = DiagnosticCategory.Error,
@@ -33468,6 +33512,7 @@ interface DataView {
                             start = nameNode.pos,
                             length = memberName.length,
                             messageChain = chain,
+                            relatedInformation = relatedInfo,
                         ))
                     }
                 }
@@ -33477,6 +33522,9 @@ interface DataView {
                     checkClassStaticSideExtends(classDecl, rawClassName, baseName, baseSymbol, source, fileName)
                 }
             }
+        }
+        } finally {
+            currentTypeParamScope = savedScope
         }
     }
 
