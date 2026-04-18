@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-18 (16.4dg, +1 test: 8220→8221) — BLOCKER #1 step (c) narrow entry:** Return-type-from-body inference for the simplest pattern only: a method whose body is a single `return new X<...>(...)` statement with resolvable class/interface callee and pass-through type args. Wired into `resolveGenericPropertyTypeWorker`'s MethodDeclaration branch so the inferred raw type (e.g. `MyList<T>`) flows through the existing class mapper and substitutes correctly at the call site (`MyList<T>` → `MyList<string>` when called on `a: MyList<string>`).
+
+  - New helper `inferSimpleReturnTypeFromBody(md)`: returns null unless body is exactly `[ReturnStatement(NewExpression(Identifier, typeArgs, args))]`. Resolves the callee via `getTypeOfIdentifier` (must yield a `Type.Interface`) and interns a `Type.Reference` with the resolved type-arg list. Pure function; wraps `StackOverflowError` into null.
+  - Call site: only in `resolveGenericPropertyTypeWorker`'s MethodDeclaration branch at `rawReturn = md.type?.let {…} ?: inferSimpleReturnTypeFromBody(md) ?: anyType`. Not wired into the non-generic `getTypeOfSymbol` path (no scope set up there) — and no tests in the current failure pool need it there.
+  - → +1 test: `genericCloneReturnTypes2_ts`. Zero regressions. Narrow scope = narrow reward; broader patterns (multi-statement bodies, identifier/property-access returns, conditional returns) are intentionally left out because each carries its own regression risk and would need a separate investigation.
+
   **Session 2026-04-18 (16.4df, +0 tests: 8220→8220) — BLOCKER #1 cycle/depth infra + step (b) framework:** Re-attempted step (b) on top of the 16.4de Type.Reference interning. End state is net-neutral but lays the cycle/depth infrastructure for future generic-comparison work, and the 4 recursive-type tests that regressed in 16.4dd (recursiveTypeComparison, infinitelyExpandingBaseTypes2, nestedInfinitelyExpandedRecursiveTypes, recursiveIdenticalAssignment) now stay green via real cycle break instead of incidental errorType-trivial-pass.
 
   Pieces added (all in `Checker.kt`):
@@ -3077,7 +3083,7 @@ These blockers recur across multiple "close-to-passing" tests and cannot be fixe
 
 #### 1. Structural comparison of generic type references — MEDIUM yield (was HIGH), MEDIUM risk
 
-**Status (2026-04-18, 8220 passing):** Steps (a), (b), and supporting cycle/depth infra all landed (commits 16.4dc, 16.4de, 16.4df). Step (b) is currently NET-NEUTRAL — the framework is correct and the recursive-type tests now pass via real cycle/deeply-nested heuristics instead of incidental errorType-trivial-pass, but step (b)'s gains are gated on (c) and (d) below. **Do not re-attempt step (b) infrastructure** — it is complete and bounded by `relationDepth < 4` (above which fresh Symbol/Signature allocation in `resolveGenericPropertyType`'s MethodDeclaration branch OOMs Promise/IPromise overload-permutation comparisons before the deeply-nested heuristic can bail).
+**Status (2026-04-18, 8221 passing):** Steps (a), (b), supporting cycle/depth infra, and a narrow entry to (c) all landed (commits 16.4dc, 16.4de, 16.4df, 16.4dg). Step (b) is currently NET-NEUTRAL — the framework is correct and the recursive-type tests now pass via real cycle/deeply-nested heuristics instead of incidental errorType-trivial-pass, but step (b)'s gains remain gated on (d) below plus broader (c) patterns. **Do not re-attempt step (b) infrastructure** — it is complete and bounded by `relationDepth < 4` (above which fresh Symbol/Signature allocation in `resolveGenericPropertyType`'s MethodDeclaration branch OOMs Promise/IPromise overload-permutation comparisons before the deeply-nested heuristic can bail). Step (c) is partial: only single-stmt `return new X<…>(…)` bodies are inferred (see 16.4dg); multi-statement bodies, identifier returns, etc. are still `anyType`.
 
 `objectTypeRelatedTo` still passes trivially for cases that step (a) can't catch:
 - Ref vs Ref with DIFFERENT targets (e.g. `Derived<string>` vs `Base<number>` where D extends B)
