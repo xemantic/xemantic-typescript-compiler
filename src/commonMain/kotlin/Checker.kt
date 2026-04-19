@@ -37212,6 +37212,78 @@ interface DataView {
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
             }
+            // 16.4ds: Per-property TS2322 when paramType is a TypeParam whose CONSTRAINT
+            // is an Object with named properties. `fn<T extends {x:string}>(n: T)` called
+            // with `fn({ x: null })` should emit TS2322 at `x` for null-vs-string. Only
+            // the per-property loop extends to this case — excess/missing-required are
+            // skipped because generic-param constraints have different semantics for those.
+            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.TypeParam) {
+                val constraint = paramType.constraint
+                if (constraint is Type.Object) {
+                    try {
+                        resolveStructuredTypeMembers(constraint)
+                        val hasConstraintProps = !constraint.properties.isNullOrEmpty()
+                        if (hasConstraintProps && argType is Type.Object) {
+                            val displayTargetObj = typeToString(constraint)
+                            for (propNode in arg.properties) {
+                                val (propName, keyPos, keyLen) = when (propNode) {
+                                    is PropertyAssignment -> {
+                                        val n = propNode.name
+                                        when (n) {
+                                            is Identifier -> Triple(n.text, n.pos, n.text.length)
+                                            else -> continue
+                                        }
+                                    }
+                                    else -> continue
+                                }
+                                val targetProp = constraint.members?.get(propName) ?: continue
+                                val targetPropType = getTypeOfSymbol(targetProp)
+                                if (targetPropType === anyType || targetPropType === errorType) continue
+                                if (!isSimpleCheckableType(targetPropType)) continue
+                                val sourcePropSym = argType.members?.get(propName) ?: continue
+                                val sourcePropType = getTypeOfSymbol(sourcePropSym)
+                                if (sourcePropType === anyType || sourcePropType === errorType) continue
+                                if (!isSimpleCheckableType(sourcePropType)) continue
+                                if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+                                val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+                                val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+                                val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+                                val related = mutableListOf<Diagnostic>()
+                                val tpDecl = targetProp.declarations.firstOrNull()
+                                if (tpDecl != null) {
+                                    val declPos = when (tpDecl) {
+                                        is PropertyDeclaration -> tpDecl.name.pos
+                                        is PropertyAssignment -> tpDecl.name.pos
+                                        else -> tpDecl.pos
+                                    }
+                                    val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                                    related.add(Diagnostic(
+                                        message = "The expected type comes from property '$propName' which is declared here on type '$displayTargetObj'",
+                                        category = DiagnosticCategory.Message,
+                                        code = 6500,
+                                        fileName = fileName,
+                                        line = dline,
+                                        character = dchar,
+                                        start = declPos,
+                                        length = propName.length,
+                                    ))
+                                }
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = kline,
+                                    character = kchar,
+                                    start = keyPos,
+                                    length = keyLen,
+                                    relatedInformation = related,
+                                ))
+                            }
+                        }
+                    } catch (_: StackOverflowError) { /* circular type */ }
+                }
+            }
             // 16.4i: Generic parameter with a simple constraint — when the argument
             // doesn't satisfy the constraint, report TS2345 using the constraint as
             // the effective parameter type (the type parameter would be inferred as
