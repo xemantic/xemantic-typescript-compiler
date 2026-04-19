@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-19 (16.4do, +2 tests: 8226→8228) — TS2354 under AMD/System resolution, excluding `node_modules/tslib`:** The classic module-resolution branch in `checkImportHelpersWithoutTslib` previously accepted `node_modules/tslib/index.d.ts` as "tslib found". TypeScript's classic resolution does NOT search `node_modules` — it only looks in the root/baseUrl. For tests that supply tslib only via `node_modules/tslib/index.d.ts` (valid for node resolution, but NOT for AMD/System/UMD under classic), we should still emit TS2354.
+
+  - In `checkImportHelpersWithoutTslib`, the `isClassicResolution` branch now rejects tslib-matching files whose path contains `node_modules`/`node-modules`. Kept the modern-resolution branch unchanged (it already required node_modules).
+  - → +2 tests: `importHelpersWithLocalCollisions_ts__module_amd__` + `importHelpersWithLocalCollisions_ts__module_system__` (both `has expected errors matching baseline`). The matching JS-baseline test under `module=es2015` remains unrelated-failing (separate helper-collision emit bug — not addressed).
+  - Zero regressions on the two runs cross-checked. Count variance (1848 vs 1847 between runs) tracked back to flappy unrelated `binderBinaryExpressionStress_ts` JS baseline; its status isn't caused by this change.
+
   **Session 2026-04-19 (16.4dn, +2 tests: 8224→8226) — per-property TS2322 + missing-required TS2345 at call-site object literal args:** Object-literal arguments passed to functions whose parameters are object types now emit two additional diagnostics that TypeScript produces. Was the follow-up to 16.4dm which laid the elaboration-chain groundwork. Note baseline: clean-suite recount showed 8224, not 8227 — prior session notes had slight count drift from JIT/ordering.
 
   - **Per-property TS2322**: for each `PropertyAssignment` in the source literal whose name matches a target property where both types are simple-checkable (primitives / literals / all-primitive unions), check `source → target` assignability. On mismatch, emit `Type 'X' is not assignable to type 'Y'.` at the PROPERTY KEY position (squiggle on `name`, not on the value expression) — matching TypeScript's column. Adds TS6500 related info "The expected type comes from property '{0}' which is declared here on type '{1}'" pointing to the target property's declaration (line/col of the target prop name).
