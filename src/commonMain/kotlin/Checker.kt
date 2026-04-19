@@ -166,6 +166,10 @@ class Checker(
     /** Tracks whether we're inside a static class method/accessor for TS2339 `this` checking. */
     private var inStaticClassMethod = false
 
+    /** True while walking a non-arrow function body. Used by 16.4dp to fire TS2322
+     *  on `arguments = <primitive>` assignments (implicit `arguments` has type IArguments). */
+    private var inNonArrowFunctionBody = false
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -28630,6 +28634,11 @@ interface DataView {
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
             currentLocalTypes = currentLocalTypes.toMutableMap()
+            // 16.4dp: Non-arrow function body — `arguments` binds to the implicit
+            // IArguments parameter here. `checkAssignmentExpression` consults this
+            // flag to emit TS2322 for `arguments = <primitive>`.
+            val savedInFunc = inNonArrowFunctionBody
+            inNonArrowFunctionBody = true
             for (param in parameters) {
                 val paramType = param.type
                 val paramName = param.name
@@ -28652,7 +28661,11 @@ interface DataView {
             }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
-            checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
+            try {
+                checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
+            } finally {
+                inNonArrowFunctionBody = savedInFunc
+            }
             // Restore outer local types
             currentLocalTypes = savedLocalTypes
         }
@@ -29247,6 +29260,35 @@ interface DataView {
             // Each assignment in the chain gets checked independently
             if (expr.right is BinaryExpression) {
                 checkAssignmentExpression(expr.right, source, fileName, varTypes, typeParams)
+            }
+            // 16.4dp: `arguments = <primitive>` inside a non-arrow function body fires
+            // TS2322 because `arguments` is the implicit `IArguments` parameter. Only
+            // emit when the RHS is clearly a primitive (number/string/boolean literal
+            // or their widened forms) — conservative to avoid FPs when IArguments
+            // could legitimately be assigned (e.g., from another function's arguments).
+            if (inNonArrowFunctionBody && expr.left is Identifier &&
+                (expr.left as Identifier).text == "arguments"
+            ) {
+                try {
+                    val rhsType = getTypeOfExpression(expr.right)
+                    if (rhsType !== anyType && rhsType !== errorType && isSimpleCheckableType(rhsType)) {
+                        val argsName = (expr.left as Identifier).text
+                        val pos = (expr.left as Identifier).pos
+                        val len = argsName.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(getWidenedLiteralType(rhsType))}' is not assignable to type 'IArguments'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = pos,
+                            length = len,
+                        ))
+                        return // one error per assignment
+                    }
+                } catch (_: StackOverflowError) { /* circular */ }
             }
             val target = expr.left
             if (target is Identifier) {
