@@ -2998,7 +2998,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `thisInFunctionCallJs_ts`: TS2683 FP inside `.js` file; needs JSDoc `@this {T}` parsing.
 
 **Blocker #5 — cross-file global conflation / module-visibility:**
-- `classMemberInitializerWithLamdaScoping4_ts`: we emit TS2301 instead of TS2663 ("Did you mean `this.field1`?").
+- `classMemberInitializerWithLamdaScoping4_ts`: we emit TS2301 instead of TS2663 ("Did you mean `this.field1`?"). **Attempted 2026-04-19**: naïve "TS2663 whenever inside a lambda AND name is a param-property" flip GAINS scoping4 (+1) but REGRESSES `classMemberInitializerWithLamdaScoping`, `scoping2`, `scoping3` (all expect TS2301 because their `var field1` IS in scope either via script-file-leak or same-file-module-leak). Net -2. True fix requires distinguishing "name is in file's enclosing scope" from "name is not" — same as blocker #5 root cause (cross-file global conflation).
 - `moduleAugmentationsImports4_ts`: TS2339 FP on nested `module "a"` augmentation inside `declare module "D"`.
 - `moduleVisibilityTest2_ts`: non-exported `var x` in first namespace block leaks into second namespace block; expected TS2304.
 - `errorsOnImportedSymbol_ts`: `import Sammy = require("./mod")` where `mod` has `export = Sammy` (type-only interface) — need to flag `Sammy` as type-only across files.
