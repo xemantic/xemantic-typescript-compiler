@@ -14298,6 +14298,35 @@ class Checker(
                     else -> {}
                 }
             }
+            is BinaryExpression -> {
+                // 16.4dp: TS1100 for `arguments = X` / `eval = X` / compound-assign
+                // inside strict-mode code. Matches TypeScript's grammar-level
+                // AssignmentTargetType restriction — `arguments` and `eval` cannot
+                // be used as the target of an assignment in strict mode.
+                val op = expr.operator
+                val isAssign = op == SyntaxKind.Equals ||
+                    op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals ||
+                    op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals ||
+                    op == SyntaxKind.PercentEquals || op == SyntaxKind.LessThanLessThanEquals ||
+                    op == SyntaxKind.GreaterThanGreaterThanEquals || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals ||
+                    op == SyntaxKind.AmpersandEquals || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals ||
+                    op == SyntaxKind.AsteriskAsteriskEquals ||
+                    op == SyntaxKind.AmpersandAmpersandEquals || op == SyntaxKind.BarBarEquals || op == SyntaxKind.QuestionQuestionEquals
+                if (isAssign && expr.left is Identifier) {
+                    checkStrictModeName(expr.left as Identifier, source, fileName, restricted)
+                }
+                checkStrictModeInExpr(expr.left, source, fileName, restricted)
+                checkStrictModeInExpr(expr.right, source, fileName, restricted)
+            }
+            is ParenthesizedExpression -> checkStrictModeInExpr(expr.expression, source, fileName, restricted)
+            is CallExpression -> {
+                checkStrictModeInExpr(expr.expression, source, fileName, restricted)
+                expr.arguments.forEach { checkStrictModeInExpr(it, source, fileName, restricted) }
+            }
+            is NewExpression -> {
+                checkStrictModeInExpr(expr.expression, source, fileName, restricted)
+                expr.arguments?.forEach { checkStrictModeInExpr(it, source, fileName, restricted) }
+            }
             else -> {}
         }
     }
