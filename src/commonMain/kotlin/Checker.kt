@@ -28538,10 +28538,12 @@ interface DataView {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
+                        decl.initializer?.let { walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams) }
                     }
                 }
                 is ExpressionStatement -> {
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
+                    walkFunctionBodiesInExpr(stmt.expression, source, fileName, varTypes, typeParams)
                 }
                 is ReturnStatement -> {
                     if (returnType != null || returnTypeNode != null) {
@@ -28707,6 +28709,59 @@ interface DataView {
             }
             // Restore outer local types
             currentLocalTypes = savedLocalTypes
+        }
+    }
+
+    /**
+     * 16.4dv: Recursively walk an expression and invoke `checkFunctionBody` on any
+     * FunctionExpression / ArrowFunction (with Block body) found. This lets TS2322
+     * (and the other assignment-style checks) fire inside function bodies that
+     * appear as array/object literal members, call arguments, etc. — contexts that
+     * the statement-scoped walker doesn't otherwise descend into.
+     *
+     * Walked containers: ArrayLiteral, ObjectLiteral property initializers,
+     * ParenthesizedExpression, BinaryExpression, CallExpression args,
+     * NewExpression args, ConditionalExpression, SpreadElement.
+     */
+    private fun walkFunctionBodiesInExpr(
+        expr: Expression, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, typeParams: Set<String>
+    ) {
+        when (expr) {
+            is FunctionExpression -> {
+                checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams)
+            }
+            is ArrowFunction -> {
+                (expr.body as? Block)?.let { body ->
+                    checkFunctionBody(body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams)
+                }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach {
+                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            }
+            is ObjectLiteralExpression -> expr.properties.forEach { prop ->
+                when (prop) {
+                    is PropertyAssignment -> walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams)
+                    else -> {}
+                }
+            }
+            is ParenthesizedExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is BinaryExpression -> {
+                walkFunctionBodiesInExpr(expr.left, source, fileName, varTypes, typeParams)
+                walkFunctionBodiesInExpr(expr.right, source, fileName, varTypes, typeParams)
+            }
+            is CallExpression -> expr.arguments.forEach {
+                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            }
+            is NewExpression -> expr.arguments?.forEach {
+                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            }
+            is ConditionalExpression -> {
+                walkFunctionBodiesInExpr(expr.whenTrue, source, fileName, varTypes, typeParams)
+                walkFunctionBodiesInExpr(expr.whenFalse, source, fileName, varTypes, typeParams)
+            }
+            is SpreadElement -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            else -> {}
         }
     }
 
