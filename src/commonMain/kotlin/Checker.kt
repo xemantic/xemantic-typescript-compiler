@@ -36925,6 +36925,131 @@ interface DataView {
                         if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName)) {
                             break // TS2353 emitted — one error per call
                         }
+                        // 16.4dn: Missing-required-property check for object literal arguments.
+                        // If source is missing one or more required target props, emit TS2345
+                        // at arg span with "Property 'X' is missing in type 'Y' but required in
+                        // type 'Z'." chain. Matches TypeScript's `foo({ name: "hello" })` vs
+                        // param `{ id: number; name?: string }` → TS2345 + missing-prop chain
+                        // + TS2728 related info pointing to first missing property declaration.
+                        if (argType is Type.Object) {
+                            val missing = mutableListOf<Symbol>()
+                            for (targetProp in paramType.properties!!) {
+                                if (isOptionalProperty(targetProp)) continue
+                                if (argType.members?.get(targetProp.name) == null) {
+                                    missing.add(targetProp)
+                                }
+                            }
+                            if (missing.isNotEmpty()) {
+                                val argDisplay = typeToString(argType)
+                                val argStart = arg.pos
+                                val argLen = expressionTrueEnd(arg) - argStart
+                                if (argLen > 0) {
+                                    val (aline, achar) = getLineAndCharacterOfPosition(source, argStart)
+                                    val chain = mutableListOf<String>()
+                                    val missingNames = missing.map { it.name }
+                                    if (missing.size == 1) {
+                                        chain.add("  Property '${missingNames[0]}' is missing in type '$argDisplay' but required in type '$displayTarget'.")
+                                    } else {
+                                        chain.add("  " + formatTs2740Message(argDisplay, displayTarget, missingNames))
+                                    }
+                                    val related = mutableListOf<Diagnostic>()
+                                    val firstDecl = missing[0].declarations.firstOrNull()
+                                    if (firstDecl != null) {
+                                        val declPos = when (firstDecl) {
+                                            is PropertyDeclaration -> firstDecl.name.pos
+                                            else -> firstDecl.pos
+                                        }
+                                        val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                                        related.add(Diagnostic(
+                                            message = "'${missing[0].name}' is declared here.",
+                                            category = DiagnosticCategory.Message,
+                                            code = 2728,
+                                            fileName = fileName,
+                                            line = dline,
+                                            character = dchar,
+                                            start = declPos,
+                                            length = missing[0].name.length,
+                                        ))
+                                    }
+                                    diagnostics.add(Diagnostic(
+                                        message = "Argument of type '$argDisplay' is not assignable to parameter of type '$displayTarget'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2345,
+                                        fileName = fileName,
+                                        line = aline,
+                                        character = achar,
+                                        start = argStart,
+                                        length = argLen,
+                                        messageChain = chain,
+                                        relatedInformation = related,
+                                    ))
+                                    break
+                                }
+                            }
+                        }
+                        // 16.4dn: Per-property value-type mismatch → TS2322 at property key,
+                        // plus TS6500 related info pointing to target prop declaration.
+                        // Conservative: only emit when BOTH source value type AND target prop
+                        // type are simple-checkable (primitives / literals / all-primitive unions).
+                        // Object↔object property mismatches are handled elsewhere via
+                        // `getPropertyElaborationChain` during arg-level TS2345 emission.
+                        if (argType is Type.Object) {
+                            for (propNode in arg.properties) {
+                                val (propName, keyPos, keyLen) = when (propNode) {
+                                    is PropertyAssignment -> {
+                                        val n = propNode.name
+                                        when (n) {
+                                            is Identifier -> Triple(n.text, n.pos, n.text.length)
+                                            else -> continue
+                                        }
+                                    }
+                                    else -> continue
+                                }
+                                val targetProp = paramType.members?.get(propName) ?: continue
+                                val targetPropType = getTypeOfSymbol(targetProp)
+                                if (targetPropType === anyType || targetPropType === errorType) continue
+                                if (!isSimpleCheckableType(targetPropType)) continue
+                                val sourcePropSym = argType.members?.get(propName) ?: continue
+                                val sourcePropType = getTypeOfSymbol(sourcePropSym)
+                                if (sourcePropType === anyType || sourcePropType === errorType) continue
+                                if (!isSimpleCheckableType(sourcePropType)) continue
+                                if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+                                val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+                                val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+                                val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+                                val related = mutableListOf<Diagnostic>()
+                                val tpDecl = targetProp.declarations.firstOrNull()
+                                if (tpDecl != null) {
+                                    val declPos = when (tpDecl) {
+                                        is PropertyDeclaration -> tpDecl.name.pos
+                                        is PropertyAssignment -> tpDecl.name.pos
+                                        else -> tpDecl.pos
+                                    }
+                                    val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                                    related.add(Diagnostic(
+                                        message = "The expected type comes from property '$propName' which is declared here on type '$displayTarget'",
+                                        category = DiagnosticCategory.Message,
+                                        code = 6500,
+                                        fileName = fileName,
+                                        line = dline,
+                                        character = dchar,
+                                        start = declPos,
+                                        length = propName.length,
+                                    ))
+                                }
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = kline,
+                                    character = kchar,
+                                    start = keyPos,
+                                    length = keyLen,
+                                    relatedInformation = related,
+                                ))
+                            }
+                        }
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
             }
