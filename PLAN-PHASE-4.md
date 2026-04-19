@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-19 (16.4ds, +1 test: 8234→8235) — Per-property TS2322 when paramType is a TypeParam with Object constraint:** Extends 16.4dn's per-property check to cover `fn<T extends {x:string}>(n: T)` called with `fn({ x: null })` — the paramType `T` is a TypeParam, not a plain Type.Object, so the 16.4dn branch didn't fire. Now when paramType is Type.TypeParam with an Object constraint that has properties, run the per-property loop using the constraint's members. Excess and missing-required checks are NOT extended — generic-param constraints have different semantics that would need separate handling.
+
+  - New gated block in `checkArgumentsAgainstSignature` after the existing paramType-is-Object branch: `paramType is Type.TypeParam && paramType.constraint is Type.Object`. Same primitive-only TS2322 emission + TS6500 related info as 16.4dn.
+  - → +1: `typeArgInferenceWithNull_ts`. Zero regressions (1841 → 1840 failed).
+
   **Session 2026-04-19 (16.4dr, +4 tests: 8230→8234) — TS2322 on `X.prototype.method = function(){return undefined;}` augmented interface mismatch:** The classic JS extension pattern `A.prototype.foo = fn` assigns to a method declared in an augmented interface (`declare module "./f1" { interface A { foo(): B } }`). Our checker didn't verify the RHS function type against the augmented method type because `checkAssignmentExpression` only handled Identifier LHS, not PropertyAccessExpression chains.
 
   - In `checkAssignmentExpression`, new branch for `target is PropertyAccessExpression` where `target.expression` is also PropertyAccessExpression with name `"prototype"` and base is Identifier. Resolve the class symbol via `currentFileLocals` → `globals`, unwrap import aliases via `resolveAliasTarget`. Call `getDeclaredTypeOfSymbol` → `Type.Interface`, `resolveStructuredTypeMembers`, then look up the method symbol in `classType.members`.
