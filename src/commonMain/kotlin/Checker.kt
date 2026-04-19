@@ -2095,7 +2095,17 @@ class Checker(
                                     if (bindings is NamedImports && decl in bindings.elements) {
                                         val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
                                             ?: continue
-                                        val targetFile2 = resolveModuleSpecifier(specifier2, stmt) ?: continue
+                                        val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
+                                        if (targetFile2 == null) {
+                                            // Ambient module fallback — `declare module "X"` in a .d.ts file.
+                                            val ambient = globals[specifier2]
+                                            if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
+                                                val target = ambient.exports?.get(originalName) ?: continue
+                                                setSymbolTarget(symbol, target)
+                                                return resolveAlias(target, visited)
+                                            }
+                                            continue
+                                        }
                                         val targetResult2 = fileResults[targetFile2] ?: continue
                                         val target = targetResult2.locals[originalName] ?: continue
                                         setSymbolTarget(symbol, target)

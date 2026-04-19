@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-19 (16.4du, +2 tests: 8236→8238) — Ambient-module fallback in import alias resolution:** Named imports from ambient modules (`import {Cls} from "C"` where `C` is declared via `declare module "C" { class Cls {...} }`) previously failed to resolve their alias target because `resolveModuleSpecifier("C", …)` returns null — ambient modules have no backing file. The Alias then resolved to itself, so `getDeclaredTypeOfSymbol(alias)` fell through to `anyType`. Downstream effect: module-augmented interface methods whose return type references such an import (e.g. `getCls(): Cls`) resolved to `(): any`, silently disabling the 16.4dr TS2322 check (it skips when return is `anyType`).
+
+  - In `resolveAlias`'s `is ImportSpecifier` branch, when `resolveModuleSpecifier` returns null, fall back to `globals[specifier2]`. If the resulting symbol is a `SymbolFlags.Module` (ambient module), look up `originalName` in its `exports` map and use that as the alias target.
+  - Narrow by design: only the ImportSpecifier branch (not the ImportDeclaration branch), and only when the specifier resolves to an ambient module symbol. Does not alter file-based imports at all.
+  - → +2 tests: `moduleAugmentationsImports1_ts`, `moduleAugmentationsImports2_ts`. Both were emitting only the first TS2322 (for `getB` where `B` comes from a file module) and missing the second (for `getCls` where `Cls` comes from ambient `"C"`). Zero regressions (1839 → 1837 failed).
+
   **Session 2026-04-19 (16.4dt, +1 test: 8235→8236) — TS2345 for `null` arg to optional TypeParam param, plus TS6500 gating:** Two additions working together to handle `foo<T extends Item>(x?: T)` called with `foo(null)`:
 
   - Emit TS2345 at the arg span with display `"<constraint> | undefined"` when: argType has Null flag, paramType is Type.TypeParam, param declaration has questionToken, and the constraint doesn't include Null/Undefined/Any. Example: `foo(null)` → `Argument of type 'null' is not assignable to parameter of type 'Item | undefined'.`
