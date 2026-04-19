@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-19 (16.4dp, +1 test: 8228→8229) — TS2322 on `arguments = <primitive>` inside non-arrow function bodies:** In a non-arrow function, `arguments` is the implicit IArguments parameter. Assigning a primitive to it is a TS2322. Previously not emitted because `arguments` isn't in `globals` (not a user declaration) so `checkAssignmentExpression`'s normal path didn't find a target type.
+
+  - New `inNonArrowFunctionBody` checker field, saved/set-true/restored in `checkFunctionBody`. (Arrow functions deliberately skipped — they inherit enclosing `arguments`.)
+  - In `checkAssignmentExpression`, before the normal Identifier-target path, check: if `inNonArrowFunctionBody && lhs is Identifier("arguments")`, resolve RHS type; when it's `isSimpleCheckableType` (conservative — primitives/literals only, covers union of primitives too), emit TS2322 with display `IArguments` (string literal — we don't model the IArguments interface).
+  - → +1: `argumentsBindsToFunctionScopeArgumentList_ts__alwaysstrict_false__has expected errors matching baseline`. The `alwaysstrict_true` variant still fails because it needs BOTH this TS2322 AND a new TS1100 "Invalid use of 'arguments' in strict mode" for the assignment target in strict mode — the TS1100 walker currently only checks declaration positions, not assignment targets. Out of scope for this commit.
+  - Zero regressions per clean full-suite diff (1847 → 1846 failed).
+
   **Session 2026-04-19 (16.4do, +2 tests: 8226→8228) — TS2354 under AMD/System resolution, excluding `node_modules/tslib`:** The classic module-resolution branch in `checkImportHelpersWithoutTslib` previously accepted `node_modules/tslib/index.d.ts` as "tslib found". TypeScript's classic resolution does NOT search `node_modules` — it only looks in the root/baseUrl. For tests that supply tslib only via `node_modules/tslib/index.d.ts` (valid for node resolution, but NOT for AMD/System/UMD under classic), we should still emit TS2354.
 
   - In `checkImportHelpersWithoutTslib`, the `isClassicResolution` branch now rejects tslib-matching files whose path contains `node_modules`/`node-modules`. Kept the modern-resolution branch unchanged (it already required node_modules).
