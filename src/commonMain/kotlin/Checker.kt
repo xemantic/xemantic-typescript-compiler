@@ -29320,6 +29320,89 @@ interface DataView {
                 } catch (_: StackOverflowError) { /* circular */ }
             }
             val target = expr.left
+            // 16.4dr: `X.prototype.method = function(){...}` — an extension
+            // point where the property type can come from a module-augmented
+            // interface declaration. Resolve the method type on X's instance
+            // interface and compare with RHS function type. Emits TS2322 with
+            // function-mismatch elaboration chain.
+            if (target is PropertyAccessExpression) {
+                val inner = target.expression
+                if (inner is PropertyAccessExpression &&
+                    inner.name.text == "prototype" &&
+                    inner.expression is Identifier
+                ) {
+                    try {
+                        val className = (inner.expression as Identifier).text
+                        val rawSym = currentFileLocals?.get(className) ?: globals[className]
+                        val classSymbol = rawSym?.let {
+                            if (it.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(it) else it
+                        }
+                        if (classSymbol != null) {
+                            val classType = getDeclaredTypeOfSymbol(classSymbol)
+                            if (classType is Type.Interface) {
+                                resolveStructuredTypeMembers(classType)
+                                val methodSym = classType.members?.get(target.name.text)
+                                if (methodSym != null) {
+                                    val methodType = getTypeOfSymbol(methodSym)
+                                    if (methodType is Type.Object && !methodType.callSignatures.isNullOrEmpty()) {
+                                        val rhsType = getTypeOfExpression(expr.right)
+                                        // 16.4dr: For `function(){ return undefined; }` RHS, our
+                                        // getTypeOfFunctionExpression reports return type as anyType
+                                        // (no body-return inference). Detect this narrow pattern and
+                                        // treat the return as undefinedType for comparison purposes.
+                                        val inferredSrcReturn = (expr.right as? FunctionExpression)?.let { fe ->
+                                            val stmts = fe.body?.statements
+                                            if (stmts != null && stmts.size == 1) {
+                                                val only = stmts[0]
+                                                if (only is ReturnStatement && only.expression is Identifier &&
+                                                    (only.expression as Identifier).text == "undefined") {
+                                                    undefinedType
+                                                } else null
+                                            } else null
+                                        }
+                                        if (rhsType is Type.Object && !rhsType.callSignatures.isNullOrEmpty() &&
+                                            inferredSrcReturn != null
+                                        ) {
+                                            val tgtSig = methodType.callSignatures!!.first()
+                                            val tgtReturn = tgtSig.resolvedReturnType ?: anyType
+                                            if (tgtReturn !== anyType && tgtReturn !== errorType &&
+                                                !tgtReturn.flags.hasAny(TypeFlags.Void or TypeFlags.Undefined or TypeFlags.Null) &&
+                                                !checkTypeRelatedTo(inferredSrcReturn, tgtReturn, assignableRelation)
+                                            ) {
+                                            val lhsStart = inner.expression.pos
+                                            val lhsEnd = expressionTrueEnd(target)
+                                            val lhsLen = lhsEnd - lhsStart
+                                            if (lhsLen > 0) {
+                                                // Manually format display as () => <return> since our
+                                                // rhsType.callSigs.first() has return=anyType; we know
+                                                // the real return is inferredSrcReturn.
+                                                val displaySource = "() => ${typeToString(inferredSrcReturn)}"
+                                                val displayTarget = "() => ${typeToString(tgtReturn)}"
+                                                val (line, character) = getLineAndCharacterOfPosition(source, lhsStart)
+                                                val chain = mutableListOf<String>()
+                                                chain.add("  Type '${typeToString(inferredSrcReturn)}' is not assignable to type '${typeToString(tgtReturn)}'.")
+                                                diagnostics.add(Diagnostic(
+                                                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                                    category = DiagnosticCategory.Error,
+                                                    code = 2322,
+                                                    fileName = fileName,
+                                                    line = line,
+                                                    character = character,
+                                                    start = lhsStart,
+                                                    length = lhsLen,
+                                                    messageChain = chain,
+                                                ))
+                                                return
+                                            }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: StackOverflowError) { /* circular */ }
+                }
+            }
             if (target is Identifier) {
                 // Try new Type-based engine for file-level and local variables
                 try {
