@@ -37212,6 +37212,37 @@ interface DataView {
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
             }
+            // 16.4dt: For an OPTIONAL TypeParam-typed parameter (`x?: T` where T extends
+            // some non-null constraint), TypeScript rejects `null` arguments with
+            // `Argument of type 'null' is not assignable to parameter of type '<C> | undefined'`.
+            // Emit TS2345 with constraint-based display.
+            if (!isRestParam && paramType is Type.TypeParam && argType.flags.hasAny(TypeFlags.Null)) {
+                val paramDecl = params[i].valueDeclaration as? Parameter
+                val isOptional = paramDecl?.questionToken == true
+                val constraint = paramType.constraint
+                if (isOptional && constraint != null &&
+                    !constraint.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Any)
+                ) {
+                    val argTypeStr = typeToString(argType)
+                    val paramTypeStr = "${typeToString(constraint)} | undefined"
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                        continue
+                    }
+                }
+            }
             // 16.4ds: Per-property TS2322 when paramType is a TypeParam whose CONSTRAINT
             // is an Object with named properties. `fn<T extends {x:string}>(n: T)` called
             // with `fn({ x: null })` should emit TS2322 at `x` for null-vs-string. Only
@@ -37249,8 +37280,11 @@ interface DataView {
                                 val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
                                 val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
                                 val related = mutableListOf<Diagnostic>()
+                                // 16.4dt: TypeScript only emits TS6500 for ANONYMOUS object constraints
+                                // (no symbol), not for named interfaces like `T extends Item`. Gate the
+                                // related-info emission on `constraint.symbol == null`.
                                 val tpDecl = targetProp.declarations.firstOrNull()
-                                if (tpDecl != null) {
+                                if (tpDecl != null && constraint.symbol == null) {
                                     val declPos = when (tpDecl) {
                                         is PropertyDeclaration -> tpDecl.name.pos
                                         is PropertyAssignment -> tpDecl.name.pos

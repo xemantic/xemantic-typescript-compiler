@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-19 (16.4dt, +1 test: 8235→8236) — TS2345 for `null` arg to optional TypeParam param, plus TS6500 gating:** Two additions working together to handle `foo<T extends Item>(x?: T)` called with `foo(null)`:
+
+  - Emit TS2345 at the arg span with display `"<constraint> | undefined"` when: argType has Null flag, paramType is Type.TypeParam, param declaration has questionToken, and the constraint doesn't include Null/Undefined/Any. Example: `foo(null)` → `Argument of type 'null' is not assignable to parameter of type 'Item | undefined'.`
+  - Gate the 16.4ds TS6500 "expected type comes from property X" related info on `constraint.symbol == null` — i.e. anonymous inline object constraints only. For named-interface constraints (like `T extends Item`), TypeScript does NOT emit TS6500 even though it could; we match that behavior by suppressing. Fixes the `typeArgInference2_ts` over-emission that resulted from widening 16.4ds.
+  - → +1: `typeArgInference2_ts`. Zero regressions (1840 → 1839 failed).
+
   **Session 2026-04-19 (16.4ds, +1 test: 8234→8235) — Per-property TS2322 when paramType is a TypeParam with Object constraint:** Extends 16.4dn's per-property check to cover `fn<T extends {x:string}>(n: T)` called with `fn({ x: null })` — the paramType `T` is a TypeParam, not a plain Type.Object, so the 16.4dn branch didn't fire. Now when paramType is Type.TypeParam with an Object constraint that has properties, run the per-property loop using the constraint's members. Excess and missing-required checks are NOT extended — generic-param constraints have different semantics that would need separate handling.
 
   - New gated block in `checkArgumentsAgainstSignature` after the existing paramType-is-Object branch: `paramType is Type.TypeParam && paramType.constraint is Type.Object`. Same primitive-only TS2322 emission + TS6500 related info as 16.4dn.
