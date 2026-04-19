@@ -29613,41 +29613,62 @@ interface DataView {
 
     /**
      * Blocker #1 step (c): narrow return-type-from-body inference for methods
-     * with no return annotation. Only handles the simplest pattern: the body
-     * is a single `return new X<...>(...)` statement where X is a resolvable
-     * class/interface type. Caller must have set up `currentTypeParamScope`
+     * with no return annotation. Caller must have set up `currentTypeParamScope`
      * so type-arg references like `T` resolve to the enclosing class's
      * canonical Type.TypeParam (subsequent `instantiateType` then substitutes
-     * the target's concrete args). Returns null for anything other than this
-     * pattern — callers fall back to `anyType`.
+     * the target's concrete args). Returns null for unhandled patterns —
+     * callers fall back to `anyType`.
+     *
+     * Currently handles single-statement bodies of the form:
+     * - `return new X<...>(...)` — class/interface ref construction
+     * - `return <stringLit>` / `return <numLit>` / `return -<numLit>`
+     *   / `return true|false` — primitive literal returns
      *
      * Unblocks cases like `a.clone()` on `a: MyList<string>` where `clone()`
      * in `class MyList<T>` returns `new MyList<T>(…)`, so the inferred return
      * type is `MyList<T>` which substitutes to `MyList<string>` at the call
-     * site. `a.clone()` assigned to `var d: MyList<number>` then hits step (a)
-     * same-target-ref comparison → TS2322.
+     * site. The primitive-literal cases improve TS2322 elaboration depth on
+     * generic interface-method comparison (e.g. `class A<T> implements
+     * Comparable<T> { compareTo(other: T) { return 1; } }` — without literal
+     * inference, the elaboration shows `(other: number) => any` instead of
+     * `(other: number) => number` and downstream parameter-mismatch chain lines
+     * are suppressed by the trivial-any return-type compatibility shortcut).
      */
     private fun inferSimpleReturnTypeFromBody(md: MethodDeclaration): Type? {
         val stmts = md.body?.statements ?: return null
         if (stmts.size != 1) return null
         val retStmt = stmts[0] as? ReturnStatement ?: return null
-        val retExpr = retStmt.expression as? NewExpression ?: return null
-        val callee = retExpr.expression as? Identifier ?: return null
-        return try {
-            val calleeType = getTypeOfIdentifier(callee)
-            if (calleeType !is Type.Interface) return null
-            val typeParams = calleeType.typeParameters
-            val typeArgs = retExpr.typeArguments
-            // Non-generic target: return the interface itself (only when no typeArgs were supplied).
-            if (typeParams.isNullOrEmpty()) {
-                return if (typeArgs.isNullOrEmpty()) calleeType else null
+        val retExpr = retStmt.expression ?: return null
+        return when (retExpr) {
+            is StringLiteralNode -> stringType
+            is NoSubstitutionTemplateLiteralNode -> stringType
+            is NumericLiteralNode -> numberType
+            is PrefixUnaryExpression ->
+                if (retExpr.operand is NumericLiteralNode) numberType else null
+            is Identifier -> when (retExpr.text) {
+                "true", "false" -> booleanType
+                else -> null
             }
-            if (typeArgs == null || typeArgs.size != typeParams.size) return null
-            val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
-            if (resolvedArgs.any { it === errorType }) return null
-            getOrInternReference(calleeType, resolvedArgs)
-        } catch (_: StackOverflowError) {
-            null
+            is NewExpression -> {
+                val callee = retExpr.expression as? Identifier ?: return null
+                try {
+                    val calleeType = getTypeOfIdentifier(callee)
+                    if (calleeType !is Type.Interface) return null
+                    val typeParams = calleeType.typeParameters
+                    val typeArgs = retExpr.typeArguments
+                    // Non-generic target: return the interface itself (only when no typeArgs were supplied).
+                    if (typeParams.isNullOrEmpty()) {
+                        return if (typeArgs.isNullOrEmpty()) calleeType else null
+                    }
+                    if (typeArgs == null || typeArgs.size != typeParams.size) return null
+                    val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                    if (resolvedArgs.any { it === errorType }) return null
+                    getOrInternReference(calleeType, resolvedArgs)
+                } catch (_: StackOverflowError) {
+                    null
+                }
+            }
+            else -> null
         }
     }
 
@@ -38169,16 +38190,30 @@ interface DataView {
             // Report at this level
             val sourcePropStr = typeToString(chosen.sourceType)
             val targetPropStr = typeToString(chosen.targetType)
+            // If the chosen mismatched property is a function (call signatures only),
+            // append parameter-mismatch / return-type lines to deepen the chain.
+            // The chain line ("    Type 'A' is not assignable to type 'B'.") sits at
+            // 4-space depth; the function-mismatch lines sit two levels deeper at
+            // 6 and 8 spaces. `getFunctionMismatchElaboration` emits at 2/4 spaces,
+            // so prepend 4 extra spaces to each line.
+            val funcExtra: List<String> = run {
+                val srcObj = chosen.sourceType as? Type.Object ?: return@run emptyList()
+                val tgtObj = chosen.targetType as? Type.Object ?: return@run emptyList()
+                if (srcObj.callSignatures.isNullOrEmpty() || tgtObj.callSignatures.isNullOrEmpty()) {
+                    return@run emptyList()
+                }
+                getFunctionMismatchElaboration(srcObj, tgtObj).map { "    $it" }
+            }
             return if (path.isEmpty()) {
                 listOf(
                     "  Types of property '${chosen.name}' are incompatible.",
                     "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-                )
+                ) + funcExtra
             } else {
                 listOf(
                     "  The types of '$propPath' are incompatible between these types.",
                     "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-                )
+                ) + funcExtra
             }
         } finally {
             state.elaborationStack.remove(pairKey)
