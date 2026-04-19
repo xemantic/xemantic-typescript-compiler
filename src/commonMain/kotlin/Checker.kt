@@ -25860,8 +25860,13 @@ interface DataView {
             }
         }
         val hasTslib = hasAmbientTslib || if (isClassicResolution) {
-            // Classic resolution: accepts tslib.d.ts in root or node_modules/tslib/
-            binderResults.any { it.sourceFile.fileName.contains("tslib") }
+            // 16.4do: Classic resolution (AMD/System/UMD) does NOT search node_modules
+            // — only accepts tslib.d.ts in the root/baseUrl. Tests that provide tslib
+            // ONLY via `node_modules/tslib/index.d.ts` still need TS2354 under classic.
+            binderResults.any { result ->
+                val fn = result.sourceFile.fileName
+                fn.contains("tslib") && !(fn.contains("node_modules") || fn.contains("node-modules"))
+            }
         } else {
             // Modern resolution: only node_modules/tslib/ counts
             binderResults.any { result ->
