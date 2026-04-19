@@ -2519,6 +2519,10 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-19 (16.4dq, +1 test: 8229→8230) — TS1100 on `arguments = X` / `eval = X` assignment in strict mode:** TypeScript's grammar-level AssignmentTargetType restriction forbids `arguments` and `eval` as assignment targets in strict code. Our TS1100 walker previously only checked declaration positions (var/param names). Now `checkStrictModeInExpr` descends into BinaryExpression assignments (including compound-assign variants) and calls `checkStrictModeName` on Identifier LHS. Also descends into Paren/Call/New subexpressions so nested assignments in strict context get caught.
+
+  - → +1: `argumentsBindsToFunctionScopeArgumentList_ts__alwaysstrict_true__has expected errors matching baseline` now passes (combines with 16.4dp's TS2322 for the same line 3). Zero regressions per clean diff (1846 → 1845).
+
   **Session 2026-04-19 (16.4dp, +1 test: 8228→8229) — TS2322 on `arguments = <primitive>` inside non-arrow function bodies:** In a non-arrow function, `arguments` is the implicit IArguments parameter. Assigning a primitive to it is a TS2322. Previously not emitted because `arguments` isn't in `globals` (not a user declaration) so `checkAssignmentExpression`'s normal path didn't find a target type.
 
   - New `inNonArrowFunctionBody` checker field, saved/set-true/restored in `checkFunctionBody`. (Arrow functions deliberately skipped — they inherit enclosing `arguments`.)
