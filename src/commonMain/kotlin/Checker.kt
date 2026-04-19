@@ -37428,7 +37428,21 @@ interface DataView {
                 val argIsNamedType = argType is Type.Interface && argType.symbol != null
                 val hasPrivateBrand = argIsNamedType && paramIsNamedType &&
                     hasPrivateBrandMismatchBetween(argType as Type.Object, paramType as Type.Object)
-                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand) continue
+                // 16.4dw: Function-to-function comparison — when both param and arg are
+                // anonymous function types (Object with only call signatures, no members)
+                // AND both signatures have only simple-checkable param/return types (no
+                // Type.TypeParam, Reference, Union, etc.), proceed with the structural
+                // check so TS2345 fires for callback arg mismatches. The simple-types
+                // guard avoids FPs in generic-inference scenarios we don't yet handle.
+                val paramIsAnonFunc = paramType is Type.Object && paramType !is Type.Interface &&
+                    !paramType.callSignatures.isNullOrEmpty() && paramType.properties.isNullOrEmpty()
+                val argIsAnonFunc = argType is Type.Object && argType !is Type.Interface &&
+                    !(argType as Type.Object).callSignatures.isNullOrEmpty() &&
+                    (argType as Type.Object).properties.isNullOrEmpty()
+                val allowFuncToFunc = paramIsAnonFunc && argIsAnonFunc &&
+                    sigHasOnlySimpleTypes((paramType as Type.Object).callSignatures!!.first()) &&
+                    sigHasOnlySimpleTypes((argType as Type.Object).callSignatures!!.first())
+                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc) continue
             }
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
@@ -37482,6 +37496,15 @@ interface DataView {
                     if (mismatchName != null) {
                         chain.add("  Types have separate declarations of a private property '$mismatchName'.")
                     }
+                }
+                // 16.4dw: Function-to-function elaboration chain — for function-typed
+                // argument vs function-typed parameter mismatches. Emits param-mismatch
+                // or return-type-mismatch lines, matching the TS2322 elaboration used in
+                // assignment contexts.
+                if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
+                    !argType.callSignatures.isNullOrEmpty() && !paramType.callSignatures.isNullOrEmpty()
+                ) {
+                    chain.addAll(getFunctionMismatchElaboration(argType, paramType))
                 }
                 diagnostics.add(Diagnostic(
                     message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
@@ -38522,6 +38545,21 @@ interface DataView {
      *   "  Types of parameters 'x' and 's1' are incompatible."
      *   "    Type 'string' is not assignable to type 'number'."
      */
+    /**
+     * 16.4dw: A signature has only simple-checkable param/return types (primitives,
+     * literals, void, undefined, null, never). Used to guard function-to-function
+     * structural comparison against generic-inference FPs.
+     */
+    private fun sigHasOnlySimpleTypes(sig: Signature): Boolean {
+        val ret = sig.resolvedReturnType ?: return false
+        if (ret !== voidType && !isSimpleCheckableType(ret)) return false
+        for (p in sig.parameters) {
+            val pt = getTypeOfSymbol(p)
+            if (!isSimpleCheckableType(pt)) return false
+        }
+        return true
+    }
+
     private fun getFunctionMismatchElaboration(
         source: Type.Object, target: Type.Object
     ): List<String> {
@@ -38530,14 +38568,9 @@ interface DataView {
         if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
         val sourceSig = sourceSigs.first()
         val targetSig = targetSigs.first()
-        // Check return type mismatch
-        val sourceReturn = sourceSig.resolvedReturnType ?: anyType
-        val targetReturn = targetSig.resolvedReturnType ?: anyType
-        if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
-            !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
-            return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
-        }
-        // Check parameter type mismatch (contravariant)
+        // 16.4dw: Check parameter type mismatch FIRST (contravariant) — TypeScript reports
+        // the parameter mismatch before the return-type mismatch when both fail, because
+        // params are contravariant and the failure is more fundamental.
         val sourceParams = sourceSig.parameters
         val targetParams = targetSig.parameters
         val len = minOf(sourceParams.size, targetParams.size)
@@ -38550,6 +38583,13 @@ interface DataView {
                     "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(sourceParamType)}'.",
                 )
             }
+        }
+        // Check return type mismatch
+        val sourceReturn = sourceSig.resolvedReturnType ?: anyType
+        val targetReturn = targetSig.resolvedReturnType ?: anyType
+        if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
+            !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
+            return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
         }
         return emptyList()
     }
