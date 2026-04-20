@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-20 (16.4dz, +3 tests: 8243→8246) — TS2493 "Tuple type '[]' of length '0' has no element at index" for array destructuring from empty literal:** Narrow new diagnostic that fires when `let [a, b, ...] = []` destructures from an empty `ArrayLiteralExpression`. Gated on: (a) `VariableDeclaration.name is ArrayBindingPattern`, (b) `initializer is ArrayLiteralExpression` with no elements and no spread, (c) the binding element at index i has no default initializer and no `dotDotDotToken` (rest), (d) the binding name is a plain `Identifier` (nested patterns skipped for now).
+
+  - New walker `checkTupleDestructuringBounds` (Checker.kt ~19000) traverses `VariableStatement`s inside blocks, if/switch/for/try/module/function/class bodies. Squiggle spans the `Identifier.text.length` at the name position.
+  - Non-empty literals (`let [a] = [1]`) and non-literal initializers (`let [a] = x`) are intentionally skipped — they need full tuple-type inference.
+  - → +3: `downlevelLetConst12_ts__target_es5__`, `downlevelLetConst12_ts__target_es2015__`, and a third test that also hits the same pattern.
+  - Zero regressions (1832 → 1829 failed).
+
   **Session 2026-04-20 (16.4dy, +1 test: 8242→8243) — Per-property TS2322 for function-typed object-literal values:** Extended the 16.4dn per-property TS2322 walker at object-literal call-site arguments to also fire when BOTH the target property type and the source (value) type are anonymous function types with simple-typed signatures (mirrors 16.4dw's arg-level function check, but at the per-property level).
 
   - New branch in `checkArgumentsAgainstSignature` (Checker.kt ~37245): `bothFuncSimple` is true when source and target prop types are `Type.Object`-not-`Type.Interface` with non-empty `callSignatures`, no `properties`, and both first call signatures pass `sigHasOnlySimpleTypes`. On relation failure, emit TS2322 at the property key with the function-mismatch elaboration chain (`getFunctionMismatchElaboration`) and the existing TS6500 "expected type comes from property 'X' which is declared here on type 'Y'" related info.

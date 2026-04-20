@@ -447,6 +447,8 @@ class Checker(
         }
         // 23. Check duplicate object literal properties (TS1117)
         checkDuplicateObjectLiteralProperties()
+        // 23b. Check tuple destructuring bounds (TS2493) for empty-literal sources
+        checkTupleDestructuringBounds()
         // 24. Check super called before this in derived constructors (TS17009)
         checkSuperBeforeThis()
         // 25. Check assignment to const variables (TS2540)
@@ -18956,6 +18958,120 @@ interface DataView {
             } else {
                 seen[name] = kind
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tuple destructuring bounds check (TS2493) — narrow to empty array literal
+    // -----------------------------------------------------------------------
+    //
+    // `let [a, b] = []` cannot bind `a` or `b` — the source tuple has length 0.
+    // We only check the case where the initializer is an empty array literal
+    // (no elements, no spread). Non-empty literals and non-literal initializers
+    // need tuple-type inference which is out of scope here.
+
+    private fun checkTupleDestructuringBounds() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForTupleBounds(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForTupleBounds(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) walkNodeForTupleBounds(stmt, source, fileName, 0)
+    }
+
+    private fun walkNodeForTupleBounds(node: Node, source: String, fileName: String, depth: Int) {
+        if (depth > 100) return
+        when (node) {
+            is VariableStatement -> {
+                for (decl in node.declarationList.declarations) {
+                    checkVarDeclTupleBounds(decl, source, fileName)
+                    decl.initializer?.let { walkNodeForTupleBounds(it, source, fileName, depth + 1) }
+                }
+            }
+            is Block -> walkForTupleBounds(node.statements, source, fileName)
+            is IfStatement -> {
+                walkNodeForTupleBounds(node.thenStatement, source, fileName, depth + 1)
+                node.elseStatement?.let { walkNodeForTupleBounds(it, source, fileName, depth + 1) }
+            }
+            is ForStatement -> node.statement.let { walkNodeForTupleBounds(it, source, fileName, depth + 1) }
+            is ForInStatement -> walkNodeForTupleBounds(node.statement, source, fileName, depth + 1)
+            is ForOfStatement -> walkNodeForTupleBounds(node.statement, source, fileName, depth + 1)
+            is WhileStatement -> walkNodeForTupleBounds(node.statement, source, fileName, depth + 1)
+            is DoStatement -> walkNodeForTupleBounds(node.statement, source, fileName, depth + 1)
+            is SwitchStatement -> {
+                for (clause in node.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForTupleBounds(clause.statements, source, fileName)
+                        is DefaultClause -> walkForTupleBounds(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkForTupleBounds(node.tryBlock.statements, source, fileName)
+                node.catchClause?.block?.let { walkForTupleBounds(it.statements, source, fileName) }
+                node.finallyBlock?.let { walkForTupleBounds(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> walkNodeForTupleBounds(node.statement, source, fileName, depth + 1)
+            is ModuleDeclaration -> {
+                val body = node.body
+                if (body is ModuleBlock) walkForTupleBounds(body.statements, source, fileName)
+            }
+            is FunctionDeclaration -> node.body?.let { walkForTupleBounds(it.statements, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in node.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { walkForTupleBounds(it.statements, source, fileName) }
+                        is Constructor -> member.body?.let { walkForTupleBounds(it.statements, source, fileName) }
+                        is GetAccessor -> member.body?.let { walkForTupleBounds(it.statements, source, fileName) }
+                        is SetAccessor -> member.body?.let { walkForTupleBounds(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ArrowFunction -> {
+                when (val body = node.body) {
+                    is Block -> walkForTupleBounds(body.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> walkForTupleBounds(node.body.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkVarDeclTupleBounds(decl: VariableDeclaration, source: String, fileName: String) {
+        val pattern = decl.name as? ArrayBindingPattern ?: return
+        val init = decl.initializer as? ArrayLiteralExpression ?: return
+        // Bail on spread elements — we can't compute the source length statically.
+        var knownLen = 0
+        for (el in init.elements) {
+            if (el is SpreadElement) return
+            knownLen++
+        }
+        for ((i, binding) in pattern.elements.withIndex()) {
+            if (binding !is BindingElement) continue  // OmittedExpression etc.
+            if (binding.dotDotDotToken) continue  // rest gets the remainder (possibly empty)
+            if (binding.initializer != null) continue  // default covers absence
+            if (i < knownLen) continue
+            val nameNode = binding.name as? Identifier ?: continue
+            val namePos = nameNode.pos
+            val nameLen = nameNode.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, namePos)
+            diagnostics.add(Diagnostic(
+                message = "Tuple type '[]' of length '0' has no element at index '$i'.",
+                category = DiagnosticCategory.Error,
+                code = 2493,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = namePos,
+                length = nameLen,
+            ))
         }
     }
 
