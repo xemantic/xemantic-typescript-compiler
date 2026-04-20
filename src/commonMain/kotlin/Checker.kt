@@ -35662,6 +35662,43 @@ interface DataView {
     }
 
     /**
+     * 16.4ed: Narrow TS2339 for `g.prop` where `g: Partial<T>` / `Required<T>` / `Readonly<T>`.
+     * These utility types preserve T's property set, so if `prop` isn't a member of T, the
+     * access is invalid. Fires only when the inner type resolves to a plain Object/Interface
+     * (no base types) with a known property set — keeps FP surface minimal. Display mimics
+     * TypeScript: `Partial<Foo>`.
+     */
+    private fun tryEmitUtilityWrapperTs2339(
+        identSymbol: Symbol, propName: String, diagStart: Int, diagLength: Int,
+        source: String, fileName: String,
+    ) {
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return
+        val decl = identSymbol.valueDeclaration as? VariableDeclaration ?: return
+        val typeNode = decl.type as? TypeReference ?: return
+        val utilName = getTypeReferenceLastName(typeNode.typeName) ?: return
+        if (utilName != "Partial" && utilName != "Required" && utilName != "Readonly") return
+        val typeArgs = typeNode.typeArguments ?: return
+        if (typeArgs.size != 1) return
+        val argType = try { getTypeFromTypeNode(typeArgs[0]) } catch (_: StackOverflowError) { return }
+        if (argType !is Type.Object || argType === anyType || argType === errorType) return
+        if (argType is Type.Interface && !argType.baseTypes.isNullOrEmpty()) return
+        try { resolveStructuredTypeMembers(argType) } catch (_: StackOverflowError) { return }
+        if (getPropertyOfType(argType, propName) != null) return
+        val inner = typeToString(argType)
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$utilName<$inner>'.",
+            category = DiagnosticCategory.Error,
+            code = 2339,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = diagStart,
+            length = diagLength,
+        ))
+    }
+
+    /**
      * Shared TS2339/TS2551 "property does not exist" check used by both property access
      * (`obj.prop`) and element access with literal key (`obj["prop"]`, `obj[0]`).
      *
@@ -35825,7 +35862,10 @@ interface DataView {
                 }
 
                 val rawType = getTypeOfSymbol(identSymbol)
-                if (rawType === anyType || rawType === errorType || rawType === unknownType) return
+                if (rawType === anyType || rawType === errorType || rawType === unknownType) {
+                    tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
+                    return
+                }
                 // For primitive types (e.g. `declare var foo: number`), resolve to the
                 // wrapper interface's apparent type so property lookups fire TS2339 when
                 // the property doesn't exist on the wrapper. Display uses the primitive name.
