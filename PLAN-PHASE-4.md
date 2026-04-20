@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-20 (16.4eb, +2 tests: 8248→8250) — TS2790 "operand of a 'delete' operator must be optional":** Under `strictNullChecks`, emit TS2790 at a `delete obj.prop` expression when `prop` resolves to a known named property that is not optional and whose type does not include `undefined`/`any`/`unknown`/`never` (or a union containing any of those). Index-signature access is skipped (`getPropertyOfType` returns null for unnamed accesses).
+
+  - Check lives in `walkExprForDelete` at the DeleteExpression branch, BEFORE the TS2703 non-property-ref check. Squiggle spans the whole `obj.prop` range (`expressionTrueEnd(inner) - inner.pos`).
+  - Helper `typeIncludesUndefinedOrTop(type)` walks unions recursively to detect any constituent with `Undefined | Any | Unknown | Never` flags. Used only by this check.
+  - → +2: `deleteExpressionMustBeOptional_ts__strict_true__` plus one other test that uses the same pattern. Zero regressions (1827 → 1825 failed).
+
   **Session 2026-04-20 (16.4ea, +2 tests: 8246→8248) — TS2616 for named import from `export = <primitive>` module:** When a multi-file compilation imports like `import { a } from "./mod"` and `./mod.ts` has `var a = 10; export = a;`, TypeScript emits TS2616 "'a' can only be imported by using 'import a = require(\"./mod\")' or a default import." at each named-import specifier.
 
   - Check runs alongside the existing TS2617/TS2596/TS2598 block (Checker.kt ~12729) but BEFORE it, and is gated differently: fires regardless of `esModuleInterop` when the target's `export =` expression is an `Identifier` resolving to a plain Variable in the target's `locals` (i.e. `flags.hasAny(Variable)` AND `flags.hasNone(Class|Interface|Module|Function|TypeAlias|Enum)`). The TS2617 path handles the different failure mode when `esModuleInterop` is explicitly false AND the exported value is namespace-like.
