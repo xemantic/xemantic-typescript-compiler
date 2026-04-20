@@ -35721,23 +35721,39 @@ interface DataView {
                     if (member !is PropertyDeclaration) continue
                     val memberName = (member.name as? Identifier)?.text ?: continue
                     if (memberName != propName) continue
-                    // Methods, get/set accessors, static members, ambient declare properties:
-                    // not class-field semantics → skip.
+                    // Ambient `declare` properties don't have class-field semantics → skip.
                     if (ModifierFlag.Declare in member.modifiers) return
-                    if (ModifierFlag.Static in member.modifiers) return
                     val start = expr.name.pos
                     val length = propName.length
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Class field '$propName' defined by the parent class is not accessible in the child class via super.",
-                        category = DiagnosticCategory.Error,
-                        code = 2855,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+                    // Static members accessed via `super` → TS2576 with "did you mean static" hint,
+                    // matching the existing ES5 branch. Non-static class fields → TS2855.
+                    if (ModifierFlag.Static in member.modifiers) {
+                        val baseClassName = baseSym.declarations.firstOrNull { it is ClassDeclaration }
+                            .let { (it as? ClassDeclaration)?.name?.text }
+                        val suggestion = if (baseClassName != null) " Did you mean to access the static member '${baseClassName}.${propName}' instead?" else ""
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '${baseType.symbol?.name ?: "unknown"}'.$suggestion",
+                            category = DiagnosticCategory.Error,
+                            code = 2576,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    } else {
+                        diagnostics.add(Diagnostic(
+                            message = "Class field '$propName' defined by the parent class is not accessible in the child class via super.",
+                            category = DiagnosticCategory.Error,
+                            code = 2855,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
                     return
                 }
             }
