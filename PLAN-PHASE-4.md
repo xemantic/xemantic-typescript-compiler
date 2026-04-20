@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-20 (16.4eg, +1 test: 8256→8257) — TS2576 for `super.staticField` on ES2015+:** Completes the 16.4ef coverage — when a `super.X` access on ES2015+ resolves to a STATIC property on the base class, TypeScript emits TS2576 (same "did you mean to access the static member 'Base.X' instead?" formatter as the existing ES5 branch) rather than TS2855 or nothing.
+
+  - `checkSuperFieldAccessES2015Plus` previously `return`ed when the matched member had the `Static` modifier (mistakenly treating it like `declare`). Now it emits TS2576 with the same suggestion formatter used by `checkSuperPropertyAccessES5`.
+  - → +1: `superAccess_ts__target_es2015__`. Zero regressions (1819 → 1818 failed).
+
   **Session 2026-04-20 (16.4ef, +3 tests: 8253→8256) — TS2855 for `super.field` access on ES2015+ targets:** Class fields (PropertyDeclaration without `declare` / `static`) are installed on the instance via `Object.defineProperty` in the constructor, so `super.field` doesn't see the parent's slot — it reads the prototype chain, which has no such field, yielding `undefined` at runtime. Under ES2015+ TypeScript emits TS2855 "Class field 'X' defined by the parent class is not accessible in the child class via super." Under ES5 (current code), the pattern emits TS2340 instead.
 
   - Widened the super-property-access gate in `checkSinglePropertyAccess` (Checker.kt ~35729): now fires on both ES5 (existing TS2340 via `checkSuperPropertyAccessES5`) and ES2015+ via a new `checkSuperFieldAccessES2015Plus`. The two paths are mutually exclusive by target.
