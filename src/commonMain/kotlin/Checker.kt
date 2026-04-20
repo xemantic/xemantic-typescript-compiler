@@ -19571,6 +19571,40 @@ interface DataView {
                 var inner = operand
                 while (inner is ParenthesizedExpression) inner = inner.expression
                 val isPropertyRef = inner is PropertyAccessExpression || inner is ElementAccessExpression
+                // 16.4eb: TS2790 "The operand of a 'delete' operator must be optional."
+                // Fires under strictNullChecks when deleting a known property that isn't
+                // declared optional AND whose type doesn't include undefined/any/unknown/never.
+                // Index-signature access is skipped (no named property declaration resolves).
+                if (strictNullChecks && inner is PropertyAccessExpression) {
+                    try {
+                        val objType = getTypeOfExpression(inner.expression)
+                        if (objType !== anyType && objType !== errorType) {
+                            val apparent = getApparentType(objType)
+                            val propSym = getPropertyOfType(apparent, inner.name.text)
+                            if (propSym != null && !isOptionalProperty(propSym)) {
+                                val propType = getTypeOfSymbol(propSym)
+                                if (propType !== anyType && propType !== errorType &&
+                                    !typeIncludesUndefinedOrTop(propType)) {
+                                    val start = inner.pos
+                                    val length = expressionTrueEnd(inner) - start
+                                    if (length > 0) {
+                                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                        diagnostics.add(Diagnostic(
+                                            message = "The operand of a 'delete' operator must be optional.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2790,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = start,
+                                            length = length,
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: StackOverflowError) { /* circular type */ }
+                }
                 if (!isPropertyRef) {
                     // TS2703: operand must be property reference
                     val start = inner.pos
@@ -38926,6 +38960,18 @@ interface DataView {
     }
 
     /** Check if a property symbol is optional (has questionToken in its declaration). */
+    /**
+     * 16.4eb: Does the type accept `undefined` as a value? True for explicit undefined,
+     * any/unknown/never, or unions whose constituents include any of those. Used by
+     * the TS2790 "delete operand must be optional" check.
+     */
+    private fun typeIncludesUndefinedOrTop(type: Type): Boolean {
+        if (type.flags.hasAny(
+                TypeFlags.Undefined or TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return true
+        if (type is Type.Union) return type.types.any { typeIncludesUndefinedOrTop(it) }
+        return false
+    }
+
     private fun isOptionalProperty(symbol: Symbol): Boolean {
         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return false
         return when (decl) {
