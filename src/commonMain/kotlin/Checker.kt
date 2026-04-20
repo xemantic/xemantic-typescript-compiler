@@ -12726,6 +12726,51 @@ class Checker(
                     }
                 }
 
+                // 16.4ea: TS2616 — `import { a } from "./mod"` where `./mod` has
+                // `export = <plain-variable>` (a primitive or non-namespace value). Named
+                // imports can't destructure properties off a primitive, so the only valid
+                // forms are `import a = require(...)` or a default import. Fires regardless
+                // of esModuleInterop setting; the TS2617 branch below handles the different
+                // failure mode when esModuleInterop is explicitly false AND the exported
+                // value is namespace-like.
+                val namedBindingsExp = importClause.namedBindings
+                if (hasExportEquals && namedBindingsExp is NamedImports) {
+                    val exportEqStmt = targetFile.statements.firstOrNull {
+                        it is ExportAssignment && it.isExportEquals
+                    } as? ExportAssignment
+                    val exportEqExpr = exportEqStmt?.expression
+                    if (exportEqExpr is Identifier) {
+                        val exportedSym = targetResult.locals[exportEqExpr.text]
+                        val nonValueLikeFlags = SymbolFlags.Class or SymbolFlags.Interface or
+                            SymbolFlags.Module or SymbolFlags.Function or
+                            SymbolFlags.TypeAlias or SymbolFlags.Enum
+                        val isPlainValue = exportedSym != null &&
+                            exportedSym.flags.hasAny(SymbolFlags.Variable) &&
+                            exportedSym.flags.hasNone(nonValueLikeFlags)
+                        if (isPlainValue) {
+                            for (importSpecifier in namedBindingsExp.elements) {
+                                if (importSpecifier.isTypeOnly) continue
+                                val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                                val importedName = nameNode.text
+                                if (importedName == "default") continue
+                                val nameStart = nameNode.pos
+                                val nameLength = importedName.length
+                                val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "'$importedName' can only be imported by using 'import $importedName = require(\"$moduleName\")' or a default import.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2616,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameStart,
+                                    length = nameLength,
+                                ))
+                            }
+                        }
+                    }
+                }
+
                 // TS2617/TS2596/TS2598 + TS2497: `import { X } from "./a"` where "./a" uses
                 // `export =` and esModuleInterop is explicitly false. TypeScript cannot synthesize
                 // named bindings without esModuleInterop, so the named import is invalid.
