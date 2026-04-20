@@ -35697,6 +35697,53 @@ interface DataView {
         }
     }
 
+    /** 16.4ef: TS2855 "Class field 'X' defined by the parent class is not accessible in the
+     *  child class via super." For ES2015+ targets, class fields (PropertyDeclaration without
+     *  `declare` / `static`) are installed on the instance via `Object.defineProperty` in the
+     *  constructor. `super.field` doesn't walk to the base instance's shadowed field — it
+     *  reads the prototype chain, which has no such slot, yielding `undefined` at runtime.
+     *  Methods, getters/setters, static members, and ambient `declare` properties are fine. */
+    private fun checkSuperFieldAccessES2015Plus(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        val propName = expr.name.text
+        if (enclosingClassType == null) return
+        if (enclosingClassType !is Type.Interface) return
+        val baseTypes = enclosingClassType.baseTypes ?: return
+        if (baseTypes.isEmpty()) return
+        for (baseType in baseTypes) {
+            if (baseType !is Type.Interface) continue
+            val baseSym = baseType.symbol ?: continue
+            for (decl in baseSym.declarations) {
+                if (decl !is ClassDeclaration) continue
+                for (member in decl.members) {
+                    if (member !is PropertyDeclaration) continue
+                    val memberName = (member.name as? Identifier)?.text ?: continue
+                    if (memberName != propName) continue
+                    // Methods, get/set accessors, static members, ambient declare properties:
+                    // not class-field semantics → skip.
+                    if (ModifierFlag.Declare in member.modifiers) return
+                    if (ModifierFlag.Static in member.modifiers) return
+                    val start = expr.name.pos
+                    val length = propName.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Class field '$propName' defined by the parent class is not accessible in the child class via super.",
+                        category = DiagnosticCategory.Error,
+                        code = 2855,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    return
+                }
+            }
+        }
+    }
+
     /**
      * Check a single property access expression for TS2341 and TS2339.
      * TS2341 is checked first (private member accessibility).
@@ -35725,9 +35772,13 @@ interface DataView {
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
-        // === TS2340: super property access restriction (ES5 only) ===
-        if (expr.expression is Identifier && (expr.expression as Identifier).text == "super" && options.target <= ScriptTarget.ES5) {
-            checkSuperPropertyAccessES5(expr, source, fileName, enclosingClassType)
+        // === TS2340 (ES5) / TS2855 (ES2015+): super property access restriction ===
+        if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") {
+            if (options.target <= ScriptTarget.ES5) {
+                checkSuperPropertyAccessES5(expr, source, fileName, enclosingClassType)
+            } else {
+                checkSuperFieldAccessES2015Plus(expr, source, fileName, enclosingClassType)
+            }
         }
 
         // === TS2341: Private member accessibility check ===
