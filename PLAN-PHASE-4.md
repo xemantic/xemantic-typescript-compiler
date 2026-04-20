@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-20 (16.4ea, +2 tests: 8246→8248) — TS2616 for named import from `export = <primitive>` module:** When a multi-file compilation imports like `import { a } from "./mod"` and `./mod.ts` has `var a = 10; export = a;`, TypeScript emits TS2616 "'a' can only be imported by using 'import a = require(\"./mod\")' or a default import." at each named-import specifier.
+
+  - Check runs alongside the existing TS2617/TS2596/TS2598 block (Checker.kt ~12729) but BEFORE it, and is gated differently: fires regardless of `esModuleInterop` when the target's `export =` expression is an `Identifier` resolving to a plain Variable in the target's `locals` (i.e. `flags.hasAny(Variable)` AND `flags.hasNone(Class|Interface|Module|Function|TypeAlias|Enum)`). The TS2617 path handles the different failure mode when `esModuleInterop` is explicitly false AND the exported value is namespace-like.
+  - Squiggle spans the imported name node: `propertyName` if present (e.g. `{ a as x }` → `a`), else `name`. Length = identifier text length.
+  - → +2: `es6ImportNamedImportNoNamedExports_ts__target_es5__`, `es6ImportNamedImportNoNamedExports_ts__target_es2015__`. Zero regressions (1829 → 1827 failed).
+
   **Session 2026-04-20 (16.4dz, +3 tests: 8243→8246) — TS2493 "Tuple type '[]' of length '0' has no element at index" for array destructuring from empty literal:** Narrow new diagnostic that fires when `let [a, b, ...] = []` destructures from an empty `ArrayLiteralExpression`. Gated on: (a) `VariableDeclaration.name is ArrayBindingPattern`, (b) `initializer is ArrayLiteralExpression` with no elements and no spread, (c) the binding element at index i has no default initializer and no `dotDotDotToken` (rest), (d) the binding name is a plain `Identifier` (nested patterns skipped for now).
 
   - New walker `checkTupleDestructuringBounds` (Checker.kt ~19000) traverses `VariableStatement`s inside blocks, if/switch/for/try/module/function/class bodies. Squiggle spans the `Identifier.text.length` at the name position.
