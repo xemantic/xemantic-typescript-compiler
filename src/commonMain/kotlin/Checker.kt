@@ -36353,6 +36353,31 @@ interface DataView {
     }
 
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
+        // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
+        // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
+        // calls — `super.method<T>()` is a regular method call and valid. Squiggle
+        // spans the whole `<...>` section; `node.end` in this AST already overshoots
+        // to the token AFTER the last type arg's `>`, so subtract when computing end.
+        val calleeExpr = expr.expression
+        if (calleeExpr is Identifier && calleeExpr.text == "super" && !expr.typeArguments.isNullOrEmpty()) {
+            val typeArgs = expr.typeArguments!!
+            val start = typeArgs.first().pos - 1
+            val end = typeArgs.last().end
+            val length = end - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'super' may not use type arguments.",
+                    category = DiagnosticCategory.Error,
+                    code = 2754,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
         // Resolve callee to get its type
         val calleeType = getCalleeType(expr.expression)
         // TS2347: "Untyped function calls may not accept type arguments." Fires when a
