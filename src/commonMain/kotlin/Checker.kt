@@ -37242,6 +37242,10 @@ interface DataView {
                         // type are simple-checkable (primitives / literals / all-primitive unions).
                         // Object↔object property mismatches are handled elsewhere via
                         // `getPropertyElaborationChain` during arg-level TS2345 emission.
+                        // 16.4dy: Also emit when both sides are anonymous function types with
+                        // simple-typed signatures — mirrors 16.4dw's arg-level function check
+                        // but at the per-property level (e.g. `test({thunk: (n:number)=>{}})`
+                        // vs `test(t: {thunk: (s:string) => void})`).
                         if (argType is Type.Object) {
                             for (propNode in arg.properties) {
                                 val (propName, keyPos, keyLen) = when (propNode) {
@@ -37257,11 +37261,23 @@ interface DataView {
                                 val targetProp = paramType.members?.get(propName) ?: continue
                                 val targetPropType = getTypeOfSymbol(targetProp)
                                 if (targetPropType === anyType || targetPropType === errorType) continue
-                                if (!isSimpleCheckableType(targetPropType)) continue
                                 val sourcePropSym = argType.members?.get(propName) ?: continue
                                 val sourcePropType = getTypeOfSymbol(sourcePropSym)
                                 if (sourcePropType === anyType || sourcePropType === errorType) continue
-                                if (!isSimpleCheckableType(sourcePropType)) continue
+                                val bothSimple = isSimpleCheckableType(targetPropType) &&
+                                    isSimpleCheckableType(sourcePropType)
+                                val tgtIsAnonFunc = targetPropType is Type.Object &&
+                                    targetPropType !is Type.Interface &&
+                                    !(targetPropType as Type.Object).callSignatures.isNullOrEmpty() &&
+                                    (targetPropType as Type.Object).properties.isNullOrEmpty()
+                                val srcIsAnonFunc = sourcePropType is Type.Object &&
+                                    sourcePropType !is Type.Interface &&
+                                    !(sourcePropType as Type.Object).callSignatures.isNullOrEmpty() &&
+                                    (sourcePropType as Type.Object).properties.isNullOrEmpty()
+                                val bothFuncSimple = tgtIsAnonFunc && srcIsAnonFunc &&
+                                    sigHasOnlySimpleTypes((targetPropType as Type.Object).callSignatures!!.first()) &&
+                                    sigHasOnlySimpleTypes((sourcePropType as Type.Object).callSignatures!!.first())
+                                if (!bothSimple && !bothFuncSimple) continue
                                 if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
                                 val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
                                 val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
@@ -37286,6 +37302,13 @@ interface DataView {
                                         length = propName.length,
                                     ))
                                 }
+                                val chain = mutableListOf<String>()
+                                if (bothFuncSimple) {
+                                    chain.addAll(getFunctionMismatchElaboration(
+                                        sourcePropType as Type.Object,
+                                        targetPropType as Type.Object,
+                                    ))
+                                }
                                 diagnostics.add(Diagnostic(
                                     message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
                                     category = DiagnosticCategory.Error,
@@ -37295,6 +37318,7 @@ interface DataView {
                                     character = kchar,
                                     start = keyPos,
                                     length = keyLen,
+                                    messageChain = chain,
                                     relatedInformation = related,
                                 ))
                             }

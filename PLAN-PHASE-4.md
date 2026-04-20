@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-20 (16.4dy, +1 test: 8242→8243) — Per-property TS2322 for function-typed object-literal values:** Extended the 16.4dn per-property TS2322 walker at object-literal call-site arguments to also fire when BOTH the target property type and the source (value) type are anonymous function types with simple-typed signatures (mirrors 16.4dw's arg-level function check, but at the per-property level).
+
+  - New branch in `checkArgumentsAgainstSignature` (Checker.kt ~37245): `bothFuncSimple` is true when source and target prop types are `Type.Object`-not-`Type.Interface` with non-empty `callSignatures`, no `properties`, and both first call signatures pass `sigHasOnlySimpleTypes`. On relation failure, emit TS2322 at the property key with the function-mismatch elaboration chain (`getFunctionMismatchElaboration`) and the existing TS6500 "expected type comes from property 'X' which is declared here on type 'Y'" related info.
+  - For `ObjectLiteralExpression` with duplicate property keys, `getTypeOfObjectLiteral` overwrites the map entry (last-wins), so both duplicate iterations compare the LAST value's type to the target — matching TypeScript's behavior of reporting both occurrences with the last-wins type.
+  - → +1: `lastPropertyInLiteralWins_ts` — 2× TS2322 at (8,5) and (9,5) for `{thunk: (str:string)=>{}, thunk: (num:number)=>{}}` vs `Thing.thunk: (str: string) => void`, both emissions using `(num: number) => void` as source (last wins).
+  - Zero regressions (1833 → 1832 failed).
+
   **Session 2026-04-20 (16.4dx, +1 test: 8241→8242) — TS2754 "'super' may not use type arguments":** Direct `super<T>(...)` calls now emit TS2754 with squiggle spanning the `<...>` section. Check sits at the top of `checkSingleCallExpressionTypes` — gated on callee being `Identifier("super")` (not `PropertyAccessExpression`, since `super.method<T>()` is a valid regular method call). The `<...>` span uses `typeArgs.first().pos - 1` for start and `typeArgs.last().end` (no `+1`) for end, because AST nodes' `end` already overshoots by one token.
 
   - → +1: `superWithTypeArgument_ts` or `parserSuperExpression2_ts` (both flipped — one passed individually before via unrelated path).
