@@ -8178,12 +8178,97 @@ class Checker(
                         if (validIdStart && name !in KEYWORD_IDENTIFIERS && !isSyntheticLiteral &&
                             (!scope.has(name) || name in VALUE_ONLY_GLOBALS || name == "undefined")) {
                             emitTS2503(name, leftmost, source, fileName)
+                            // 16.4ee: When the whole module reference is a bare Identifier that
+                            // does NOT resolve in scope AND the alias is exported from a file
+                            // under `declaration: true`, TypeScript's declaration-emit path
+                            // fails to resolve the target and reports the alias as "circular"
+                            // (TS2303) + identifier as not-found (TS2304). Non-exported or
+                            // non-declaration-emit files emit TS2503 only.
+                            if (ref is Identifier && !scope.has(name) && options.declaration) {
+                                val isExported = ModifierFlag.Export in stmt.modifiers
+                                    || isImportAliasReExported(fileName, stmt.name.text)
+                                if (isExported) {
+                                    emitTS2304ForImportRef(name, leftmost, source, fileName)
+                                    emitTS2303ForImportEquals(stmt, source, fileName)
+                                }
+                            }
                         }
                     }
                 }
             }
             else -> {}
         }
+    }
+
+    /** 16.4ee: Returns true when `aliasName` is re-exported by a top-level
+     *  `export { aliasName }` (no `from` clause) in the given file. Used to narrow
+     *  TS2303/TS2304 emission to the declaration-emit-visible surface. */
+    private fun isImportAliasReExported(fileName: String, aliasName: String): Boolean {
+        val result = fileResults[fileName] ?: return false
+        for (stmt in result.sourceFile.statements) {
+            if (stmt is ExportDeclaration && stmt.moduleSpecifier == null) {
+                val clause = stmt.exportClause
+                if (clause is NamedExports) {
+                    for (spec in clause.elements) {
+                        val internalName = spec.propertyName?.text ?: spec.name.text
+                        if (internalName == aliasName) return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /** 16.4ee: TS2303 "Circular definition of import alias 'Foo'." emitted at an
+     *  ImportEqualsDeclaration whose bare-identifier module reference is unresolvable.
+     *  Squiggle spans from the first non-whitespace char of the statement to the end
+     *  of the module reference identifier (inclusive of trailing `;` if present).
+     *  Avoids `stmt.end` which overshoots into the next token. */
+    private fun emitTS2303ForImportEquals(stmt: ImportEqualsDeclaration, source: String, fileName: String) {
+        val name = stmt.name.text
+        var spanStart = stmt.pos
+        while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+        val refEnd = when (val r = stmt.moduleReference) {
+            is Identifier -> r.pos + r.text.length
+            else -> stmt.end
+        }
+        // Include trailing `;` only if it immediately follows the module reference
+        // (optionally separated by spaces/tabs — stay on the same line).
+        var probe = refEnd
+        while (probe < source.length && source[probe].let { it == ' ' || it == '\t' }) probe++
+        val spanEnd = if (probe < source.length && source[probe] == ';') probe + 1 else refEnd
+        val length = (spanEnd - spanStart).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+        diagnostics.add(Diagnostic(
+            message = "Circular definition of import alias '$name'.",
+            category = DiagnosticCategory.Error,
+            code = 2303,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = spanStart,
+            length = length,
+        ))
+    }
+
+    /** 16.4ee: TS2304 "Cannot find name 'X'." at the identifier node of an import-equals
+     *  module reference. Kept separate from the generic TS2304 emitter because that one
+     *  applies spelling-suggestion logic (TS2552) and class-member hints (TS2725) — neither
+     *  of which TypeScript attaches at import-equals reference positions. */
+    private fun emitTS2304ForImportRef(name: String, node: Identifier, source: String, fileName: String) {
+        val start = node.pos
+        val length = name.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find name '$name'.",
+            category = DiagnosticCategory.Error,
+            code = 2304,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /** Extract constructor parameter names from a list of class members. */
