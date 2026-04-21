@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-21 (16.4ej, +1 test: 8259→8260) — TS2790 under `exactOptionalPropertyTypes: true` fires on non-optional props even when type includes `| undefined`:** New compiler option `exactOptionalPropertyTypes` added to `CompilerOptions` (parsed via `exactoptionalpropertytypes` directive key). Under `exactOptional=true`, a required property like `b: number | undefined` must still be deleted via optional marker (`b?`) — the undefined in the type doesn't make the property itself optional. Under `exactOptional=false` (default, 16.4eb behavior preserved), `T | undefined` is still treated as optional-for-delete.
+
+  - Modified the TS2790 guard in `walkExprForDelete` (Checker.kt ~19672): new local `skipOnUndefinedInType = !options.exactOptionalPropertyTypes`. The type-includes-undefined skip now only applies when this flag is true. Any/Unknown/Never types still skip the diagnostic in both modes.
+  - → +1: `deleteExpressionMustBeOptional_exactOptionalPropertyTypes_ts__exactoptionalpropertytypes_true__` (adds TS2790 at `delete f.b` and `delete f.e`). The =false variant already passed after 16.4eb. Zero regressions (1816 → 1815 failed).
+
   **Session 2026-04-21 (16.4ei, +1 test: 8258→8259) — Extend 16.4eh TS2339 to parameter binding patterns:** `function fst({ s } = t) { }` where `t: { s: string } | undefined` now also emits TS2339 at the binding-element's name. Same `checkDestructuringFromNullableUnion` helper reused from the VariableDeclaration path, wired into the parameter loop inside `checkFunctionBody` (Checker.kt ~28965): when a parameter's name is `ObjectBindingPattern` AND it has a default initializer, run the helper on the initializer. No change to the helper itself.
 
   - → +1: `contextualTypeForInitalizedVariablesFiltersUndefined_ts`. The `const { s } = t;` (var decl) emission landed in 16.4eh; this commit adds the companion parameter-default emission at (8,16). Zero regressions (1817 → 1816 failed).

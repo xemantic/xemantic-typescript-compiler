@@ -19668,8 +19668,14 @@ interface DataView {
                             val propSym = getPropertyOfType(apparent, inner.name.text)
                             if (propSym != null && !isOptionalProperty(propSym)) {
                                 val propType = getTypeOfSymbol(propSym)
+                                // Under exactOptionalPropertyTypes, a required property with
+                                // `| undefined` in its type still requires optionality to delete.
+                                // Under default (exactOptional=false), `T | undefined` is treated
+                                // as optional-for-delete purposes.
+                                val skipOnUndefinedInType = !options.exactOptionalPropertyTypes
                                 if (propType !== anyType && propType !== errorType &&
-                                    !typeIncludesUndefinedOrTop(propType)) {
+                                    !propType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never) &&
+                                    (!skipOnUndefinedInType || !typeIncludesUndefinedOrTop(propType))) {
                                     val start = inner.pos
                                     val length = expressionTrueEnd(inner) - start
                                     if (length > 0) {
