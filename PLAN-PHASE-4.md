@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-21 (16.4eh, +1 test: 8257→8258) — TS2339 for object destructuring from union including `null`/`undefined`:** `var {n, ...rest} = x` where `x: { n: number } | undefined` (or `| null`) now emits TS2339 at each non-rest binding element's property position. TypeScript's rule: a property access on a union that may be `null`/`undefined` is invalid because not every constituent has the property.
+
+  - New walker `checkDestructuringFromNullableUnion(ObjectBindingPattern, initializer, ...)` invoked at the top of `checkVarDeclAssignability` (Checker.kt ~29226) before the existing `name !is Identifier` early return. Gated on: (a) initializer type resolves via `getTypeOfExpression`, (b) type is `Type.Union`, (c) at least one constituent has `TypeFlags.Null or TypeFlags.Undefined`. For each `BindingElement` with a simple Identifier/StringLiteral property name (not rest), emits TS2339 at the property-name position with the 1-char/quoted squiggle.
+  - **Display-order fix**: TypeScript puts `null`/`undefined` at the END of union display even when authored first. The checker's `typeToString(Type.Union)` preserves source order, so the local display reorders constituents (null/undefined constituents get sort-key 1, others get 0) before formatting. Local to this helper; doesn't alter global `typeToString`.
+  - → +1: `restUnion_ts` (2× TS2339 for `{n} = undefinedUnion` and `{n} = nullUnion`). Zero regressions (1818 → 1817 failed).
+
   **Session 2026-04-20 (16.4eg, +1 test: 8256→8257) — TS2576 for `super.staticField` on ES2015+:** Completes the 16.4ef coverage — when a `super.X` access on ES2015+ resolves to a STATIC property on the base class, TypeScript emits TS2576 (same "did you mean to access the static member 'Base.X' instead?" formatter as the existing ES5 branch) rather than TS2855 or nothing.
 
   - `checkSuperFieldAccessES2015Plus` previously `return`ed when the matched member had the `Static` modifier (mistakenly treating it like `declare`). Now it emits TS2576 with the same suggestion formatter used by `checkSuperPropertyAccessES5`.

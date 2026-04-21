@@ -29224,6 +29224,9 @@ interface DataView {
         varTypes: MutableMap<String, String>, typeParams: Set<String>
     ) {
         val name = decl.name
+        if (name is ObjectBindingPattern) {
+            checkDestructuringFromNullableUnion(name, decl.initializer, source, fileName)
+        }
         if (name !is Identifier) return
 
         // For unannotated variables with initializers, infer and store the type
@@ -29440,6 +29443,64 @@ interface DataView {
             if (exprType != null && !isAssignableTo(exprType, declaredTypeStr)) {
                 emitTS2322(name.pos, name.text.length, exprType, declaredTypeStr, source, fileName, hasElaboration = !isSimpleLiteral(init), typeParams = typeParams)
             }
+        }
+    }
+
+    /**
+     * TS2339 for `var {n, ...rest} = x` where x's type is a union containing
+     * `undefined` or `null`. TypeScript considers the property access invalid
+     * because not every union member has the property.
+     *
+     * Only fires when the initializer's type is a Type.Union with a Null or
+     * Undefined constituent — exactly matches TypeScript's rule. Skipped for
+     * rest elements (propertyName=null, dotDotDotToken=true) and nested
+     * patterns. Message format: `Property 'n' does not exist on type
+     * '{ n: number; } | undefined'.`
+     */
+    private fun checkDestructuringFromNullableUnion(
+        pattern: ObjectBindingPattern,
+        initializer: Expression?,
+        source: String,
+        fileName: String,
+    ) {
+        val init = initializer ?: return
+        val initType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
+        if (initType !is Type.Union) return
+        val hasNullOrUndefined = initType.types.any {
+            it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+        }
+        if (!hasNullOrUndefined) return
+        // TypeScript puts null/undefined at the end of union display
+        val ordered = initType.types.sortedBy {
+            if (it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) 1 else 0
+        }
+        val display = ordered.joinToString(" | ") { typeToString(it) }
+        for (el in pattern.elements) {
+            if (el !is BindingElement) continue
+            if (el.dotDotDotToken) continue
+            val propNode = el.propertyName ?: el.name
+            val propName = when (propNode) {
+                is Identifier -> propNode.text
+                is StringLiteralNode -> propNode.text
+                else -> continue
+            }
+            val squiggleStart = propNode.pos
+            val squiggleLen = when (propNode) {
+                is Identifier -> propNode.text.length
+                is StringLiteralNode -> (propNode.rawText?.length ?: propNode.text.length) + 2
+                else -> continue
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, squiggleStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$display'.",
+                category = DiagnosticCategory.Error,
+                code = 2339,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = squiggleStart,
+                length = squiggleLen,
+            ))
         }
     }
 
