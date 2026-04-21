@@ -171,6 +171,7 @@ data class CompilerOptions(
     val inlineSources: Boolean = false,
     val sourceRoot: String? = null,
     val composite: Boolean = false,
+    val exactOptionalPropertyTypes: Boolean = false,
     val pretty: Boolean = false,
     val incremental: Boolean? = null,
     val isolatedDeclarations: Boolean = false,
@@ -418,6 +419,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
         "noimplicitthis" -> options.copy(noImplicitThis = boolValue)
         "strictnullchecks" -> options.copy(strictNullChecks = boolValue, strictNullChecksExplicitlyFalse = !boolValue)
+        "exactoptionalpropertytypes" -> options.copy(exactOptionalPropertyTypes = boolValue)
         "strictpropertyinitialization" -> options.copy(strictPropertyInitializationExplicitlyFalse = !boolValue)
         "nounusedlocals" -> options.copy(noUnusedLocals = boolValue)
         "nounusedparameters" -> options.copy(noUnusedParameters = boolValue)
