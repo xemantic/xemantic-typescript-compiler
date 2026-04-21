@@ -28963,6 +28963,11 @@ interface DataView {
             for (param in parameters) {
                 val paramType = param.type
                 val paramName = param.name
+                // 16.4ei: `function fst({ s } = t) {}` where t has nullable-union type —
+                // destructuring pattern as parameter name with a default initializer.
+                if (paramName is ObjectBindingPattern && param.initializer != null) {
+                    checkDestructuringFromNullableUnion(paramName, param.initializer, source, fileName)
+                }
                 if (paramType != null && paramName is Identifier) {
                     // Rest parameter with clearly-non-array type annotation: TS2370 fires
                     // but the parameter's runtime type is effectively any[] — skip local
