@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-22 (16.4eo, +1 test: 8265→8266) — TS2300 for property + complete accessor pair when property is first, and TS2717 when later property's type differs from earlier accessor pair:** In `checkDuplicateClassMembers`, when a class has `public x; get x() {} set x(_x: T) {}`, all three now get TS2300. Previously only the property was flagged. TS2717 also now fires when a property is declared AFTER a complete get/set pair and has a different type (e.g. `get x2() { return 10 } set x2(_x: number) {} public x2;` → `Property 'x2' must be of type 'number', but here has type 'any'.`).
+
+  - Two changes in `checkDuplicateClassMembers` (Checker.kt ~11463): (a) include `memberNode` on GetAccessor/SetAccessor `MemberInfo` entries so TS2717 can extract accessor-pair types; (b) the `hasProperty && hasCompleteAccessorPair` branch now flags only the property when `propIdx > lastAccessorIdx` (property comes after both accessors) — else flags the whole group. Prior behavior treated the pair as "the intended definition" regardless of order, missing the "property first, accessors later" case.
+  - TS2717 firstType extraction: when first member is accessor, prefer getter's return-type annotation, else setter's first parameter annotation. Later-property type defaults to `"any"` when property has no annotation and no initializer.
+  - → +1: `duplicateClassElements_ts` (adds 2× TS2300 on `get x`/`set x` and 1× TS2717 on later `public x2;`). Zero regressions (1810 → 1809 failed).
+
   **Session 2026-04-22 (16.4en, +1 test: 8264→8265) — TS7005 for un-annotated `var` inside ambient context (not just `declare var`):** `declare namespace m { var x; var y: any; namespace n { var y; } }` now emits TS7005 "Variable 'x' implicitly has an 'any' type." at each `var` without a type annotation and no initializer — the previous gate required `Declare` modifier directly on the `VariableStatement`, missing the case where the ambient context comes from an enclosing `declare namespace`.
 
   - Single-line fix at Checker.kt ~7252 in `checkImplicitAnyInStatements` VariableStatement branch: change `ModifierFlag.Declare in stmt.modifiers` to `(ModifierFlag.Declare in stmt.modifiers || inAmbientContext)`. The `inAmbientContext` flag is already propagated correctly through nested ModuleDeclaration branches (line 7280).

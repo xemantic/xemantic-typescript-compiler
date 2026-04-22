@@ -11516,11 +11516,11 @@ class Checker(
                 }
                 is GetAccessor -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "getter", member.name))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "getter", member.name, member))
                 }
                 is SetAccessor -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "setter", member.name))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "setter", member.name, member))
                 }
                 else -> {}
             }
@@ -11554,9 +11554,23 @@ class Checker(
             val membersToFlag: List<MemberInfo> = when {
                 getterCount >= 2 || setterCount >= 2 -> group // all conflict when either accessor is duplicated
                 hasMethod && (hasGetter || hasSetter) -> group // method + accessor → all
-                hasProperty && hasCompleteAccessorPair ->
-                    // Complete get+set pair plus property: only the property is the duplicate
-                    group.filter { it.kind == "property" }
+                hasProperty && hasCompleteAccessorPair -> {
+                    // Complete get+set pair plus property:
+                    // - If property comes AFTER the pair completes → only flag the property
+                    //   (the accessor pair is the intended definition)
+                    // - If property comes BEFORE the pair completes → flag all
+                    //   (property "first" creates a non-accessor binding and the pair conflicts)
+                    val propIdx = group.indexOfFirst { it.kind == "property" }
+                    val lastAccessorIdx = maxOf(
+                        group.indexOfLast { it.kind == "getter" },
+                        group.indexOfLast { it.kind == "setter" },
+                    )
+                    if (propIdx > lastAccessorIdx) {
+                        group.filter { it.kind == "property" }
+                    } else {
+                        group
+                    }
+                }
                 hasProperty && (hasGetter || hasSetter) ->
                     // Incomplete accessor + property: both conflict
                     group
@@ -11584,7 +11598,17 @@ class Checker(
             // Fires when a property is subsequent to any first declaration with a different type
             if (hasProperty && group.size >= 2) {
                 val firstMember = group[0]
-                val firstType = getMemberTypeString(firstMember.memberNode)
+                val firstType = when (firstMember.kind) {
+                    "property", "method" -> getMemberTypeString(firstMember.memberNode)
+                    "getter", "setter" -> {
+                        // Prefer getter's return-type annotation, else setter's first param annotation
+                        val getter = group.firstOrNull { it.kind == "getter" }?.memberNode as? GetAccessor
+                        val setter = group.firstOrNull { it.kind == "setter" }?.memberNode as? SetAccessor
+                        getter?.type?.let { typeNodeToSimpleString(it) }
+                            ?: setter?.parameters?.firstOrNull()?.type?.let { typeNodeToSimpleString(it) }
+                    }
+                    else -> null
+                }
                 if (firstType != null) {
                     // Check all subsequent properties (not methods — TS2717 only fires on properties)
                     for (i in 1 until group.size) {
@@ -11592,6 +11616,7 @@ class Checker(
                         if (info.kind != "property") continue
                         val laterProp = info.memberNode as? PropertyDeclaration ?: continue
                         val laterType = getPropertyTypeString(laterProp)
+                            ?: if (laterProp.type == null && laterProp.initializer == null) "any" else null
                         if (laterType != null && laterType != firstType) {
                             val name = info.displayName
                             val start = info.nameNode.pos
@@ -11640,6 +11665,14 @@ class Checker(
             is PropertyDeclaration -> getPropertyTypeString(memberNode)
             is MethodDeclaration -> getMethodTypeString(memberNode)
             else -> null
+        }
+    }
+
+    private fun typeNodeToSimpleString(typeNode: TypeNode): String? {
+        return when (typeNode) {
+            is TypeReference -> (typeNode.typeName as? Identifier)?.text
+            is KeywordTypeNode -> typeNode.kind.name.lowercase().removeSuffix("keyword")
+            else -> formatTypeForDisplay(typeNode)
         }
     }
 
