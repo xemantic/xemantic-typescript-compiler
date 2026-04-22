@@ -2519,6 +2519,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-22 (16.4ev, +1 test: 8274→8275) — TS1166 + TS1169 for non-literal computed property names, plus TS2564 BinaryExpression display:** `interface I { [x = '']: string; }` now emits TS1169 at the `[x = '']` span. `class C { [x = 0]: string }` emits both TS1166 at the `[x = 0]` span AND TS2564 with display `Property '[x = 0]'`.
+
+  - New `checkComputedPropertyNameLiteral` pass (Checker.kt ~24242): walks `InterfaceDeclaration` and `ClassDeclaration` members, emitting TS1169 / TS1166 when a `ComputedPropertyName` expression fails `isLiteralLikeExpr`.
+  - `isLiteralLikeExpr` is deliberately conservative — it returns `true` for identifiers, dotted `PropertyAccessExpression`s (e.g. `Symbol.iterator`, `NS.x`), numeric/string/bigint literals, negative-literal `PrefixUnaryExpression`, and parenthesized forms, since those commonly resolve to literal or unique-symbol types we can't fully verify without inference. It returns `false` only for obviously-non-literal shapes: `BinaryExpression`, `CallExpression`, object/array literals, `FunctionExpression`/`ArrowFunction`, and `NewExpression`.
+  - Extended the TS2564 `ComputedPropertyName` branch in `checkPropertyInit` to handle `BinaryExpression` expressions (e.g. `[x = 0]`) by pulling the literal source text between `[` and `]` as the display name. Previous branches for `Identifier` and `PropertyAccessExpression` are unchanged.
+  - Span: start = `ComputedPropertyName.pos` (the `[`), end = `source.indexOf(']', expression.pos) + 1`. Includes both brackets.
+  - → +1: `indexSignatureWithInitializer_ts` (adds TS1169 + TS1166 + TS2564). Zero regressions (1801 → 1800 failed).
+
   **Session 2026-04-22 (16.4eu, +1 test: 8273→8274) — TS4105 "Private or protected member cannot be accessed on a type parameter":** `type X<T extends A> = T["a"]` where class `A` has `private a: number` now emits TS4105 at the `T["a"]` span. Also fires for unions of type-parameter-or-class at the object side (e.g. `(T | B)["a"]`) and for type parameters whose constraint is itself a union (`T extends A | B`). Intersection constraints (`T extends A & B`) do NOT emit — the intersection merges the private members into a single shape.
 
   - New `checkIndexedAccessPrivateMembers` pass (Checker.kt ~42545): walks `TypeAliasDeclaration`, `InterfaceDeclaration` members, and `ClassDeclaration` members, building a cumulative `tpConstraints` map from `TypeParameter` declarations in scope. For each `IndexedAccessType` encountered, if the index is a string-literal type and the object side has any class in its apparent-type closure with a private/protected property of that name, emit TS4105.

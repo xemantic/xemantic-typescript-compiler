@@ -515,6 +515,8 @@ class Checker(
         checkMultipleDefaults()
         // 45. Check interface property initializers (TS1246)
         checkInterfacePropertyInitializers()
+        // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
+        checkComputedPropertyNameLiteral()
         // 46. Check await in non-async context (TS1308)
         checkAwaitContext()
         // 47. Check declaration name conflicts with built-in global (TS2397)
@@ -6182,6 +6184,11 @@ class Checker(
                             buildDottedName(expr)?.let { "[$it]" }
                         }
                         is Identifier -> "[${expr.text}]"
+                        is BinaryExpression -> {
+                            // Assignment-like inside computed name (rare, e.g. `[x = 0]`) — use source text between brackets
+                            val closeIdx = source.indexOf(']', expr.pos)
+                            if (closeIdx > 0) source.substring(name.pos, closeIdx + 1) else null
+                        }
                         else -> null
                     }
                 }
@@ -24237,6 +24244,100 @@ interface DataView {
             is Block -> for (s in stmt.statements) checkInterfacePropInit(s, source, fileName)
             else -> {}
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1166 / TS1169: Computed property names in classes / interfaces must
+    // refer to literal or 'unique symbol' types.
+    // -----------------------------------------------------------------------
+
+    private fun checkComputedPropertyNameLiteral() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                checkComputedPropNameInStmt(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun checkComputedPropNameInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is InterfaceDeclaration -> for (m in stmt.members) {
+                if (m is PropertyDeclaration) {
+                    val name = m.name
+                    if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
+                        emitComputedPropNameNonLiteral(name, source, fileName, 1169,
+                            "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.")
+                    }
+                }
+            }
+            is ClassDeclaration -> for (m in stmt.members) {
+                if (m is PropertyDeclaration) {
+                    val name = m.name
+                    if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
+                        emitComputedPropNameNonLiteral(name, source, fileName, 1166,
+                            "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
+                    }
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName)
+            }
+            is Block -> for (s in stmt.statements) checkComputedPropNameInStmt(s, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Conservative check: only obviously non-literal expressions return false.
+     * Returns true for patterns TypeScript typically accepts (literals,
+     * negative-literal unary, and dotted names like `Symbol.iterator` or
+     * `NS.x` which may resolve to unique-symbol / literal const types).
+     * Returning true avoids a false-positive TS1166/TS1169 on patterns we
+     * can't verify without full type inference. */
+    private fun isLiteralLikeExpr(expr: Expression): Boolean {
+        return when (expr) {
+            is StringLiteralNode -> true
+            is NumericLiteralNode -> true
+            is BigIntLiteralNode -> true
+            is NoSubstitutionTemplateLiteralNode -> true
+            is Identifier -> expr.text == "true" || expr.text == "false" || expr.text == "null" || expr.text == "undefined" ||
+                // Accept other identifiers conservatively — they could resolve to unique-symbol consts or literal-type vars
+                true
+            is PrefixUnaryExpression -> expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode
+            is PropertyAccessExpression -> true // Symbol.iterator, NS.x etc. — accept conservatively
+            is ParenthesizedExpression -> isLiteralLikeExpr(expr.expression)
+            is BinaryExpression -> false
+            is CallExpression -> false
+            is ObjectLiteralExpression -> false
+            is ArrayLiteralExpression -> false
+            is FunctionExpression -> false
+            is ArrowFunction -> false
+            is NewExpression -> false
+            else -> true // unknown node types — be conservative
+        }
+    }
+
+    private fun emitComputedPropNameNonLiteral(
+        name: ComputedPropertyName, source: String, fileName: String,
+        code: Int, message: String,
+    ) {
+        val start = name.pos
+        val closeIdx = source.indexOf(']', name.expression.pos)
+        if (closeIdx < 0) return
+        val length = closeIdx + 1 - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
