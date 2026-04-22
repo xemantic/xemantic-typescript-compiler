@@ -22204,12 +22204,85 @@ interface DataView {
         for (stmt in stmts) checkSetterInStatement(stmt, source, fileName)
     }
 
+    /**
+     * TS2808: "A get accessor must be at least as accessible as the setter".
+     * Fires on BOTH getter and setter when the getter's visibility is more restrictive
+     * than the setter's (e.g. `private get X` + `public set X`). Ignores cases without
+     * a matching pair.
+     *
+     * Accessibility level: private=1, protected=2, public=3 (default).
+     */
+    private fun checkAccessorVisibilityMismatch(members: List<ClassElement>, source: String, fileName: String) {
+        fun accessorName(node: NameNode): String? = when (node) {
+            is Identifier -> node.text
+            is StringLiteralNode -> node.text
+            is NumericLiteralNode -> node.text
+            else -> null
+        }
+        fun accessLevel(mods: Set<ModifierFlag>): Int = when {
+            ModifierFlag.Private in mods -> 1
+            ModifierFlag.Protected in mods -> 2
+            else -> 3
+        }
+        val getters = mutableMapOf<Pair<String, Boolean>, GetAccessor>()
+        val setters = mutableMapOf<Pair<String, Boolean>, SetAccessor>()
+        for (m in members) {
+            when (m) {
+                is GetAccessor -> accessorName(m.name)?.let {
+                    getters[it to (ModifierFlag.Static in m.modifiers)] = m
+                }
+                is SetAccessor -> accessorName(m.name)?.let {
+                    setters[it to (ModifierFlag.Static in m.modifiers)] = m
+                }
+                else -> {}
+            }
+        }
+        for ((key, g) in getters) {
+            val s = setters[key] ?: continue
+            if (accessLevel(g.modifiers) < accessLevel(s.modifiers)) {
+                for ((nameNode, _) in listOf(g.name to true, s.name to false)) {
+                    val start = if (nameNode is Identifier) nameNode.pos else 0
+                    val length = if (nameNode is Identifier) nameNode.text.length else 3
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "A get accessor must be at least as accessible as the setter",
+                        category = DiagnosticCategory.Error,
+                        code = 2808,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        }
+    }
+
     private fun checkSetterInStatement(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
             is ClassDeclaration -> {
+                checkAccessorVisibilityMismatch(stmt.members, source, fileName)
                 for (m in stmt.members) {
                     if (m is SetAccessor) {
                         checkSetterParams(m.name, m.parameters, source, fileName)
+                        // TS1095: set accessor cannot have a return type annotation
+                        if (m.type != null) {
+                            val nameNode = m.name
+                            val start = if (nameNode is Identifier) nameNode.pos else m.pos
+                            val length = if (nameNode is Identifier) nameNode.text.length else 3
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "A 'set' accessor cannot have a return type annotation.",
+                                category = DiagnosticCategory.Error,
+                                code = 1095,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
                     }
                     if (m is GetAccessor && m.parameters.isNotEmpty()) {
                         // TS1054: get accessor cannot have parameters
