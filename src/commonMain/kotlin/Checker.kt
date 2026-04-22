@@ -7249,7 +7249,7 @@ class Checker(
                     for (decl in stmt.declarationList.declarations) {
                         // TS7005: Variable implicitly has an 'any' type (ambient/declare declarations only)
                         if (decl.type == null && decl.initializer == null
-                            && ModifierFlag.Declare in stmt.modifiers) {
+                            && (ModifierFlag.Declare in stmt.modifiers || inAmbientContext)) {
                             val name = decl.name
                             if (name is Identifier && name.text.isNotEmpty()) {
                                 val start = name.pos
