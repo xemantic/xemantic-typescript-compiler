@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-22 (16.4er, +2 tests: 8269→8271) — TS2678 for case clause literal that doesn't match a const-narrowed switch expression:** `const x = 1; switch (x) { case 10: ... }` now emits TS2678 "Type '10' is not comparable to type '1'." at the case literal position. `let x = 1` is NOT tracked because `let` widens to the primitive type (`number`), making `case 10` comparable to it.
+
+  - New `checkSwitchCaseComparable` pass (Checker.kt ~23580): walks statement lists, collects `const X = <literal>` bindings from the enclosing block (untyped `const` only — a type annotation would widen the literal), then for each SwitchStatement in the same block, checks case clauses against the const's literal. Literal kinds tracked: NumericLiteral, StringLiteral, BigIntLiteral, `true`/`false` (as Identifier), and `PrefixUnaryExpression(-, NumericLiteral)` for negative numbers.
+  - Emits TS2678 only when source and target literals share the SAME primitive kind but DIFFERENT display — avoids FPs for `case "hello"` against a numeric-const switch (kind mismatch is a separate TS error).
+  - Squiggle spans just the case expression's literal text — 2 chars for `10`, `text.length + 2` for string literal (includes quotes).
+  - → +2: `letConstInCaseClauses_ts__target_es5__` and `letConstInCaseClauses_ts__target_es2015__`. Zero regressions (1806 → 1804 failed).
+
   **Session 2026-04-22 (16.4eq, +1 test: 8268→8269) — TS2395 fires for instantiated namespaces in the value space, and fires alongside TS2434:** When a non-exported `namespace X { var t }` and an exported `class X` / `function X` / `export namespace X { var t }` coexist, all three occupy the value space (instantiated namespaces merge with class/function/var). The TS2395 "Individual declarations in merged declaration 'X' must be all exported or all local" check now includes instantiated namespaces in the value-space comparison, emitting on the namespace AND the class/function position too.
 
   - `checkDuplicateDeclarations` (Checker.kt ~10984): value-space decls now include instantiated namespace decls (via `isNamespaceInstantiated`). TS2395 emissions are deduplicated across the three spaces (type, value, namespace) using a position-keyed map so an instantiated namespace that conflicts in both value-space AND namespace-space only emits once at its declaration position.
