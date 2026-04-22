@@ -642,6 +642,8 @@ class Checker(
         }
         // 77. Check class named 'Object' with CJS/AMD/System/UMD module (TS2725)
         checkObjectClassNameConflict()
+        // 78. Check indexed access into type parameter whose constraint has private/protected member (TS4105)
+        checkIndexedAccessPrivateMembers()
         } // end if (!declarationOnly)
     }
 
@@ -42538,6 +42540,195 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS4105: Private or protected member cannot be accessed on a type parameter
+    // -----------------------------------------------------------------------
+
+    private fun checkIndexedAccessPrivateMembers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkIndexedAccessPrivateInStatements(result.sourceFile.statements, source, fileName, emptyMap())
+        }
+    }
+
+    private fun checkIndexedAccessPrivateInStatements(
+        stmts: List<Statement>, source: String, fileName: String,
+        outerTpConstraints: Map<String, TypeNode>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is TypeAliasDeclaration -> {
+                    val tpConstraints = outerTpConstraints + collectTpConstraints(stmt.typeParameters)
+                    walkTypeForIndexedAccess(stmt.type, tpConstraints, source, fileName)
+                }
+                is InterfaceDeclaration -> {
+                    val tpConstraints = outerTpConstraints + collectTpConstraints(stmt.typeParameters)
+                    for (member in stmt.members) {
+                        walkMemberForIndexedAccess(member, tpConstraints, source, fileName)
+                    }
+                }
+                is ClassDeclaration -> {
+                    val classTp = outerTpConstraints + collectTpConstraints(stmt.typeParameters)
+                    for (member in stmt.members) {
+                        walkMemberForIndexedAccess(member, classTp, source, fileName)
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkIndexedAccessPrivateInStatements(body.statements, source, fileName, outerTpConstraints)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun collectTpConstraints(tps: List<TypeParameter>?): Map<String, TypeNode> {
+        if (tps.isNullOrEmpty()) return emptyMap()
+        val m = mutableMapOf<String, TypeNode>()
+        for (tp in tps) {
+            val c = tp.constraint
+            if (c != null) m[tp.name.text] = c
+        }
+        return m
+    }
+
+    private fun walkMemberForIndexedAccess(
+        member: Node, outerTp: Map<String, TypeNode>,
+        source: String, fileName: String,
+    ) {
+        when (member) {
+            is PropertyDeclaration -> member.type?.let { walkTypeForIndexedAccess(it, outerTp, source, fileName) }
+            is MethodDeclaration -> {
+                val methodTp = outerTp + collectTpConstraints(member.typeParameters)
+                for (p in member.parameters) p.type?.let { walkTypeForIndexedAccess(it, methodTp, source, fileName) }
+                member.type?.let { walkTypeForIndexedAccess(it, methodTp, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkTypeForIndexedAccess(
+        type: TypeNode, tpConstraints: Map<String, TypeNode>,
+        source: String, fileName: String,
+    ) {
+        when (type) {
+            is IndexedAccessType -> {
+                walkTypeForIndexedAccess(type.objectType, tpConstraints, source, fileName)
+                walkTypeForIndexedAccess(type.indexType, tpConstraints, source, fileName)
+                val keyLit = type.indexType as? LiteralType ?: return
+                val keyStr = (keyLit.literal as? StringLiteralNode)?.text ?: return
+                if (indexedAccessHasPrivateMember(type.objectType, keyStr, tpConstraints, mutableSetOf())) {
+                    val closeIdx = source.indexOf(']', type.indexType.pos)
+                    if (closeIdx < 0) return
+                    val start = type.pos
+                    val length = closeIdx + 1 - start
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Private or protected member '$keyStr' cannot be accessed on a type parameter.",
+                        category = DiagnosticCategory.Error,
+                        code = 4105,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            is UnionType -> type.types.forEach { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+            is IntersectionType -> type.types.forEach { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+            is ParenthesizedType -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
+            is ArrayType -> walkTypeForIndexedAccess(type.elementType, tpConstraints, source, fileName)
+            is TupleType -> type.elements.forEach { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+            is TypeOperator -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
+            is TypeReference -> type.typeArguments?.forEach { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+            is FunctionType -> {
+                val innerTp = tpConstraints + collectTpConstraints(type.typeParameters)
+                for (p in type.parameters) p.type?.let { walkTypeForIndexedAccess(it, innerTp, source, fileName) }
+                walkTypeForIndexedAccess(type.type, innerTp, source, fileName)
+            }
+            is ConstructorType -> {
+                val innerTp = tpConstraints + collectTpConstraints(type.typeParameters)
+                for (p in type.parameters) p.type?.let { walkTypeForIndexedAccess(it, innerTp, source, fileName) }
+                walkTypeForIndexedAccess(type.type, innerTp, source, fileName)
+            }
+            is ConditionalType -> {
+                walkTypeForIndexedAccess(type.checkType, tpConstraints, source, fileName)
+                walkTypeForIndexedAccess(type.extendsType, tpConstraints, source, fileName)
+                walkTypeForIndexedAccess(type.trueType, tpConstraints, source, fileName)
+                walkTypeForIndexedAccess(type.falseType, tpConstraints, source, fileName)
+            }
+            is MappedType -> {
+                type.type?.let { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+                type.nameType?.let { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+            }
+            is TypeLiteral -> for (m in type.members) walkMemberForIndexedAccess(m, tpConstraints, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Returns true if [typeNode] (object side of an IndexedAccessType) refers to at
+     * least one class with a private/protected member named [propName]. An intersection
+     * constraint returns false — TS allows indexed access through intersection. */
+    private fun indexedAccessHasPrivateMember(
+        typeNode: TypeNode, propName: String,
+        tpConstraints: Map<String, TypeNode>, visited: MutableSet<String>,
+    ): Boolean {
+        return when (typeNode) {
+            is ParenthesizedType -> indexedAccessHasPrivateMember(typeNode.type, propName, tpConstraints, visited)
+            is UnionType -> typeNode.types.any { indexedAccessHasPrivateMember(it, propName, tpConstraints, visited) }
+            is IntersectionType -> false
+            is TypeReference -> {
+                val baseName = (typeNode.typeName as? Identifier)?.text ?: return false
+                val constraint = tpConstraints[baseName]
+                if (constraint != null) {
+                    if (baseName in visited) return false
+                    visited.add(baseName)
+                    val r = indexedAccessHasPrivateMember(constraint, propName, tpConstraints, visited)
+                    visited.remove(baseName)
+                    r
+                } else {
+                    classOrInterfaceHasPrivatePropByName(baseName, propName)
+                }
+            }
+            else -> false
+        }
+    }
+
+    private fun classOrInterfaceHasPrivatePropByName(className: String, propName: String): Boolean {
+        val sym = globals[className] ?: return false
+        for (decl in sym.declarations ?: emptyList()) {
+            when (decl) {
+                is ClassDeclaration -> {
+                    for (m in decl.members) {
+                        val memberName = when (m) {
+                            is PropertyDeclaration -> (m.name as? Identifier)?.text
+                            is MethodDeclaration -> (m.name as? Identifier)?.text
+                            is GetAccessor -> (m.name as? Identifier)?.text
+                            is SetAccessor -> (m.name as? Identifier)?.text
+                            else -> null
+                        }
+                        if (memberName != propName) continue
+                        val modifiers = when (m) {
+                            is PropertyDeclaration -> m.modifiers
+                            is MethodDeclaration -> m.modifiers
+                            is GetAccessor -> m.modifiers
+                            is SetAccessor -> m.modifiers
+                            else -> emptySet()
+                        }
+                        if (ModifierFlag.Private in modifiers || ModifierFlag.Protected in modifiers) return true
+                    }
+                }
+                else -> {}
+            }
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
