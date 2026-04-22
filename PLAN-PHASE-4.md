@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-22 (16.4es, +1 test: 8271→8272) — TS2449 + cross-class TS2729 for forward-class refs in static property initializers:** `class X { static illegal = After.data; } class After { static data = 12; }` now emits TS2449 "Class 'After' used before its declaration." at the `After` reference AND TS2729 "Property 'data' is used before its initialization." at the `.data` name (because After's statics haven't been initialized at the point X's static initializer runs).
+
+  - `checkUBDForwardRefs` ClassDeclaration branch (Checker.kt ~21739): now also walks static property initializers — they execute at class-declaration time and can forward-reference later same-scope classes. Instance-property initializers still skipped (they evaluate in the constructor, so forward-class refs through `new After()` are fine at that later point).
+  - New TS2729 emission inside `checkUBDForwardInExpr` PropertyAccessExpression branch: when the base is a forward-referenced class (tracked via a new `classNode: ClassDeclaration?` field on `BlockScopedDecl`), look up a matching static property by name in the class's members and emit TS2729 at the property-access name with a TS2728 "declared here" related info pointing at the static property declaration.
+  - → +1: `scopeCheckStaticInitializer_ts` (adds 2× TS2449 on `After` refs + 1× TS2729 on `After.data`). Zero regressions (1804 → 1803 failed).
+
   **Session 2026-04-22 (16.4er, +2 tests: 8269→8271) — TS2678 for case clause literal that doesn't match a const-narrowed switch expression:** `const x = 1; switch (x) { case 10: ... }` now emits TS2678 "Type '10' is not comparable to type '1'." at the case literal position. `let x = 1` is NOT tracked because `let` widens to the primitive type (`number`), making `case 10` comparable to it.
 
   - New `checkSwitchCaseComparable` pass (Checker.kt ~23580): walks statement lists, collects `const X = <literal>` bindings from the enclosing block (untyped `const` only — a type annotation would widen the literal), then for each SwitchStatement in the same block, checks case clauses against the const's literal. Literal kinds tracked: NumericLiteral, StringLiteral, BigIntLiteral, `true`/`false` (as Identifier), and `PrefixUnaryExpression(-, NumericLiteral)` for negative numbers.
