@@ -529,6 +529,8 @@ class Checker(
         checkAmbientStatements()
         // 51. Check parameter initializer in non-implementation context (TS2371)
         checkParameterInitializerInNonImpl()
+        // 51b. Check parameter initializer references later parameter (TS2373)
+        checkParamInitForwardRef()
         // 52. Check strict mode reserved words as identifiers (TS1212)
         checkStrictModeReservedWords()
         // 53. Check class/interface named 'undefined' (TS2414/TS2427)
@@ -24292,6 +24294,155 @@ interface DataView {
                 start = spanStart,
                 length = length,
             ))
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2373: Parameter 'X' cannot reference identifier 'Y' declared after it.
+    // Narrow: later-parameter references only (body-var case is deferred because
+    // of TS2304 interaction under ES2015+ parameter-scope rules).
+    // -----------------------------------------------------------------------
+
+    private fun checkParamInitForwardRef() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForParamInitForwardRef(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForParamInitForwardRef(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    stmt.body?.let { body ->
+                        checkForwardRefsInParams(stmt.parameters, source, fileName)
+                        walkForParamInitForwardRef(body.statements, source, fileName)
+                    }
+                }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { body ->
+                                checkForwardRefsInParams(member.parameters, source, fileName)
+                                walkForParamInitForwardRef(body.statements, source, fileName)
+                            }
+                            is Constructor -> member.body?.let { body ->
+                                checkForwardRefsInParams(member.parameters, source, fileName)
+                                walkForParamInitForwardRef(body.statements, source, fileName)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForParamInitForwardRef(it.statements, source, fileName) }
+                is Block -> walkForParamInitForwardRef(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForParamInitForwardRef(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForParamInitForwardRef(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
+                is TryStatement -> {
+                    walkForParamInitForwardRef(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.statements?.let { walkForParamInitForwardRef(it, source, fileName) }
+                    stmt.finallyBlock?.statements?.let { walkForParamInitForwardRef(it, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkForwardRefsInParams(
+        params: List<Parameter>,
+        source: String,
+        fileName: String,
+    ) {
+        if (params.size < 2) return
+        val paramNames = params.map { (it.name as? Identifier)?.text }
+        for (i in params.indices) {
+            val p = params[i]
+            val pName = paramNames[i] ?: continue
+            val init = p.initializer ?: continue
+            val laterParams = mutableSetOf<String>()
+            for (j in (i + 1)..<params.size) {
+                paramNames[j]?.let { laterParams.add(it) }
+            }
+            if (laterParams.isEmpty()) continue
+            findForwardParamRefs(init, pName, laterParams, source, fileName)
+        }
+    }
+
+    /** Walk an expression tree and emit TS2373 for Identifier references that resolve
+     * to a later parameter. Skips nested function/arrow/class bodies (they have their
+     * own scope and aren't evaluated during param initialization). */
+    private fun findForwardParamRefs(
+        expr: Expression,
+        currentParamName: String,
+        laterParams: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                val name = expr.text
+                if (name in laterParams) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter '$currentParamName' cannot reference identifier '$name' declared after it.",
+                        category = DiagnosticCategory.Error,
+                        code = 2373,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = expr.pos,
+                        length = name.length,
+                    ))
+                }
+            }
+            is BinaryExpression -> {
+                findForwardParamRefs(expr.left, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.right, currentParamName, laterParams, source, fileName)
+            }
+            is PrefixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName)
+            is PostfixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName)
+            is ParenthesizedExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+            is ConditionalExpression -> {
+                findForwardParamRefs(expr.condition, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.whenTrue, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.whenFalse, currentParamName, laterParams, source, fileName)
+            }
+            is CallExpression -> {
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                expr.arguments.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
+            }
+            is NewExpression -> {
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                expr.arguments?.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
+            }
+            is PropertyAccessExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+            is ElementAccessExpression -> {
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.argumentExpression, currentParamName, laterParams, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName)
+                        is ShorthandPropertyAssignment -> findForwardParamRefs(prop.name, currentParamName, laterParams, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is SpreadElement -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+            // Skip ArrowFunction, FunctionExpression, ClassExpression — own scope, not immediately evaluated.
+            // Skip TypeAssertionExpression / AsExpression — TypeScript doesn't fire in type positions.
+            else -> {}
         }
     }
 

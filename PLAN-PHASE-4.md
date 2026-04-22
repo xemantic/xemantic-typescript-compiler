@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-22 (16.4el, +1 test: 8261→8262) — TS2373 for parameter initializer referencing later parameter:** `function right(a = b, b = a)` now emits TS2373 "Parameter 'a' cannot reference identifier 'b' declared after it." at the `b` reference (col 20). The narrow walker `findForwardParamRefs` traverses expression subtrees, skipping nested function/arrow/class bodies (deferred-usage exception) and TypeAssertion/As-expression (type positions).
+
+  - New `checkParamInitForwardRef` pass (Checker.kt ~24301): walks FunctionDeclaration, ClassDeclaration methods, and Constructor bodies. For each function with 2+ parameters, collects param names in order; for each param `p[i]` with initializer, walks the initializer for Identifier references to any `p[j]` where `j > i`, emitting TS2373 at the reference position.
+  - **Deliberately narrow**: does NOT emit for body-var references (those require coordinating TS2304 suppression under ES2015+ parameter-scope rules — attempted in this session, reverted because the ES2015 variant of `optionalParamReferencingOtherParams2_ts` already passes via TS2304 and adding TS2373+TS2454 would regress it). Does NOT emit TS2454 either, for the same reason.
+  - → +1: `optionalParamReferencingOtherParams3_ts` (single TS2373 at `function right(a = b, b = a)`). `capturedParametersInInitializers1_ts` gained 1 of 3 expected emissions (foo4 shorthand-property case) but didn't flip — foo5 (IIFE) and foo9 (computed method name) need additional detection. Zero regressions (1814 → 1813 failed).
+
   **Session 2026-04-22 (16.4ek, +1 test: 8260→8261) — TS2451 for `type` alias + `const`/`let` redeclaration at file scope:** `export type foo = 5;` + `export const foo = 5;` in the same file now emits TS2451 "Cannot redeclare block-scoped variable 'foo'." at each declaration. TypeAliasDeclaration was previously not tracked in `DeclInfo` collection in `checkDuplicateDeclarations` (Checker.kt ~10690), so any type+const/let collision was silently ignored.
 
   - Added `TypeAliasDeclaration -> decls.add(DeclInfo(stmt.name.text, "type", stmt.name, stmt))` to the collection loop. New kind "type" is not referenced by any existing handler.
