@@ -21745,6 +21745,15 @@ interface DataView {
                         }
                     }
                 }
+                // Static property initializers evaluate at class-declaration time — check for
+                // forward refs to other classes. Instance-property initializers evaluate in the
+                // constructor (deferred), so they're safe.
+                for (member in stmt.members) {
+                    if (member is PropertyDeclaration &&
+                        ModifierFlag.Static in member.modifiers) {
+                        member.initializer?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+                    }
+                }
             }
             is SwitchStatement -> checkUBDForwardInExpr(stmt.expression, blockDecls, source, fileName)
             is LabeledStatement -> checkUBDForwardRefs(stmt.statement, blockDecls, source, fileName)
@@ -21786,7 +21795,29 @@ interface DataView {
                 checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
                 for (arg in expr.arguments) checkUBDForwardInExpr(arg, blockDecls, source, fileName)
             }
-            is PropertyAccessExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is PropertyAccessExpression -> {
+                // TS2729 cross-class: if the base is a forward-referenced class, and the
+                // accessed property is a static property of that class, emit TS2729 at the
+                // property name — the class's statics haven't been initialized yet.
+                val base = expr.expression
+                if (base is Identifier) {
+                    val baseDecl = blockDecls[base.text]
+                    if (baseDecl != null && baseDecl.isClass && base.pos < baseDecl.pos) {
+                        val classNode = baseDecl.classNode
+                        val propName = expr.name.text
+                        val staticProp = classNode?.members?.firstOrNull { m ->
+                            m is PropertyDeclaration &&
+                                ModifierFlag.Static in m.modifiers &&
+                                (m.name as? Identifier)?.text == propName
+                        } as? PropertyDeclaration
+                        if (staticProp != null) {
+                            val propPos = (staticProp.name as? Identifier)?.pos ?: staticProp.pos
+                            emitTS2729CrossClass(expr.name, propName, propPos, source, fileName)
+                        }
+                    }
+                }
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            }
             is ElementAccessExpression -> {
                 checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
                 checkUBDForwardInExpr(expr.argumentExpression, blockDecls, source, fileName)
@@ -21820,7 +21851,7 @@ interface DataView {
         }
     }
 
-    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false, val isConst: Boolean = false, val hasInitializer: Boolean = false)
+    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false, val isConst: Boolean = false, val hasInitializer: Boolean = false, val classNode: ClassDeclaration? = null)
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
         val decls = mutableMapOf<String, BlockScopedDecl>()
@@ -21856,7 +21887,7 @@ interface DataView {
                 if (ModifierFlag.Declare !in stmt.modifiers) {
                     val name = stmt.name
                     if (name != null) {
-                        decls[name.text] = BlockScopedDecl(name.pos, isClass = true)
+                        decls[name.text] = BlockScopedDecl(name.pos, isClass = true, classNode = stmt)
                     }
                 }
             }
@@ -22194,6 +22225,33 @@ interface DataView {
                 character = declChar,
                 start = declPos,
                 length = name.length,
+            )),
+        ))
+    }
+
+    private fun emitTS2729CrossClass(useNode: Identifier, propName: String, propDeclPos: Int, source: String, fileName: String) {
+        val start = useNode.pos
+        val length = propName.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val (declLine, declChar) = getLineAndCharacterOfPosition(source, propDeclPos)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' is used before its initialization.",
+            category = DiagnosticCategory.Error,
+            code = 2729,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$propName' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = fileName,
+                line = declLine,
+                character = declChar,
+                start = propDeclPos,
+                length = propName.length,
             )),
         ))
     }
