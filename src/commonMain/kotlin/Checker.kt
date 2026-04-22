@@ -10982,37 +10982,43 @@ class Checker(
                 }
                 // Classify each declaration into spaces
                 val typeSpaceDecls = group.filter { it.kind == "interface" || it.kind == "class" }
-                // For value space: exclude pure function overloads (handled by TS2383/TS2384/TS2385)
+                // For value space: exclude pure function overloads (handled by TS2383/TS2384/TS2385).
+                // Instantiated namespaces ALSO occupy the value space — they merge with class/function/var.
+                val instantiatedNsDecls = group.filter { it.kind == "namespace" }.filter { decl ->
+                    (decl.stmt as? ModuleDeclaration)?.let { isNamespaceInstantiated(it) } == true
+                }
                 val valueSpaceDecls = if (group.all { it.kind == "function" }) emptyList()
-                    else group.filter { it.kind == "class" || it.kind == "function" || it.kind == "var" }
+                    else group.filter { it.kind == "class" || it.kind == "function" || it.kind == "var" } + instantiatedNsDecls
                 val namespaceSpaceDecls = group.filter { it.kind == "namespace" }
-                var emitted2395 = false
+                // Collect 2395-worthy positions across spaces and emit each position at most once.
+                val all2395Decls = linkedMapOf<Int, DeclInfo>()
                 for (spaceDecls in listOf(typeSpaceDecls, valueSpaceDecls, namespaceSpaceDecls)) {
                     if (spaceDecls.size < 2) continue
                     val exported = spaceDecls.filter { isExported(it) }
                     val nonExported = spaceDecls.filter { !isExported(it) }
                     if (exported.isNotEmpty() && nonExported.isNotEmpty()) {
-                        // Emit TS2395 on all declarations in this group (both exported and not)
-                        // Deduplicate: only emit once per declaration node
-                        val all2395 = (exported + nonExported).distinctBy { it.nameNode.pos }
-                        for (decl in all2395) {
-                            val start = decl.nameNode.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
-                                category = DiagnosticCategory.Error,
-                                code = 2395,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = decl.name.length,
-                            ))
+                        for (decl in (exported + nonExported)) {
+                            all2395Decls.putIfAbsent(decl.nameNode.pos, decl)
                         }
-                        emitted2395 = true
                     }
                 }
-                if (emitted2395) continue // Don't also check for TS2300 etc.
+                val emitted2395 = all2395Decls.isNotEmpty()
+                for (decl in all2395Decls.values) {
+                    val start = decl.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
+                        category = DiagnosticCategory.Error,
+                        code = 2395,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = decl.name.length,
+                    ))
+                }
+                // Note: TS2434 (namespace-before-class/function merge) may fire alongside TS2395
+                // on the same declaration, so we do NOT `continue` after emitting TS2395.
 
                 // TS2434: A namespace declaration cannot be located prior to a class or function
                 // with which it is merged. Only fires for instantiated namespaces.
@@ -11056,6 +11062,9 @@ class Checker(
                     }
                     }
                 }
+                // Skip TS2300/TS2393/TS2813/etc. when TS2395 already fired — those checks are
+                // superseded by TS2395's "all exported or all local" category.
+                if (emitted2395) continue
 
                 // TS2393: Duplicate function implementation — two functions both with bodies
                 // Fires regardless of other declaration kinds (alongside TS2300 if var/class also present)
