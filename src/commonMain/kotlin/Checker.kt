@@ -21751,7 +21751,7 @@ interface DataView {
                 for (member in stmt.members) {
                     if (member is PropertyDeclaration &&
                         ModifierFlag.Static in member.modifiers) {
-                        member.initializer?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+                        member.initializer?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName, inStaticInit = true) }
                     }
                 }
             }
@@ -21761,13 +21761,16 @@ interface DataView {
         }
     }
 
-    /** Check expression for forward references to block-scoped declarations */
-    private fun checkUBDForwardInExpr(expr: Expression, blockDecls: Map<String, BlockScopedDecl>, source: String, fileName: String) {
+    /** Check expression for forward references to block-scoped declarations.
+     * `inStaticInit` is true when walking a class static-property initializer;
+     * TS2729 for forward-referenced receivers fires only in that context. */
+    private fun checkUBDForwardInExpr(expr: Expression, blockDecls: Map<String, BlockScopedDecl>, source: String, fileName: String, inStaticInit: Boolean = false) {
         when (expr) {
             is Identifier -> {
                 val decl = blockDecls[expr.text]
                 if (decl != null && expr.pos < decl.pos) {
                     when {
+                        decl.isNamespace -> {} // namespaces have a hoisted binding; no TS2448/2449/2450 on the name itself
                         decl.isEnum -> emitTS2450(expr, decl.pos, expr.text, source, fileName)
                         decl.isClass -> emitTS2449(expr, decl.pos, expr.text, source, fileName)
                         else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer)
@@ -21778,80 +21781,91 @@ interface DataView {
                 // Iteratively walk left spine to avoid StackOverflow on deep binary chains
                 var current: Expression = expr
                 while (current is BinaryExpression) {
-                    checkUBDForwardInExpr(current.right, blockDecls, source, fileName)
+                    checkUBDForwardInExpr(current.right, blockDecls, source, fileName, inStaticInit)
                     current = current.left
                 }
-                checkUBDForwardInExpr(current, blockDecls, source, fileName)
+                checkUBDForwardInExpr(current, blockDecls, source, fileName, inStaticInit)
             }
-            is PrefixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName)
-            is PostfixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName)
-            is ParenthesizedExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is PrefixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName, inStaticInit)
+            is PostfixUnaryExpression -> checkUBDForwardInExpr(expr.operand, blockDecls, source, fileName, inStaticInit)
+            is ParenthesizedExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             is ConditionalExpression -> {
-                checkUBDForwardInExpr(expr.condition, blockDecls, source, fileName)
-                checkUBDForwardInExpr(expr.whenTrue, blockDecls, source, fileName)
-                checkUBDForwardInExpr(expr.whenFalse, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.condition, blockDecls, source, fileName, inStaticInit)
+                checkUBDForwardInExpr(expr.whenTrue, blockDecls, source, fileName, inStaticInit)
+                checkUBDForwardInExpr(expr.whenFalse, blockDecls, source, fileName, inStaticInit)
             }
             is CallExpression -> {
-                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-                for (arg in expr.arguments) checkUBDForwardInExpr(arg, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+                for (arg in expr.arguments) checkUBDForwardInExpr(arg, blockDecls, source, fileName, inStaticInit)
             }
             is PropertyAccessExpression -> {
-                // TS2729 cross-class: if the base is a forward-referenced class, and the
-                // accessed property is a static property of that class, emit TS2729 at the
-                // property name — the class's statics haven't been initialized yet.
-                val base = expr.expression
-                if (base is Identifier) {
-                    val baseDecl = blockDecls[base.text]
-                    if (baseDecl != null && baseDecl.isClass && base.pos < baseDecl.pos) {
-                        val classNode = baseDecl.classNode
-                        val propName = expr.name.text
-                        val staticProp = classNode?.members?.firstOrNull { m ->
-                            m is PropertyDeclaration &&
-                                ModifierFlag.Static in m.modifiers &&
-                                (m.name as? Identifier)?.text == propName
-                        } as? PropertyDeclaration
-                        if (staticProp != null) {
-                            val propPos = (staticProp.name as? Identifier)?.pos ?: staticProp.pos
-                            emitTS2729CrossClass(expr.name, propName, propPos, source, fileName)
+                // TS2729 for forward-referenced receivers: if the base identifier refers
+                // to a block-scoped entity whose initializer runs later in the same
+                // top-level sequence, accessing its members before that point reads
+                // before initialization. Fires for: class statics, enum members, const
+                // object-literal properties, and non-ambient namespace exports.
+                // Only in class static-initializer contexts — in regular code the
+                // TS2448/2449/2450 on the bare receiver identifier is sufficient.
+                if (inStaticInit) {
+                    val base = expr.expression
+                    if (base is Identifier) {
+                        val baseDecl = blockDecls[base.text]
+                        if (baseDecl != null && base.pos < baseDecl.pos) {
+                            val propName = expr.name.text
+                            val propDeclPos = findForwardRefMemberPos(baseDecl, propName)
+                            if (propDeclPos != null) {
+                                emitTS2729CrossClass(expr.name, propName, propDeclPos, source, fileName)
+                            }
                         }
                     }
                 }
-                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             }
             is ElementAccessExpression -> {
-                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-                checkUBDForwardInExpr(expr.argumentExpression, blockDecls, source, fileName)
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+                checkUBDForwardInExpr(expr.argumentExpression, blockDecls, source, fileName, inStaticInit)
             }
-            is ArrayLiteralExpression -> for (el in expr.elements) checkUBDForwardInExpr(el, blockDecls, source, fileName)
+            is ArrayLiteralExpression -> for (el in expr.elements) checkUBDForwardInExpr(el, blockDecls, source, fileName, inStaticInit)
             is ObjectLiteralExpression -> for (prop in expr.properties) {
                 when (prop) {
-                    is PropertyAssignment -> checkUBDForwardInExpr(prop.initializer, blockDecls, source, fileName)
-                    is SpreadAssignment -> checkUBDForwardInExpr(prop.expression, blockDecls, source, fileName)
+                    is PropertyAssignment -> checkUBDForwardInExpr(prop.initializer, blockDecls, source, fileName, inStaticInit)
+                    is SpreadAssignment -> checkUBDForwardInExpr(prop.expression, blockDecls, source, fileName, inStaticInit)
                     else -> {}
                 }
             }
             is TemplateExpression -> for (span in expr.templateSpans) {
-                checkUBDForwardInExpr(span.expression, blockDecls, source, fileName)
+                checkUBDForwardInExpr(span.expression, blockDecls, source, fileName, inStaticInit)
             }
-            is TypeOfExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-            is NonNullExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-            is SpreadElement -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is TypeOfExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is NonNullExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is SpreadElement -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             is NewExpression -> {
-                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-                expr.arguments?.forEach { checkUBDForwardInExpr(it, blockDecls, source, fileName) }
+                checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+                expr.arguments?.forEach { checkUBDForwardInExpr(it, blockDecls, source, fileName, inStaticInit) }
             }
-            is AsExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-            is TypeAssertionExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-            is VoidExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-            is DeleteExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
-            is AwaitExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName)
+            is AsExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is TypeAssertionExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is VoidExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is DeleteExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is AwaitExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             // Don't recurse into functions/arrows (they capture lazily)
             is ArrowFunction, is FunctionExpression -> {}
             else -> {}
         }
     }
 
-    private data class BlockScopedDecl(val pos: Int, val isEnum: Boolean = false, val isClass: Boolean = false, val isConst: Boolean = false, val hasInitializer: Boolean = false, val classNode: ClassDeclaration? = null)
+    private data class BlockScopedDecl(
+        val pos: Int,
+        val isEnum: Boolean = false,
+        val isClass: Boolean = false,
+        val isConst: Boolean = false,
+        val hasInitializer: Boolean = false,
+        val isNamespace: Boolean = false,
+        val classNode: ClassDeclaration? = null,
+        val enumNode: EnumDeclaration? = null,
+        val constInitObjLit: ObjectLiteralExpression? = null,
+        val namespaceNode: ModuleDeclaration? = null,
+    )
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
         val decls = mutableMapOf<String, BlockScopedDecl>()
@@ -21868,7 +21882,8 @@ interface DataView {
                 if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
                     val isConstDecl = kind == SyntaxKind.ConstKeyword
                     for (d in stmt.declarationList.declarations) {
-                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null)
+                        val objLit = if (isConstDecl) d.initializer as? ObjectLiteralExpression else null
+                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null, constInitObjLit = objLit)
                     }
                 }
             }
@@ -21879,7 +21894,7 @@ interface DataView {
                 // EXCEPT with isolatedModules/verbatimModuleSyntax, where inlining is suppressed
                 val isConst = ModifierFlag.Const in stmt.modifiers
                 if (!isConst || options.isolatedModules || options.verbatimModuleSyntax) {
-                    decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true)
+                    decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true, enumNode = stmt)
                 }
             }
             is ClassDeclaration -> {
@@ -21888,6 +21903,18 @@ interface DataView {
                     val name = stmt.name
                     if (name != null) {
                         decls[name.text] = BlockScopedDecl(name.pos, isClass = true, classNode = stmt)
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                // Track non-ambient namespaces only for member-access forward-ref detection.
+                // The namespace identifier itself doesn't trigger use-before-decl (namespaces
+                // have a hoisted binding); only `Namespace.X` before the namespace's IIFE runs
+                // is a TS2729.
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    val nameNode = stmt.name
+                    if (nameNode is Identifier) {
+                        decls[nameNode.text] = BlockScopedDecl(nameNode.pos, isNamespace = true, namespaceNode = stmt)
                     }
                 }
             }
@@ -21909,9 +21936,9 @@ interface DataView {
         }
     }
 
-    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false) {
+    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false, constInitObjLit: ObjectLiteralExpression? = null) {
         when (name) {
-            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit)
+            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit, constInitObjLit = constInitObjLit)
             is ObjectBindingPattern -> for (el in name.elements) {
                 collectBindingNamesEx(el.name, decls, isConst, hasInit)
             }
@@ -22227,6 +22254,63 @@ interface DataView {
                 length = name.length,
             )),
         ))
+    }
+
+    /** Return the declaration position of `propName` inside a forward-referenced
+     * block-scoped entity (class static, enum member, const-assigned object literal
+     * property, or namespace export), or null if no such member exists. */
+    private fun findForwardRefMemberPos(baseDecl: BlockScopedDecl, propName: String): Int? {
+        baseDecl.classNode?.let { classNode ->
+            val staticProp = classNode.members.firstOrNull { m ->
+                m is PropertyDeclaration &&
+                    ModifierFlag.Static in m.modifiers &&
+                    (m.name as? Identifier)?.text == propName
+            } as? PropertyDeclaration
+            if (staticProp != null) {
+                return (staticProp.name as? Identifier)?.pos ?: staticProp.pos
+            }
+        }
+        baseDecl.enumNode?.let { enumNode ->
+            val member = enumNode.members.firstOrNull { (it.name as? Identifier)?.text == propName }
+            if (member != null) {
+                return (member.name as? Identifier)?.pos ?: member.pos
+            }
+        }
+        baseDecl.constInitObjLit?.let { objLit ->
+            for (prop in objLit.properties) {
+                val propIdName = when (prop) {
+                    is PropertyAssignment -> (prop.name as? Identifier)?.text
+                    is ShorthandPropertyAssignment -> prop.name.text
+                    is MethodDeclaration -> (prop.name as? Identifier)?.text
+                    else -> null
+                }
+                if (propIdName == propName) {
+                    val pos = when (prop) {
+                        is PropertyAssignment -> (prop.name as? Identifier)?.pos ?: prop.pos
+                        is ShorthandPropertyAssignment -> prop.name.pos
+                        is MethodDeclaration -> (prop.name as? Identifier)?.pos ?: prop.pos
+                        else -> prop.pos
+                    }
+                    return pos
+                }
+            }
+        }
+        baseDecl.namespaceNode?.let { nsNode ->
+            val body = nsNode.body
+            if (body is ModuleBlock) {
+                for (s in body.statements) {
+                    if (s is VariableStatement && ModifierFlag.Export in s.modifiers) {
+                        for (d in s.declarationList.declarations) {
+                            val n = d.name
+                            if (n is Identifier && n.text == propName) {
+                                return n.pos
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun emitTS2729CrossClass(useNode: Identifier, propName: String, propDeclPos: Int, source: String, fileName: String) {
