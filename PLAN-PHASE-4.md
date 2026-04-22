@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-22 (16.4ek, +1 test: 8260→8261) — TS2451 for `type` alias + `const`/`let` redeclaration at file scope:** `export type foo = 5;` + `export const foo = 5;` in the same file now emits TS2451 "Cannot redeclare block-scoped variable 'foo'." at each declaration. TypeAliasDeclaration was previously not tracked in `DeclInfo` collection in `checkDuplicateDeclarations` (Checker.kt ~10690), so any type+const/let collision was silently ignored.
+
+  - Added `TypeAliasDeclaration -> decls.add(DeclInfo(stmt.name.text, "type", stmt.name, stmt))` to the collection loop. New kind "type" is not referenced by any existing handler.
+  - Added a narrow branch BEFORE the existing `allBlockScoped` check: if `hasType && hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && group.size >= 2`, emit TS2451 on each decl in the group. This deliberately sidesteps `type`+`type` (which should be TS2300/TS2717) and `type`+other-kinds to minimize regression risk.
+  - → +1: `jsdocTypedefNoCrash2_ts` (`export type foo = 5;` + `export const foo = 5;` in a `.js` file). Zero regressions (1815 → 1814 failed).
+
   **Session 2026-04-21 (16.4ej, +1 test: 8259→8260) — TS2790 under `exactOptionalPropertyTypes: true` fires on non-optional props even when type includes `| undefined`:** New compiler option `exactOptionalPropertyTypes` added to `CompilerOptions` (parsed via `exactoptionalpropertytypes` directive key). Under `exactOptional=true`, a required property like `b: number | undefined` must still be deleted via optional marker (`b?`) — the undefined in the type doesn't make the property itself optional. Under `exactOptional=false` (default, 16.4eb behavior preserved), `T | undefined` is still treated as optional-for-delete.
 
   - Modified the TS2790 guard in `walkExprForDelete` (Checker.kt ~19672): new local `skipOnUndefinedInType = !options.exactOptionalPropertyTypes`. The type-includes-undefined skip now only applies when this flag is true. Any/Unknown/Never types still skip the diagnostic in both modes.
