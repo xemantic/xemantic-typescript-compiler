@@ -12944,6 +12944,51 @@ class Checker(
                     ))
                 }
 
+                // TS2595 + TS2497: `import { X } from "./a"` where "./a" uses `export =`
+                // in an ESM output target AND esModuleInterop is NOT explicitly false
+                // (default or true). TypeScript emits TS2595 per named import and TS2497
+                // at the module specifier with an "allowSyntheticDefaultImports" wording.
+                val isEsmOutputForEquals = isESModuleFormat(options.effectiveModule, fileName)
+                if (isEsmOutputForEquals && hasExportEquals && !options.esModuleInteropExplicitlyFalse &&
+                    namedBindingsEM is NamedImports) {
+                    var anyNamedImportEmitted = false
+                    for (importSpecifier in namedBindingsEM.elements) {
+                        if (importSpecifier.isTypeOnly) continue
+                        val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                        val importedName = nameNode.text
+                        if (importedName == "default") continue
+                        val nameStart = nameNode.pos
+                        val nameLength = importedName.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                        diagnostics.add(Diagnostic(
+                            message = "'$importedName' can only be imported by using a default import.",
+                            category = DiagnosticCategory.Error,
+                            code = 2595,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameStart,
+                            length = nameLength,
+                        ))
+                        anyNamedImportEmitted = true
+                    }
+                    if (anyNamedImportEmitted) {
+                        val specStart = specifier.pos
+                        val specLength = moduleName.length + 2
+                        val (line, character) = getLineAndCharacterOfPosition(source, specStart)
+                        diagnostics.add(Diagnostic(
+                            message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag and referencing its default export.",
+                            category = DiagnosticCategory.Error,
+                            code = 2497,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = specStart,
+                            length = specLength,
+                        ))
+                    }
+                }
+
                 // TS2497: `import * as X from` against an `export =` module in an ESM
                 // output format (ES2015+, ESNext, Preserve) requires
                 // allowSyntheticDefaultImports (already guarded at the top of this
