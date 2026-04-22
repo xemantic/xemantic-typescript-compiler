@@ -487,6 +487,8 @@ class Checker(
         checkImportModifiers()
         // 37. Check block-scoped variable use before declaration (TS2448)
         checkUseBeforeDeclaration()
+        // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
+        checkSwitchCaseComparable()
         // 38. Check setter parameter count (TS1049)
         checkSetterParameterCount()
         // 39. Check duplicate modifiers (TS1030)
@@ -23572,6 +23574,152 @@ interface DataView {
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Switch/case literal-type comparability (TS2678)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Emits TS2678 "Type '<case>' is not comparable to type '<switch>'" when the
+     * switch expression is a `const X = <literal>` (narrow literal type) and a case
+     * clause uses a different literal of the same primitive kind.
+     *
+     * Narrow scope: only tracks const bindings in the SAME enclosing block as the
+     * switch statement. Literal kinds: numeric, string, true, false, bigint.
+     * `let`/`var` bindings are NOT tracked — they widen to their primitive type.
+     */
+    data class ConstLiteralBinding(val kind: String, val display: String)
+
+    private fun literalKindDisplay(e: Expression): ConstLiteralBinding? = when (e) {
+        is NumericLiteralNode -> ConstLiteralBinding("number", e.text)
+        is StringLiteralNode -> ConstLiteralBinding("string", "\"${e.text}\"")
+        is BigIntLiteralNode -> ConstLiteralBinding("bigint", e.text)
+        is Identifier -> when (e.text) {
+            "true" -> ConstLiteralBinding("boolean", "true")
+            "false" -> ConstLiteralBinding("boolean", "false")
+            else -> null
+        }
+        is PrefixUnaryExpression -> if (e.operator == SyntaxKind.Minus && e.operand is NumericLiteralNode) {
+            ConstLiteralBinding("number", "-${(e.operand as NumericLiteralNode).text}")
+        } else null
+        else -> null
+    }
+
+    private fun checkSwitchCaseComparable() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkSwitchCaseComparable(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkSwitchCaseComparable(stmts: List<Statement>, source: String, fileName: String) {
+        val constBindings = mutableMapOf<String, ConstLiteralBinding>()
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                        for (d in stmt.declarationList.declarations) {
+                            val name = d.name as? Identifier ?: continue
+                            // Skip when there's a type annotation that would widen the literal
+                            if (d.type != null) continue
+                            val init = d.initializer ?: continue
+                            val binding = literalKindDisplay(init) ?: continue
+                            constBindings[name.text] = binding
+                        }
+                    }
+                    // Walk initializers for nested switch/blocks
+                    for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
+                    }
+                }
+                is SwitchStatement -> {
+                    // Check case clauses if the switch expression resolves to a const literal
+                    val expr = stmt.expression
+                    val binding = if (expr is Identifier) constBindings[expr.text] else null
+                    if (binding != null) {
+                        for (c in stmt.caseBlock) {
+                            if (c !is CaseClause) continue
+                            val caseBinding = literalKindDisplay(c.expression) ?: continue
+                            // Same kind + different display → incompatible literal types
+                            if (caseBinding.kind == binding.kind && caseBinding.display != binding.display) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, c.expression.pos)
+                                val length = when (val ce = c.expression) {
+                                    is NumericLiteralNode -> ce.text.length
+                                    is StringLiteralNode -> ce.text.length + 2
+                                    is BigIntLiteralNode -> ce.text.length
+                                    is Identifier -> ce.text.length
+                                    is PrefixUnaryExpression -> if (ce.operand is NumericLiteralNode) 1 + (ce.operand as NumericLiteralNode).text.length else 1
+                                    else -> 1
+                                }
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '${caseBinding.display}' is not comparable to type '${binding.display}'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2678,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = c.expression.pos,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
+                    // Recurse into case statement bodies
+                    for (c in stmt.caseBlock) {
+                        when (c) {
+                            is CaseClause -> walkSwitchCaseComparable(c.statements, source, fileName)
+                            is DefaultClause -> walkSwitchCaseComparable(c.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is Block -> walkSwitchCaseComparable(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkSwitchCaseComparableStmt(stmt.thenStatement, source, fileName)
+                    stmt.elseStatement?.let { walkSwitchCaseComparableStmt(it, source, fileName) }
+                }
+                is ForStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                is ForInStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                is ForOfStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                is WhileStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                is DoStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                is TryStatement -> {
+                    walkSwitchCaseComparable(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkSwitchCaseComparable(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is ExpressionStatement -> walkSwitchCaseComparableInExpr(stmt.expression, source, fileName)
+                is LabeledStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkSwitchCaseComparableStmt(stmt: Statement, source: String, fileName: String) {
+        walkSwitchCaseComparable(listOf(stmt), source, fileName)
+    }
+
+    private fun walkSwitchCaseComparableInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkSwitchCaseComparable(body.statements, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
             else -> {}
         }
     }
