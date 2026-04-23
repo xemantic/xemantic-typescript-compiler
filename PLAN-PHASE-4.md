@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4fb, +1 test: 8281→8282) — TS7031 for destructured parameter binding elements:** `function f1([a], {b}, c, d)` now emits TS7031 "Binding element 'a' implicitly has an 'any' type." at each binding element whose name is a bare identifier and whose enclosing parameter has no type annotation / no initializer. Binding elements with their own initializer (e.g. `[a = undefined]`) are skipped — the initializer supplies a type hint.
+
+  - Extension in `checkParamsForImplicitAny`: when `name !is Identifier`, walk `ArrayBindingPattern.elements.filterIsInstance<BindingElement>()` and `ObjectBindingPattern.elements`. For each element: skip if `initializer != null`; emit TS7031 at `eltName.pos`, length `eltName.text.length`.
+  - Nested binding patterns (e.g. `[[a]]`) are not recursed — narrow scope, no test cases currently need them.
+  - → +1 test: `noImplicitAnyDestructuringParameterDeclaration_ts` (adds 2× TS7031 at (1,14)/(1,19) for `a`/`b`; the TS7008 diagnostics from 16.4fa at (7,20)/(7,30) for `{ b }` type literal members were already passing). Zero regressions (1794 → 1793 failed).
+
   **Session 2026-04-23 (16.4fa, +1 test: 8280→8281) — TS7008 for inline type-literal members + nested TS7006 walk:** Extended `checkImplicitAnyInTypeAnnotation` to recurse into `TypeLiteral` and function-return types, and updated `checkParamsForImplicitAny` to walk nested type annotations even when the outer parameter has a type.
 
   - **TS7008 in `TypeLiteral`**: `declare var objL: { v; w; }` now emits "Member 'v' implicitly has an 'any' type." and "Member 'w'..." at each PropertyDeclaration with no `type` and no `initializer`. Matches the existing ClassDeclaration/InterfaceDeclaration handling but for anonymous type literals in variable annotations, parameter annotations, function return types, etc.
