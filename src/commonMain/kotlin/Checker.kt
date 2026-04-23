@@ -563,6 +563,8 @@ class Checker(
         checkDuplicateLabels()
         // 59. Check empty type argument list (TS1099)
         checkEmptyTypeArguments()
+        // 59b. Check type parameter defaults for self/forward references (TS2744)
+        checkTypeParameterDefaults()
         // 60. Check TS2354: importHelpers without tslib
         checkImportHelpersWithoutTslib()
         // 60b. Check TS2343: syntax requires helper not in tslib
@@ -24682,6 +24684,264 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2744: Type parameter defaults can only reference previously declared
+    // type parameters.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Emits TS2744 for any TypeParameter whose default TypeNode references a
+     * type parameter in the same list at an index >= its own (self-reference
+     * or forward reference). Squiggle is at the first offending Identifier,
+     * length = identifier.text.length.
+     *
+     * Only references to same-list type parameter NAMES trigger this; outer
+     * scopes (enclosing class/interface name, other type params in enclosing
+     * scopes) are fine.
+     */
+    private fun checkTypeParameterDefaults() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkTParamDefaultsInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkTParamDefaultsInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkTParamDefaultsInStmt(stmt, source, fileName)
+    }
+
+    private fun walkTParamDefaultsInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                stmt.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                for (p in stmt.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                stmt.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                for (member in stmt.members) walkTParamDefaultsInClassMember(member, source, fileName)
+            }
+            is InterfaceDeclaration -> {
+                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                for (member in stmt.members) walkTParamDefaultsInClassMember(member, source, fileName)
+            }
+            is TypeAliasDeclaration -> {
+                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                walkTParamDefaultsInType(stmt.type, source, fileName)
+            }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                d.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            }
+            is ExpressionStatement -> walkTParamDefaultsInExpr(stmt.expression, source, fileName)
+            is Block -> walkTParamDefaultsInStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkTParamDefaultsInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkTParamDefaultsInStmt(it, source, fileName) }
+            }
+            is ForStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is TryStatement -> {
+                walkTParamDefaultsInStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
+                stmt.finallyBlock?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                val stmts = (clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements
+                stmts?.let { walkTParamDefaultsInStmts(it, source, fileName) }
+            }
+            is LabeledStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
+                walkTParamDefaultsInStmts(it, source, fileName)
+            }
+            is ExportAssignment -> walkTParamDefaultsInExpr(stmt.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun walkTParamDefaultsInClassMember(member: ClassElement, source: String, fileName: String) {
+        when (member) {
+            is MethodDeclaration -> {
+                member.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                member.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                for (p in member.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
+            }
+            is Constructor -> {
+                for (p in member.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
+            }
+            is GetAccessor -> {
+                member.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
+            }
+            is SetAccessor -> {
+                for (p in member.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
+            }
+            is PropertyDeclaration -> {
+                member.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                member.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkTParamDefaultsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                expr.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                expr.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                for (p in expr.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                (expr.body as? Block)?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
+            }
+            is FunctionExpression -> {
+                expr.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                expr.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                for (p in expr.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                expr.body?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
+            }
+            is ClassExpression -> {
+                expr.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                for (member in expr.members) walkTParamDefaultsInClassMember(member, source, fileName)
+            }
+            is ParenthesizedExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                walkTParamDefaultsInExpr(expr.left, source, fileName)
+                walkTParamDefaultsInExpr(expr.right, source, fileName)
+            }
+            is CallExpression -> {
+                walkTParamDefaultsInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) walkTParamDefaultsInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                walkTParamDefaultsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkTParamDefaultsInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkTParamDefaultsInExpr(expr.expression, source, fileName)
+                walkTParamDefaultsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkTParamDefaultsInExpr(expr.whenTrue, source, fileName)
+                walkTParamDefaultsInExpr(expr.whenFalse, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkTParamDefaultsInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                (p as? PropertyAssignment)?.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            }
+            is TypeAssertionExpression -> {
+                walkTParamDefaultsInType(expr.type, source, fileName)
+                walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            }
+            is AsExpression -> {
+                walkTParamDefaultsInType(expr.type, source, fileName)
+                walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            }
+            is SpreadElement -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            is PrefixUnaryExpression -> walkTParamDefaultsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkTParamDefaultsInExpr(expr.operand, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun walkTParamDefaultsInType(type: TypeNode, source: String, fileName: String) {
+        when (type) {
+            is FunctionType -> {
+                type.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                walkTParamDefaultsInType(type.type, source, fileName)
+                for (p in type.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+            }
+            is ConstructorType -> {
+                type.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                walkTParamDefaultsInType(type.type, source, fileName)
+                for (p in type.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+            }
+            is UnionType -> for (t in type.types) walkTParamDefaultsInType(t, source, fileName)
+            is IntersectionType -> for (t in type.types) walkTParamDefaultsInType(t, source, fileName)
+            is ArrayType -> walkTParamDefaultsInType(type.elementType, source, fileName)
+            is TupleType -> for (e in type.elements) walkTParamDefaultsInType(e, source, fileName)
+            is ParenthesizedType -> walkTParamDefaultsInType(type.type, source, fileName)
+            is TypeReference -> type.typeArguments?.forEach { walkTParamDefaultsInType(it, source, fileName) }
+            is TypeLiteral -> for (m in type.members) walkTParamDefaultsInClassMember(m, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun validateTParamDefaults(tparams: List<TypeParameter>, source: String, fileName: String) {
+        if (tparams.isEmpty()) return
+        val names = tparams.map { it.name.text }
+        for (i in tparams.indices) {
+            val tp = tparams[i]
+            val default = tp.default ?: continue
+            // Find the first Identifier reference in the default whose name matches
+            // a type parameter at index >= i.
+            val offender = findForwardTParamRef(default, names, i) ?: continue
+            val start = offender.pos
+            val length = offender.text.length.coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type parameter defaults can only reference previously declared type parameters.",
+                category = DiagnosticCategory.Error,
+                code = 2744,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /**
+     * Walks a TypeNode looking for the first Identifier reference whose text
+     * matches a type parameter name at index >= ownIdx. Returns the offending
+     * Identifier (or null if none).
+     */
+    private fun findForwardTParamRef(type: TypeNode, names: List<String>, ownIdx: Int): Identifier? {
+        when (type) {
+            is TypeReference -> {
+                val tn = type.typeName
+                if (tn is Identifier) {
+                    val idx = names.indexOf(tn.text)
+                    if (idx >= ownIdx) return tn
+                }
+                type.typeArguments?.forEach { ta ->
+                    findForwardTParamRef(ta, names, ownIdx)?.let { return it }
+                }
+            }
+            is UnionType -> for (t in type.types) findForwardTParamRef(t, names, ownIdx)?.let { return it }
+            is IntersectionType -> for (t in type.types) findForwardTParamRef(t, names, ownIdx)?.let { return it }
+            is ArrayType -> return findForwardTParamRef(type.elementType, names, ownIdx)
+            is TupleType -> for (e in type.elements) findForwardTParamRef(e, names, ownIdx)?.let { return it }
+            is ParenthesizedType -> return findForwardTParamRef(type.type, names, ownIdx)
+            is FunctionType -> {
+                // Type params introduced by the FunctionType shadow outer names inside it.
+                val inner = type.typeParameters?.map { it.name.text } ?: emptyList()
+                if (inner.isEmpty()) {
+                    for (p in type.parameters) p.type?.let {
+                        findForwardTParamRef(it, names, ownIdx)?.let { id -> return id }
+                    }
+                    return findForwardTParamRef(type.type, names, ownIdx)
+                }
+                // Otherwise skip — inner scope.
+            }
+            else -> {}
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------
