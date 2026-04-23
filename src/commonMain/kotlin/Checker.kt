@@ -7596,8 +7596,35 @@ class Checker(
             // Skip error-recovery placeholders (empty name) unless it's a rest parameter
             // e.g. `function t1(...) {}` — TS7019 fires with name "(Missing)"
             if (name is Identifier && name.text.isEmpty() && !param.dotDotDotToken) continue
-            // Skip destructured parameters (they get separate diagnostics)
-            if (name !is Identifier) continue
+            // Destructured parameters (ArrayBindingPattern / ObjectBindingPattern): emit
+            // TS7031 at each binding element when the enclosing param has no type AND no
+            // initializer, and the binding element itself has no initializer. Matches
+            // TypeScript's rule — an initializer (outer or inner) supplies a type hint.
+            if (name !is Identifier) {
+                val elements: List<BindingElement> = when (name) {
+                    is ArrayBindingPattern -> name.elements.filterIsInstance<BindingElement>()
+                    is ObjectBindingPattern -> name.elements
+                    else -> emptyList()
+                }
+                for (elt in elements) {
+                    if (elt.initializer != null) continue
+                    val eltName = elt.name as? Identifier ?: continue
+                    if (eltName.text.isEmpty()) continue
+                    val start = eltName.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Binding element '${eltName.text}' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error,
+                        code = 7031,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = eltName.text.length,
+                    ))
+                }
+                continue
+            }
             // Skip parameter properties (public/private/etc. modifiers) — TS7006 already
             // emitted in checkParamPropsInParams alongside TS2369 for them.
             if (param.modifiers.any { isParameterPropertyModifier(it) }) continue
