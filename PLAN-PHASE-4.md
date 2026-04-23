@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4ez, +1 test: 8279→8280) — TS2374 duplicate index signatures + TS2411 for methods vs primitive index types:** Extended `checkIndexSigInStatement` to handle two more diagnostics on interface/class members.
+
+  - **TS2374**: walks `IndexSignature` members, groups by key-keyword (`string`/`number`/`symbol`), and emits "Duplicate index signature for type 'X'." at each sig in a group of size ≥ 2. Gated on well-formed signatures only (exactly one parameter, no `?`, no `...`) — malformed shapes already fire TS1017/TS1096/TS1097 and TypeScript doesn't double-report.
+  - **TS2411 extension for methods**: when the string index type is a primitive (String/Number/Boolean/BigInt), overloaded methods on the interface/class are never assignable. Emits "Property 'X' of type '{ (): any; (): any; }' is not assignable to 'string' index type 'Y'." at the FIRST overload's span. Narrow: only fires when all overloads take zero parameters, and skips call/construct signatures (methods named `""`/`"new"`) and `static` methods (per CLAUDE.md gotcha, and because static methods live on the class's static side, not the instance).
+  - **Squiggle span**: both TS2374 and TS2411-for-methods search `source.indexOf(';', sig.pos)` (capped at 80 chars from start) rather than scanning from `sig.end - 1`. `sig.end` overshoots by one token in this AST, so for the FIRST duplicate it would find the SECOND signature's `;`. Scanning from `sig.pos` gives the first `;` which is the trailing semicolon of the current signature.
+  - → +1 test: `interfaceMemberValidation_ts`. Zero regressions after skipping static methods (was 1798 → 1795 failed, initial attempt without static-method skip regressed 3 tests).
+
   **Session 2026-04-23 (16.4ey, +2 tests: 8277→8279) — TS2345 for tagged template substitutions:** Tagged templates like `` f `${1}${2}` `` now emit TS2345 when a substitution's type doesn't match the corresponding tag-function parameter. The tag's first parameter is `TemplateStringsArray` (bound to the static parts), substitutions map to parameters[1..N]. Narrow scope: single-signature tag, no type parameters, both sides simple-checkable.
 
   - New `checkSingleTaggedTemplateTypes` helper (Checker.kt ~37760) invoked from `checkCallTypesInExpr`'s `TaggedTemplateExpression` branch alongside the existing tag recursion.
