@@ -14823,6 +14823,12 @@ class Checker(
             "bind", "call",
         )
 
+        /** Object.prototype members implicitly available on every base class — skip TS2339 for super.X. */
+        private val OBJECT_PROTOTYPE_IMPLICIT = setOf(
+            "toString", "valueOf", "hasOwnProperty", "isPrototypeOf",
+            "propertyIsEnumerable", "toLocaleString", "constructor",
+        )
+
         /** Words that are reserved as identifiers in strict mode (TS1212). */
         private val STRICT_MODE_RESERVED_WORDS = setOf(
             "let", "public", "private", "protected", "static",
@@ -36740,6 +36746,8 @@ interface DataView {
             } else {
                 checkSuperFieldAccessES2015Plus(expr, source, fileName, enclosingClassType)
             }
+            // 16.4ex: emit TS2339 when the property doesn't exist on the base class.
+            if (emitTs2339ForMissingSuperMember(expr, source, fileName, enclosingClassType)) return
         }
 
         // === TS2341: Private member accessibility check ===
@@ -36756,6 +36764,65 @@ interface DataView {
             enclosingClassType = enclosingClassType,
             emitTs2728RelatedInfo = true,
         )
+    }
+
+    /**
+     * 16.4ex: TS2339 for `super.X` where X isn't a member of any base class in the chain.
+     * Gated on: enclosing class has at least one non-empty baseType; propName not in the
+     * Object.prototype implicit list. Walks the base chain via `getPropertyOfType`, which
+     * already handles inherited members. Returns true if emitted (so the caller can bail
+     * before the generic member-access check runs).
+     */
+    private fun emitTs2339ForMissingSuperMember(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ): Boolean {
+        val propName = expr.name.text
+        if (propName.isEmpty()) return false
+        if (propName in OBJECT_PROTOTYPE_IMPLICIT) return false
+        if (enclosingClassType !is Type.Interface) return false
+        val baseTypes = enclosingClassType.baseTypes ?: return false
+        if (baseTypes.isEmpty()) return false
+        // Walk each base chain; if ANY base has the property (including inherited), bail.
+        var baseDisplay: String? = null
+        for (base in baseTypes) {
+            if (base !is Type.Interface) return false // unknown base shape — be conservative
+            if (baseDisplay == null) baseDisplay = base.symbol?.name
+            try { resolveStructuredTypeMembers(base) } catch (_: StackOverflowError) { return false }
+            if (getPropertyOfType(base, propName) != null) return false
+            // Also walk base's base chain (resolveStructuredTypeMembers may not have
+            // merged inherited members — be thorough).
+            if (basePropertyInheritedChain(base, propName, mutableSetOf())) return false
+        }
+        val display = baseDisplay ?: return false
+        val start = expr.name.pos
+        val length = propName.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$display'.",
+            category = DiagnosticCategory.Error,
+            code = 2339,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        return true
+    }
+
+    private fun basePropertyInheritedChain(
+        base: Type.Interface, propName: String, visited: MutableSet<Int>,
+    ): Boolean {
+        if (!visited.add(base.id)) return false
+        val chain = base.baseTypes ?: return false
+        for (b in chain) {
+            if (b !is Type.Interface) return false
+            try { resolveStructuredTypeMembers(b) } catch (_: StackOverflowError) { return false }
+            if (getPropertyOfType(b, propName) != null) return true
+            if (basePropertyInheritedChain(b, propName, visited)) return true
+        }
+        return false
     }
 
     /**

@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4ex, +1 test: 8276→8277) — TS2339 for `super.X` when X is not a member of any base class in the chain:** `super.super.foo` / `super.prototype.foo` / `super.bar()` (where `bar` is a subclass-only method, not inherited) now emit TS2339 "Property 'X' does not exist on type 'BaseClassName'." at the property name. Display uses the first base type's symbol name.
+
+  - New helper `emitTs2339ForMissingSuperMember` inserted in `checkSinglePropertyAccess` right after the existing `checkSuperFieldAccessES2015Plus` / `checkSuperPropertyAccessES5` calls. Returns `true` if it emitted (so the caller can skip the downstream generic member-access check).
+  - Gate: `expr.expression is Identifier("super")` AND enclosingClassType is `Type.Interface` with non-empty `baseTypes` AND propName ∉ `OBJECT_PROTOTYPE_IMPLICIT`. Walks the base chain via `getPropertyOfType` plus `basePropertyInheritedChain` (recurses through each base's own `baseTypes` with an id-visited guard).
+  - `OBJECT_PROTOTYPE_IMPLICIT` set (in the Checker companion — MUST be defined there or before init{} per the Kotlin-property-order gotcha): `toString`, `valueOf`, `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString`, `constructor`. These implicitly inherit from Object.prototype and our resolver doesn't model that chain, so skip them to avoid FPs. `prototype` is NOT in this skip list — per TypeScript's baseline, `super.prototype` IS a TS2339.
+  - → +1 test: `super1_ts` (3× TS2339 at (16,22)/(29,22)/(42,22)). Zero regressions (1799 → 1798 failed).
+
   **Session 2026-04-23 (16.4ew, +1 test: 8275→8276) — TS1294 for TypeAssertionExpression when `erasableSyntaxOnly` is enabled:** Added the new compiler option `erasableSyntaxOnly` (parsed from `// @erasableSyntaxOnly: true` test directive) and a narrow Checker pass that walks statement/expression trees looking for `TypeAssertionExpression`. Emits TS1294 "This syntax is not allowed when 'erasableSyntaxOnly' is enabled." at the `<Type>` header span.
 
   - `CompilerOptions.kt`: added `erasableSyntaxOnly: Boolean` field + directive parsing (`"erasablesyntaxonly" -> ...`).
