@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4fc, +1 test: 8282→8283) — TS7013 for construct signature in TypeLiteral without return type annotation:** `var x11: { new (); };` now emits TS7013 "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type." at the `new ();` span.
+
+  - Extension in `checkImplicitAnyInTypeAnnotation`'s TypeLiteral branch: inside the MethodDeclaration-member handling (added in 16.4fa), also emit TS7013 when `name == "new"` and `member.type == null`. Span uses the `source.indexOf(';', member.pos)` scan pattern (capped at 80 chars) — matches the 7-char `new ();` squiggle from the baseline. Regular methods and call signatures (name `""`) are not flagged here; their parameter-type implicit-any is already covered by the existing TS7006 path.
+  - → +1 test: `implicitAnyDeclareTypePropertyWithoutType_ts`. Zero regressions (1793 → 1792 failed).
+
   **Session 2026-04-23 (16.4fb, +1 test: 8281→8282) — TS7031 for destructured parameter binding elements:** `function f1([a], {b}, c, d)` now emits TS7031 "Binding element 'a' implicitly has an 'any' type." at each binding element whose name is a bare identifier and whose enclosing parameter has no type annotation / no initializer. Binding elements with their own initializer (e.g. `[a = undefined]`) are skipped — the initializer supplies a type hint.
 
   - Extension in `checkParamsForImplicitAny`: when `name !is Identifier`, walk `ArrayBindingPattern.elements.filterIsInstance<BindingElement>()` and `ObjectBindingPattern.elements`. For each element: skip if `initializer != null`; emit TS7031 at `eltName.pos`, length `eltName.text.length`.
