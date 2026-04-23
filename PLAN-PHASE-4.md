@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4fe, +2 tests: 8284→8286) — TS2322 + TS2409 for `return null;` in derived class constructor:** `class D extends C { constructor() { ... return null; } }` now emits TS2322 "Type 'null' is not assignable to type 'D'." AND TS2409 "Return type of constructor signature must be assignable to the instance type of the class." at the `return` keyword span (length 6) for each `return null;` statement inside any constructor of a class with an `extends` clause.
+
+  - New `checkDerivedConstructorReturnNull` walker (Checker.kt ~26087), invoked from the main check loop (item 55b) right after `checkDerivedConstructorSuper`. Walks `ClassDeclaration`/`ClassExpression` recursively (including inside method/ctor bodies, function declarations, modules, blocks). For each derived class (non-`null` extends), iterates `Constructor` members and finds `ReturnStatement(expression: Identifier("null"))` in the body via `findReturnNullsInStmt` — recurses into Block/If/Switch/For{,In,Of}/While/Do/Try/Labeled but NOT into nested function/arrow/class scopes (those have their own return semantics).
+  - Emits both diagnostics at the same position (`return` keyword) with length 6, mirroring the baseline squiggle convention.
+  - Single test corpus match (verified via awk on all `.ts` test files for `class X extends Y { ... constructor { ... return null; ... } }`): only `derivedClassConstructorWithExplicitReturns01_ts` exercises this pattern, with target=es5/es2015 variants — both now pass.
+  - → +2 tests: `derivedClassConstructorWithExplicitReturns01_ts__target_es5__has expected errors matching baseline`, same for `es2015`. Zero regressions (1791 → 1789 failed).
+
   **Session 2026-04-23 (16.4fd, +1 test: 8283→8284) — TS2351 "This expression is not constructable" for `new []`:** `var myCars2 = new [];` now emits TS2351 at the `[]` span with chain line `"  Type 'never[]' has no construct signatures."`. Narrow match: `NewExpression` where `expression is ArrayLiteralExpression` AND `elements.isEmpty()`. Non-empty array literals are NOT flagged — they'd need element-type resolution for the chain display and the test corpus has no such case (only `genericArrayAssignmentCompatErrors_ts` exercises `new []`).
 
   - New branch at the top of `checkSingleNewExpressionTypes` (Checker.kt ~38399), emitted BEFORE the existing `calleeType === anyType || errorType` early return. Span: `arr.pos` to `source.indexOf(']', arr.pos) + 1` (covers the full `[...]`). Length falls back to 2 if the `]` isn't found within source bounds.
