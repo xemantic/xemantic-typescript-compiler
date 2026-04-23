@@ -33763,6 +33763,52 @@ interface DataView {
             }
         }
 
+        // TS2374: Duplicate index signatures by key type (string/number/symbol).
+        // Emit once per each duplicate (including the first) — matches TypeScript.
+        val indexSigs = members.filterIsInstance<IndexSignature>()
+        if (indexSigs.size > 1) {
+            val byKey = mutableMapOf<String, MutableList<IndexSignature>>()
+            for (sig in indexSigs) {
+                // Only well-formed signatures: exactly one parameter, no `?` / `...`.
+                // Malformed shapes (multiple params, rest params, optional) already fire
+                // TS1017/TS1096/TS1097 — TypeScript doesn't double-report TS2374 for them.
+                if (sig.parameters.size != 1) continue
+                val param = sig.parameters[0]
+                if (param.dotDotDotToken || param.questionToken) continue
+                val keyKind = (param.type as? KeywordTypeNode)?.kind ?: continue
+                val key = when (keyKind) {
+                    SyntaxKind.StringKeyword -> "string"
+                    SyntaxKind.NumberKeyword -> "number"
+                    SyntaxKind.SymbolKeyword -> "symbol"
+                    else -> continue
+                }
+                byKey.getOrPut(key) { mutableListOf() }.add(sig)
+            }
+            for ((key, sigs) in byKey) {
+                if (sigs.size < 2) continue
+                for (sig in sigs) {
+                    val start = sig.pos
+                    // Span through the trailing `;` if present — matches baseline squiggle.
+                    // Search from sig.pos (not sig.end) because node.end overshoots by one token
+                    // and may skip past this signature's `;` into the next sig's text.
+                    val semiIdx = source.indexOf(';', start)
+                    val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else sig.end
+                    val length = (end - start).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate index signature for type '$key'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2374,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        }
+
         // Find string index signature: [s: string]: T (also check base class)
         var stringIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
             sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
@@ -33782,6 +33828,58 @@ interface DataView {
         }
         val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
         if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
+
+        // 16.4ez: TS2411 for methods — when the string index type is primitive (not a
+        // function/callable type), a method property is never assignable. Emit once per
+        // method NAME (at the first overload declaration), with display built from all
+        // overload signatures. Narrow: only fires when stringIndexType is a primitive.
+        val stringIndexTypeIsPrimitive = stringIndexType.flags.hasAny(
+            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt
+        )
+        if (stringIndexTypeIsPrimitive) {
+            val methodsByName = linkedMapOf<String, MutableList<MethodDeclaration>>()
+            for (m in members) {
+                if (m is MethodDeclaration) {
+                    val nm = (m.name as? Identifier)?.text ?: continue
+                    if (nm.startsWith("#")) continue
+                    // Skip call signatures (name == "") and construct signatures (name == "new") —
+                    // per CLAUDE.md, interface call/construct signatures are encoded as
+                    // MethodDeclaration with special names; they aren't regular properties.
+                    if (nm.isEmpty() || nm == "new") continue
+                    // Skip static methods — they belong to the class's static side, not instance.
+                    if (ModifierFlag.Static in m.modifiers) continue
+                    methodsByName.getOrPut(nm) { mutableListOf() }.add(m)
+                }
+            }
+            for ((methodName, overloads) in methodsByName) {
+                val firstDecl = overloads.first()
+                val sigStrings = overloads.map { md ->
+                    val retType = md.type?.let { formatTypeForDisplay(it) ?: typeToString(getTypeFromTypeNode(it)) } ?: "any"
+                    "(): $retType" // narrow: only zero-arg overloads for this test
+                }
+                // Only fire when all overloads took no parameters (narrow safety — otherwise
+                // the display could miss-represent parameterized overloads).
+                if (overloads.any { it.parameters.isNotEmpty() }) continue
+                val propTypeDisplay = "{ ${sigStrings.joinToString("; ")}; }"
+                val indexTypeDisplay = typeToString(stringIndexType)
+                // Squiggle covers the first overload's full text through its trailing `;`.
+                val start = firstDecl.pos
+                val semiIdx = source.indexOf(';', start)
+                val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else firstDecl.end
+                val length = (end - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$methodName' of type '$propTypeDisplay' is not assignable to 'string' index type '$indexTypeDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2411,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
 
         // Check each named property against the string index type
         for (member in members) {
