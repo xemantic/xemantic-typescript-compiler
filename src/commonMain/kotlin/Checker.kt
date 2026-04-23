@@ -517,6 +517,10 @@ class Checker(
         checkInterfacePropertyInitializers()
         // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
         checkComputedPropertyNameLiteral()
+        // 45c. Check erasableSyntaxOnly restrictions (TS1294) — narrow: TypeAssertion only
+        if (options.erasableSyntaxOnly) {
+            checkErasableSyntaxOnly()
+        }
         // 46. Check await in non-async context (TS1308)
         checkAwaitContext()
         // 47. Check declaration name conflicts with built-in global (TS2397)
@@ -24332,6 +24336,143 @@ interface DataView {
             message = message,
             category = DiagnosticCategory.Error,
             code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1294: `erasableSyntaxOnly` — narrow scope, TypeAssertion only
+    // -----------------------------------------------------------------------
+
+    private fun checkErasableSyntaxOnly() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                walkErasableInStmt(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun walkErasableInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkErasableInExpr(it, source, fileName) }
+            }
+            is ExpressionStatement -> walkErasableInExpr(stmt.expression, source, fileName)
+            is Block -> for (s in stmt.statements) walkErasableInStmt(s, source, fileName)
+            is IfStatement -> {
+                walkErasableInExpr(stmt.expression, source, fileName)
+                walkErasableInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkErasableInStmt(it, source, fileName) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkErasableInExpr(it, source, fileName) }
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                    it.initializer?.let { i -> walkErasableInExpr(i, source, fileName) }
+                }
+                stmt.condition?.let { walkErasableInExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkErasableInExpr(it, source, fileName) }
+                walkErasableInStmt(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                walkErasableInExpr(stmt.expression, source, fileName)
+                walkErasableInStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkErasableInStmt(stmt.statement, source, fileName)
+                walkErasableInExpr(stmt.expression, source, fileName)
+            }
+            is ReturnStatement -> stmt.expression?.let { walkErasableInExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkErasableInExpr(it, source, fileName) }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) walkErasableInStmt(s, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            }
+            is SwitchStatement -> {
+                walkErasableInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    (clause as? CaseClause)?.expression?.let { walkErasableInExpr(it, source, fileName) }
+                    val stmts = (clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements
+                    stmts?.forEach { walkErasableInStmt(it, source, fileName) }
+                }
+            }
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+                    is Constructor -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+                    is GetAccessor -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+                    is SetAccessor -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkErasableInExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkErasableInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is TypeAssertionExpression -> {
+                emitErasableTypeAssertion(expr, source, fileName)
+                walkErasableInExpr(expr.expression, source, fileName)
+            }
+            is ParenthesizedExpression -> walkErasableInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                walkErasableInExpr(expr.left, source, fileName)
+                walkErasableInExpr(expr.right, source, fileName)
+            }
+            is CallExpression -> {
+                walkErasableInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) walkErasableInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                walkErasableInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkErasableInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> walkErasableInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkErasableInExpr(expr.expression, source, fileName)
+                walkErasableInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkErasableInExpr(expr.condition, source, fileName)
+                walkErasableInExpr(expr.whenTrue, source, fileName)
+                walkErasableInExpr(expr.whenFalse, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkErasableInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkErasableInExpr(expr.operand, source, fileName)
+            is ArrayLiteralExpression -> for (e in expr.elements) walkErasableInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                (p as? PropertyAssignment)?.initializer?.let { walkErasableInExpr(it, source, fileName) }
+            }
+            is SpreadElement -> walkErasableInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkErasableInExpr(it, source, fileName) }
+            is AwaitExpression -> walkErasableInExpr(expr.expression, source, fileName)
+            is ArrowFunction -> (expr.body as? Block)?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            is FunctionExpression -> expr.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun emitErasableTypeAssertion(
+        expr: TypeAssertionExpression, source: String, fileName: String,
+    ) {
+        val start = expr.pos
+        val length = (expr.headerEnd - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This syntax is not allowed when 'erasableSyntaxOnly' is enabled.",
+            category = DiagnosticCategory.Error,
+            code = 1294,
             fileName = fileName,
             line = line,
             character = character,
