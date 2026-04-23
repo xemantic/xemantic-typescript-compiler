@@ -7348,6 +7348,27 @@ class Checker(
                         checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
                     }
                     if (member is MethodDeclaration) {
+                        // TS7013 for construct signature in TypeLiteral without return type annotation.
+                        // Call signatures (name == "") and regular methods are not flagged here —
+                        // the existing TS7006 path handles parameter-type implicit-any.
+                        val nm = (member.name as? Identifier)?.text
+                        if (nm == "new" && member.type == null) {
+                            val start = member.pos
+                            val semiIdx = source.indexOf(';', start)
+                            val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else member.end
+                            val length = (end - start).coerceAtLeast(1)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7013,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
                         checkParamsForImplicitAny(member.parameters, source, fileName)
                     }
                 }
