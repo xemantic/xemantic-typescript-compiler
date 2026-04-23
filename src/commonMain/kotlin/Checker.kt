@@ -37711,7 +37711,14 @@ interface DataView {
             is TemplateExpression -> {
                 for (span in expr.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
             }
-            is TaggedTemplateExpression -> checkCallTypesInExpr(expr.tag, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkSingleTaggedTemplateTypes(expr, source, fileName)
+                checkCallTypesInExpr(expr.tag, source, fileName)
+                // Also recurse into substitutions so nested calls/errors surface.
+                (expr.template as? TemplateExpression)?.let { tmpl ->
+                    for (span in tmpl.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
+                }
+            }
             is AsExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
             is TypeAssertionExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
             is SatisfiesExpression -> checkCallTypesInExpr(expr.expression, source, fileName)
@@ -37749,6 +37756,68 @@ interface DataView {
         val decl = symbol.valueDeclaration as? VariableDeclaration ?: return false
         // Definitively implicit-any only when BOTH annotation and initializer are absent.
         return decl.type == null && decl.initializer == null
+    }
+
+    /**
+     * 16.4ey: TS2345 for tagged template substitutions whose type doesn't match the
+     * tag function's parameter. The tag's first parameter is `TemplateStringsArray`
+     * (bound to the static parts); substitutions map to parameters[1..N]. Narrow:
+     * skipped when tag has 0 signatures, multi-signature, or type parameters; only
+     * fires when both substitution type and expected param type are simple-checkable
+     * (primitives / literal unions). This mirrors the CallExpression path without
+     * re-invoking the full overload/contextual-typing machinery.
+     */
+    private fun checkSingleTaggedTemplateTypes(
+        expr: TaggedTemplateExpression, source: String, fileName: String,
+    ) {
+        val calleeType = try { getCalleeType(expr.tag) } catch (_: StackOverflowError) { return }
+        if (calleeType === anyType || calleeType === errorType) return
+        val signatures = getCallSignaturesOfType(calleeType)
+        if (signatures.size != 1) return
+        val sig = signatures[0]
+        if (!sig.typeParameters.isNullOrEmpty()) return
+        val tmpl = expr.template as? TemplateExpression ?: return
+        val substitutions = tmpl.templateSpans.map { it.expression }
+        if (substitutions.any { it is OmittedExpression }) return
+        val params = sig.parameters
+        // TypeScript counts the unterminated trailing `${` as a phantom substitution — a
+        // template `...${1}${2}${` at a tag expecting 3 params (TSA + 2) is still 4 args
+        // → TS2554 (which we don't emit, but TS does), so per-arg TS2345 is suppressed.
+        // Our gate: count isUnterminated as +1 arg. Skip TS2345 when total > params.size.
+        val phantomUnterminated = if (tmpl.isUnterminated) 1 else 0
+        if (substitutions.size + 1 + phantomUnterminated > params.size) return
+        for ((i, sub) in substitutions.withIndex()) {
+            val paramIdx = i + 1 // skip TemplateStringsArray
+            if (paramIdx >= params.size) break
+            val paramType = getTypeOfSymbol(params[paramIdx])
+            if (paramType === anyType || paramType === errorType) continue
+            if (!isSimpleCheckableType(paramType)) continue
+            val argType = try { getTypeOfExpression(sub) } catch (_: StackOverflowError) { continue }
+            if (argType === anyType || argType === errorType) continue
+            if (!isSimpleCheckableType(argType)) continue
+            // Use the subtype relation to check assignability.
+            val widenedArg = getWidenedLiteralType(argType)
+            val widenedParam = getWidenedLiteralType(paramType)
+            if (checkTypeRelatedTo(argType, paramType, assignableRelation)) continue
+            // Also allow widened-literal to pass (e.g. `1` vs `number`).
+            if (widenedArg === widenedParam) continue
+            val argStr = typeToString(widenedArg)
+            val paramStr = typeToString(widenedParam)
+            val start = sub.pos
+            val length = (expressionTrueEnd(sub) - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argStr' is not assignable to parameter of type '$paramStr'.",
+                category = DiagnosticCategory.Error,
+                code = 2345,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            break // Report one error per tagged template
+        }
     }
 
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
