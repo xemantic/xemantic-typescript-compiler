@@ -547,6 +547,8 @@ class Checker(
         checkMultipleDefaultExports()
         // 55. Check derived class constructor must contain super call (TS2377)
         checkDerivedConstructorSuper()
+        // 55b. Check derived class constructor `return null` (TS2322 + TS2409)
+        checkDerivedConstructorReturnNull()
         // 56. Check circular import alias definitions (TS2303)
         checkCircularImportAlias()
         // 57. Check return statement outside function body (TS1108)
@@ -26082,6 +26084,129 @@ interface DataView {
             if (stmtContainsSuperCall(stmt)) return true
         }
         return false
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2322 + TS2409: `return null` in derived class constructor
+    // -----------------------------------------------------------------------
+
+    private fun checkDerivedConstructorReturnNull() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForCtorReturnNull(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForCtorReturnNull(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    checkClassCtorReturnNull(stmt.heritageClauses, stmt.members, source, fileName, stmt.name?.text)
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                            is Constructor -> m.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        when (val init = d.initializer) {
+                            is ClassExpression -> checkClassCtorReturnNull(init.heritageClauses, init.members, source, fileName, init.name?.text)
+                            is FunctionExpression -> walkForCtorReturnNull(init.body.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                is Block -> walkForCtorReturnNull(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkClassCtorReturnNull(
+        heritageClauses: List<HeritageClause>?,
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+        className: String?,
+    ) {
+        val extendsClause = heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return
+        val extendsExpr = extendsClause.types.firstOrNull()?.expression
+        // Skip `class X extends null` (handled elsewhere).
+        if (extendsExpr is Identifier && extendsExpr.text == "null") return
+        if (className == null) return
+        for (member in members) {
+            if (member !is Constructor) continue
+            val body = member.body ?: continue
+            findReturnNullsInStatements(body.statements) { returnPos ->
+                val (line, character) = getLineAndCharacterOfPosition(source, returnPos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'null' is not assignable to type '$className'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = returnPos,
+                    length = 6, // "return"
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Return type of constructor signature must be assignable to the instance type of the class.",
+                    category = DiagnosticCategory.Error,
+                    code = 2409,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = returnPos,
+                    length = 6,
+                ))
+            }
+        }
+    }
+
+    private fun findReturnNullsInStatements(stmts: List<Statement>, callback: (Int) -> Unit) {
+        for (stmt in stmts) findReturnNullsInStmt(stmt, callback)
+    }
+
+    private fun findReturnNullsInStmt(stmt: Statement, callback: (Int) -> Unit) {
+        when (stmt) {
+            is ReturnStatement -> {
+                val expr = stmt.expression
+                if (expr is Identifier && expr.text == "null") callback(stmt.pos)
+            }
+            is Block -> findReturnNullsInStatements(stmt.statements, callback)
+            is IfStatement -> {
+                findReturnNullsInStmt(stmt.thenStatement, callback)
+                stmt.elseStatement?.let { findReturnNullsInStmt(it, callback) }
+            }
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> clause.statements.forEach { findReturnNullsInStmt(it, callback) }
+                        is DefaultClause -> clause.statements.forEach { findReturnNullsInStmt(it, callback) }
+                        else -> {}
+                    }
+                }
+            }
+            is ForStatement -> findReturnNullsInStmt(stmt.statement, callback)
+            is ForInStatement -> findReturnNullsInStmt(stmt.statement, callback)
+            is ForOfStatement -> findReturnNullsInStmt(stmt.statement, callback)
+            is WhileStatement -> findReturnNullsInStmt(stmt.statement, callback)
+            is DoStatement -> findReturnNullsInStmt(stmt.statement, callback)
+            is TryStatement -> {
+                findReturnNullsInStatements(stmt.tryBlock.statements, callback)
+                stmt.catchClause?.let { findReturnNullsInStatements(it.block.statements, callback) }
+                stmt.finallyBlock?.let { findReturnNullsInStatements(it.statements, callback) }
+            }
+            is LabeledStatement -> findReturnNullsInStmt(stmt.statement, callback)
+            else -> {}
+        }
     }
 
     /** Returns the position of the first super() call in stmts, or null if none. */
