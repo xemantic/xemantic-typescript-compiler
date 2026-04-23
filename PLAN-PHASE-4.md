@@ -2519,6 +2519,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4fd, +1 test: 8283→8284) — TS2351 "This expression is not constructable" for `new []`:** `var myCars2 = new [];` now emits TS2351 at the `[]` span with chain line `"  Type 'never[]' has no construct signatures."`. Narrow match: `NewExpression` where `expression is ArrayLiteralExpression` AND `elements.isEmpty()`. Non-empty array literals are NOT flagged — they'd need element-type resolution for the chain display and the test corpus has no such case (only `genericArrayAssignmentCompatErrors_ts` exercises `new []`).
+
+  - New branch at the top of `checkSingleNewExpressionTypes` (Checker.kt ~38399), emitted BEFORE the existing `calleeType === anyType || errorType` early return. Span: `arr.pos` to `source.indexOf(']', arr.pos) + 1` (covers the full `[...]`). Length falls back to 2 if the `]` isn't found within source bounds.
+  - → +1 test: `genericArrayAssignmentCompatErrors_ts`. Zero regressions (1792 → 1791 failed).
+
   **Session 2026-04-23 (16.4fc, +1 test: 8282→8283) — TS7013 for construct signature in TypeLiteral without return type annotation:** `var x11: { new (); };` now emits TS7013 "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type." at the `new ();` span.
 
   - Extension in `checkImplicitAnyInTypeAnnotation`'s TypeLiteral branch: inside the MethodDeclaration-member handling (added in 16.4fa), also emit TS7013 when `name == "new"` and `member.type == null`. Span uses the `source.indexOf(';', member.pos)` scan pattern (capped at 80 chars) — matches the 7-char `new ();` squiggle from the baseline. Regular methods and call signatures (name `""`) are not flagged here; their parameter-type implicit-any is already covered by the existing TS7006 path.
