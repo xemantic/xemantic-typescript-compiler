@@ -3234,14 +3234,19 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val pos = getPos()
         nextToken() // skip <
         val type = parseType()
-        parseExpected(SyntaxKind.GreaterThan)
+        val hadGreaterThan = parseExpected(SyntaxKind.GreaterThan)
+        // If `>` was consumed, `getPrevTokenEnd` points just after it; otherwise the type text
+        // ended at the previous token's end (before the missing `>`).
+        val headerEnd = scanner.getPrevTokenEnd()
         // `yield` cannot be the argument of a type assertion — TypeScript emits TS1109
         // and uses `;` (empty) for the assertion. Parse `yield ...` as a separate statement.
         val expr = if (token == SyntaxKind.YieldKeyword) {
             reportError("Expression expected.", code = 1109)
             OmittedExpression(pos = pos, end = pos)
         } else parseUnaryExpression()
-        return TypeAssertionExpression(type = type, expression = expr, pos = pos, end = getEnd())
+        return TypeAssertionExpression(
+            type = type, expression = expr, headerEnd = headerEnd, pos = pos, end = getEnd(),
+        )
     }
 
     // ── JSX Parsing ─────────────────────────────────────────────────────────

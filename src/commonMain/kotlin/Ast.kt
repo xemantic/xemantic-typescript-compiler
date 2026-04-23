@@ -760,6 +760,8 @@ data class TaggedTemplateExpression(
 data class TypeAssertionExpression(
     val type: TypeNode,
     val expression: Expression,
+    /** Position right after the closing `>` (or right after the type text if `>` was missing). */
+    val headerEnd: Int = 0,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

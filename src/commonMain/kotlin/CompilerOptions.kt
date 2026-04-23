@@ -175,6 +175,7 @@ data class CompilerOptions(
     val pretty: Boolean = false,
     val incremental: Boolean? = null,
     val isolatedDeclarations: Boolean = false,
+    val erasableSyntaxOnly: Boolean = false,
     val ignoreDeprecations: String? = null,
     /**
      * Simulated TypeScript version for version-gated diagnostics (from `// @typeScriptVersion` test directive).
@@ -486,6 +487,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "pretty" -> options.copy(pretty = boolValue)
         "incremental" -> options.copy(incremental = boolValue)
         "isolateddeclarations" -> options.copy(isolatedDeclarations = boolValue)
+        "erasablesyntaxonly" -> options.copy(erasableSyntaxOnly = boolValue)
         "ignoredeprecations" -> options.copy(ignoreDeprecations = value.trim())
         "typescriptversion" -> options.copy(simulatedTypeScriptVersion = value.trim())
         else -> options

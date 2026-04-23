@@ -2519,6 +2519,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4ew, +1 test: 8275→8276) — TS1294 for TypeAssertionExpression when `erasableSyntaxOnly` is enabled:** Added the new compiler option `erasableSyntaxOnly` (parsed from `// @erasableSyntaxOnly: true` test directive) and a narrow Checker pass that walks statement/expression trees looking for `TypeAssertionExpression`. Emits TS1294 "This syntax is not allowed when 'erasableSyntaxOnly' is enabled." at the `<Type>` header span.
+
+  - `CompilerOptions.kt`: added `erasableSyntaxOnly: Boolean` field + directive parsing (`"erasablesyntaxonly" -> ...`).
+  - `Ast.kt` / `Parser.kt`: added `headerEnd: Int` field to `TypeAssertionExpression`, populated from `scanner.getPrevTokenEnd()` after `parseExpected(GreaterThan)`. This gives the true exclusive end of the `<Type>` header whether or not the `>` was actually present — `scanner.getPrevTokenEnd()` is the position right after the last successfully consumed token, which avoids the node.end overshoot (CLAUDE.md gotcha: `node.end` is after the next token was scanned, so it includes trailing trivia and the next token's start).
+  - `Checker.kt`: new `checkErasableSyntaxOnly` + `walkErasableInStmt`/`walkErasableInExpr` walkers that recurse through statements (VarStmt, ExprStmt, Block, If/For/While/Do, Return/Throw, Try, Switch, Function/Class/Module) and expressions (Call/New/Property/Element/Conditional/Paren/Unary/Array/Object/Spread/Yield/Await/Arrow/Function/Binary). Emits TS1294 at `TypeAssertionExpression.pos` with length = `headerEnd - pos`. Gated on `options.erasableSyntaxOnly`.
+  - → +1 test: `erasableSyntaxOnly2_ts` (3× TS1294 + pre-existing 3× TS1005 now all aligned with baseline). Zero regressions (1800 → 1799 failed).
+  - Scope is deliberately narrow: only TypeAssertion triggers TS1294 — the broader cases (parameter properties, non-ambient enums/namespaces, `import X = Y.Z`, `import = require`, `export =`) are not covered. The main `erasableSyntaxOnly_ts` and `erasableSyntaxOnlyDeclaration_ts` tests still fail because they exercise those other patterns.
+
   **Session 2026-04-22 (16.4ev, +1 test: 8274→8275) — TS1166 + TS1169 for non-literal computed property names, plus TS2564 BinaryExpression display:** `interface I { [x = '']: string; }` now emits TS1169 at the `[x = '']` span. `class C { [x = 0]: string }` emits both TS1166 at the `[x = 0]` span AND TS2564 with display `Property '[x = 0]'`.
 
   - New `checkComputedPropertyNameLiteral` pass (Checker.kt ~24242): walks `InterfaceDeclaration` and `ClassDeclaration` members, emitting TS1169 / TS1166 when a `ComputedPropertyName` expression fails `isLiteralLikeExpr`.
