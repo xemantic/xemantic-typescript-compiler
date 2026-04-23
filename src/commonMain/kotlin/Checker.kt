@@ -197,6 +197,11 @@ class Checker(
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
 
+    /** Symbols (TypeAlias/Interface/Class) whose type parameter defaults emitted TS2744
+     *  (circular / forward reference). Display as `Name<any, any, ...>` (with N args) when
+     *  referenced without type arguments — matches TypeScript's substitution-on-invalid-default. */
+    private val circularDefaultTypeParamCount: MutableMap<Int, Int> = mutableMapOf()
+
     /** The file name currently being checked — used to look up file-level type maps. */
     private var currentCheckFileName: String? = null
 
@@ -24706,7 +24711,13 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            walkTParamDefaultsInStmts(result.sourceFile.statements, source, fileName)
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                walkTParamDefaultsInStmts(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
         }
     }
 
@@ -24731,7 +24742,7 @@ interface DataView {
                 for (member in stmt.members) walkTParamDefaultsInClassMember(member, source, fileName)
             }
             is TypeAliasDeclaration -> {
-                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName, stmt.name.text) }
                 walkTParamDefaultsInType(stmt.type, source, fileName)
             }
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
@@ -24881,9 +24892,15 @@ interface DataView {
         }
     }
 
-    private fun validateTParamDefaults(tparams: List<TypeParameter>, source: String, fileName: String) {
+    private fun validateTParamDefaults(
+        tparams: List<TypeParameter>,
+        source: String,
+        fileName: String,
+        parentAliasName: String? = null,
+    ) {
         if (tparams.isEmpty()) return
         val names = tparams.map { it.name.text }
+        var anyCircular = false
         for (i in tparams.indices) {
             val tp = tparams[i]
             val default = tp.default ?: continue
@@ -24903,6 +24920,16 @@ interface DataView {
                 start = start,
                 length = length,
             ))
+            anyCircular = true
+        }
+        // For TypeAliases with circular defaults, track the symbol so that later
+        // display of `Name` (without type args) renders as `Name<any, ..., any>`
+        // to match TypeScript's substitution-on-invalid-default behavior.
+        if (anyCircular && parentAliasName != null) {
+            val sym = currentFileLocals?.get(parentAliasName)
+            if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
+                circularDefaultTypeParamCount[sym.id] = tparams.size
+            }
         }
     }
 
@@ -41726,7 +41753,18 @@ interface DataView {
                     val argNames = typeArgs.map { formatTypeForDisplay(it) }
                     if (argNames.any { it == null }) return null
                     "$baseName<${argNames.joinToString(", ")}>"
-                } else baseName
+                } else {
+                    // 16.4fi: for TypeAliases with circular-default type params, fill in
+                    // `<any, any, ...>` for bare references — matches TypeScript's
+                    // substitution-on-invalid-default display.
+                    val tnName = typeNode.typeName
+                    val sym = if (tnName is Identifier) currentFileLocals?.get(tnName.text) ?: globals[tnName.text]
+                        else null
+                    val n = sym?.let { circularDefaultTypeParamCount[it.id] }
+                    if (n != null && n > 0) {
+                        "$baseName<${List(n) { "any" }.joinToString(", ")}>"
+                    } else baseName
+                }
             }
             is ArrayType -> {
                 val elementType = formatTypeForDisplay(typeNode.elementType) ?: return null
