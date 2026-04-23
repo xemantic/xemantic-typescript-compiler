@@ -38397,6 +38397,27 @@ interface DataView {
      * Check argument types for a NewExpression against the construct signature.
      */
     private fun checkSingleNewExpressionTypes(expr: NewExpression, source: String, fileName: String) {
+        // 16.4fd: `new []` — empty array literal is not constructable.
+        // Narrow to empty array literal — non-empty would need element-type
+        // resolution for the chain display.
+        if (expr.expression is ArrayLiteralExpression && (expr.expression as ArrayLiteralExpression).elements.isEmpty()) {
+            val arr = expr.expression as ArrayLiteralExpression
+            val close = source.indexOf(']', arr.pos)
+            val length = if (close >= arr.pos) close + 1 - arr.pos else 2
+            val (line, character) = getLineAndCharacterOfPosition(source, arr.pos)
+            diagnostics.add(Diagnostic(
+                message = "This expression is not constructable.",
+                category = DiagnosticCategory.Error,
+                code = 2351,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = arr.pos,
+                length = length,
+                messageChain = listOf("  Type 'never[]' has no construct signatures."),
+            ))
+            return
+        }
         val args = expr.arguments ?: return
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
