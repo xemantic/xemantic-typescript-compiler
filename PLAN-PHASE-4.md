@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4fg, +1 test: 8287→8288) — TS2352 for `<NamedType>null` cast to non-nullable Class/Interface:** `<IHasVisualizationModel>null` now emits TS2352 "Conversion of type 'null' to type 'IHasVisualizationModel' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first." at the full `<T>null` span.
+
+  - New `checkNullTypeAssertionOverlap` walker (Checker.kt ~24620), invoked from the main check loop after `checkImportEqualsRequireOfNonModule` (item 14''). Uses a newly refactored `walkTypeAssertionsInStmt`/`walkTypeAssertionsInExpr` traversal pair (extracted from the old `walkErasableIn*` walker) that takes a `(TypeAssertionExpression) -> Unit` callback, so both TS1294 (erasable) and TS2352 share the same traversal.
+  - Gates: `expression` is `Identifier("null")` (skips `null!` which parses as NonNullExpression and widens to `never`). `type` is `TypeReference` with `typeName` as Identifier resolving to a local Class or Interface symbol (not TypeAlias — aliases can resolve to `any`/`unknown`). Skips lib-declared `Object`/`Function` names.
+  - Squiggle span: `[expr.pos, expressionTrueEnd(inner)]` — covers the entire `<T>null` (e.g. 28 chars for `<IHasVisualizationModel>null`).
+  - → +1 test: `aliasUsageInGenericFunction_ts`. Zero regressions (1788 → 1787 failed; 8287 → 8288 passing).
+
   **Session 2026-04-23 (16.4ff, +1 test: 8286→8287) — TS2306 for `import = require("./X")` of non-module file:** `import fs = require("./empty_file")` where `empty_file.ts` has no imports/exports/exported declarations now emits TS2306 "File 'empty_file.ts' is not a module." at the module specifier span (length = name.length + 2 for quotes).
 
   - New `checkImportEqualsRequireOfNonModule` walker (Checker.kt ~12549), invoked from main check loop right after `checkUnresolvedModules` (item 14'). Iterates `ImportEqualsDeclaration` with `ExternalModuleReference`, resolves the relative specifier via `resolveModuleSpecifierStrictRelative`, and emits TS2306 when the target file's statements fail `isModuleFile` (no ImportDeclaration, ExportDeclaration, exported decl, etc.).

@@ -401,6 +401,8 @@ class Checker(
         checkUnresolvedModules()
         // 14'. Check `import = require()` of a non-module file (TS2306)
         checkImportEqualsRequireOfNonModule()
+        // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
+        checkNullTypeAssertionOverlap()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -24488,111 +24490,117 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
-                walkErasableInStmt(stmt, source, fileName)
+                walkTypeAssertionsInStmt(stmt, source, fileName, ::emitErasableTypeAssertion)
             }
         }
     }
 
-    private fun walkErasableInStmt(stmt: Statement, source: String, fileName: String) {
+    private fun walkTypeAssertionsInStmt(
+        stmt: Statement, source: String, fileName: String,
+        onAssertion: (TypeAssertionExpression, String, String) -> Unit,
+    ) {
         when (stmt) {
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { walkErasableInExpr(it, source, fileName) }
+                d.initializer?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             }
-            is ExpressionStatement -> walkErasableInExpr(stmt.expression, source, fileName)
-            is Block -> for (s in stmt.statements) walkErasableInStmt(s, source, fileName)
+            is ExpressionStatement -> walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
+            is Block -> for (s in stmt.statements) walkTypeAssertionsInStmt(s, source, fileName, onAssertion)
             is IfStatement -> {
-                walkErasableInExpr(stmt.expression, source, fileName)
-                walkErasableInStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkErasableInStmt(it, source, fileName) }
+                walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
+                walkTypeAssertionsInStmt(stmt.thenStatement, source, fileName, onAssertion)
+                stmt.elseStatement?.let { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             }
             is ForStatement -> {
-                (stmt.initializer as? Expression)?.let { walkErasableInExpr(it, source, fileName) }
+                (stmt.initializer as? Expression)?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
                 (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
-                    it.initializer?.let { i -> walkErasableInExpr(i, source, fileName) }
+                    it.initializer?.let { i -> walkTypeAssertionsInExpr(i, source, fileName, onAssertion) }
                 }
-                stmt.condition?.let { walkErasableInExpr(it, source, fileName) }
-                stmt.incrementor?.let { walkErasableInExpr(it, source, fileName) }
-                walkErasableInStmt(stmt.statement, source, fileName)
+                stmt.condition?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
+                stmt.incrementor?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
+                walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
             }
             is WhileStatement -> {
-                walkErasableInExpr(stmt.expression, source, fileName)
-                walkErasableInStmt(stmt.statement, source, fileName)
+                walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
+                walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
             }
             is DoStatement -> {
-                walkErasableInStmt(stmt.statement, source, fileName)
-                walkErasableInExpr(stmt.expression, source, fileName)
+                walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
+                walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
             }
-            is ReturnStatement -> stmt.expression?.let { walkErasableInExpr(it, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { walkErasableInExpr(it, source, fileName) }
+            is ReturnStatement -> stmt.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
+            is ThrowStatement -> stmt.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             is TryStatement -> {
-                for (s in stmt.tryBlock.statements) walkErasableInStmt(s, source, fileName)
-                stmt.catchClause?.block?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
-                stmt.finallyBlock?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+                for (s in stmt.tryBlock.statements) walkTypeAssertionsInStmt(s, source, fileName, onAssertion)
+                stmt.catchClause?.block?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                stmt.finallyBlock?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             }
             is SwitchStatement -> {
-                walkErasableInExpr(stmt.expression, source, fileName)
+                walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
                 for (clause in stmt.caseBlock) {
-                    (clause as? CaseClause)?.expression?.let { walkErasableInExpr(it, source, fileName) }
+                    (clause as? CaseClause)?.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
                     val stmts = (clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements
-                    stmts?.forEach { walkErasableInStmt(it, source, fileName) }
+                    stmts?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
                 }
             }
-            is FunctionDeclaration -> stmt.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             is ClassDeclaration -> for (m in stmt.members) {
                 when (m) {
-                    is MethodDeclaration -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
-                    is Constructor -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
-                    is GetAccessor -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
-                    is SetAccessor -> m.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { walkErasableInExpr(it, source, fileName) }
+                    is MethodDeclaration -> m.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    is Constructor -> m.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    is GetAccessor -> m.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    is SetAccessor -> m.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    is PropertyDeclaration -> m.initializer?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
                     else -> {}
                 }
             }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             else -> {}
         }
     }
 
-    private fun walkErasableInExpr(expr: Expression, source: String, fileName: String) {
+    private fun walkTypeAssertionsInExpr(
+        expr: Expression, source: String, fileName: String,
+        onAssertion: (TypeAssertionExpression, String, String) -> Unit,
+    ) {
         when (expr) {
             is TypeAssertionExpression -> {
-                emitErasableTypeAssertion(expr, source, fileName)
-                walkErasableInExpr(expr.expression, source, fileName)
+                onAssertion(expr, source, fileName)
+                walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             }
-            is ParenthesizedExpression -> walkErasableInExpr(expr.expression, source, fileName)
+            is ParenthesizedExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is BinaryExpression -> {
-                walkErasableInExpr(expr.left, source, fileName)
-                walkErasableInExpr(expr.right, source, fileName)
+                walkTypeAssertionsInExpr(expr.left, source, fileName, onAssertion)
+                walkTypeAssertionsInExpr(expr.right, source, fileName, onAssertion)
             }
             is CallExpression -> {
-                walkErasableInExpr(expr.expression, source, fileName)
-                for (a in expr.arguments) walkErasableInExpr(a, source, fileName)
+                walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+                for (a in expr.arguments) walkTypeAssertionsInExpr(a, source, fileName, onAssertion)
             }
             is NewExpression -> {
-                walkErasableInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkErasableInExpr(it, source, fileName) }
+                walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+                expr.arguments?.forEach { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             }
-            is PropertyAccessExpression -> walkErasableInExpr(expr.expression, source, fileName)
+            is PropertyAccessExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is ElementAccessExpression -> {
-                walkErasableInExpr(expr.expression, source, fileName)
-                walkErasableInExpr(expr.argumentExpression, source, fileName)
+                walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+                walkTypeAssertionsInExpr(expr.argumentExpression, source, fileName, onAssertion)
             }
             is ConditionalExpression -> {
-                walkErasableInExpr(expr.condition, source, fileName)
-                walkErasableInExpr(expr.whenTrue, source, fileName)
-                walkErasableInExpr(expr.whenFalse, source, fileName)
+                walkTypeAssertionsInExpr(expr.condition, source, fileName, onAssertion)
+                walkTypeAssertionsInExpr(expr.whenTrue, source, fileName, onAssertion)
+                walkTypeAssertionsInExpr(expr.whenFalse, source, fileName, onAssertion)
             }
-            is PrefixUnaryExpression -> walkErasableInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkErasableInExpr(expr.operand, source, fileName)
-            is ArrayLiteralExpression -> for (e in expr.elements) walkErasableInExpr(e, source, fileName)
+            is PrefixUnaryExpression -> walkTypeAssertionsInExpr(expr.operand, source, fileName, onAssertion)
+            is PostfixUnaryExpression -> walkTypeAssertionsInExpr(expr.operand, source, fileName, onAssertion)
+            is ArrayLiteralExpression -> for (e in expr.elements) walkTypeAssertionsInExpr(e, source, fileName, onAssertion)
             is ObjectLiteralExpression -> for (p in expr.properties) {
-                (p as? PropertyAssignment)?.initializer?.let { walkErasableInExpr(it, source, fileName) }
+                (p as? PropertyAssignment)?.initializer?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             }
-            is SpreadElement -> walkErasableInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkErasableInExpr(it, source, fileName) }
-            is AwaitExpression -> walkErasableInExpr(expr.expression, source, fileName)
-            is ArrowFunction -> (expr.body as? Block)?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
-            is FunctionExpression -> expr.body?.statements?.forEach { walkErasableInStmt(it, source, fileName) }
+            is SpreadElement -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is YieldExpression -> expr.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
+            is AwaitExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is ArrowFunction -> (expr.body as? Block)?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+            is FunctionExpression -> expr.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             else -> {}
         }
     }
@@ -24607,6 +24615,67 @@ interface DataView {
             message = "This syntax is not allowed when 'erasableSyntaxOnly' is enabled.",
             category = DiagnosticCategory.Error,
             code = 1294,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2352: Type assertion from 'null' to a named Class/Interface
+    // -----------------------------------------------------------------------
+
+    /**
+     * Emits TS2352 "Conversion of type 'null' to type 'X' may be a mistake because
+     * neither type sufficiently overlaps with the other." for `<T>null` casts where
+     * T is a named Interface/Class (not a TypeAlias, and not any/unknown). `null!`
+     * is skipped — the NonNullExpression wraps the null literal and shouldn't match.
+     */
+    private fun checkNullTypeAssertionOverlap() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfNullCast)
+                }
+            } finally {
+                currentFileLocals = savedLocals
+            }
+        }
+    }
+
+    private fun emitTS2352IfNullCast(
+        expr: TypeAssertionExpression, source: String, fileName: String,
+    ) {
+        val inner = expr.expression
+        if (inner !is Identifier || inner.text != "null") return
+        val typeNode = expr.type
+        if (typeNode !is TypeReference) return
+        val typeName = typeNode.typeName as? Identifier ?: return
+        val name = typeName.text
+        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return
+        // Only fire for locally-declared named Class or Interface (not TypeAlias,
+        // not Enum, not Module) — aliases can resolve to any/unknown/union, risk FP.
+        val isClassOrInterface = sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+                && !sym.flags.hasAny(SymbolFlags.TypeAlias or SymbolFlags.Module)
+        if (!isClassOrInterface) return
+        // Skip lib-declared Object/Function — their interfaces accept null-like values in practice.
+        if (name == "Object" || name == "Function") return
+
+        val start = expr.pos
+        val endPos = expressionTrueEnd(inner)
+        val length = (endPos - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type 'null' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error,
+            code = 2352,
             fileName = fileName,
             line = line,
             character = character,
