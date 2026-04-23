@@ -12566,9 +12566,19 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             for (stmt in flattenImportLikeStatements(result.sourceFile.statements)) {
-                if (stmt !is ImportEqualsDeclaration) continue
-                val ref = stmt.moduleReference as? ExternalModuleReference ?: continue
-                val specifier = ref.expression as? StringLiteralNode ?: continue
+                val specifier: StringLiteralNode = when (stmt) {
+                    is ImportEqualsDeclaration -> {
+                        val ref = stmt.moduleReference as? ExternalModuleReference ?: continue
+                        ref.expression as? StringLiteralNode ?: continue
+                    }
+                    is ExportDeclaration -> {
+                        // Only bare `export * from "..."` — named re-exports already surface
+                        // per-name errors via checkUnresolvedModules / named-binding paths.
+                        if (stmt.exportClause != null) continue
+                        stmt.moduleSpecifier as? StringLiteralNode ?: continue
+                    }
+                    else -> continue
+                }
                 val moduleName = specifier.text
                 val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
                 if (!isRelative) continue  // Skip non-relative — likely resolves via node_modules etc.
@@ -37531,6 +37541,59 @@ interface DataView {
     }
 
     /**
+     * Narrow TS2339 for `namespaceImport.ClassName.prop` chains. When `ns` is a namespace
+     * import alias (`import * as ns from "./m"`) and `ClassName` is a locally-declared
+     * class in the imported module, verify `prop` exists as a static member of that
+     * class; emit TS2339 with `typeof ClassName` display when it doesn't. Bails on
+     * heritage chains and on symbols with multiple declarations (merges).
+     */
+    private fun tryEmitNamespaceMemberTs2339(
+        access: PropertyAccessExpression, propName: String,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ): Boolean {
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
+        val nsIdent = access.expression as? Identifier ?: return false
+        val nsSym = globals[nsIdent.text] ?: return false
+        if (!nsSym.flags.hasAny(SymbolFlags.Alias)) return false
+        val resolved = resolveAliasTarget(nsSym) ?: return false
+        if (!resolved.flags.hasAny(SymbolFlags.Module)) return false
+        val memberName = access.name.text
+        val memberSym = resolved.exports?.get(memberName) ?: return false
+        if (!memberSym.flags.hasAny(SymbolFlags.Class)) return false
+        if (memberSym.declarations.size > 1) return false  // merged — be conservative
+        val classDecl = memberSym.declarations.firstOrNull() as? ClassDeclaration ?: return false
+        // Heritage complicates static-member lookup; skip.
+        val hasExtends = classDecl.heritageClauses?.any {
+            it.token == SyntaxKind.ExtendsKeyword
+        } == true
+        if (hasExtends) return false
+        val hasStatic = classDecl.members.any { m ->
+            val (mName, modifiers) = when (m) {
+                is PropertyDeclaration -> ((m.name as? Identifier)?.text) to m.modifiers
+                is MethodDeclaration -> ((m.name as? Identifier)?.text) to m.modifiers
+                is GetAccessor -> ((m.name as? Identifier)?.text) to m.modifiers
+                is SetAccessor -> ((m.name as? Identifier)?.text) to m.modifiers
+                else -> null to null
+            }
+            if (mName != propName || modifiers == null) false
+            else ModifierFlag.Static in modifiers
+        }
+        if (hasStatic) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type 'typeof $memberName'.",
+            category = DiagnosticCategory.Error,
+            code = 2339,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = diagStart,
+            length = diagLength,
+        ))
+        return true
+    }
+
+    /**
      * 16.4ed: Narrow TS2339 for `g.prop` where `g: Partial<T>` / `Required<T>` / `Readonly<T>`.
      * These utility types preserve T's property set, so if `prop` isn't a member of T, the
      * access is invalid. Fires only when the inner type resolves to a plain Object/Interface
@@ -37702,6 +37765,13 @@ interface DataView {
             }
             rawArr
         } else {
+            // Narrow: `ns.Class.prop` — namespace import alias + class in target module's
+            // locals + prop is not a static member. Emits TS2339 with `typeof Class` display.
+            if (objectExpr is PropertyAccessExpression &&
+                objectExpr.expression is Identifier &&
+                tryEmitNamespaceMemberTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
+                return
+            }
             if (objectExpr !is Identifier) return
             val identName = objectExpr.text
             val identSymbol = globals[identName]
