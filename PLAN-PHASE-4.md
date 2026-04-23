@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4ff, +1 test: 8286→8287) — TS2306 for `import = require("./X")` of non-module file:** `import fs = require("./empty_file")` where `empty_file.ts` has no imports/exports/exported declarations now emits TS2306 "File 'empty_file.ts' is not a module." at the module specifier span (length = name.length + 2 for quotes).
+
+  - New `checkImportEqualsRequireOfNonModule` walker (Checker.kt ~12549), invoked from main check loop right after `checkUnresolvedModules` (item 14'). Iterates `ImportEqualsDeclaration` with `ExternalModuleReference`, resolves the relative specifier via `resolveModuleSpecifierStrictRelative`, and emits TS2306 when the target file's statements fail `isModuleFile` (no ImportDeclaration, ExportDeclaration, exported decl, etc.).
+  - Scope: relative specifiers only (`./X` or `../X`); non-relative names skipped (would resolve via node_modules / paths). Single-file mode skipped.
+  - Display name uses the basename of the resolved file path (e.g. `requireOfAnEmptyFile1_b.ts`).
+  - → +1 test: `requireOfAnEmptyFile1_ts`. Zero regressions (1789 → 1788 failed).
+
   **Session 2026-04-23 (16.4fe, +2 tests: 8284→8286) — TS2322 + TS2409 for `return null;` in derived class constructor:** `class D extends C { constructor() { ... return null; } }` now emits TS2322 "Type 'null' is not assignable to type 'D'." AND TS2409 "Return type of constructor signature must be assignable to the instance type of the class." at the `return` keyword span (length 6) for each `return null;` statement inside any constructor of a class with an `extends` clause.
 
   - New `checkDerivedConstructorReturnNull` walker (Checker.kt ~26087), invoked from the main check loop (item 55b) right after `checkDerivedConstructorSuper`. Walks `ClassDeclaration`/`ClassExpression` recursively (including inside method/ctor bodies, function declarations, modules, blocks). For each derived class (non-`null` extends), iterates `Constructor` members and finds `ReturnStatement(expression: Identifier("null"))` in the body via `findReturnNullsInStmt` — recurses into Block/If/Switch/For{,In,Of}/While/Do/Try/Labeled but NOT into nested function/arrow/class scopes (those have their own return semantics).

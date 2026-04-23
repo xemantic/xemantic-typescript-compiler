@@ -399,6 +399,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14'. Check `import = require()` of a non-module file (TS2306)
+        checkImportEqualsRequireOfNonModule()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -12542,6 +12544,45 @@ class Checker(
             }
         }
         return out
+    }
+
+    /**
+     * TS2306: "File 'X' is not a module." for `import X = require("./Y")` where Y has no
+     * imports/exports/exported declarations (i.e. is a script file, not a module).
+     */
+    private fun checkImportEqualsRequireOfNonModule() {
+        if (binderResults.size <= 1 && !isMultiFileSource) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in flattenImportLikeStatements(result.sourceFile.statements)) {
+                if (stmt !is ImportEqualsDeclaration) continue
+                val ref = stmt.moduleReference as? ExternalModuleReference ?: continue
+                val specifier = ref.expression as? StringLiteralNode ?: continue
+                val moduleName = specifier.text
+                val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+                if (!isRelative) continue  // Skip non-relative — likely resolves via node_modules etc.
+                val resolved = resolveModuleSpecifierStrictRelative(moduleName, fileName) ?: continue
+                val targetResult = binderResults.firstOrNull { it.sourceFile.fileName == resolved } ?: continue
+                if (isModuleFile(targetResult.sourceFile.statements)) continue
+                // Compute display filename — basename of resolved path
+                val displayName = resolved.substringAfterLast('/')
+                val start = specifier.pos
+                val length = moduleName.length + 2 // +2 for quotes
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "File '$displayName' is not a module.",
+                    category = DiagnosticCategory.Error,
+                    code = 2306,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
     }
 
     private fun emitTS2307(specifier: Expression, moduleName: String, source: String, fileName: String) {
