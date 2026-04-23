@@ -7319,7 +7319,39 @@ class Checker(
      */
     private fun checkImplicitAnyInTypeAnnotation(type: TypeNode?, source: String, fileName: String) {
         when (type) {
-            is FunctionType -> checkParamsForImplicitAny(type.parameters, source, fileName)
+            is FunctionType -> {
+                checkParamsForImplicitAny(type.parameters, source, fileName)
+                // Recurse into the return type — may itself be a FunctionType or TypeLiteral.
+                checkImplicitAnyInTypeAnnotation(type.type, source, fileName)
+            }
+            is TypeLiteral -> {
+                // TS7008 for inline type-literal members without annotation/initializer.
+                for (member in type.members) {
+                    if (member is PropertyDeclaration) {
+                        if (member.type == null && member.initializer == null) {
+                            val name = member.name
+                            if (name is Identifier && name.text.isNotEmpty()) {
+                                val start = name.pos
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Member '${name.text}' implicitly has an 'any' type.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 7008,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = name.text.length,
+                                ))
+                            }
+                        }
+                        checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
+                    }
+                    if (member is MethodDeclaration) {
+                        checkParamsForImplicitAny(member.parameters, source, fileName)
+                    }
+                }
+            }
             else -> {}
         }
     }
@@ -7550,8 +7582,13 @@ class Checker(
     ) {
         for (param in parameters) {
             if (param.isCommentPlaceholder) continue
-            // Skip if parameter has type annotation or initializer
-            if (param.type != null) continue
+            // Recurse into nested function-type/type-literal annotations even if this
+            // param has a type — catches `funcLit: (y2) => number` (y2 gets TS7006) and
+            // `x: { v; w }` (v/w get TS7008).
+            if (param.type != null) {
+                checkImplicitAnyInTypeAnnotation(param.type, source, fileName)
+                continue
+            }
             if (param.initializer != null) continue
             // Skip `this` parameter
             val name = param.name

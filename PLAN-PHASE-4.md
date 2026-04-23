@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-23 (16.4fa, +1 test: 8280→8281) — TS7008 for inline type-literal members + nested TS7006 walk:** Extended `checkImplicitAnyInTypeAnnotation` to recurse into `TypeLiteral` and function-return types, and updated `checkParamsForImplicitAny` to walk nested type annotations even when the outer parameter has a type.
+
+  - **TS7008 in `TypeLiteral`**: `declare var objL: { v; w; }` now emits "Member 'v' implicitly has an 'any' type." and "Member 'w'..." at each PropertyDeclaration with no `type` and no `initializer`. Matches the existing ClassDeclaration/InterfaceDeclaration handling but for anonymous type literals in variable annotations, parameter annotations, function return types, etc.
+  - **Nested TS7006 via FunctionType-in-param-type**: `function testFuncLiteral(funcLit: (y2) => number) {}` now emits TS7006 for `y2`. Previously the outer `funcLit: (y2) => number` had a type, so `checkParamsForImplicitAny` early-exited without inspecting the nested FunctionType. The fix moves the nested-type walk BEFORE the `continue` so `checkImplicitAnyInTypeAnnotation(param.type)` runs on annotated params too — it then recurses into FunctionType/TypeLiteral. MethodDeclaration members inside TypeLiteral also get their parameters walked.
+  - → +1 test: `implicitAnyFunctionInvocationWithAnyArguements_ts` (adds 3× diagnostics: 2× TS7008 @ (4,21)/(4,24) for `v`/`w` in `{ v; w }`, and TS7006 @ (10,36) for `y2` in `(y2) => number`). Zero regressions (1795 → 1794 failed).
+
   **Session 2026-04-23 (16.4ez, +1 test: 8279→8280) — TS2374 duplicate index signatures + TS2411 for methods vs primitive index types:** Extended `checkIndexSigInStatement` to handle two more diagnostics on interface/class members.
 
   - **TS2374**: walks `IndexSignature` members, groups by key-keyword (`string`/`number`/`symbol`), and emits "Duplicate index signature for type 'X'." at each sig in a group of size ≥ 2. Gated on well-formed signatures only (exactly one parameter, no `?`, no `...`) — malformed shapes already fire TS1017/TS1096/TS1097 and TypeScript doesn't double-report.
