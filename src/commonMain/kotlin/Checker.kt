@@ -25771,7 +25771,34 @@ interface DataView {
                 findForwardParamRefs(expr.whenFalse, currentParamName, laterParams, source, fileName)
             }
             is CallExpression -> {
-                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                // IIFE: `(() => z)()` or `(function() { return z })()` — the callee body
+                // evaluates immediately. Descend into it so later-param refs fire here too.
+                // Skip generator IIFEs (return a Generator without running the body) and
+                // async IIFEs (TypeScript's baseline treats these as OK in param-init scope).
+                val callee = (expr.expression as? ParenthesizedExpression)?.expression ?: expr.expression
+                when (callee) {
+                    is ArrowFunction -> {
+                        val isAsync = ModifierFlag.Async in callee.modifiers
+                        // Exclude laterParams that the IIFE's own params shadow — otherwise
+                        // `((z) => z)()` would falsely flag the inner `z` against an outer `z` param.
+                        val inner = laterParams - callee.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                        if (!isAsync && !callee.asteriskToken && inner.isNotEmpty()) {
+                            when (val body = callee.body) {
+                                is Expression -> findForwardParamRefs(body, currentParamName, inner, source, fileName)
+                                is Block -> findForwardParamRefsInBlock(body, currentParamName, inner, source, fileName)
+                                else -> {}
+                            }
+                        }
+                    }
+                    is FunctionExpression -> {
+                        val isAsync = ModifierFlag.Async in callee.modifiers
+                        val inner = laterParams - callee.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                        if (!isAsync && !callee.asteriskToken && inner.isNotEmpty()) {
+                            findForwardParamRefsInBlock(callee.body, currentParamName, inner, source, fileName)
+                        }
+                    }
+                    else -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                }
                 expr.arguments.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
             }
             is NewExpression -> {
@@ -25787,8 +25814,30 @@ interface DataView {
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
-                        is PropertyAssignment -> findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName)
+                        is PropertyAssignment -> {
+                            // Computed property keys evaluate eagerly when the object literal is built.
+                            (prop.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                            }
+                            findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName)
+                        }
                         is ShorthandPropertyAssignment -> findForwardParamRefs(prop.name, currentParamName, laterParams, source, fileName)
+                        is MethodDeclaration -> {
+                            // Only the computed key evaluates eagerly; the method body is deferred.
+                            (prop.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                            }
+                        }
+                        is GetAccessor -> {
+                            (prop.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                            }
+                        }
+                        is SetAccessor -> {
+                            (prop.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                            }
+                        }
                         else -> {}
                     }
                 }
@@ -25797,6 +25846,27 @@ interface DataView {
             // Skip ArrowFunction, FunctionExpression, ClassExpression — own scope, not immediately evaluated.
             // Skip TypeAssertionExpression / AsExpression — TypeScript doesn't fire in type positions.
             else -> {}
+        }
+    }
+
+    /** Walk an IIFE body (Block) for TS2373 later-param refs. Only return-statement
+     *  expressions and top-level expression statements are walked — nested blocks/
+     *  functions would re-create scopes we don't model here. */
+    private fun findForwardParamRefsInBlock(
+        body: Block,
+        currentParamName: String,
+        laterParams: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in body.statements) {
+            when (stmt) {
+                is ReturnStatement -> stmt.expression?.let {
+                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName)
+                }
+                is ExpressionStatement -> findForwardParamRefs(stmt.expression, currentParamName, laterParams, source, fileName)
+                else -> {}
+            }
         }
     }
 
