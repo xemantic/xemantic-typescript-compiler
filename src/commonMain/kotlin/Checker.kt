@@ -12367,10 +12367,13 @@ class Checker(
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         }
-                    } else if (isClassicResolution && options.paths.isNullOrEmpty() && options.baseUrl == null) {
+                    } else if (isClassicResolution && options.paths.isNullOrEmpty() && options.baseUrl == null && options.rootDirs.isNullOrEmpty()) {
                         // For classic/AMD/System/UMD module resolution, emit TS2792 in multi-file
-                        // when the module can't be resolved. Skip when paths/baseUrl are configured
-                        // since those require complex path remapping that our simple resolver can't handle.
+                        // when the module can't be resolved. Skip when paths/baseUrl/rootDirs are
+                        // configured since those require complex path remapping that our simple
+                        // resolver can't model (rootDirs virtually merges multiple source roots,
+                        // so a specifier like `./project/file3` in one root can resolve to
+                        // `../generated/src/project/file3.ts` in another).
                         // Skip .json imports (handled by TS5070 resolveJsonModule+classic incompatibility).
                         if (!moduleName.endsWith(".json")) {
                             val resolved = if (isRelative) {
