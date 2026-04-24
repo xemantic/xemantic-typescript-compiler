@@ -31109,7 +31109,7 @@ interface DataView {
                     val rt = sig.resolvedReturnType ?: return@any false
                     checkTypeRelatedTo(rt, targetType, assignableRelation)
                 } == true
-                if (srcIsFunc && !tgtIsFunc && !tgtIsNewable && callingHelps &&
+                if (srcIsFunc && !tgtIsNewable && callingHelps &&
                     init !is ArrowFunction && init !is FunctionExpression) {
                     val initStart = init.pos
                     val initEnd = expressionTrueEnd(init)
@@ -31121,11 +31121,16 @@ interface DataView {
                         fileName = fileName, line = iLine, character = iCol,
                         start = initStart, length = initEnd - initStart,
                     )
+                    val chain = mutableListOf<String>()
+                    if (tgtIsFunc) {
+                        chain.addAll(getFunctionMismatchElaboration(sourceType as Type.Object, targetType as Type.Object))
+                    }
                     diagnostics.add(Diagnostic(
                         message = msg,
                         category = DiagnosticCategory.Error, code = 2322,
                         fileName = fileName, line = iLine, character = iCol,
                         start = initStart, length = initEnd - initStart,
+                        messageChain = chain,
                         relatedInformation = listOf(related),
                     ))
                     return
@@ -33505,13 +33510,25 @@ interface DataView {
     /**
      * Get a display-friendly string for a Type (used in diagnostic messages).
      */
+    /**
+     * Format a single parameter as `name: type` / `name?: type | undefined` / `...name: type`
+     * depending on modifiers on its declaration. Shared by signatureToString / signatureToStringColon
+     * so arrow and colon forms render params identically.
+     */
+    private fun formatParameter(p: Symbol): String {
+        val decl = p.valueDeclaration as? Parameter
+        val pType = getTypeOfSymbol(p).let { if (it === anyType) "any" else typeToString(it) }
+        return when {
+            decl?.dotDotDotToken == true -> "...${p.name}: $pType"
+            decl?.questionToken == true -> "${p.name}?: $pType | undefined"
+            else -> "${p.name}: $pType"
+        }
+    }
+
     /** Format a signature as a string like `(x: number) => string` or `new (x: number) => Foo`. */
     private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) "new " else ""
-        val params = sig.parameters.joinToString(", ") { p ->
-            val pType = getTypeOfSymbol(p).let { if (it === anyType) "any" else typeToString(it) }
-            "${p.name}: $pType"
-        }
+        val params = sig.parameters.joinToString(", ") { formatParameter(it) }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
         return "$prefix($params) => $retType"
     }
@@ -33519,10 +33536,7 @@ interface DataView {
     /** Format a signature using colon notation like `(x: number): string` for use in `{ }` blocks. */
     private fun signatureToStringColon(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) "new " else ""
-        val params = sig.parameters.joinToString(", ") { p ->
-            val pType = getTypeOfSymbol(p).let { if (it === anyType) "any" else typeToString(it) }
-            "${p.name}: $pType"
-        }
+        val params = sig.parameters.joinToString(", ") { formatParameter(it) }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
         return "$prefix($params): $retType"
     }
@@ -40128,7 +40142,9 @@ interface DataView {
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 // TS6213: If the argument type has construct signatures but no call signatures,
-                // suggest "Did you mean to use 'new' with this expression?"
+                // suggest "Did you mean to use 'new' with this expression?". TS6212 mirrors
+                // this for call signatures whose return type would satisfy the parameter —
+                // "Did you mean to call this expression?".
                 val relatedInfo: MutableList<Diagnostic> = mutableListOf()
                 if (argType is Type.Object) {
                     val constructSigs = getConstructSignaturesOfType(argType)
@@ -40144,6 +40160,23 @@ interface DataView {
                             start = start,
                             length = length,
                         ))
+                    } else if (callSigs.isNotEmpty() && arg !is ArrowFunction && arg !is FunctionExpression) {
+                        val callingHelpsArg = callSigs.any { sig ->
+                            val rt = sig.resolvedReturnType ?: return@any false
+                            checkTypeRelatedTo(rt, paramType, assignableRelation)
+                        }
+                        if (callingHelpsArg) {
+                            relatedInfo.add(Diagnostic(
+                                message = "Did you mean to call this expression?",
+                                category = DiagnosticCategory.Message,
+                                code = 6212,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
                     }
                 }
                 // TS2793: overload implementation would have matched
