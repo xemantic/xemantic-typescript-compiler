@@ -37137,46 +37137,80 @@ interface DataView {
         if (typeName in BUILTIN_GENERICS) return
 
         val symbol = globals[typeName] ?: return
-        // Find type parameters from the declaration
-        val typeParams = getTypeParametersOfSymbol(symbol) ?: return
-        if (typeParams.isEmpty()) return
+        // 16.4gc: Get type parameter DECLARATIONS and resolve constraints with the
+        // fresh TypeParam objects pushed onto scope — this way TypeParam references
+        // inside a constraint (e.g. `T` inside `{ a: T }` for `U extends { a: T }`)
+        // resolve to the same fresh TypeParam instances we return, so a TypeMapper
+        // keyed on those instances can substitute them at display time.
+        val typeParamNodes = getTypeParameterDeclarationsOfSymbol(symbol) ?: return
+        if (typeParamNodes.isEmpty()) return
+        val typeParams = typeParamNodes.map { tp ->
+            val p = Type.TypeParam()
+            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+            p
+        }
+        val savedScope = currentTypeParamScope
+        try {
+            val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
+            typeParamNodes.forEachIndexed { i, tp -> scope[tp.name.text] = typeParams[i] }
+            currentTypeParamScope = scope
+            typeParamNodes.forEachIndexed { i, tp ->
+                tp.constraint?.let { typeParams[i].constraint = getTypeFromTypeNode(it) }
+                tp.default?.let { typeParams[i].default = getTypeFromTypeNode(it) }
+            }
+        } finally {
+            currentTypeParamScope = savedScope
+        }
+
+        val argTypes = typeArgs.map { getTypeFromTypeNode(it) }
+        val mapper = createTypeMapper(typeParams, argTypes)
 
         val len = minOf(typeArgs.size, typeParams.size)
         for (i in 0 until len) {
             val typeParam = typeParams[i]
             val constraint = typeParam.constraint ?: continue
-            val argType = getTypeFromTypeNode(typeArgs[i])
+            val argType = argTypes[i]
             if (argType === anyType || argType === errorType) continue
-            val constraintType = constraint
-            if (constraintType === anyType || constraintType === errorType) continue
+            val instantiatedConstraint = instantiateType(constraint, mapper)
+            if (instantiatedConstraint === anyType || instantiatedConstraint === errorType) continue
 
-            if (!checkTypeRelatedTo(argType, constraintType, assignableRelation)) {
+            if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
                 // TS allows primitive type arguments to satisfy object-shape constraints
                 // via apparent type: `string` has the String wrapper's members (`length`,
                 // `charAt`, etc.), so `A<string>` where A's param extends `{ length: number }`
                 // is fine. Only apply this bail-out at the TS2344 emission site to avoid
                 // affecting other relation-based checks.
-                if (constraintType is Type.Object &&
+                if (instantiatedConstraint is Type.Object &&
                     argType.flags.hasAny(TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BooleanLike)) {
                     val apparent = getApparentType(argType)
                     if (apparent !== argType && apparent is Type.Object &&
-                        checkTypeRelatedTo(apparent, constraintType, assignableRelation)) {
+                        checkTypeRelatedTo(apparent, instantiatedConstraint, assignableRelation)) {
                         continue
                     }
                 }
                 val argNode = typeArgs[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
-                val constraintDisplay = typeToString(constraintType)
+                // 16.4gc: constraint display with TypeParam substitution (see 16.4gb)
+                val constraintDisplay = typeToStringWithMapper(instantiatedConstraint, mapper)
+                // 16.4gc: source-span squiggle (see 16.4gb)
+                var trueEnd = argNode.end
+                while (trueEnd > argNode.pos && source.getOrNull(trueEnd - 1)?.let {
+                    it == ' ' || it == '\t' || it == '\n' || it == '\r' ||
+                    it == ',' || it == '>' || it == ')' || it == ';'
+                } == true) trueEnd--
+                val length = if (trueEnd > argNode.pos) trueEnd - argNode.pos else argDisplay.length
+                if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, argNode.pos)
                 val message = "Type '$argDisplay' does not satisfy the constraint '$constraintDisplay'."
                 val chain = mutableListOf<String>()
                 val relatedInfo = mutableListOf<Diagnostic>()
 
-                // Add elaboration for missing properties
-                if (argType is Type.Object && constraintType is Type.Object) {
+                // Add elaboration for missing properties (structural Object vs Object)
+                var emittedMissing = false
+                if (argType is Type.Object && instantiatedConstraint is Type.Object) {
                     resolveStructuredTypeMembers(argType)
-                    resolveStructuredTypeMembers(constraintType)
-                    val constraintProps = constraintType.properties ?: emptyList()
+                    resolveStructuredTypeMembers(instantiatedConstraint)
+                    val constraintProps = instantiatedConstraint.properties ?: emptyList()
                     val argMembers = argType.members
                     for (cp in constraintProps) {
                         if (isOptionalProperty(cp)) continue
@@ -37206,7 +37240,27 @@ interface DataView {
                                     length = declLength,
                                 ))
                             }
+                            emittedMissing = true
                             break
+                        }
+                    }
+                    // 16.4gc: property-type-mismatch elaboration (see 16.4gb) — only
+                    // when no missing-property chain was already emitted.
+                    if (!emittedMissing) {
+                        val cProps = instantiatedConstraint.properties ?: emptyList()
+                        val argMembersMap = argType.members ?: emptyMap()
+                        for (cp in cProps) {
+                            val ap = argMembersMap[cp.name] ?: continue
+                            val cpType = symbolTypes[cp.id] ?: continue
+                            val apType = symbolTypes[ap.id] ?: continue
+                            val cpTypeInst = instantiateType(cpType, mapper)
+                            if (cpTypeInst === anyType || cpTypeInst === errorType) continue
+                            if (!checkTypeRelatedTo(apType, cpTypeInst, assignableRelation)) {
+                                val cpDisplay = typeToStringWithMapper(cpType, mapper)
+                                chain.add("  Types of property '${cp.name}' are incompatible.")
+                                chain.add("    Type '${typeToString(apType)}' is not assignable to type '$cpDisplay'.")
+                                break
+                            }
                         }
                     }
                 }
@@ -37219,12 +37273,36 @@ interface DataView {
                     line = line,
                     character = character,
                     start = argNode.pos,
-                    length = argDisplay.length,
+                    length = length,
                     messageChain = chain,
                     relatedInformation = relatedInfo,
                 ))
             }
         }
+    }
+
+    /**
+     * Return the TypeParameterDeclaration AST nodes for a symbol (class, interface,
+     * type alias, or function). Used by [checkConstraintsForTypeArgs] to re-resolve
+     * constraints in a scope populated with fresh TypeParams, so the returned TypeParam
+     * instances match references inside constraints and a TypeMapper can substitute them.
+     */
+    private fun getTypeParameterDeclarationsOfSymbol(symbol: Symbol): List<TypeParameter>? {
+        val resolved = if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+            try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
+        } else symbol
+        for (decl in resolved.declarations) {
+            val typeParamNodes = when (decl) {
+                is ClassDeclaration -> decl.typeParameters
+                is InterfaceDeclaration -> decl.typeParameters
+                is TypeAliasDeclaration -> decl.typeParameters
+                is FunctionDeclaration -> decl.typeParameters
+                else -> null
+            } ?: continue
+            if (typeParamNodes.isEmpty()) continue
+            return typeParamNodes
+        }
+        return null
     }
 
     /** Get type parameters from a symbol's declarations (class, interface, or type alias). */
