@@ -8978,6 +8978,12 @@ class Checker(
                         (lname[0] in 'A'..'Z' || lname[0] in 'a'..'z' || lname[0] == '_' || lname[0] == '$')
                     if (validIdStart && lname !in KEYWORD_IDENTIFIERS) {
                         if (!scope.has(lname)) {
+                            val candidates = collectNamespaceNames(fileName)
+                            val suggestion = getSpellingSuggestionFromNames(lname, candidates)
+                            if (suggestion != null) {
+                                emitTS2833(lname, leftmost, suggestion, source, fileName)
+                                return
+                            }
                             emitTS2503(lname, leftmost, source, fileName)
                             return
                         }
@@ -31480,6 +31486,30 @@ interface DataView {
     ) {
         val expr = stmt.expression
 
+        // If the declared return type is a TypeReference with a QualifiedName whose
+        // leftmost is unresolvable AND has a spelling-suggestion target (meaning
+        // TS2833 likely fired on the qualifier in `checkTypeNameResolved`), skip
+        // TS2322 — otherwise the string-based path matches the stripped last-name
+        // against an unrelated top-level symbol. Scoped to "suggestion-available"
+        // to avoid suppressing the nested-namespace case where the qualifier is
+        // reachable via scope chain (globals/currentFileLocals don't include
+        // nested-namespace siblings, so a `!in globals` check alone is too broad).
+        if (returnTypeNode is TypeReference) {
+            val tn = returnTypeNode.typeName
+            if (tn is QualifiedName) {
+                var leftmost: Node = tn
+                while (leftmost is QualifiedName) leftmost = leftmost.left
+                if (leftmost is Identifier) {
+                    val lname = leftmost.text
+                    if (lname !in globals && currentFileLocals?.get(lname) == null) {
+                        val suggestion = getSpellingSuggestionFromNames(
+                            lname, collectNamespaceNames(fileName)
+                        )
+                        if (suggestion != null) return
+                    }
+                }
+            }
+        }
         // Try new Type-based engine when returnTypeNode is available
         if (returnTypeNode != null) {
             try {
