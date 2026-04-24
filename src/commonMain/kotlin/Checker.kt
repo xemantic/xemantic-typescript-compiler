@@ -31718,6 +31718,18 @@ interface DataView {
                             val propElab = getPropertyElaborationChain(sourceType, targetType)
                             if (propElab != null) chain.addAll(propElab)
                         }
+                    } else if (sourceType is Type.Union) {
+                        // Union source: find the last failing constituent for elaboration
+                        // (mirrors the var-decl path at checkVarDeclAssignability).
+                        var lastFailingConstituent: Type? = null
+                        for (constituent in sourceType.types) {
+                            if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
+                                lastFailingConstituent = constituent
+                            }
+                        }
+                        if (lastFailingConstituent != null) {
+                            chain.add("  Type '${typeToString(lastFailingConstituent)}' is not assignable to type '$displayTarget'.")
+                        }
                     }
                     diagnostics.add(Diagnostic(
                         message = message,
@@ -41165,6 +41177,58 @@ interface DataView {
     }
 
     /**
+     * TS2839: "This condition will always return 'false'/'true' since JavaScript
+     * compares objects by reference, not value." Fires when one side of an
+     * `==`/`===`/`!=`/`!==` comparison is a fresh object-/array-literal expression
+     * — a newly allocated object never matches anything by reference.
+     *
+     * Narrow: requires the other side's type to overlap with the literal (i.e.
+     * TS2367 wouldn't fire). If the other side is purely primitive without any
+     * object-like constituent, the overlap check handles it as a different
+     * diagnostic class.
+     */
+    private fun checkFreshLiteralReferenceEquality(
+        expr: BinaryExpression, source: String, fileName: String,
+    ) {
+        val leftIsLit = expr.left is ObjectLiteralExpression || expr.left is ArrayLiteralExpression
+        val rightIsLit = expr.right is ObjectLiteralExpression || expr.right is ArrayLiteralExpression
+        if (!leftIsLit && !rightIsLit) return
+        try {
+            val otherType = getTypeOfExpression(if (leftIsLit) expr.right else expr.left)
+            if (otherType === anyType || otherType === errorType || otherType === unknownType) return
+            // Need at least one object-like constituent in the other side's type
+            // for the "comparison by reference" message to apply (otherwise TS2367
+            // would flag as no-overlap instead).
+            val hasObjectLike: (Type) -> Boolean = { t ->
+                t is Type.Object || t is Type.Reference || t is Type.Interface ||
+                t.flags.hasAny(TypeFlags.NonPrimitive)
+            }
+            val overlaps = when (otherType) {
+                is Type.Union -> otherType.types.any(hasObjectLike)
+                else -> hasObjectLike(otherType)
+            }
+            if (!overlaps) return
+            val op = expr.operator
+            val isTruthy = op == SyntaxKind.ExclamationEquals || op == SyntaxKind.ExclamationEqualsEquals
+            val verdict = if (isTruthy) "'true'" else "'false'"
+            val start = expr.pos
+            val length = expressionTrueEnd(expr.right) - start
+            if (length <= 0) return
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "This condition will always return $verdict since JavaScript compares objects by reference, not value.",
+                category = DiagnosticCategory.Error,
+                code = 2839,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
      * 16.0: Traverse a chained assignment right-hand side to find the innermost
      * ObjectLiteralExpression. Returns null if the chain doesn't end in a literal.
      * E.g. for `obj2 = obj3 = { a: 1 }`, returns the `{a: 1}` node.
@@ -43177,6 +43241,10 @@ interface DataView {
         if (op == SyntaxKind.EqualsEquals || op == SyntaxKind.ExclamationEquals ||
             op == SyntaxKind.EqualsEqualsEquals || op == SyntaxKind.ExclamationEqualsEquals) {
             checkEqualityComparisonNoOverlap(expr, source, fileName)
+            // TS2839: "This condition will always return 'false' since JavaScript
+            // compares objects by reference, not value." — fresh object/array literal
+            // on one side can never equal anything else by reference.
+            checkFreshLiteralReferenceEquality(expr, source, fileName)
             // Fall through — there's no arithmetic check for equality ops, so the
             // rest of this function won't double-emit.
         }
