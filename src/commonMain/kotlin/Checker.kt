@@ -31152,6 +31152,15 @@ interface DataView {
                         ))
                     }
                 } else {
+                // Per-property TS2322 + TS6500 for object-literal var initializers.
+                // When the source is `{ k: v, ... }` and target is an object type, prefer
+                // emitting one TS2322 per mismatched property at the property key (matching
+                // tsc) instead of a single var-name TS2322 with a chain.
+                if (init is ObjectLiteralExpression && sourceType is Type.Object && targetType is Type.Object) {
+                    if (emitPerPropertyMismatchesForObjectLiteral(init, sourceType, targetType, displayTarget, source, fileName)) {
+                        return
+                    }
+                }
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
                 // Function→function: add specific elaboration (return/param mismatch)
@@ -41231,6 +41240,88 @@ interface DataView {
      *   "  The types of 'x.y' are incompatible between these types."
      *   "    Type 'string' is not assignable to type 'number'."
      */
+    /**
+     * Per-property TS2322 + TS6500 emission for object-literal initializers (var-decl,
+     * property assignment) where the target is a known object type.
+     *
+     * Walks the source object literal's properties in source order. For each property
+     * whose value type doesn't match the target's same-named property AND both sides
+     * are simple-checkable (primitives / literals / all-primitive unions), emits a
+     * TS2322 at the property KEY position with a TS6500 "expected type comes from"
+     * related info pointing to the target property's declaration.
+     *
+     * Returns true if at least one TS2322 was emitted — caller should then suppress
+     * the wider variable-name TS2322. Conservative: skips computed property names,
+     * spread elements, methods, and shorthand property assignments.
+     */
+    private fun emitPerPropertyMismatchesForObjectLiteral(
+        init: ObjectLiteralExpression,
+        sourceType: Type.Object,
+        targetType: Type.Object,
+        displayTarget: String,
+        source: String, fileName: String,
+    ): Boolean {
+        var emitted = false
+        for (propNode in init.properties) {
+            if (propNode !is PropertyAssignment) continue
+            val nameNode = propNode.name
+            val (propName, keyPos, keyLen) = when (nameNode) {
+                is Identifier -> Triple(nameNode.text, nameNode.pos, nameNode.text.length)
+                is NumericLiteralNode -> Triple(nameNode.text, nameNode.pos, nameNode.text.length)
+                is StringLiteralNode -> Triple(
+                    nameNode.text,
+                    nameNode.pos,
+                    (nameNode.rawText?.length ?: nameNode.text.length) + 2,
+                )
+                else -> continue
+            }
+            val targetProp = targetType.members?.get(propName) ?: continue
+            val targetPropType = getTypeOfSymbol(targetProp)
+            if (targetPropType === anyType || targetPropType === errorType) continue
+            val sourceProp = sourceType.members?.get(propName) ?: continue
+            val sourcePropType = getTypeOfSymbol(sourceProp)
+            if (sourcePropType === anyType || sourcePropType === errorType) continue
+            if (!isSimpleCheckableType(targetPropType) || !isSimpleCheckableType(sourcePropType)) continue
+            if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+            val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+            val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+            val related = mutableListOf<Diagnostic>()
+            val tpDecl = targetProp.declarations.firstOrNull()
+            if (tpDecl != null) {
+                val declPos = when (tpDecl) {
+                    is PropertyDeclaration -> tpDecl.name.pos
+                    is PropertyAssignment -> tpDecl.name.pos
+                    else -> tpDecl.pos
+                }
+                val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                related.add(Diagnostic(
+                    message = "The expected type comes from property '$propName' which is declared here on type '$displayTarget'",
+                    category = DiagnosticCategory.Message,
+                    code = 6500,
+                    fileName = fileName,
+                    line = dline,
+                    character = dchar,
+                    start = declPos,
+                    length = propName.length,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = kline,
+                character = kchar,
+                start = keyPos,
+                length = keyLen,
+                relatedInformation = related,
+            ))
+            emitted = true
+        }
+        return emitted
+    }
+
     private fun getPropertyElaborationChain(
         source: Type,
         target: Type,
