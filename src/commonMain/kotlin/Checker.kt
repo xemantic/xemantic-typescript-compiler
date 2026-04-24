@@ -39355,6 +39355,10 @@ interface DataView {
                 // Collect related info: TS6500/TS2728 for property source, TS2793 for implementation
                 val related = mutableListOf<Diagnostic>()
                 for ((_, sig, errorMsg) in overloadErrors) {
+                    if (errorMsg.startsWith("Object literal may only specify known properties")) {
+                        // Excess-property errors get no TS2728/TS6500 related info.
+                        continue
+                    }
                     if (errorMsg.startsWith("Property '") && errorMsg.contains("is missing")) {
                         // TS2728: "'X' is declared here." for missing property errors
                         val ts2728 = getMissingPropertyDeclaredHere(args, sig, source, fileName)
@@ -39449,6 +39453,24 @@ interface DataView {
             resolveStructuredTypeMembers(paramType)
             val targetProps = paramType.properties ?: return null
             if (argType !is Type.Object) return null
+            // Excess-property check first: object literals against object types without an
+            // index signature get the stricter "Object literal may only specify known properties"
+            // message at the first excess property (matching tsc).
+            if (paramType.stringIndexInfo == null && paramType.numberIndexInfo == null) {
+                val targetNames = targetProps.map { it.name }.toSet()
+                for (prop in arg.properties) {
+                    val name = when (val n = (prop as? PropertyAssignment)?.name
+                        ?: (prop as? ShorthandPropertyAssignment)?.name
+                        ?: (prop as? MethodDeclaration)?.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> continue
+                    }
+                    if (name !in targetNames) {
+                        return "Object literal may only specify known properties, and '$name' does not exist in type '${typeToString(paramType)}'."
+                    }
+                }
+            }
             for (targetProp in targetProps) {
                 val isOptional = isOptionalProperty(targetProp)
                 val sourceProp = argType.members?.get(targetProp.name)
@@ -39537,6 +39559,26 @@ interface DataView {
             val targetProps = paramType.properties ?: return null
             val argType = getTypeOfExpression(arg)
             if (argType !is Type.Object) return null
+            // Excess-property: squiggle the FIRST excess property name (matching tsc).
+            if (paramType.stringIndexInfo == null && paramType.numberIndexInfo == null) {
+                val targetNames = targetProps.map { it.name }.toSet()
+                for (prop in arg.properties) {
+                    val nameNode = when (prop) {
+                        is PropertyAssignment -> prop.name
+                        is ShorthandPropertyAssignment -> prop.name
+                        is MethodDeclaration -> prop.name
+                        else -> continue
+                    }
+                    val name = when (nameNode) {
+                        is Identifier -> nameNode.text
+                        is StringLiteralNode -> nameNode.text
+                        else -> continue
+                    }
+                    if (name !in targetNames) {
+                        return Pair(nameNode.pos, name.length)
+                    }
+                }
+            }
             for (targetProp in targetProps) {
                 val sourceProp = argType.members?.get(targetProp.name)
                 if (sourceProp == null) {
