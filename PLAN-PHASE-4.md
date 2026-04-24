@@ -2519,6 +2519,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-24 (16.4fk, +1 test: 8291→8292) — TS7023 narrow for indirect self-reference in function return expressions:** `function fn5() { return [fn5][0](); }` now emits TS7023 "'fn5' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions." at the function name span.
+
+  - New helper `checkIndirectSelfReferenceReturn` collects all return expressions in a function body (skipping nested function/method/class/arrow bodies via `collectReturnExpressions`) and classifies each as: contains-self-identifier (`exprContainsIdentifier`), direct self-call (`self(...)` at the top level), direct self-ref (`return self;`). Emits TS7023 when **every** return has a self-reference AND **at least one** is neither a direct call nor a direct ref (i.e. wrapped in array/object/call/etc).
+  - Distinction matters: `return fn2(n);` (direct call) is typed as `never` by TS and does NOT trigger TS7023; `return [fn5][0]();` (indirect) does. My narrow rule also correctly skips functions with a base case (a return that does not reference self, e.g. `return 3;`).
+  - Wired only into `checkFunctionForImplicitReturn` (FunctionDeclaration path). Methods, arrows, and accessors are out of scope — the accessor case in `trivialSubtypeReductionNoStructuralCheck` depends on circular type inference through the class's own type, not syntactic self-reference, and would require genuine type-inference machinery.
+  - Gated on `retType == null && !isAsync` — async functions have inferred `Promise<...>` return type and don't fit this pattern.
+  - → +1 test: `simpleRecursionWithBaseCase1_ts`. Zero regressions (1784 → 1783 failed; 8291 → 8292 passing).
+
   **Session 2026-04-23 (16.4fj, +2 tests: 8289→8291) — TS2306 for `export * from "./nonModule"` + TS2339 for `nsImport.Class.staticMissing`:** Two narrow extensions stacked to flip both target=es5 and target=es2015 variants of `exportStarFromEmptyModule_ts`.
 
   - **TS2306**: extended 16.4ff's `checkImportEqualsRequireOfNonModule` to also walk bare `export * from "./X"` (`ExportDeclaration` with `exportClause == null`). Same gate as the import path: relative specifier, target file resolves, target's statements fail `isModuleFile`. Display name = basename of resolved path; squiggle = specifier span (`name.length + 2` for quotes). Named re-exports (`export { X } from`) intentionally skipped — they already surface per-name errors via other paths.
