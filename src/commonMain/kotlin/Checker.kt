@@ -9397,6 +9397,11 @@ class Checker(
                 // Look up the merged symbol for this namespace via nodeToSymbol
                 val symbol = result.nodeToSymbol[nodeKey(stmt)]
                 symbol?.exports?.forEach { (exportName, exportSym) ->
+                    // Binder puts ALL namespace members in symbol.exports (not just `export`-prefixed).
+                    // For cross-block visibility (merged namespace blocks), only truly exported
+                    // names should be visible. Non-exported members remain visible within their
+                    // own block via collectDeclaredNames on the block statements.
+                    if (symbol != null && !isNameExportedFromNamespace(symbol, exportName)) return@forEach
                     nsScope.names.add(exportName)
                     if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
                 }
