@@ -3525,7 +3525,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 
 ### What's left in the "surgical fix" pool
 
-**As of 2026-04-24 (post-16.4fk, 8292 passing)**: pool fully drained at every diff size I checked (1-3 via `find_candidates.py --fresh`: 0 candidates; 4-6 single-bucket: 0 fresh; 4-10 mostly-missing: 0 fresh). All remaining fresh candidates at diff 4-6 are multi-bug composite fixes (see 2026-04-24 explored-but-skipped entry for details: assignmentCompat1, genericSignatureIdentity, fakeInfinity1, arrayAssignmentTest4, etc.). Next gains require either a blocker #1 sub-step (return-type-from-body broader patterns, or named→named cross-target comparison) or a coordinated new-diagnostic family implementation (TS6212/TS6213 "Did you mean to use new/call?", rootDir validation, iterator-protocol typing for TS2802/TS2495/TS2488).
+**As of 2026-04-24 (post-16.4fl, 8293 passing)**: pool fully drained at every diff size I checked (1-3 via `find_candidates.py --fresh`: 0 candidates; 4-6 single-bucket: 0 fresh; 4-10 mostly-missing: 0 fresh). Post-16.4fl (TS4081 narrow) the situation is unchanged — `--fresh` still returns 0 across all buckets (filtered from 9/119/31). All remaining fresh candidates at diff 4-6 are multi-bug composite fixes (see 2026-04-24 explored-but-skipped entry for details: assignmentCompat1, genericSignatureIdentity, fakeInfinity1, arrayAssignmentTest4, etc.). Next gains require either a blocker #1 sub-step (return-type-from-body broader patterns, or named→named cross-target comparison) or a coordinated new-diagnostic family implementation (TS6212/TS6213 "Did you mean to use new/call?", rootDir validation, iterator-protocol typing for TS2802/TS2495/TS2488).
 
 ---
 
