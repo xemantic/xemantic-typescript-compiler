@@ -29194,6 +29194,37 @@ interface DataView {
         currentFunctionParams = expr.parameters
         try {
             checkBodyForImplicitReturn(bodyNode, retType, isAsync, null, source, fileName)
+            // TS7030 for no-retType async arrow under noImplicitReturns: async wraps body return
+            // in a Promise, so any return-with-value implies non-void inferred return type.
+            // Use liberal expression counting (anyExpr=true) to capture `return callExpr()` as well.
+            if (retType == null && isAsync && options.noImplicitReturns) {
+                val hasValueReturn = bodyHasReturnWithValue(bodyNode.statements, anyExpr = true)
+                val alwaysReturns = bodyAlwaysReturns(bodyNode.statements)
+                if (hasValueReturn && !alwaysReturns) {
+                    // For async arrows, back up over the `async` keyword (modifiers lose pos
+                    // in the AST). Scan backwards from expr.pos past whitespace, then look for `async`.
+                    var startPos = expr.pos
+                    var i = startPos - 1
+                    while (i >= 0 && (source[i] == ' ' || source[i] == '\t')) i--
+                    if (i >= 4 && source.substring(i - 4, i + 1) == "async") {
+                        startPos = i - 4
+                    }
+                    val nl = source.indexOf('\n', startPos)
+                    val endPos = if (nl == -1) source.length else nl
+                    val length = endPos - startPos
+                    val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Not all code paths return a value.",
+                        category = DiagnosticCategory.Error,
+                        code = 7030,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = startPos,
+                        length = length,
+                    ))
+                }
+            }
         } finally {
             currentFunctionParams = savedParams
         }
