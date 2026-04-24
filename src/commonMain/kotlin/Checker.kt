@@ -31451,7 +31451,8 @@ interface DataView {
                         init !is BinaryExpression && init !is ParenthesizedExpression &&
                         init !is ElementAccessExpression && init !is AsExpression &&
                         init !is TypeAssertionExpression &&
-                        init !is PropertyAccessExpression
+                        init !is PropertyAccessExpression &&
+                        init !is ArrayLiteralExpression && init !is ObjectLiteralExpression
                     if (needsElaboration) chain.add("  $message")
                     }
                     if (targetType is Type.TypeParam) {
@@ -33894,12 +33895,13 @@ interface DataView {
                             for (p in props) {
                                 val propType = symbolTypes[p.id]
                                 val typeStr = if (propType != null) typeToString(propType) else "any"
+                                val displayName = formatPropertyDisplayName(p)
                                 // 16.0: Optional properties render as `name?: type | undefined`
                                 // matching TypeScript's display convention.
                                 if (isOptionalProperty(p)) {
-                                    parts.add("${p.name}?: $typeStr | undefined")
+                                    parts.add("$displayName?: $typeStr | undefined")
                                 } else {
-                                    parts.add("${p.name}: $typeStr")
+                                    parts.add("$displayName: $typeStr")
                                 }
                             }
                         }
@@ -41923,6 +41925,39 @@ interface DataView {
             is MethodDeclaration -> decl.questionToken
             else -> false
         }
+    }
+
+    /**
+     * Render a property's name for type display. Quotes the name when it was written as
+     * a string-literal key AND is not a valid JS identifier (mirrors TypeScript's display:
+     * `"0"`, `"ns:attribute"`, `"resolution-mode"` stay quoted; `"hello"` displays as
+     * `hello`; numeric-literal keys like `0:` and identifier keys stay unquoted).
+     */
+    private fun formatPropertyDisplayName(symbol: Symbol): String {
+        val name = symbol.name
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        val nameNode = when (decl) {
+            is PropertyAssignment -> decl.name
+            is ShorthandPropertyAssignment -> decl.name
+            is MethodDeclaration -> decl.name
+            is PropertyDeclaration -> decl.name
+            else -> null
+        }
+        if (nameNode is StringLiteralNode && !isValidJsIdentifier(name)) {
+            return "\"$name\""
+        }
+        return name
+    }
+
+    private fun isValidJsIdentifier(text: String): Boolean {
+        if (text.isEmpty()) return false
+        val first = text[0]
+        if (!first.isLetter() && first != '_' && first != '$') return false
+        for (i in 1 until text.length) {
+            val c = text[i]
+            if (!c.isLetterOrDigit() && c != '_' && c != '$') return false
+        }
+        return true
     }
 
     /**
