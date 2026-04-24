@@ -28783,8 +28783,158 @@ interface DataView {
         } finally {
             currentFunctionParams = savedParams
         }
+        // TS7023: indirect self-reference in return expressions of an un-annotated function.
+        if (retType == null && !isAsync) {
+            val name = decl.name
+            if (name is Identifier) {
+                checkIndirectSelfReferenceReturn(name.text, name.pos, name.text.length, body.statements, source, fileName)
+            }
+        }
         // Recurse into body for nested functions
         walkForImplicitReturns(body.statements, source, fileName)
+    }
+
+    /**
+     * TS7023: "'X' implicitly has return type 'any' because it does not have a return type
+     * annotation and is referenced directly or indirectly in one of its return expressions."
+     *
+     * Narrow rule: emit when every `return expr;` in the body references the function's own
+     * name AND at least one reference is in a non-direct-call position (i.e. the expression is
+     * NOT just `self(...)` or `self` at the top level of the return expression).
+     *
+     * Rationale: direct self-recursion (`return self(...)`) is typed as `never` by TS and does
+     * not trigger TS7023. Indirect references (e.g. `return [self][0]();`, `return self;`,
+     * `return {x: self};`) cause TS's inference to get stuck → TS7023.
+     *
+     * Does NOT recurse into nested function/arrow/class bodies when collecting returns or
+     * checking self-references.
+     */
+    private fun checkIndirectSelfReferenceReturn(
+        name: String,
+        namePos: Int,
+        nameLength: Int,
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        val returns = mutableListOf<Expression?>()
+        collectReturnExpressions(stmts, returns)
+        if (returns.isEmpty()) return
+        var allHaveSelfRef = true
+        var anyIndirect = false
+        for (expr in returns) {
+            if (expr == null) {
+                allHaveSelfRef = false
+                break
+            }
+            if (!exprContainsIdentifier(expr, name)) {
+                allHaveSelfRef = false
+                break
+            }
+            if (!isDirectSelfCall(expr, name) && !isDirectSelfRef(expr, name)) {
+                anyIndirect = true
+            }
+        }
+        if (!allHaveSelfRef || !anyIndirect) return
+        val (line, character) = getLineAndCharacterOfPosition(source, namePos)
+        diagnostics.add(Diagnostic(
+            message = "'$name' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+            category = DiagnosticCategory.Error,
+            code = 7023,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = namePos,
+            length = nameLength,
+        ))
+    }
+
+    private fun collectReturnExpressions(stmts: List<Statement>, out: MutableList<Expression?>) {
+        for (stmt in stmts) collectReturnExpressionsFromStmt(stmt, out)
+    }
+
+    private fun collectReturnExpressionsFromStmt(stmt: Statement, out: MutableList<Expression?>) {
+        when (stmt) {
+            is ReturnStatement -> out.add(stmt.expression)
+            is Block -> collectReturnExpressions(stmt.statements, out)
+            is IfStatement -> {
+                collectReturnExpressionsFromStmt(stmt.thenStatement, out)
+                stmt.elseStatement?.let { collectReturnExpressionsFromStmt(it, out) }
+            }
+            is WhileStatement -> collectReturnExpressionsFromStmt(stmt.statement, out)
+            is DoStatement -> collectReturnExpressionsFromStmt(stmt.statement, out)
+            is ForStatement -> collectReturnExpressionsFromStmt(stmt.statement, out)
+            is ForInStatement -> collectReturnExpressionsFromStmt(stmt.statement, out)
+            is ForOfStatement -> collectReturnExpressionsFromStmt(stmt.statement, out)
+            is LabeledStatement -> collectReturnExpressionsFromStmt(stmt.statement, out)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> collectReturnExpressions(clause.statements, out)
+                        is DefaultClause -> collectReturnExpressions(clause.statements, out)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                collectReturnExpressions(stmt.tryBlock.statements, out)
+                stmt.catchClause?.let { collectReturnExpressions(it.block.statements, out) }
+                stmt.finallyBlock?.let { collectReturnExpressions(it.statements, out) }
+            }
+            else -> {} // do NOT recurse into nested FunctionDeclaration / ClassDeclaration / etc.
+        }
+    }
+
+    /** Direct self-call: `self(...)` at the top level of the return expression. */
+    private fun isDirectSelfCall(expr: Expression, name: String): Boolean {
+        return expr is CallExpression && expr.expression is Identifier && (expr.expression as Identifier).text == name
+    }
+
+    /** Direct self-reference: `self` at the top level (no wrapping expressions). */
+    private fun isDirectSelfRef(expr: Expression, name: String): Boolean {
+        return expr is Identifier && expr.text == name
+    }
+
+    /**
+     * True if [expr] contains an [Identifier] with [name] anywhere (excluding nested
+     * function/arrow/class bodies, which define their own scope).
+     */
+    private fun exprContainsIdentifier(expr: Expression?, name: String): Boolean {
+        if (expr == null) return false
+        return when (expr) {
+            is Identifier -> expr.text == name
+            is CallExpression -> exprContainsIdentifier(expr.expression, name)
+                || expr.arguments.any { exprContainsIdentifier(it, name) }
+            is NewExpression -> exprContainsIdentifier(expr.expression, name)
+                || (expr.arguments?.any { exprContainsIdentifier(it, name) } ?: false)
+            is PropertyAccessExpression -> exprContainsIdentifier(expr.expression, name)
+            is ElementAccessExpression -> exprContainsIdentifier(expr.expression, name)
+                || exprContainsIdentifier(expr.argumentExpression, name)
+            is ParenthesizedExpression -> exprContainsIdentifier(expr.expression, name)
+            is BinaryExpression -> exprContainsIdentifier(expr.left, name)
+                || exprContainsIdentifier(expr.right, name)
+            is ConditionalExpression -> exprContainsIdentifier(expr.condition, name)
+                || exprContainsIdentifier(expr.whenTrue, name)
+                || exprContainsIdentifier(expr.whenFalse, name)
+            is ArrayLiteralExpression -> expr.elements.any { exprContainsIdentifier(it, name) }
+            is SpreadElement -> exprContainsIdentifier(expr.expression, name)
+            is PrefixUnaryExpression -> exprContainsIdentifier(expr.operand, name)
+            is PostfixUnaryExpression -> exprContainsIdentifier(expr.operand, name)
+            is AsExpression -> exprContainsIdentifier(expr.expression, name)
+            is TypeAssertionExpression -> exprContainsIdentifier(expr.expression, name)
+            is NonNullExpression -> exprContainsIdentifier(expr.expression, name)
+            is ObjectLiteralExpression -> expr.properties.any { prop ->
+                when (prop) {
+                    is PropertyAssignment -> exprContainsIdentifier(prop.initializer, name)
+                    is ShorthandPropertyAssignment -> prop.name.text == name
+                    is SpreadAssignment -> exprContainsIdentifier(prop.expression, name)
+                    else -> false
+                }
+            }
+            // Do NOT recurse into FunctionExpression/ArrowFunction/ClassExpression bodies —
+            // those have their own scopes and any `self` reference inside is unrelated.
+            else -> false
+        }
     }
 
     private fun checkMethodForImplicitReturn(decl: MethodDeclaration, source: String, fileName: String) {
