@@ -5118,6 +5118,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Save diagnostics count — parseParameter() inside tryScan may report false TS1003
         // when (()=>c)[] is a parenthesized function type, not a parameter list.
         val savedDiagCount = diagnostics.size
+        var emptyFnTypeMissingArrowPos: Int? = null  // captured when () lacks => (TS1005 case)
         val funcType = scanner.tryScan {
             if (token != SyntaxKind.OpenParen) return@tryScan null
             nextToken() // consume (
@@ -5128,10 +5129,28 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
             if (token != SyntaxKind.CloseParen) return@tryScan null
             nextToken() // consume )
-            if (token != SyntaxKind.EqualsGreaterThan) return@tryScan null
+            if (token != SyntaxKind.EqualsGreaterThan) {
+                // `()` followed by something other than `=>` cannot be a parenthesized type
+                // (parens require an inner type). Treat as a function-type missing its arrow
+                // and capture the next-token position for a TS1005 diagnostic below.
+                // Position = where `=>` should appear (start of the token after the empty `)`).
+                if (params.isEmpty()) {
+                    emptyFnTypeMissingArrowPos = scanner.getTokenPos()
+                    return@tryScan FunctionType(
+                        parameters = params,
+                        type = KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = pos, end = getEnd()),
+                        pos = pos,
+                        end = getEnd(),
+                    )
+                }
+                return@tryScan null
+            }
             nextToken() // consume =>
             val returnType = parseType()
             FunctionType(parameters = params, type = returnType, pos = pos, end = getEnd())
+        }
+        emptyFnTypeMissingArrowPos?.let { closePos ->
+            reportError("'=>' expected.", code = 1005, overrideLength = 1, overrideStart = closePos)
         }
         if (funcType != null) return funcType
         // Discard any diagnostics reported speculatively during the failed tryScan

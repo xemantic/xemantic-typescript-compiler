@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-24 (16.4fo, +1 test: 8295→8296) — TS1005 `'=>' expected.` for empty `()` lacking arrow in type position:** A type annotation like `function f(x: ())` (param `x` typed as bare `()` without `=> RetType`) now emits TS1005 at the position WHERE `=>` should appear — i.e. the start of the next token after the empty `()`. Previously we silently fell back to the parenthesized-type branch (which then failed downstream with `')' expected.` at a much later position) because the function-type tryScan returned null for `()` when no `=>` followed.
+
+  - Fix in `parseFunctionOrParenthesizedType` (Parser.kt ~5113): inside the tryScan, after consuming the close paren of an EMPTY parameter list (`params.isEmpty()`), if the next token isn't `=>`, capture `scanner.getTokenPos()` (start of the would-be `=>` slot) and synthesize a `FunctionType` with empty params and `KeywordTypeNode(AnyKeyword)` return type. After the tryScan returns, emit TS1005 `'=>' expected.` at the captured position via `reportError(..., overrideLength = 1, overrideStart = captured)`.
+  - Gated on `params.isEmpty()` only — `(foo)` (single param without type) still falls back to the parenthesized-type branch as before, so single-name parenthesized types like `(SomeType)` continue to work.
+  - The captured position is taken AFTER `nextToken()` consumed the close paren, so it refers to the token AFTER `)` — matching tsc's behavior of pointing TS1005 at the token where `=>` was expected.
+  - → +1 test: `functionTypesLackingReturnTypes_ts`. Zero regressions (1780 → 1779 failed; 8295 → 8296 passing).
+
   **Session 2026-04-24 (16.4fn, +1 test: 8294→8295) — TS2769 excess-property message + position for object-literal args:** When an object literal arg is passed to a function whose overloads expect object types without an index signature, the per-overload chain message now reads "Object literal may only specify known properties, and 'X' does not exist in type '...'" (matching tsc) instead of the previous "Property 'Y' is missing..." for the first MISSING target prop. The squiggle moves from the whole `{...}` to the first EXCESS property name.
 
   - `getObjectLiteralPropertyError` (Checker.kt ~39448): added an excess-property check ahead of the missing-property loop. Iterates `arg.properties` in source order and returns the new message at the first source property whose name is not in the target's `properties`. Gated on `paramType.stringIndexInfo == null && paramType.numberIndexInfo == null` — types with index signatures legitimately accept extra properties.
