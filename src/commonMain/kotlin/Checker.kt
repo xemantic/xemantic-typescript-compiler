@@ -442,6 +442,10 @@ class Checker(
         // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
         // functions with definitely-non-nullable return types.
         checkImplicitReturns()
+        // 18e. Check exported type alias references nested-only private name (TS4081)
+        if (options.declaration) {
+            checkExportTypeAliasPrivateNameRef()
+        }
         // 19. Check type used as value (TS2693)
         checkTypeUsedAsValue()
         // 20. Check always-truthy expressions (TS2872)
@@ -16956,6 +16960,123 @@ interface DataView {
      * Check for type-only names used in value positions.
      * Emits TS2693 "'X' only refers to a type, but is being used as a value here."
      */
+    /**
+     * TS4081: "Exported type alias 'X' has or is using private name 'Y'."
+     *
+     * Narrow scope: only fires when `options.declaration` is enabled and a top-level
+     * exported `type X = typeof Y;` references a name `Y` that is declared INSIDE a
+     * non-top-level block (e.g. `if (false) { export var Y = 0; }`) and NOT also at
+     * the file's top level. Other TS4081 patterns (using a non-exported top-level name)
+     * require declaration-emission visibility analysis we don't yet model.
+     */
+    private fun checkExportTypeAliasPrivateNameRef() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+            val topLevelValueNames = mutableSetOf<String>()
+            val nestedValueNames = mutableSetOf<String>()
+            for (stmt in statements) {
+                collectTopLevelValueNames(stmt, topLevelValueNames)
+            }
+            for (stmt in statements) {
+                collectNestedValueNames(stmt, nestedValueNames, topLevel = true)
+            }
+            for (stmt in statements) {
+                if (stmt !is TypeAliasDeclaration) continue
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                val aliasName = stmt.name.text
+                walkTypeQueryForPrivateName(stmt.type, aliasName, topLevelValueNames, nestedValueNames, source, fileName)
+            }
+        }
+    }
+
+    private fun collectTopLevelValueNames(stmt: Statement, out: MutableSet<String>) {
+        when (stmt) {
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                (decl.name as? Identifier)?.text?.let { out.add(it) }
+            }
+            is FunctionDeclaration -> stmt.name?.text?.let { out.add(it) }
+            is ClassDeclaration -> stmt.name?.text?.let { out.add(it) }
+            is EnumDeclaration -> out.add(stmt.name.text)
+            is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { out.add(it) }
+            else -> {}
+        }
+    }
+
+    private fun collectNestedValueNames(stmt: Statement, out: MutableSet<String>, topLevel: Boolean) {
+        when (stmt) {
+            is Block -> for (s in stmt.statements) collectNestedValueNames(s, out, topLevel = false)
+            is IfStatement -> {
+                collectNestedValueNames(stmt.thenStatement, out, topLevel = false)
+                stmt.elseStatement?.let { collectNestedValueNames(it, out, topLevel = false) }
+            }
+            is ForStatement -> collectNestedValueNames(stmt.statement, out, topLevel = false)
+            is ForInStatement -> collectNestedValueNames(stmt.statement, out, topLevel = false)
+            is ForOfStatement -> collectNestedValueNames(stmt.statement, out, topLevel = false)
+            is WhileStatement -> collectNestedValueNames(stmt.statement, out, topLevel = false)
+            is DoStatement -> collectNestedValueNames(stmt.statement, out, topLevel = false)
+            is LabeledStatement -> collectNestedValueNames(stmt.statement, out, topLevel = false)
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) collectNestedValueNames(s, out, topLevel = false)
+                stmt.catchClause?.let { for (s in it.block.statements) collectNestedValueNames(s, out, topLevel = false) }
+                stmt.finallyBlock?.let { for (s in it.statements) collectNestedValueNames(s, out, topLevel = false) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                when (clause) {
+                    is CaseClause -> for (s in clause.statements) collectNestedValueNames(s, out, topLevel = false)
+                    is DefaultClause -> for (s in clause.statements) collectNestedValueNames(s, out, topLevel = false)
+                    else -> {}
+                }
+            }
+            is VariableStatement -> if (!topLevel) for (decl in stmt.declarationList.declarations) {
+                (decl.name as? Identifier)?.text?.let { out.add(it) }
+            }
+            is FunctionDeclaration -> if (!topLevel) stmt.name?.text?.let { out.add(it) }
+            is ClassDeclaration -> if (!topLevel) stmt.name?.text?.let { out.add(it) }
+            else -> {}
+        }
+    }
+
+    private fun walkTypeQueryForPrivateName(
+        type: TypeNode,
+        aliasName: String,
+        topLevel: Set<String>,
+        nested: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        when (type) {
+            is TypeQuery -> {
+                val expr = type.exprName
+                if (expr is Identifier) {
+                    val n = expr.text
+                    if (n in nested && n !in topLevel) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Exported type alias '$aliasName' has or is using private name '$n'.",
+                            category = DiagnosticCategory.Error,
+                            code = 4081,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = expr.pos,
+                            length = n.length,
+                        ))
+                    }
+                }
+            }
+            is UnionType -> type.types.forEach { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+            is IntersectionType -> type.types.forEach { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+            is ParenthesizedType -> walkTypeQueryForPrivateName(type.type, aliasName, topLevel, nested, source, fileName)
+            is ArrayType -> walkTypeQueryForPrivateName(type.elementType, aliasName, topLevel, nested, source, fileName)
+            is TupleType -> type.elements.forEach { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+            is TypeReference -> type.typeArguments?.forEach { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+            else -> {}
+        }
+    }
+
     private fun checkTypeUsedAsValue() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName

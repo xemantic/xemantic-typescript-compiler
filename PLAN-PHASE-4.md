@@ -2519,6 +2519,13 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-24 (16.4fl, +1 test: 8292→8293) — TS4081 for top-level exported `type X = typeof Y` referencing nested-only private name:** Under `--declaration`, `export type MyClass = typeof myClass;` where `myClass` is declared only inside `if (false) { export var myClass = 0; }` (i.e. nested in a non-top-level block AND absent at top level) now emits TS4081 "Exported type alias 'MyClass' has or is using private name 'myClass'." at the typeof's identifier (length = name.length).
+
+  - New `checkExportTypeAliasPrivateNameRef` walker (Checker.kt ~16963), invoked from the main check loop at item 18e (right after `checkImplicitReturns`). Gated on `options.declaration`.
+  - Per-file: collect `topLevelValueNames` (VariableStatement/Function/Class/Enum/ModuleDeclaration at file scope) and `nestedValueNames` (recursive walk of Block/If/For/ForIn/ForOf/While/Do/Labeled/Try/Switch — each treats its body as `topLevel = false` so the inner var/function/class adds to nested only).
+  - For each top-level `TypeAliasDeclaration` with `Export` modifier, recurse through its `type` (TypeQuery, Union, Intersection, Parenthesized, Array, Tuple, TypeReference type-args) and emit TS4081 at any `TypeQuery(Identifier(name))` whose name is in nested but NOT in top-level. Other TS4081 patterns (top-level non-exported var, etc.) require declaration-emission visibility analysis we don't model.
+  - → +1 test: `declarationEmitInvalidExport_ts` (adds TS4081 at (4,30)). Zero regressions (1783 → 1782 failed; 8292 → 8293 passing).
+
   **Session 2026-04-24 (16.4fk, +1 test: 8291→8292) — TS7023 narrow for indirect self-reference in function return expressions:** `function fn5() { return [fn5][0](); }` now emits TS7023 "'fn5' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions." at the function name span.
 
   - New helper `checkIndirectSelfReferenceReturn` collects all return expressions in a function body (skipping nested function/method/class/arrow bodies via `collectReturnExpressions`) and classifies each as: contains-self-identifier (`exprContainsIdentifier`), direct self-call (`self(...)` at the top level), direct self-ref (`return self;`). Emits TS7023 when **every** return has a self-reference AND **at least one** is neither a direct call nor a direct ref (i.e. wrapped in array/object/call/etc).
