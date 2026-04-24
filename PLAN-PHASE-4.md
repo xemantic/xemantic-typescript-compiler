@@ -2519,6 +2519,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-24 (16.4fm, +1 test: 8293→8294) — TS5101 inheritance: route deprecated-option diagnostics inherited via `extends` to the EXTENDING tsconfig's `compilerOptions` key:** When `tsconfig.json` extends a base that contains a deprecated option (e.g. `baseUrl`), TypeScript fires TS5101 at the extending file's `"compilerOptions"` key (not at the base file's actual `"baseUrl"` key). Previously we emitted at the base file's option key (`/other/tsconfig.base.json` (3,5)) instead of the extending file's compilerOptions (`/project/tsconfig.json` (3,3)).
+
+  - Fix in `addDeprecation5101` (TypeScriptCompiler.kt ~183): if the resolved option position's `fileName` differs from the synthetic `compileroptionskey` (which always tracks the MAIN tsconfig because the `+` merge in `applyTsconfigOptions` lets the main file's compilerOptions key override the base's), use `compileroptionskey` instead. This re-attributes any inherited-from-extends option to the main file's compilerOptions block, matching tsc's diagnostic placement.
+  - The fallback only triggers when both `rawPos` and `mainKey` exist AND their fileNames differ — preserves current behavior for (a) options set in main tsconfig (rawPos.fileName == mainKey.fileName), (b) directive-only options without any tsconfig (rawPos == null, no fallback), (c) tsconfig without compilerOptions block (mainKey == null).
+  - → +1 test: `pathMappingInheritedBaseUrl_ts`. Zero regressions (1782 → 1781 failed; 8293 → 8294 passing).
+
   **Session 2026-04-24 (16.4fl, +1 test: 8292→8293) — TS4081 for top-level exported `type X = typeof Y` referencing nested-only private name:** Under `--declaration`, `export type MyClass = typeof myClass;` where `myClass` is declared only inside `if (false) { export var myClass = 0; }` (i.e. nested in a non-top-level block AND absent at top level) now emits TS4081 "Exported type alias 'MyClass' has or is using private name 'myClass'." at the typeof's identifier (length = name.length).
 
   - New `checkExportTypeAliasPrivateNameRef` walker (Checker.kt ~16963), invoked from the main check loop at item 18e (right after `checkImplicitReturns`). Gated on `options.declaration`.
