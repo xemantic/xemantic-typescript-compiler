@@ -12391,6 +12391,32 @@ class Checker(
                         // Relative .json imports still fall back to direct-file parsing in the test
                         // layout, so we leave their handling to downstream type checking.
                         emitTS2732(specifier, moduleName, source, fileName)
+                    } else if (!isRelative && options.paths.isNotEmpty() && moduleName in options.paths) {
+                        // Paths mapping exact-key with explicit-extension targets: if every mapped
+                        // target has an explicit .ts/.tsx/.d.ts extension (ruling out directory →
+                        // index resolution) and NONE of them resolve to an existing file, emit
+                        // TS2307. Narrow to avoid FPs where a bare target like "./lib/p1" resolves
+                        // via `./lib/p1/index.ts` — our resolver doesn't model index-file lookup.
+                        val pathTargets = options.paths[moduleName]!!
+                        val allExplicitExt = pathTargets.isNotEmpty() && pathTargets.all { t ->
+                            !t.contains('*') && (
+                                t.endsWith(".ts") || t.endsWith(".tsx") || t.endsWith(".d.ts")
+                            )
+                        }
+                        if (allExplicitExt) {
+                            val anyResolves = pathTargets.any { target ->
+                                target in fileResults
+                                    || "/$target" in fileResults
+                                    || "./$target" in fileResults
+                                    || resolveModuleSpecifier(target) != null
+                            }
+                            if (!anyResolves && moduleName !in ambientModuleNames
+                                && moduleName !in dtsFileBaseNames
+                                && !hasNodeModulesPackage(moduleName)
+                            ) {
+                                emitTS2307(specifier, moduleName, source, fileName)
+                            }
+                        }
                     }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs.
