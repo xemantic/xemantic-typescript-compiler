@@ -166,6 +166,9 @@ class Checker(
     /** Tracks whether we're inside a static class method/accessor for TS2339 `this` checking. */
     private var inStaticClassMethod = false
 
+    /** Base-class ctor param info for super() arity checking inside a derived ctor body. */
+    private var argCountSuperCtor: FuncParamInfo? = null
+
     /** True while walking a non-arrow function body. Used by 16.4dp to fire TS2322
      *  on `arguments = <primitive>` assignments (implicit `arguments` has type IArguments). */
     private var inNonArrowFunctionBody = false
@@ -18534,13 +18537,28 @@ interface DataView {
                 }
             }
             is ClassDeclaration -> {
+                // Look up base-class ctor info for super() arity checks inside this class's
+                // constructor body. Only handles same-file Identifier base names whose ctor
+                // params we've already collected.
+                val baseCtorInfo: FuncParamInfo? = stmt.heritageClauses
+                    ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.types?.firstOrNull()
+                    ?.expression
+                    ?.let { (it as? Identifier)?.text }
+                    ?.let { classCtorParams[it] }
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> member.body?.let {
                             checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
                         }
                         is Constructor -> member.body?.let {
-                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            val prevSuper = argCountSuperCtor
+                            argCountSuperCtor = baseCtorInfo
+                            try {
+                                checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            } finally {
+                                argCountSuperCtor = prevSuper
+                            }
                         }
                         is GetAccessor -> member.body?.let {
                             checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
@@ -18595,7 +18613,7 @@ interface DataView {
                     else -> null
                 }
                 if (calleeName != null) {
-                    val info = funcParams[calleeName]
+                    val info = if (calleeName == "super") argCountSuperCtor else funcParams[calleeName]
                     if (info != null && !info.isOverloaded) {
                         val argCount = expr.arguments.size
                         if (!info.hasRest && argCount > info.maxParams) {
