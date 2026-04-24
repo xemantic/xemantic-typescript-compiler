@@ -247,6 +247,13 @@ class Checker(
      *  elaboration path to produce "Types have separate declarations of a private property 'X'." */
     private var lastPrivateBrandMismatchName: String? = null
 
+    /** Tracks the property symbol underlying a chain "Property 'X' is missing in type 'A' but
+     *  required in type 'B'." line emitted by `getPropertyElaborationChain` (e.g. through the
+     *  same-target-ref shortcut for `Animal[]` vs `Giraffe[]`). Consumed by TS2322-with-chain
+     *  emission sites to attach the matching TS2728 "'X' is declared here." related info.
+     *  Reset before each top-level chain invocation. */
+    private var lastChainMissingPropSymbol: Symbol? = null
+
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
     private fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
@@ -30448,11 +30455,7 @@ interface DataView {
         if (sourceIsPrimitive && targetType is Type.Object && targetType.symbol != null) return true
         // Object↔Object structural comparison — safe with recursive cycle detection (7.0).
         if (sourceType is Type.Object && targetType is Type.Object) {
-            // Skip array types when both are arrays (getArrayType returns anyType → empty Object)
-            // Allow array→non-array (always fails) and non-array→array (always fails)
             val sourceIsArray = isArrayLikeType(sourceType)
-            val targetIsArray = isArrayLikeType(targetType)
-            if (sourceIsArray && targetIsArray) return false
             // Array→tuple needs contextual typing — skip
             if (sourceIsArray && targetType.tupleElementTypes != null) return false
             // Skip types with unresolved type parameters (incomplete generic instantiation)
@@ -31074,6 +31077,17 @@ interface DataView {
             // 16.0: Array literal initializer — contextual TS2353 for each object element
             // against the declared element type. `let x: { id: number }[] = [{ id: 1, name: "a" }]`.
             checkArrayLiteralElementExcessProps(init, targetType, source, fileName)
+            // Suppress the outer "Type 'X[]' is not assignable to type 'Y[]'." TS2322
+            // when the source is an array literal and the target is an array type.
+            // Per-element TS2322/TS2353 from `checkArrayLiteralElementExcessProps` (or
+            // the element-mismatch walker) already covers the specific mismatches;
+            // the outer diagnostic would just duplicate them. Matches TypeScript's
+            // baseline for tests like `contextualTyping21_ts`.
+            if (canUse && !isAssignable && init is ArrayLiteralExpression &&
+                targetType is Type.Reference && targetType.target.symbol?.name == "Array"
+            ) {
+                return
+            }
             if (canUse && !isAssignable) {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
@@ -31117,11 +31131,19 @@ interface DataView {
                     return
                 }
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
-                val missingProp = lastMissingPropertyName
-                val missingPropSym = lastMissingPropertySymbol
-                if (missingProp != null) {
-                    // Collect all missing properties to decide TS2741 vs TS2740
-                    val allMissing = collectMissingProperties(sourceType, targetType)
+                // Compute outer-level missing properties directly. `lastMissingPropertyName`
+                // can leak from inner comparisons (e.g. `IToken[]` vs `IStateToken[]` —
+                // the inner Animal vs Giraffe comparison sets it to "g" or "state" but
+                // the OUTER missing-prop set on `Animal[]` vs `Giraffe[]` is empty since
+                // Array members all match). Mirroring the assignment path: gate TS2741/
+                // TS2739/TS2740 on `allMissing.isNotEmpty()` and let the chain path
+                // handle inner-level missing-property elaboration via the elaboration
+                // chain.
+                val allMissing = collectMissingProperties(sourceType, targetType)
+                val missingPropSym = if (allMissing.isNotEmpty() && targetType is Type.Object) {
+                    lastMissingPropertySymbol ?: targetType.properties?.find { it.name == allMissing[0] }
+                } else null
+                if (allMissing.isNotEmpty()) {
                     if (allMissing.size >= 2) {
                         // TS2739 for 2-4 missing, TS2740 for 5+
                         diagnostics.add(Diagnostic(
@@ -31136,6 +31158,7 @@ interface DataView {
                         ))
                     } else {
                         // TS2741: Property 'X' is missing in type 'Y' but required in type 'Z'.
+                        val missingProp = allMissing[0]
                         val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, targetType, displayTarget)
                         val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'."
                         val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
@@ -31163,6 +31186,7 @@ interface DataView {
                 }
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
+                lastChainMissingPropSymbol = null // ensure relatedInfo doesn't pick up stale state
                 // Function→function: add specific elaboration (return/param mismatch)
                 if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
@@ -31182,6 +31206,7 @@ interface DataView {
                 } else {
                     // Object→Object: property-level elaboration (16.1)
                     if (sourceType is Type.Object && targetType is Type.Object) {
+                        lastChainMissingPropSymbol = null
                         val propElab = getPropertyElaborationChain(sourceType, targetType)
                         if (propElab != null) chain.addAll(propElab)
                     }
@@ -31206,6 +31231,7 @@ interface DataView {
                         }
                     }
                 }
+                val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
                 diagnostics.add(Diagnostic(
                     message = message,
                     category = DiagnosticCategory.Error,
@@ -31216,6 +31242,7 @@ interface DataView {
                     start = name.pos,
                     length = name.text.length,
                     messageChain = chain,
+                    relatedInformation = listOfNotNull(chainRelatedInfo),
                 ))
                 } // end else (not missing property)
                 return // Type engine handled it — skip old system
@@ -31656,6 +31683,15 @@ interface DataView {
                         }
                         // 16.0: Array literal assignment — contextual TS2353 for each object element
                         checkArrayLiteralElementExcessProps(expr.right, tt, source, fileName)
+                        // Suppress outer "Type 'X[]' is not assignable to type 'Y[]'." TS2322
+                        // when source is an array literal and target is array — per-element
+                        // diagnostics already cover it. See matching comment in the var-decl
+                        // path above (`contextualTyping21_ts` test).
+                        if (canUse && !isAssignable && expr.right is ArrayLiteralExpression &&
+                            tt is Type.Reference && tt.target.symbol?.name == "Array"
+                        ) {
+                            return
+                        }
                         if (canUse && !isAssignable) {
                             val displaySource = typeToString(sourceType)
                             val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
@@ -31703,6 +31739,7 @@ interface DataView {
                             }
                             val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                             val chain = mutableListOf<String>()
+                            lastChainMissingPropSymbol = null // ensure relatedInfo doesn't pick up stale state
                             // Function→function: add specific elaboration
                             if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                                 tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
@@ -31722,6 +31759,7 @@ interface DataView {
                             } else {
                                 // Object→Object: property-level elaboration (16.1)
                                 if (sourceType is Type.Object && tt is Type.Object) {
+                                    lastChainMissingPropSymbol = null
                                     val propElab = getPropertyElaborationChain(sourceType, tt)
                                     if (propElab != null) chain.addAll(propElab)
                                 }
@@ -31741,6 +31779,7 @@ interface DataView {
                                 }
                                 }
                             }
+                            val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
                             diagnostics.add(Diagnostic(
                                 message = message,
                                 category = DiagnosticCategory.Error,
@@ -31751,6 +31790,7 @@ interface DataView {
                                 start = target.pos,
                                 length = target.text.length,
                                 messageChain = chain,
+                                relatedInformation = listOfNotNull(chainRelatedInfo),
                             ))
                             return // Type engine handled it — skip old system
                         }
@@ -40651,12 +40691,19 @@ interface DataView {
     /**
      * Collect all non-optional property names from targetType that are missing from sourceType.
      * Used to decide between TS2741 (single missing) and TS2740 (multiple missing).
+     *
+     * Returns an empty list when `source.members` is null — e.g., anonymous function
+     * types from `() => T` whose `Type.Object` carries only call signatures. In that
+     * case the comparison failure is a kind mismatch (callable vs shape), not a
+     * "property X is missing" situation, so the caller should fall through to plain
+     * TS2322 instead of TS2739/TS2741. Matches TypeScript's baseline for tests like
+     * `assigningFunctionToTupleIssuesError_ts` (`() => void` → `[string]`).
      */
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
         if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
         resolveStructuredTypeMembers(sourceType)
         resolveStructuredTypeMembers(targetType)
-        val sourceMembers = sourceType.members ?: emptyMap()
+        val sourceMembers = sourceType.members ?: return emptyList()
         val targetProps = targetType.properties ?: return emptyList()
         val missing = mutableListOf<String>()
         for (prop in targetProps) {
@@ -41335,8 +41382,11 @@ interface DataView {
         try {
             // Generic ref mismatch: when source and target share a target interface but
             // differ in type arguments (e.g. `Bar<string>` vs `Bar<number>`), elaborate
-            // with the first failing arg pair rather than property-level output, matching
-            // TypeScript's "Type 'string' is not assignable to type 'number'." form.
+            // with the first failing arg pair. For top-level (path == "") the main
+            // TS2322 message already shows "Type 'A<X>' vs 'A<Y>'.", so emit only the
+            // deeper chain. For nested calls (path != "") include a context line at
+            // this level so the chain reads "  Types of prop X incompatible.
+            //   Type 'A<X>[]' vs 'A<Y>[]'.    Type 'X' vs 'Y'."
             if (source is Type.Reference && target is Type.Reference &&
                 source.target === target.target) {
                 val sourceArgs = source.resolvedTypeArguments
@@ -41346,9 +41396,21 @@ interface DataView {
                         val sa = sourceArgs[i]
                         val ta = targetArgs[i]
                         if (!checkTypeRelatedTo(sa, ta, assignableRelation)) {
-                            return listOf(
-                                "  Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'."
-                            )
+                            // Try richer elaboration when both args are object types.
+                            val argChain = if (sa is Type.Object && ta is Type.Object) {
+                                getPropertyElaborationChain(sa, ta, "")
+                            } else null
+                            return if (path.isEmpty()) {
+                                argChain
+                                    ?: listOf("  Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'.")
+                            } else {
+                                val ctx = "  Type '${typeToString(source)}' is not assignable to type '${typeToString(target)}'."
+                                if (argChain != null) {
+                                    listOf(ctx) + argChain.map { "  $it" }
+                                } else {
+                                    listOf(ctx, "    Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'.")
+                                }
+                            }
                         }
                     }
                 }
@@ -41383,7 +41445,20 @@ interface DataView {
                     incompatible.add(IncompatibleProp(targetName, sourcePropType, targetPropType))
                 }
             }
-            if (incompatible.isEmpty()) return null
+            if (incompatible.isEmpty()) {
+                // No property-type mismatch — try the missing-required-property path.
+                // Matches `propertiesRelatedTo`'s missing-prop logic so structural
+                // failures via missing members still produce an informative chain
+                // (e.g. `Animal[]` vs `Giraffe[]` → "Property 'g' is missing in
+                // type 'Animal' but required in type 'Giraffe'.").
+                val missing = getMissingRequiredPropertySymbol(source, target)
+                if (missing != null) {
+                    return listOf(
+                        "  Property '${missing.name}' is missing in type '${typeToString(source)}' but required in type '${typeToString(target)}'."
+                    )
+                }
+                return null
+            }
 
             // Prefer leaf mismatches (non-Object types) over recursive ones
             // This avoids following circular property paths (A.p→D→C.q→B→A.p...)
@@ -41394,10 +41469,35 @@ interface DataView {
             val chosen = leaf ?: incompatible.first()
 
             val propPath = if (path.isEmpty()) chosen.name else "$path.${chosen.name}"
+            val outerLine = if (path.isEmpty()) {
+                "  Types of property '${chosen.name}' are incompatible."
+            } else {
+                "  The types of '$propPath' are incompatible between these types."
+            }
             // Try to go deeper into nested object properties (if not a leaf)
             if (leaf == null) {
                 val deeper = getPropertyElaborationChain(chosen.sourceType, chosen.targetType, propPath)
-                if (deeper != null) return deeper
+                if (deeper != null) {
+                    // Two chain forms depending on what the deeper recursion produced:
+                    //   1. **Collapsed form** — pure Object property nesting (no
+                    //      Array/Reference elements in the middle). Deeper's first
+                    //      line already reads "The types of '$propPath' are
+                    //      incompatible between these types." naming the full path,
+                    //      so the outer need not prepend its own "Types of property
+                    //      'x' are incompatible." line. Matches TypeScript's
+                    //      collapsed chain (e.g. `multiLineErrors_ts`).
+                    //   2. **Per-level form** — chain went through an Array/Reference
+                    //      element in the middle (deeper's first line starts with
+                    //      "Type 'A[]' is not assignable to type 'B[]'." from the
+                    //      same-target-ref shortcut). The path context isn't in the
+                    //      deeper line, so we prepend the outer "Types of property
+                    //      'X' are incompatible." line and indent the deeper chain
+                    //      by 2 more spaces (e.g. `typeMatch2_ts`'s `{ f2: Animal[] }`
+                    //      vs `{ f2: Giraffe[] }`).
+                    val isCollapsed = deeper.first().trimStart().startsWith("The types of '")
+                    return if (isCollapsed) deeper
+                        else listOf(outerLine) + deeper.map { "  $it" }
+                }
             }
             // Report at this level
             val sourcePropStr = typeToString(chosen.sourceType)
@@ -41416,20 +41516,41 @@ interface DataView {
                 }
                 getFunctionMismatchElaboration(srcObj, tgtObj).map { "    $it" }
             }
-            return if (path.isEmpty()) {
-                listOf(
-                    "  Types of property '${chosen.name}' are incompatible.",
-                    "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-                ) + funcExtra
-            } else {
-                listOf(
-                    "  The types of '$propPath' are incompatible between these types.",
-                    "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-                ) + funcExtra
-            }
+            return listOf(
+                outerLine,
+                "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
+            ) + funcExtra
         } finally {
             state.elaborationStack.remove(pairKey)
         }
+    }
+
+    /**
+     * Find the first non-optional target property that source lacks and that source's
+     * string index signature (if any) does not satisfy. Mirrors `propertiesRelatedTo`'s
+     * missing-property logic so the elaboration chain can include "Property 'X' is
+     * missing in type 'A' but required in type 'B'." for purely structural failures
+     * (no per-property type mismatch). Sets `lastChainMissingPropSymbol` so callers
+     * can attach matching TS2728 "'X' is declared here." related info to TS2322.
+     */
+    private fun getMissingRequiredPropertySymbol(source: Type.Object, target: Type.Object): Symbol? {
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        val targetProps = target.properties ?: return null
+        val sourceMembers = source.members ?: return null
+        val srcIndex = source.stringIndexInfo
+        for (targetProp in targetProps) {
+            if (sourceMembers[targetProp.name] != null) continue
+            if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (isOptionalProperty(targetProp)) continue
+            if (srcIndex != null) {
+                val targetPropType = getPropertyTypeForRelation(target, targetProp)
+                if (checkTypeRelatedTo(srcIndex.type, targetPropType, assignableRelation)) continue
+            }
+            lastChainMissingPropSymbol = targetProp
+            return targetProp
+        }
+        return null
     }
 
     /** Check if a property symbol is optional (has questionToken in its declaration). */
