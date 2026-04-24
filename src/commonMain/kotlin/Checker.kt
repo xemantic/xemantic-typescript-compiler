@@ -25671,7 +25671,7 @@ interface DataView {
             when (stmt) {
                 is FunctionDeclaration -> {
                     stmt.body?.let { body ->
-                        checkForwardRefsInParams(stmt.parameters, source, fileName)
+                        checkForwardRefsInParams(stmt.parameters, source, fileName, body)
                         walkForParamInitForwardRef(body.statements, source, fileName)
                     }
                 }
@@ -25679,11 +25679,11 @@ interface DataView {
                     for (member in stmt.members) {
                         when (member) {
                             is MethodDeclaration -> member.body?.let { body ->
-                                checkForwardRefsInParams(member.parameters, source, fileName)
+                                checkForwardRefsInParams(member.parameters, source, fileName, body)
                                 walkForParamInitForwardRef(body.statements, source, fileName)
                             }
                             is Constructor -> member.body?.let { body ->
-                                checkForwardRefsInParams(member.parameters, source, fileName)
+                                checkForwardRefsInParams(member.parameters, source, fileName, body)
                                 walkForParamInitForwardRef(body.statements, source, fileName)
                             }
                             else -> {}
@@ -25715,9 +25715,24 @@ interface DataView {
         params: List<Parameter>,
         source: String,
         fileName: String,
+        body: Block? = null,
     ) {
-        if (params.size < 2) return
+        if (params.isEmpty()) return
         val paramNames = params.map { (it.name as? Identifier)?.text }
+        val paramNameSet = paramNames.filterNotNull().toSet()
+        // Under ES5, `var` declarations hoist into the function scope — shared with
+        // parameters — so a param initializer like `y = b` where `b` is declared
+        // `var b` in the body resolves to the hoisted body-var. The existing TS2304
+        // path (checkUnresolvedInFunctionLike) suppresses TS2304 for this case under
+        // ES5; TypeScript instead fires TS2373 ("parameter ... cannot reference X
+        // declared after it") + TS2454 ("used before being assigned"). Collect the
+        // hoisted body-var names that aren't shadowed by param names.
+        val bodyVarRefs: Set<String> = if (body != null && options.target < ScriptTarget.ES2015) {
+            val names = mutableSetOf<String>()
+            collectHoistedVarNamesFromStmts(body.statements, names)
+            names - paramNameSet
+        } else emptySet()
+        if (params.size < 2 && bodyVarRefs.isEmpty()) return
         for (i in params.indices) {
             val p = params[i]
             val pName = paramNames[i] ?: continue
@@ -25726,20 +25741,79 @@ interface DataView {
             for (j in (i + 1)..<params.size) {
                 paramNames[j]?.let { laterParams.add(it) }
             }
-            if (laterParams.isEmpty()) continue
-            findForwardParamRefs(init, pName, laterParams, source, fileName)
+            val allRefs = laterParams + bodyVarRefs
+            if (allRefs.isEmpty()) continue
+            findForwardParamRefs(init, pName, allRefs, source, fileName, bodyVarRefs)
+        }
+    }
+
+    /** Collect hoisted `var` declaration names from a statement list into [out].
+     *  Simpler alternative to the NameScope-based [collectHoistedVarNames] — used
+     *  by the ES5 param-forward-ref check. Recurses through block/if/loops but
+     *  does NOT descend into nested function bodies (each has its own scope). */
+    private fun collectHoistedVarNamesFromStmts(stmts: List<Statement>, out: MutableSet<String>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (stmt.declarationList.flags == SyntaxKind.VarKeyword) {
+                        for (decl in stmt.declarationList.declarations) {
+                            (decl.name as? Identifier)?.text?.let { out.add(it) }
+                        }
+                    }
+                }
+                is Block -> collectHoistedVarNamesFromStmts(stmt.statements, out)
+                is IfStatement -> {
+                    collectHoistedVarNamesFromStmts(listOf(stmt.thenStatement), out)
+                    stmt.elseStatement?.let { collectHoistedVarNamesFromStmts(listOf(it), out) }
+                }
+                is ForStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (decl in init.declarations) (decl.name as? Identifier)?.text?.let { out.add(it) }
+                    }
+                    collectHoistedVarNamesFromStmts(listOf(stmt.statement), out)
+                }
+                is ForInStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (decl in init.declarations) (decl.name as? Identifier)?.text?.let { out.add(it) }
+                    }
+                    collectHoistedVarNamesFromStmts(listOf(stmt.statement), out)
+                }
+                is ForOfStatement -> {
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                        for (decl in init.declarations) (decl.name as? Identifier)?.text?.let { out.add(it) }
+                    }
+                    collectHoistedVarNamesFromStmts(listOf(stmt.statement), out)
+                }
+                is WhileStatement -> collectHoistedVarNamesFromStmts(listOf(stmt.statement), out)
+                is DoStatement -> collectHoistedVarNamesFromStmts(listOf(stmt.statement), out)
+                is TryStatement -> {
+                    collectHoistedVarNamesFromStmts(stmt.tryBlock.statements, out)
+                    stmt.catchClause?.block?.statements?.let { collectHoistedVarNamesFromStmts(it, out) }
+                    stmt.finallyBlock?.statements?.let { collectHoistedVarNamesFromStmts(it, out) }
+                }
+                else -> {}
+            }
         }
     }
 
     /** Walk an expression tree and emit TS2373 for Identifier references that resolve
      * to a later parameter. Skips nested function/arrow/class bodies (they have their
-     * own scope and aren't evaluated during param initialization). */
+     * own scope and aren't evaluated during param initialization).
+     *
+     * [bodyVarRefs] (ES5 only) names a subset of [laterParams] that correspond to
+     * hoisted body `var` declarations rather than later function parameters. When
+     * the matched identifier is in this subset, also emit TS2454 ("used before
+     * being assigned"). */
     private fun findForwardParamRefs(
         expr: Expression,
         currentParamName: String,
         laterParams: Set<String>,
         source: String,
         fileName: String,
+        bodyVarRefs: Set<String> = emptySet(),
     ) {
         when (expr) {
             is Identifier -> {
@@ -25756,19 +25830,31 @@ interface DataView {
                         start = expr.pos,
                         length = name.length,
                     ))
+                    if (name in bodyVarRefs) {
+                        diagnostics.add(Diagnostic(
+                            message = "Variable '$name' is used before being assigned.",
+                            category = DiagnosticCategory.Error,
+                            code = 2454,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = expr.pos,
+                            length = name.length,
+                        ))
+                    }
                 }
             }
             is BinaryExpression -> {
-                findForwardParamRefs(expr.left, currentParamName, laterParams, source, fileName)
-                findForwardParamRefs(expr.right, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.left, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.right, currentParamName, laterParams, source, fileName, bodyVarRefs)
             }
-            is PrefixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName)
-            is PostfixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName)
-            is ParenthesizedExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+            is PrefixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName, bodyVarRefs)
+            is PostfixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName, bodyVarRefs)
+            is ParenthesizedExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
             is ConditionalExpression -> {
-                findForwardParamRefs(expr.condition, currentParamName, laterParams, source, fileName)
-                findForwardParamRefs(expr.whenTrue, currentParamName, laterParams, source, fileName)
-                findForwardParamRefs(expr.whenFalse, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.condition, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.whenTrue, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.whenFalse, currentParamName, laterParams, source, fileName, bodyVarRefs)
             }
             is CallExpression -> {
                 // IIFE: `(() => z)()` or `(function() { return z })()` — the callee body
@@ -25784,8 +25870,8 @@ interface DataView {
                         val inner = laterParams - callee.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
                         if (!isAsync && !callee.asteriskToken && inner.isNotEmpty()) {
                             when (val body = callee.body) {
-                                is Expression -> findForwardParamRefs(body, currentParamName, inner, source, fileName)
-                                is Block -> findForwardParamRefsInBlock(body, currentParamName, inner, source, fileName)
+                                is Expression -> findForwardParamRefs(body, currentParamName, inner, source, fileName, bodyVarRefs)
+                                is Block -> findForwardParamRefsInBlock(body, currentParamName, inner, source, fileName, bodyVarRefs)
                                 else -> {}
                             }
                         }
@@ -25794,55 +25880,55 @@ interface DataView {
                         val isAsync = ModifierFlag.Async in callee.modifiers
                         val inner = laterParams - callee.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
                         if (!isAsync && !callee.asteriskToken && inner.isNotEmpty()) {
-                            findForwardParamRefsInBlock(callee.body, currentParamName, inner, source, fileName)
+                            findForwardParamRefsInBlock(callee.body, currentParamName, inner, source, fileName, bodyVarRefs)
                         }
                     }
-                    else -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                    else -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
                 }
-                expr.arguments.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
+                expr.arguments.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs) }
             }
             is NewExpression -> {
-                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
-                expr.arguments?.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                expr.arguments?.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs) }
             }
-            is PropertyAccessExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+            is PropertyAccessExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
             is ElementAccessExpression -> {
-                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
-                findForwardParamRefs(expr.argumentExpression, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.argumentExpression, currentParamName, laterParams, source, fileName, bodyVarRefs)
             }
-            is ArrayLiteralExpression -> expr.elements.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
+            is ArrayLiteralExpression -> expr.elements.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs) }
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
                         is PropertyAssignment -> {
                             // Computed property keys evaluate eagerly when the object literal is built.
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
                             }
-                            findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName)
+                            findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName, bodyVarRefs)
                         }
-                        is ShorthandPropertyAssignment -> findForwardParamRefs(prop.name, currentParamName, laterParams, source, fileName)
+                        is ShorthandPropertyAssignment -> findForwardParamRefs(prop.name, currentParamName, laterParams, source, fileName, bodyVarRefs)
                         is MethodDeclaration -> {
                             // Only the computed key evaluates eagerly; the method body is deferred.
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
                             }
                         }
                         is GetAccessor -> {
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
                             }
                         }
                         is SetAccessor -> {
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
                             }
                         }
                         else -> {}
                     }
                 }
             }
-            is SpreadElement -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+            is SpreadElement -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
             // Skip ArrowFunction, FunctionExpression, ClassExpression — own scope, not immediately evaluated.
             // Skip TypeAssertionExpression / AsExpression — TypeScript doesn't fire in type positions.
             else -> {}
@@ -25858,13 +25944,14 @@ interface DataView {
         laterParams: Set<String>,
         source: String,
         fileName: String,
+        bodyVarRefs: Set<String> = emptySet(),
     ) {
         for (stmt in body.statements) {
             when (stmt) {
                 is ReturnStatement -> stmt.expression?.let {
-                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName)
+                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs)
                 }
-                is ExpressionStatement -> findForwardParamRefs(stmt.expression, currentParamName, laterParams, source, fileName)
+                is ExpressionStatement -> findForwardParamRefs(stmt.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
                 else -> {}
             }
         }
