@@ -122,6 +122,7 @@ data class CompilerOptions(
     val lib: List<String> = emptyList(),
     val outDir: String? = null,
     val rootDir: String? = null,
+    val rootDirs: List<String>? = null,
     val baseUrl: String? = null,
     val paths: Map<String, List<String>> = emptyMap(),
     val moduleResolution: String? = null,
@@ -837,6 +838,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
     for ((key, values) in arrayPairs) {
         result = when (key) {
             "modulesuffixes" -> result.copy(moduleSuffixes = values)
+            "rootdirs" -> result.copy(rootDirs = values)
             else -> result
         }
     }
