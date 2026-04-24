@@ -40523,19 +40523,54 @@ interface DataView {
             if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
                 val argNode = typeArgNodes[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
-                val constraintDisplay = typeToString(instantiatedConstraint)
+                // 16.4gb: For anonymous Type.Object constraints where instantiateType
+                // doesn't rewrite member types, render with explicit substitution so a
+                // constraint like `{ a: T }` with T→string displays as `{ a: string; }`.
+                val constraintDisplay = typeToStringWithMapper(instantiatedConstraint, mapper)
                 val start = argNode.pos
-                // Use display text length for span — node.end overshoots (includes next token trivia)
-                val length = argDisplay.length
+                // 16.4gb: Use the source span (trim trailing whitespace/`,`/`>`/`;`) instead
+                // of display-text length. Source text `{ a: number }` is 13 chars but display
+                // renders as `{ a: number; }` (14 chars) — display length over-extends the
+                // squiggle past the source text.
+                var trueEnd = argNode.end
+                while (trueEnd > start && source.getOrNull(trueEnd - 1)?.let {
+                    it == ' ' || it == '\t' || it == '\n' || it == '\r' ||
+                    it == ',' || it == '>' || it == ')' || it == ';'
+                } == true) trueEnd--
+                val length = if (trueEnd > start) trueEnd - start else argDisplay.length
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 val chain = mutableListOf<String>()
                 val missingProp = lastMissingPropertyName
                 val missingPropSym = lastMissingPropertySymbol
-                val relatedInfo = if (missingProp != null) {
+                val relatedInfo = mutableListOf<Diagnostic>()
+                if (missingProp != null) {
                     chain.add("  Property '$missingProp' is missing in type '$argDisplay' but required in type '$constraintDisplay'.")
-                    missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { listOf(it) } ?: emptyList()
-                } else emptyList()
+                    missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { relatedInfo.add(it) }
+                } else if (argType is Type.Object && instantiatedConstraint is Type.Object) {
+                    // 16.4gb: Property-type-mismatch elaboration. When both sides have the
+                    // same property but its types are incompatible, emit
+                    //   "  Types of property 'X' are incompatible."
+                    //   "    Type 'A' is not assignable to type 'B'."
+                    // mirroring TS2322's per-property elaboration chain.
+                    resolveStructuredTypeMembers(argType)
+                    resolveStructuredTypeMembers(instantiatedConstraint)
+                    val argMembers = argType.members ?: emptyMap()
+                    val cProps = instantiatedConstraint.properties ?: emptyList()
+                    for (cp in cProps) {
+                        val ap = argMembers[cp.name] ?: continue
+                        val cpType = symbolTypes[cp.id] ?: continue
+                        val apType = symbolTypes[ap.id] ?: continue
+                        val cpTypeInst = instantiateType(cpType, mapper)
+                        if (cpTypeInst === anyType || cpTypeInst === errorType) continue
+                        if (!checkTypeRelatedTo(apType, cpTypeInst, assignableRelation)) {
+                            val cpDisplay = typeToStringWithMapper(cpType, mapper)
+                            chain.add("  Types of property '${cp.name}' are incompatible.")
+                            chain.add("    Type '${typeToString(apType)}' is not assignable to type '$cpDisplay'.")
+                            break
+                        }
+                    }
+                }
                 diagnostics.add(Diagnostic(
                     message = "Type '$argDisplay' does not satisfy the constraint '$constraintDisplay'.",
                     category = DiagnosticCategory.Error,
@@ -42047,6 +42082,59 @@ interface DataView {
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
         )
+    }
+
+    /**
+     * Like [typeToString] but substitutes TypeParam references via [mapper] at display
+     * time. Used to render an un-instantiated constraint (e.g. `{ a: T }`) as the
+     * substituted form (`{ a: string }`) in TS2344 messages without touching the type
+     * system. Walks anonymous Type.Object property types; falls back to [typeToString]
+     * for named types, signatures, and anything the walker doesn't know how to render.
+     */
+    private fun typeToStringWithMapper(type: Type, mapper: TypeMapper): String {
+        // Order matters: Type.Interface and Type.Reference must be checked BEFORE
+        // Type.Object — both extend Type.Object.
+        return when (type) {
+            is Type.TypeParam -> mapper.map(type)?.let { typeToString(it) } ?: (type.symbol?.name ?: "T")
+            is Type.Interface -> typeToString(type)
+            is Type.Reference -> {
+                val args = type.resolvedTypeArguments
+                if (type.target === globalArrayType && args != null && args.size == 1) {
+                    val elemStr = typeToStringWithMapper(args[0], mapper)
+                    if (args[0] is Type.Union || args[0] is Type.Intersection) "($elemStr)[]"
+                    else "$elemStr[]"
+                } else {
+                    val target = type.target.symbol?.name ?: "Object"
+                    if (args != null && args.isNotEmpty()) {
+                        "$target<${args.joinToString(", ") { typeToStringWithMapper(it, mapper) }}>"
+                    } else target
+                }
+            }
+            is Type.Object -> {
+                // Only rewrite anonymous object types (no backing symbol declaration).
+                // Named types display by name via typeToString; callers don't expect
+                // their bodies to be walked.
+                if (type.symbol != null) return typeToString(type)
+                val hasSignatures = !type.callSignatures.isNullOrEmpty() || !type.constructSignatures.isNullOrEmpty()
+                if (hasSignatures) return typeToString(type)
+                val props = type.properties ?: return typeToString(type)
+                val parts = mutableListOf<String>()
+                for (p in props) {
+                    val pt = symbolTypes[p.id]
+                    val typeStr = if (pt != null) typeToStringWithMapper(pt, mapper) else "any"
+                    val displayName = formatPropertyDisplayName(p)
+                    if (isOptionalProperty(p)) {
+                        parts.add("$displayName?: $typeStr | undefined")
+                    } else {
+                        parts.add("$displayName: $typeStr")
+                    }
+                }
+                if (parts.isNotEmpty()) "{ ${parts.joinToString("; ")}; }" else "{}"
+            }
+            is Type.Union -> type.types.joinToString(" | ") { typeToStringWithMapper(it, mapper) }
+            is Type.Intersection -> type.types.joinToString(" & ") { typeToStringWithMapper(it, mapper) }
+            else -> typeToString(type)
+        }
     }
 
     /**
