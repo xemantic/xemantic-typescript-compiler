@@ -180,7 +180,12 @@ class TypeScriptCompiler {
             stopFunctioningVersion: String = "7.0",
             withMigrationUrl: Boolean = true,
         ) {
-            val pos = tsconfigKey?.let { tsconfigPos[it] }
+            val rawPos = tsconfigKey?.let { tsconfigPos[it] }
+            val mainKey = tsconfigPos["compileroptionskey"]
+            // When the option was inherited from an extended tsconfig, attribute the
+            // diagnostic to the EXTENDING file's "compilerOptions" key (matching tsc).
+            val pos = if (rawPos != null && mainKey != null && rawPos.fileName != mainKey.fileName) mainKey
+                      else rawPos
             if (simulatedVersion >= stopFunctioningVersion) {
                 // Option has been removed: ignoreDeprecations no longer suppresses the diagnostic
                 diagnostics.add(Diagnostic(
