@@ -42117,8 +42117,26 @@ interface DataView {
                                 getPropertyElaborationChain(sa, ta, "")
                             } else null
                             return if (path.isEmpty()) {
-                                argChain
-                                    ?: listOf("  Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'.")
+                                val header = "  Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'."
+                                if (argChain != null) {
+                                    // Skip the header when argChain's first line is a
+                                    // "Property 'X' is missing in type 'A' but required
+                                    // in type 'B'." terminal — that line already mentions
+                                    // both source and target type names so the header is
+                                    // redundant (matches TypeScript's `promisesWithConstraints`-
+                                    // style output). For deeper structural chains
+                                    // ("The types returned by '...'", "Types of property '...'",
+                                    // etc.), include the header to identify the parent
+                                    // arg pair being compared (matches `generics4`-style output).
+                                    val firstTrimmed = argChain.first().trimStart()
+                                    if (firstTrimmed.startsWith("Property '")) {
+                                        argChain
+                                    } else {
+                                        listOf(header) + argChain.map { "  $it" }
+                                    }
+                                } else {
+                                    listOf(header)
+                                }
                             } else {
                                 val ctx = "  Type '${typeToString(source)}' is not assignable to type '${typeToString(target)}'."
                                 if (argChain != null) {
@@ -42218,6 +42236,37 @@ interface DataView {
             // Report at this level
             val sourcePropStr = typeToString(chosen.sourceType)
             val targetPropStr = typeToString(chosen.targetType)
+            // Method-property collapsed form: when both prop types are pure function
+            // types (call signatures only, no own properties/members) AND the
+            // function-mismatch elaboration produces exactly one line — which is the
+            // case for return-type-only mismatch, since param mismatch returns two
+            // lines via `Types of parameters '...' incompatible.` — TypeScript collapses
+            // the chain to "The types returned by 'X()' are incompatible between these
+            // types." instead of "Types of property 'X' are incompatible. Type '() => A'
+            // is not assignable to type '() => B'." (cf. `generics4_ts`'s `f(): boolean`
+            // vs `f(): string`). For param mismatches and arity mismatches, fall through
+            // to the standard "Types of property" + function-type-display + funcExtra path.
+            val srcObjForCollapse = chosen.sourceType as? Type.Object
+            val tgtObjForCollapse = chosen.targetType as? Type.Object
+            val funcMismatch: List<String>? = if (
+                srcObjForCollapse != null && tgtObjForCollapse != null &&
+                !srcObjForCollapse.callSignatures.isNullOrEmpty() &&
+                !tgtObjForCollapse.callSignatures.isNullOrEmpty() &&
+                srcObjForCollapse.properties.isNullOrEmpty() &&
+                tgtObjForCollapse.properties.isNullOrEmpty() &&
+                srcObjForCollapse.members.isNullOrEmpty() &&
+                tgtObjForCollapse.members.isNullOrEmpty()
+            ) {
+                getFunctionMismatchElaboration(srcObjForCollapse, tgtObjForCollapse)
+            } else null
+            if (funcMismatch != null && funcMismatch.size == 1) {
+                val collapsedHeader = if (path.isEmpty()) {
+                    "  The types returned by '${chosen.name}()' are incompatible between these types."
+                } else {
+                    "  The types returned by '$propPath()' are incompatible between these types."
+                }
+                return listOf(collapsedHeader) + funcMismatch.map { "  $it" }
+            }
             // If the chosen mismatched property is a function (call signatures only),
             // append parameter-mismatch / return-type lines to deepen the chain.
             // The chain line ("    Type 'A' is not assignable to type 'B'.") sits at
