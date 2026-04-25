@@ -11,6 +11,11 @@ approach.
 ```
 Continue Phase 4 of the TypeScript compiler port.
 
+(This session may be running as one iteration of `scripts/run-loop.sh`.
+Commit + push every fix individually. Do NOT leave uncommitted changes
+at session end — the loop driver aborts if it sees them, so partial
+state would freeze the loop until a human investigates.)
+
 Before picking any work:
 - read STATUS.md for the current test count
 - read CLAUDE.md's "AI agent mission" and "Execution protocol" sections
@@ -99,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-25, 8342 passing):** Surgical pool is exhausted (6+
+**Status (2026-04-25, 8343 passing):** Surgical pool is exhausted (6+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
 progress with infrastructure largely in place:
@@ -118,6 +123,8 @@ progress with infrastructure largely in place:
   scope + `this` tracking + path-aware body suppression (+2)
 - 17.4b: TS2774 `&&`-chain walking + ExpressionStatement-level +
   arrow-body-level (net-zero infra; test2 reaches 34/35)
+- 17.5a: `x.constructor === Class` narrowing wired into
+  `narrowByEquality` (+1; flips `typeGuardConstructorDerivedClass_ts`)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
@@ -125,22 +132,23 @@ remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
 them only opportunistically. Default workflow (steps 1-9 above)
 applies, with these candidates as the next concrete moves:
 
-- **TS2774 + `&&`-chain operand WALKING**: `truthinessCallExpressionCoercion2_ts`
-  (35 emissions) needs `bothHelper(left, right)` for `&&` so each
-  operand of an `&&`-chain is checked. Suppression rules need to
-  consider sibling operands (`if (isFoo && isFoo())` → no error
-  because sibling is a call to `isFoo`). Distinct from `&&`-chain
-  NARROWING below.
 - **TS2774 + `&&`-chain narrowing**: `uncalledFunctionChecksInConditional2_ts`
   needs `perf && perf.measure && perf.clearMarks && perf.clearMeasures`
   to narrow `perf` from `Performance | undefined` to defined by the time
-  the last operand fires. Requires `&&`-chain operand narrowing wired
-  through `applyConditionNarrowing`.
+  the last operand fires. ALSO blocked on `window` resolving to `any`
+  (lib `Window & typeof globalThis` intersection unresolved); same gap
+  as the missing 35th emission in `truthinessCallExpressionCoercion2_ts`.
 - **TS2454 via flow-graph definite-assignment**: replace the ad-hoc
-  walker. Note 17.1c session warned a snapshot/restore approach
-  regressed -7 tests; tread carefully.
+  walker (does NOT recurse into IfStatement bodies, blocking
+  `nestedLoopTypeGuards_ts` etc.). Note 17.1c session warned a
+  snapshot/restore approach regressed -7 tests; tread carefully.
 - **FlowAssignment-RHS narrowing**: medium risk — could over-narrow
   legitimate union-source TS2322 cases.
+- **ElementAccessExpression `var1["constructor"]`**: 17.5a only
+  handles PropertyAccessExpression form. Adding the bracket form would
+  unlock half the variants in `typeGuardConstructorClassAndNumber_ts`,
+  but that test ALSO needs multi-member union TS2339 elaboration —
+  not a single-step win.
 
 These leverage the installed flow-graph (`Flow.kt` / `FlowGraphBuilder`,
 `currentFlowGraph`, `nodeToFlow`, `applyConditionNarrowing`,
