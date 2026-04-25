@@ -34086,7 +34086,66 @@ interface DataView {
                 SyntaxKind.InKeyword -> narrowByInOperator(t, expr, hasProp = isTrue, name)
                 else -> t
             }
+            is CallExpression -> narrowByCallPredicate(t, expr, isMatch = isTrue, name)
             else -> t
+        }
+    }
+
+    /**
+     * Narrow `t` by a `predFn(name)` call where `predFn` is declared with a type
+     * predicate return type (`function predFn(x): x is T`). `isMatch=true`
+     * (then-branch) keeps types assignable to T; `false` (else-branch) removes
+     * them. Mirrors `narrowByInstanceOf` shape — the only difference is how the
+     * target type is resolved (from the predicate annotation rather than the
+     * instanceof RHS).
+     *
+     * Falls back to `t` unchanged if the callee isn't a function with a
+     * non-asserting type predicate, or if the matching argument isn't an
+     * Identifier matching [name]. `asserts` predicates are skipped — those
+     * narrow only on the assertion path, not via the boolean return.
+     */
+    private fun narrowByCallPredicate(
+        t: Type, expr: CallExpression, isMatch: Boolean, name: String,
+    ): Type {
+        val callee = expr.expression
+        if (callee !is Identifier) return t
+        val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return t
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return t
+        val (params, returnTypeNode) = when (decl) {
+            is FunctionDeclaration -> decl.parameters to decl.type
+            is MethodDeclaration -> decl.parameters to decl.type
+            else -> return t
+        }
+        val predicate = returnTypeNode as? TypePredicate ?: return t
+        if (predicate.assertsModifier) return t
+        val targetTypeNode = predicate.type ?: return t
+        // Parser quirk: `c is C1` parses `c` as a TypeReference (the LHS is parsed
+        // by parseIntersectionOrHigherType before `is` is recognized). Extract the
+        // parameter name from either Identifier or TypeReference shape.
+        val predicateParamName = when (val pn = predicate.parameterName) {
+            is Identifier -> pn.text
+            is TypeReference -> (pn.typeName as? Identifier)?.text
+            else -> null
+        } ?: return t
+        val paramIdx = params.indexOfFirst { (it.name as? Identifier)?.text == predicateParamName }
+        if (paramIdx < 0) return t
+        val arg = expr.arguments.getOrNull(paramIdx) ?: return t
+        if (arg !is Identifier || arg.text != name) return t
+        val targetType = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
+        if (targetType === errorType || targetType === anyType) return t
+        if (t is Type.Union) {
+            val filtered = if (isMatch) {
+                t.types.filter { checkTypeRelatedTo(it, targetType, assignableRelation) }
+            } else {
+                t.types.filter { !checkTypeRelatedTo(it, targetType, assignableRelation) }
+            }
+            return getUnionType(filtered)
+        }
+        val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
+        return when {
+            matches == isMatch -> t
+            isMatch -> targetType
+            else -> neverType
         }
     }
 
@@ -34105,13 +34164,13 @@ interface DataView {
         val classType = resolveInstanceOfRhsType(expr.right) ?: return t
         if (t is Type.Union) {
             val filtered = if (isMatch) {
-                t.types.filter { checkTypeRelatedTo(it, classType, assignableRelation) }
+                t.types.filter { isInstanceOfClass(it, classType) }
             } else {
-                t.types.filter { !checkTypeRelatedTo(it, classType, assignableRelation) }
+                t.types.filter { !isInstanceOfClass(it, classType) }
             }
             return getUnionType(filtered)
         }
-        val matches = checkTypeRelatedTo(t, classType, assignableRelation)
+        val matches = isInstanceOfClass(t, classType)
         return when {
             matches == isMatch -> t
             isMatch -> classType
@@ -34120,6 +34179,23 @@ interface DataView {
             // narrowByTypeOfGuard's same-shape behavior for typeof tags.
             else -> neverType
         }
+    }
+
+    /**
+     * Symbol-identity instanceof check: `t` is an instance of `cls` iff t and cls
+     * are the same class symbol, or t's extends chain includes cls. This differs
+     * from structural assignability — two structurally-identical classes with
+     * distinct symbols (e.g. `class C1 { x: string }; class C3 { x: string }`)
+     * are NOT instances of each other at runtime, even though they're mutually
+     * assignable. Falls back to assignability for non-Interface shapes (e.g. when
+     * narrowing a non-class instance type like `string`).
+     */
+    private fun isInstanceOfClass(t: Type, cls: Type): Boolean {
+        if (t !is Type.Interface || cls !is Type.Interface) {
+            return checkTypeRelatedTo(t, cls, assignableRelation)
+        }
+        if (t.symbol != null && t.symbol === cls.symbol) return true
+        return t.baseTypes?.any { isInstanceOfClass(it, cls) } ?: false
     }
 
     /**
@@ -38484,6 +38560,7 @@ interface DataView {
             val source = result.sourceFile.text
             currentFileLocals = result.locals
             currentCheckFileName = fileName
+            currentFlowGraph = result.flowGraph
             try {
                 checkPropertyAccessInStatements(
                     result.sourceFile.statements, source, fileName,
@@ -38492,6 +38569,7 @@ interface DataView {
             } catch (_: StackOverflowError) {
                 // Circular type resolution in complex files — skip gracefully
             }
+            currentFlowGraph = null
         }
         currentFileLocals = null
         currentCheckFileName = null
