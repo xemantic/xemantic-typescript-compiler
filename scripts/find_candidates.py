@@ -41,7 +41,8 @@ def load_skipped_tests() -> set[str]:
     """Extract test-basename tokens from the 'Explored-but-skipped' section
     of PLAN-PHASE-4.md. Matches occurrences like ``testname_ts`` or
     ``testname_ts__suffix__`` inside backticks, and stores the base
-    ``testname_ts`` form so parameterized variants match automatically."""
+    ``testname_ts`` form so parameterized variants match automatically.
+    Tokens inside ~~strikethrough~~ markers are excluded (resolved entries)."""
     if not os.path.isfile(PLAN):
         return set()
     with open(PLAN) as f:
@@ -53,9 +54,10 @@ def load_skipped_tests() -> set[str]:
     if not m:
         return set()
     region = m.group(0)
-    # Match any backtick-quoted token that contains `_ts` (with optional suffixes).
+    # Strip strikethrough spans first so resolved entries don't leak in.
+    region_active = re.sub(r"~~.*?~~", "", region, flags=re.DOTALL)
     out: set[str] = set()
-    for tok in re.findall(r"`([A-Za-z0-9_\-]+)`", region):
+    for tok in re.findall(r"`([A-Za-z0-9_\-]+)`", region_active):
         base = re.match(r"([A-Za-z0-9_\-]+?_ts)(?:__|$)", tok)
         if base:
             out.add(base.group(1))
