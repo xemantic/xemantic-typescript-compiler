@@ -30,6 +30,13 @@ class BinderResult(
     val nodeToSymbol: MutableMap<Long, Symbol>,
     /** Module instance states for namespace/module declarations. */
     val moduleInstanceStates: MutableMap<Long, ModuleInstanceState>,
+    /**
+     * Control-flow graph for narrowing. Maps reference-position node keys to
+     * the [FlowNode] representing the program point just before that
+     * reference is evaluated. Built by [FlowGraphBuilder]. NOT YET CONSUMED
+     * by the checker — Phase 17 step 1 is infrastructure only.
+     */
+    val flowGraph: FlowGraph,
 )
 
 /**
@@ -54,7 +61,8 @@ class Binder(private val options: CompilerOptions) {
         val fileLocals = symbolTable()
         currentScope = fileLocals
         bindStatements(sourceFile.statements)
-        return BinderResult(sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates)
+        val flowGraph = FlowGraphBuilder().build(sourceFile)
+        return BinderResult(sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates, flowGraph)
     }
 
     private fun bindStatements(statements: List<Statement>) {
