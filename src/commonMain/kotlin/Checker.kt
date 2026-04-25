@@ -33727,7 +33727,14 @@ interface DataView {
             return getUnionType(filtered)
         }
         val matches = checkTypeRelatedTo(t, classType, assignableRelation)
-        return if (matches == isMatch) t else if (isMatch) classType else t
+        return when {
+            matches == isMatch -> t
+            isMatch -> classType
+            // matches=true, isMatch=false: source IS the class but we're in the
+            // !instanceof branch — contradiction → narrow to never. Mirrors
+            // narrowByTypeOfGuard's same-shape behavior for typeof tags.
+            else -> neverType
+        }
     }
 
     /**
@@ -39160,6 +39167,33 @@ interface DataView {
             }
             if (objectExpr !is Identifier) return
             val identName = objectExpr.text
+
+            // Phase 17 / Blocker #1 step 2c: narrowed-to-never on receiver emits
+            // TS2339 with 'never' display. Walks the flow graph from the receiver
+            // expression's recorded flow node; when narrowing collapses a Union
+            // receiver to never via exhaustive typeof/instanceof/equality checks,
+            // the property access is invalid. Uses `getTypeOfExpression` so this
+            // works for function-local identifiers (parameters, locals) too — not
+            // just file-level globals. Gate: only when raw type is a Union (most
+            // common narrow-to-never shape; single-type contradictions are rarer
+            // and the existing identSymbol-resolution path already handles them).
+            try {
+                val rawForNarrowing = getTypeOfExpression(objectExpr)
+                if (rawForNarrowing is Type.Union) {
+                    val narrowed = getNarrowedTypeForReference(rawForNarrowing, objectExpr)
+                    if (narrowed === neverType) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type 'never'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
+                }
+            } catch (_: StackOverflowError) { /* fall through to normal check */ }
+
             val identSymbol = globals[identName]
 
             if (identSymbol != null) {
