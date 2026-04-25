@@ -37719,12 +37719,33 @@ interface DataView {
                         if (calleeType !is Type.Object) return@run null
                         resolveStructuredTypeMembers(calleeType)
                         val sigs = calleeType.callSignatures
-                        val sig = if (sigs != null && sigs.size == 1) sigs[0] else return@run null
-                        expr.arguments!!.mapIndexed { i, _ ->
-                            if (i < sig.parameters.size) {
-                                val pt = getTypeOfSymbol(sig.parameters[i])
-                                if (pt === anyType || pt === errorType) null else pt
-                            } else null
+                        if (sigs.isNullOrEmpty()) return@run null
+                        // Single signature: use its parameter types directly.
+                        // Multiple overloads: per-arg-position, only adopt the first
+                        // overload's param type if EVERY overload has a callable
+                        // function type at that position (matches TS's contextual
+                        // signature behavior for callback overloads — used by
+                        // `callb((a) => {...})` patterns).
+                        if (sigs.size == 1) {
+                            val sig = sigs[0]
+                            expr.arguments!!.mapIndexed { i, _ ->
+                                if (i < sig.parameters.size) {
+                                    val pt = getTypeOfSymbol(sig.parameters[i])
+                                    if (pt === anyType || pt === errorType) null else pt
+                                } else null
+                            }
+                        } else {
+                            expr.arguments!!.mapIndexed { i, _ ->
+                                val candidates = sigs.mapNotNull { sig ->
+                                    if (i < sig.parameters.size) {
+                                        val pt = getTypeOfSymbol(sig.parameters[i])
+                                        if (pt === anyType || pt === errorType) null else pt
+                                    } else null
+                                }
+                                if (candidates.size != sigs.size) null
+                                else if (candidates.all { it is Type.Object && !it.callSignatures.isNullOrEmpty() }) candidates[0]
+                                else null
+                            }
                         }
                     } catch (_: StackOverflowError) { null }
                 }
@@ -38744,8 +38765,17 @@ interface DataView {
             val tgt = objectType.target
             if (tgt.baseTypes != null && tgt.baseTypes!!.isNotEmpty()) return
         }
-        // Skip well-known runtime properties
-        if (propName in RUNTIME_PROPERTIES) return
+        // Skip well-known runtime properties (FP-prevention for class instances and
+        // structural types where we may not have full member info). For primitive
+        // types resolved through apparent type (displayTypeOverride != null), we DO
+        // have authoritative member info from the wrapper interface — only allow the
+        // RUNTIME_PROPERTIES exemption when the member actually exists on the
+        // apparent type. This makes `s: string; s.length` pass (length is on String)
+        // while `n: number; n.length` fires TS2339 (length is not on Number).
+        if (propName in RUNTIME_PROPERTIES) {
+            if (displayTypeOverride == null) return
+            if (getPropertyOfType(objectType, propName) != null) return
+        }
         // Check if property exists in type members
         val prop = getPropertyOfType(objectType, propName)
         if (prop != null) {
