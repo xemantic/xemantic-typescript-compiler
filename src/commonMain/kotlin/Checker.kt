@@ -34654,20 +34654,24 @@ interface DataView {
     }
 
     /**
-     * Narrow `t` by an `x.constructor === Class` (or `!==`) comparison.
-     * Mirrors TypeScript's `.constructor`-identity narrowing: at runtime,
-     * `obj.constructor` is the exact class symbol the object was constructed
-     * with — so `obj.constructor === C` narrows `obj` to types whose class
-     * symbol is exactly `C` (NOT subclasses). Distinct from `instanceof`,
-     * which DOES include subclasses.
+     * Narrow `t` by an `x.constructor === Class` / `x["constructor"] === Class`
+     * (or `!==`) comparison. Mirrors TypeScript's `.constructor`-identity
+     * narrowing: at runtime, `obj.constructor` is the exact class symbol the
+     * object was constructed with — so `obj.constructor === C` narrows `obj` to
+     * types whose class symbol is exactly `C` (NOT subclasses). Distinct from
+     * `instanceof`, which DOES include subclasses.
      *
      * Returns null if the expression isn't a `name.constructor === ClassRef`
-     * (or symmetric) shape, so callers can fall through to other narrowers.
+     * (or symmetric, or bracket-form) shape, so callers can fall through to
+     * other narrowers.
      *
-     * For unions: positive branch keeps members with exact class symbol match;
-     * negative branch removes them. For non-unions: conservative — returns
-     * `t` unchanged unless [equal] is false and the singleton matches exactly
-     * (contradiction → never).
+     * Positive branch (equal=true): for unions, filter to members with exact
+     * class symbol match; for non-unions, narrow to `classType` if not already
+     * the exact class. Negative branch (equal=false): TypeScript does NOT
+     * narrow — `var.constructor !== C` only excludes "this specific instance's
+     * constructor was C", which is too weak to remove a class member from the
+     * union (subclass instances and reassigned `.constructor` values exist).
+     * Return `t` unchanged.
      */
     private fun narrowByConstructorEquals(
         t: Type, expr: BinaryExpression, equal: Boolean, name: String,
@@ -34679,28 +34683,32 @@ interface DataView {
         }
         val classType = resolveInstanceOfRhsType(classExpr) ?: return null
         val classSymbol = (classType as? Type.Interface)?.symbol ?: return null
+        if (!equal) return t
         if (t is Type.Union) {
-            val filtered = if (equal) {
-                t.types.filter { hasExactClassSymbol(it, classSymbol) }
-            } else {
-                t.types.filter { !hasExactClassSymbol(it, classSymbol) }
-            }
-            return getUnionType(filtered)
+            return getUnionType(t.types.filter { hasExactClassSymbol(it, classSymbol) })
         }
-        val matchesExactly = hasExactClassSymbol(t, classSymbol)
-        return when {
-            matchesExactly == equal -> t
-            equal -> classType
-            else -> neverType
-        }
+        return if (hasExactClassSymbol(t, classSymbol)) t else classType
     }
 
     private fun isConstructorAccessOf(expr: Expression, name: String): Boolean {
-        if (expr !is PropertyAccessExpression) return false
-        val obj = expr.expression
-        val prop = expr.name
-        return obj is Identifier && obj.text == name &&
-                prop is Identifier && prop.text == "constructor"
+        val obj: Expression
+        val isProp: Boolean
+        when (expr) {
+            is PropertyAccessExpression -> {
+                obj = expr.expression
+                val propName = expr.name
+                isProp = propName is Identifier && propName.text == "constructor"
+            }
+            is ElementAccessExpression -> {
+                obj = expr.expression
+                val arg = expr.argumentExpression
+                isProp = (arg is StringLiteralNode && arg.text == "constructor") ||
+                        (arg is NoSubstitutionTemplateLiteralNode && arg.text == "constructor")
+            }
+            else -> return false
+        }
+        if (!isProp) return false
+        return obj is Identifier && obj.text == name
     }
 
     private fun hasExactClassSymbol(t: Type, classSymbol: Symbol): Boolean {
