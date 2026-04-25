@@ -34633,13 +34633,14 @@ interface DataView {
     /**
      * Narrow type [t] given a `===`/`==`/`!==`/`!=` comparison. [equal] is the
      * effective polarity (true means "expression evaluates to equal").
-     * Handles `typeof x === "string"` first, then falls back to
-     * `x === literal` direct equality narrowing.
+     * Handles `typeof x === "string"` first, then `x.constructor === Class`,
+     * then falls back to `x === literal` direct equality narrowing.
      */
     private fun narrowByEquality(
         t: Type, expr: BinaryExpression, equal: Boolean, name: String,
     ): Type {
         tryNarrowByTypeOf(t, expr, equal, name)?.let { return it }
+        narrowByConstructorEquals(t, expr, equal, name)?.let { return it }
 
         val leftIsRef = expr.left is Identifier && (expr.left as Identifier).text == name
         val rightIsRef = expr.right is Identifier && (expr.right as Identifier).text == name
@@ -34650,6 +34651,60 @@ interface DataView {
         }
         val literalType = literalTypeOfExpression(other) ?: return t
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * Narrow `t` by an `x.constructor === Class` (or `!==`) comparison.
+     * Mirrors TypeScript's `.constructor`-identity narrowing: at runtime,
+     * `obj.constructor` is the exact class symbol the object was constructed
+     * with — so `obj.constructor === C` narrows `obj` to types whose class
+     * symbol is exactly `C` (NOT subclasses). Distinct from `instanceof`,
+     * which DOES include subclasses.
+     *
+     * Returns null if the expression isn't a `name.constructor === ClassRef`
+     * (or symmetric) shape, so callers can fall through to other narrowers.
+     *
+     * For unions: positive branch keeps members with exact class symbol match;
+     * negative branch removes them. For non-unions: conservative — returns
+     * `t` unchanged unless [equal] is false and the singleton matches exactly
+     * (contradiction → never).
+     */
+    private fun narrowByConstructorEquals(
+        t: Type, expr: BinaryExpression, equal: Boolean, name: String,
+    ): Type? {
+        val classExpr = when {
+            isConstructorAccessOf(expr.left, name) -> expr.right
+            isConstructorAccessOf(expr.right, name) -> expr.left
+            else -> return null
+        }
+        val classType = resolveInstanceOfRhsType(classExpr) ?: return null
+        val classSymbol = (classType as? Type.Interface)?.symbol ?: return null
+        if (t is Type.Union) {
+            val filtered = if (equal) {
+                t.types.filter { hasExactClassSymbol(it, classSymbol) }
+            } else {
+                t.types.filter { !hasExactClassSymbol(it, classSymbol) }
+            }
+            return getUnionType(filtered)
+        }
+        val matchesExactly = hasExactClassSymbol(t, classSymbol)
+        return when {
+            matchesExactly == equal -> t
+            equal -> classType
+            else -> neverType
+        }
+    }
+
+    private fun isConstructorAccessOf(expr: Expression, name: String): Boolean {
+        if (expr !is PropertyAccessExpression) return false
+        val obj = expr.expression
+        val prop = expr.name
+        return obj is Identifier && obj.text == name &&
+                prop is Identifier && prop.text == "constructor"
+    }
+
+    private fun hasExactClassSymbol(t: Type, classSymbol: Symbol): Boolean {
+        return t is Type.Interface && t.symbol === classSymbol
     }
 
     /**
