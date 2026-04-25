@@ -99,28 +99,53 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-18, 8220 passing):** Blocker #1 step (b) infrastructure
-is COMPLETE — interning (16.4de), cycle/depth heuristic + step (b)
-framework + TypeParam-vs-TypeParam comparison + `resolveGenericPropertyType`
-caching (16.4df). Net 0 gain currently because step (b)'s gains are gated
-on (c) return-type-from-body inference and (d) named→named cross-target
-comparison. **Do NOT re-attempt step (b) again** — read 16.4df session note
-in PLAN-PHASE-4.md first if tempted. Default workflow (steps 1-9 above)
+**Status (2026-04-25, 8339 passing):** Surgical pool is exhausted (6+
+consecutive sessions confirmed; `find_candidates.py --fresh` returns
+0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
+progress with infrastructure largely in place:
+
+- 17.1a: Flow-graph infra in binder (no behavior change)
+- 17.1b: var-decl `never` target narrowing wired (+1)
+- 17.1c: `typeof` narrowing op + widened var-decl gate (net-zero infra)
+- 17.1d: `instanceof` narrowing op (net-zero infra)
+- 17.1e: TS2339 narrowed-to-never wiring + instanceof contradiction
+  fix (net-zero infra)
+- 17.1f: `in` operator narrowing (net-zero infra)
+- 17.2a: TS2774 "uncalled function in conditional" Identifier-only (+1)
+
+**Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
+read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
+remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
+them only opportunistically. Default workflow (steps 1-9 above)
 applies, with these candidates as the next concrete moves:
 
-- (c) **Return-type-from-body inference**: when an un-annotated method has
-  `return expr` statements, infer the return type from `expr` instead of
-  defaulting to `void`/`any`. Unblocks `genericCloneReturnTypes2_ts`-style
-  tests where `a.clone()` on `a: MyList<string>` should return `MyList<string>`.
-- (d) **Named→named cross-target Reference comparison**: walk the source's
-  base chain for the target's type, instantiate via target mapper, compare.
-  Unblocks tests like `Derived<X>` vs `Base<Y>` where structural comparison
-  with substituted properties needs both sides resolved through their
-  base hierarchies.
+- **TS2774 PropertyAccessExpression operands**: extend the 17.2a
+  walker to handle `x.foo.bar` / `this.isUser` / `stats.isDirectory`
+  patterns. Targets `truthinessCallExpressionCoercion[1,2]_ts` (~7
+  TS2774 emissions each). Needs property-path body-walk for
+  suppression and parameter-type lookup for callable params (e.g.
+  `function f(required: () => boolean)`).
+- **TS2774 + `&&` chain narrowing**: `uncalledFunctionChecksInConditional2_ts`
+  needs `perf && perf.measure && perf.clearMarks && perf.clearMeasures`
+  to narrow `perf` from `Performance | undefined` to defined by the time
+  the last operand fires. Requires `&&`-chain operand narrowing wired
+  through `applyConditionNarrowing`.
+- **Type-predicate function narrowing** (`function isC1(c): c is A`):
+  when called as a condition, narrows the named arg. Unblocks
+  `instanceofWithStructurallyIdenticalTypes_ts` and similar.
+- **TS2454 via flow-graph definite-assignment**: replace the ad-hoc
+  walker. Note 17.1c session warned a snapshot/restore approach
+  regressed -7 tests; tread carefully.
+- **FlowAssignment-RHS narrowing**: medium risk — could over-narrow
+  legitimate union-source TS2322 cases.
 
-Both leverage the now-installed cycle/depth infra (`relationSourceTargets`/
-`relationTargetTargets` stacks, `isDeeplyNested` 5+ heuristic, TypeParam
-apparent-type comparison, `resolvedPropertyTypes` cache).
+These leverage the installed flow-graph (`Flow.kt` / `FlowGraphBuilder`,
+`currentFlowGraph`, `nodeToFlow`, `applyConditionNarrowing`,
+`narrowByEquality` / `narrowByInstanceOf` / `narrowByInOperator` /
+`tryNarrowByTypeOf`) and the structural-comparison infra
+(`relationSourceTargets` / `relationTargetTargets` stacks,
+`isDeeplyNested` 5+ heuristic, TypeParam apparent-type comparison,
+`resolvedPropertyTypes` cache).
 ```
 
 ---
