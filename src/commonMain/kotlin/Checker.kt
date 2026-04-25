@@ -40133,6 +40133,42 @@ interface DataView {
                         ))
                         return
                     }
+                    // Phase 17 / Blocker #1 step 2g: multi-member union TS2339 elaboration.
+                    // When the narrowed receiver is still a Union with at least one member
+                    // missing the property AND at least one member having it (partial
+                    // coverage), emit TS2339 with the union display + a chain line naming
+                    // the first missing member. Mirrors TypeScript's baseline format.
+                    //
+                    // Conservative gate: only emit when ALL missing members are primitives
+                    // (Type.Intrinsic / literal types). When missing members are Object/
+                    // Interface types, the union is likely a discriminated union whose
+                    // property-equality narrowing (e.g. `ab.type === 'a'` narrowing AB to
+                    // A1 | A2) isn't yet implemented — emitting would FP.
+                    if (narrowed is Type.Union && propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES) {
+                        val members = narrowed.types
+                        fun memberHasIt(m: Type): Boolean {
+                            if (m === anyType || m === errorType || m === unknownType) return true
+                            return try { typeHasOwnProperty(getApparentType(m), propName) } catch (_: StackOverflowError) { true }
+                        }
+                        fun isPrimitiveLike(m: Type): Boolean = m is Type.Intrinsic ||
+                            m is Type.StringLiteral || m is Type.NumberLiteral || m is Type.BigIntLiteral
+                        val missingMembers = members.filter { !memberHasIt(it) }
+                        val anyHasIt = members.any { memberHasIt(it) }
+                        if (missingMembers.isNotEmpty() && anyHasIt && missingMembers.all { isPrimitiveLike(it) }) {
+                            val missingMember = missingMembers.first()
+                            val unionDisplay = typeToString(narrowed)
+                            val memberDisplay = typeToString(missingMember)
+                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type '$unionDisplay'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                                messageChain = listOf("  Property '$propName' does not exist on type '$memberDisplay'."),
+                            ))
+                            return
+                        }
+                    }
                 }
             } catch (_: StackOverflowError) { /* fall through to normal check */ }
 
