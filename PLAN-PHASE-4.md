@@ -3693,6 +3693,8 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 
 ### What's left in the "surgical fix" pool
 
+**As of 2026-04-25 (post-16.4gs, 8337 passing) — RECOMMENDED SHIFT**: After 6 consecutive sessions confirming the surgical pool is empty (16.4go, post-16.4gk recon, post-16.4gl recon, 16.4gp, 16.4gq, post-16.4gr) plus this session's exhaustive re-audit of skip-list entries, the surgical pool is genuinely exhausted at the +1 to +3 per-commit level. **Next sessions should commit entirely to architectural blockers** per the new priority ordering (see "Known architectural blockers" below — reshuffled 2026-04-25). The recommended next step is **MAINT-1 (stale skip-log audit)**, then **Blocker #1 (full control flow narrowing)** — the latter has the highest single-feature yield estimate (~60–100 tests realistic, 250 upper bound).
+
 **As of 2026-04-25 (post-16.4gi, 8323 passing)**: `find_candidates.py --fresh` returns 1 SWAP candidate (`newMap_ts`) which requires a multi-piece fix (TS2743 emission + lib-version-aware MapConstructor/WeakMapConstructor declarations). All other candidates are filtered as already-skipped. **Re-examining previously-skipped tests after each round of infrastructure changes is the highest-yield strategy now**: 16.4gi flipped `typeCheckingInsideFunctionExpressionInArray_ts` because 16.4ge's Variable+Interface merge made `Object` resolve as a real Type.Interface, which then revealed that `getReturnTypeOfNewExpression`'s Type.Interface branch returned `calleeType` directly (instead of consulting construct sigs for the "constructor interface" pattern). The same merge unblocks several other tests partially — e.g. `booleanAssignment_ts` now correctly types `b: Boolean` (after 16.4gi's `new X()` fix) but still has 2 FPs (primitive→wrapper assignability) + 1 missing chain (valueOf elaboration). Continuing to re-examine the skip log against the latest infrastructure is the recommended workflow until a coordinated multi-piece fix or blocker is undertaken.
 
 **As of 2026-04-24 (post-16.4fs, 8304 passing)**: `find_candidates.py --fresh` still returns 0 across all buckets at diff ≤ 3 (filtered from 9/118/32). The 16.4fs win came from re-visiting a previously-skipped test (`pathMappingBasedModuleResolution_withExtension_failedLookup`) and landing a narrow TS2307 branch gated on "every paths target has an explicit `.ts`/`.tsx`/`.d.ts` extension" — narrower than the broad "paths config → skip TS2307" originally used. Each previously-skipped test is worth re-examining when its skip reason names a specific resolver limitation that a narrower gate could bypass. The 16.4fr win came from a non-obvious extension of an existing emission site (TS6212 branch) to cover an adjacent pattern, not from a fresh candidate — the tests it flipped (`optionalParamAssignmentCompat`, `functionSignatureAssignmentCompat1`) had 3-gap diffs (position + display + related info) that all resolved cleanly together. Similar "stacked gap" wins may still exist when multiple narrow fixes coincide. Otherwise next gains require either a blocker #1 sub-step (return-type-from-body broader patterns, or named→named cross-target comparison) or a coordinated new-diagnostic family implementation (TS6213 "Did you mean to use new?" at var-init, rootDir validation, iterator-protocol typing for TS2802/TS2495/TS2488).
@@ -3717,67 +3719,132 @@ The next +N gains either come from:
 
 **Recommendation**: surgical pool is **exhausted**. Next session should commit to either (a) a new-diagnostic batch (pick 2-3 low-risk ones in a single session), or (b) blocker #1 (structural generic comparison) with the retry plan below. Continuing to look for +1 surgical wins via `find_candidates.py --fresh` will yield nothing.
 
-### Known architectural blockers (as of 2026-04-17, 8145 passing)
+### Known architectural blockers (RESHUFFLED 2026-04-25, 8337 passing)
 
 These blockers recur across multiple "close-to-passing" tests and cannot be fixed with surgical changes in a single session. Any agent attempting these should plan for a multi-session investigation with regression budget.
 
-**Priority ordering** — ranked by (expected tests unblocked) ÷ (regression risk / refactor scope). Higher rank = better cost/benefit. Work 1 → 5 only when an agent has the full-session budget to see one through; otherwise keep grinding surgical fixes in the meantime.
+**Priority ordering** — ranked by (expected tests unblocked) ÷ (regression risk × refactor scope). Higher rank = better cost/benefit. Reshuffled after the 16.4gq–gs session: the surgical pool has been ground down to zero across 5+ sessions, so the path forward is committing entire sessions to architectural work. Per the original Phase 16 impact analysis (line ~2479), the largest unaddressed feature is **control flow narrowing** (~250 tests potential, only partial done in 16.3) — it now sits at #1.
+
+**What changed in this reshuffle:**
+- **NEW #1**: Full control flow narrowing (was 16.3 PARTIAL — promoted to architectural blocker since the remaining work is full flow-graph construction, not surgical).
+- **NEW #2**: Generic argument inference (was implicit under "16.4 generic instantiation" — promoted because tests like `genericConstraintSatisfaction1`, `superCallArgsMustMatch`, `genericClassWithStaticFactory`, `superWithTypeArgument3`, `privacyCheckAnonymousFunctionParameter2` all hit the same gap: we don't infer `T` from arg type then check the constraint).
+- **#3 (was #5)**: Cross-file global scope conflation — bumped UP. Each session that does skip-log auditing finds more tests gated on this; estimated impact revised upward.
+- **#4 (was #1)**: Structural comparison of generic refs — DEMOTED to LOW yield. Steps (a)–(d) infrastructure landed; the remaining gaps are bounded (different-target TS2352, overload-aware TS2416 for lib types, multi-statement return-from-body inference) and total ≤ 10 tests across all sub-cases.
+- **#5–#7**: JSDoc, TS7006 over-suppression, Parser error-recovery — unchanged ordering, all LOW yield.
+- **NEW MAINT-1**: Stale skip-log audit (16.4gp/gr/gs sessions all found stale entries — running this once could surface +5–15 candidates that are already passing).
 
 ---
 
-#### 1. Structural comparison of generic type references — MEDIUM yield (was HIGH), MEDIUM risk
+#### 1. Full control flow narrowing — HIGHEST yield (~100+ tests realistic), MEDIUM risk
 
-**Status (2026-04-18, 8222 passing):** Steps (a), (b), supporting cycle/depth infra, and a narrow entry to (c) all landed (commits 16.4dc, 16.4de, 16.4df, 16.4dg). TS2367 narrow (16.4dh) also leverages step (a). Step (b) is currently NET-NEUTRAL — the framework is correct and the recursive-type tests now pass via real cycle/deeply-nested heuristics instead of incidental errorType-trivial-pass, but step (b)'s gains remain gated on (d) below plus broader (c) patterns. **Do not re-attempt step (b) infrastructure** — it is complete and bounded by `relationDepth < 4` (above which fresh Symbol/Signature allocation in `resolveGenericPropertyType`'s MethodDeclaration branch OOMs Promise/IPromise overload-permutation comparisons before the deeply-nested heuristic can bail). Step (c) is partial: only single-stmt `return new X<…>(…)` bodies are inferred (see 16.4dg); multi-statement bodies, identifier returns, etc. are still `anyType`.
+**Status (2026-04-25):** 16.3 landed surgical narrowing fixes (TS1344 message, TS2739/TS2740 multi-missing, null/undefined narrowing in `if (x == null)` branches, narrowing helper for variable declarations). Full flow-graph construction was deferred. The remaining gap is the dominant blocker for TS2339 (549 tests with this code), TS2454 (103 deficit), TS2774 (118 tests).
 
-`objectTypeRelatedTo` still passes trivially for cases that step (a) can't catch:
-- Ref vs Ref with DIFFERENT targets (e.g. `Derived<string>` vs `Base<number>` where D extends B)
-- Method return types that lack T→arg substitution (e.g. `a.clone()` on `a: MyList<string>` returns un-substituted `MyList<T>` when the method has no return-type annotation — `genericCloneReturnTypes2_ts` is stuck on this, since return-type-from-body inference isn't implemented).
+**Failing test patterns that need this:**
+- `nestedLoopTypeGuards_ts` (TS2454 per-loop-scope narrowing)
+- `typeGuardConstructorDerivedClass_ts` (TS2339 on narrowed `never`)
+- `narrowingUnionToNeverAssigment_ts` (union narrowing through control flow)
+- `narrowByEquality_ts` (TS2839 narrowing — partially done in 16.4fy but limited)
+- `optionalChainWithInstantiationExpression1_ts` (narrowing through optional chain)
+- Many TS2774 "always defined" / TS2454 "used before assigned" with non-trivial control flow.
 
-- **Yield**: ~10-20 TS2322 tests, all gated on (c) or (d) below — step (b)'s plumbing is complete but downstream callers don't yet leverage substituted property types.
-- **Scope**: contained to the checker (no binder/parser changes).
-- **Remaining plan**: (c) implement return-type-from-body inference for un-annotated methods so `a.clone()` on `a: MyList<string>` returns `MyList<string>` not `anyType` — also unblocks property-typed-via-method tests; (d) widen the comparison engine to handle named→named generic refs with different targets (walk base chain + instantiate via target mapper). Both (c) and (d) can leverage the now-installed cycle/depth infra (`relationSourceTargets`/`relationTargetTargets` stacks, `isDeeplyNested` 5+ heuristic, TypeParam-vs-TypeParam apparent-type comparison, `resolvedPropertyTypes` cache).
+- **Yield**: 60–100 tests realistic (250 upper bound from impact analysis × ~30% realistic factor).
+- **Scope**: build a real flow graph during binding (per-function basic blocks + branch edges), reify narrowed types per AST position. tsgo's `internal/checker/flow.go` (2.7K lines) is the reference implementation. This is INFRASTRUCTURE work — expect 2–4 sessions to land safely.
+- **Risk**: MEDIUM. Narrowing is opt-in (a position with no narrow info falls back to declared type), so regressions are bounded to over-narrowing (false NEVER) rather than wholesale changes.
+- **Why first now**: highest absolute yield. The original Phase 16 ordering put 16.3 fourth ("orthogonal but complex; defer to after easier wins") but the easier wins are now exhausted — narrowing IS the next big unlock.
 
-**Session 2026-04-18 (16.4dd — attempted step (b), reverted):** Added `getPropertyTypeForRelation` helper that calls `resolveGenericPropertyType(ref, prop)` in `propertiesRelatedTo`. Zero gains, 6 regressions — all recursive-type tests. Root cause: `instantiateType` minted fresh `Type.Reference` ids per recursion level, defeating the id-pair-based cycle detection. Reverted without commit. **Resolved by 16.4de (interning) + 16.4df (cycle/depth infra)** — all 6 tests now stay green and step (b) is net-neutral with the framework in place for future (c)/(d) work.
+#### 2. Generic argument inference (NEW) — HIGH yield (~20–40 tests), MEDIUM risk
 
-#### 2. JSDoc type annotations — LOW yield, LOW risk
+When calling a generic function with concrete args, TypeScript infers each type parameter from the corresponding argument type, then checks each inferred T against its constraint. Currently we punt on this entirely — generic call sites with type-param-typed args either pass trivially (T = anyType) or skip the assignability check.
 
-`@type {T}`, `@this {T}`, `@typedef`, `@param {T}` — we bind `@typedef` nominally but don't honor `@type` assertions or `@this` parameter types.
+**Failing test patterns that need this:**
+- `genericConstraintSatisfaction1_ts`: `f<T extends S>(x: T)` called with `{s: 1}` against `S = {s: string}` — should emit TS2322 + TS6500.
+- `genericClassWithStaticFactory_ts`: `T` not inferred from arg → no TS2345.
+- `superCallArgsMustMatch_ts`, `superWithTypeArgument3_ts`: `super(...)` arg checking when base is generic.
+- `privacyCheckAnonymousFunctionParameter2_ts`: function-typed parameter not structurally compared.
+- `widenToAny1_ts`, `widenToAny2_ts`: `string | undefined` initializer widened wrong against `number` annotation.
 
-- **Yield**: handful of `.js` file tests (TS2352 in `@type` casts, TS2683 suppression when `@this` is present, TS2741 with `@typedef` class shapes).
-- **Scope**: contained to JSDoc parsing (scanner comment handling) and a new JSDoc-to-TypeNode bridge in the checker. Does not touch non-JS checking paths.
-- **Why second**: smallest blast radius of any blocker; can proceed in parallel with #1 because it only affects `.js`/`.jsx` files.
+- **Yield**: 20–40 tests. Each individual test gives +1, but the pattern repeats across many test files.
+- **Scope**: extend `checkArgumentsAgainstSignature` and `checkArgumentsAgainstOverloads` to: (a) collect inferences from arg→param matching (each TypeParam → concrete type), (b) apply constraint check per TypeParam, (c) substitute inferred types into the param type and recheck. Touches the existing overload-resolution and constraint-checking paths.
+- **Risk**: MEDIUM. Could regress overload-resolution tests if inference picks wrong overload. Mitigate with conservative gating (only when ALL TypeParams resolve to non-error types).
+- **Why second**: stacks naturally on Blocker #4 step (a)/(b)/(c)/(d) infrastructure (Type.Reference interning, `resolveGenericPropertyType` mapper, `getPropertyTypeForRelation` cache) — the building blocks are already there.
 
-#### 3. TS7006 over-suppression for callback parameters — LOW yield, MEDIUM risk
-
-We suppress TS7006 for any `contextuallyTyped=true` param (any callback context). TypeScript only suppresses when the contextual type actually provides param types (bidirectional inference succeeds).
-
-Fixing properly needs real contextual typing that distinguishes "context present but param-less" (should still fire TS7006) from "context provides the param type" (correctly suppressed). Blocks several TS7006 tests with nuanced expectations (`intraBindingPattern`, `subtypeReduction`, `signatureCombiningRestParameters`).
-
-- **Yield**: ~3-5 tests. Small.
-- **Scope**: requires bidirectional inference infrastructure — new plumbing in contextual typing.
-- **Why third**: needs genuine infrastructure but yield is small; lower priority than #1/#2 unless the inference work is already happening for another reason.
-
-#### 4. Parser error-recovery asymmetry — LOW yield, HIGH risk per attempt
-
-Several tests expect specific token-consumption-then-continue recovery (e.g. `declare class foo();` → class with empty body + phantom `()` statement + next function). Our recovery consumes tokens differently, producing TS1183 where TS emits TS1109+TS1005.
-
-- **Yield**: 1-2 tests per case, case-by-case.
-- **Scope**: per-case parser edits.
-- **Why fourth**: each case is tractable but regression-prone (touches error-recovery paths used across many tests). No multiplier — best handled opportunistically when a specific case aligns with a surgical session's budget.
-
-#### 5. Cross-file global scope conflation — MEDIUM yield, HIGHEST risk
+#### 3. Cross-file global scope conflation — MEDIUM-HIGH yield (~30+ tests, was MEDIUM), HIGHEST risk
 
 `Checker.init` does `mergeSymbolTable(globals, result.locals)` for every binderResult, merging module-file exports into the shared `globals` map alongside script-file locals and lib. In module files, identifiers from OTHER module files that weren't imported appear in `scope.has(name)` as if they were globals.
 
-Blocks fine-grained module-visibility diagnostics: TS2301 vs TS2663 distinction (e.g. `classMemberInitializerWithLamdaScoping4`), default-import-from-export-equals visibility, etc.
+Blocks fine-grained module-visibility diagnostics: TS2301 vs TS2663 distinction, default-import-from-export-equals visibility, namespace export filtering across files.
 
-- **Yield**: unclear count — many tests have cross-file global leakage as one of several issues.
-- **Scope**: splitting "true globals" (script locals + lib + `KNOWN_GLOBALS`) from per-file module locals; reconstructing `fileScope` to only include imports the current file actually declares. Touches **every identifier-resolution check** in the checker.
-- **Why last**: broadest regression risk of any blocker. Defer until #1 and #2 have cleared the "close-to-passing" pool — at that point the remaining failures pointing to this blocker will be clearer, and the refactor can be done against a smaller, better-characterized set of expected flips.
+**Failing test patterns:**
+- `classMemberInitializerWithLamdaScoping4_ts` (TS2301 vs TS2663)
+- `moduleAugmentationsImports3/4_ts` (TS2339 FP on nested module augmentation)
+- `errorsOnImportedSymbol_ts` (cross-file type-only flagging)
+- `jsFileCompilationLetDeclarationOrder2_ts`, `jsFileCompilationDuplicateVariableErrorReported_ts`
+- Possibly contributes to many `genericSpecializations*`, `arrayAssignmentTest*` cross-namespace cases not yet diagnosed.
+
+- **Yield**: 30+ tests. Each skip-log audit session surfaces more candidates blocked here.
+- **Scope**: split "true globals" (script-file locals + lib + KNOWN_GLOBALS) from per-file module locals; reconstruct `fileScope` to only include imports the current file actually declares. Touches **every identifier-resolution check** in the checker (~30 call sites).
+- **Risk**: HIGHEST. A naive implementation regresses 50+ tests. Recommended approach: introduce per-file-scope construction behind a flag, run side-by-side, then flip per file as the scope construction proves correct.
+- **Why third (bumped from last)**: yield estimate revised upward after multiple skip-log audits found this blocker named in the residual; without addressing it, ~30 surgical-looking tests remain stuck.
+
+#### 4. Structural comparison of generic type references — LOW yield (was MEDIUM), MEDIUM risk
+
+**Status (2026-04-25, 8337 passing):** Steps (a), (b), (c) partial, (d) partial all landed across 16.4dc–df, dg, dm, gr, gs. Type.Reference interning, cycle/depth heuristic, TypeParam apparent-type comparison, `resolvedPropertyTypes` cache, heritage-clause type-arg instantiation, base-chain inheritance via `resolveGenericPropertyType`, parameter-mismatch chain elaboration, base-method TypeParam TS2208 — all in place.
+
+**What's left (small, gated by other blockers):**
+- Different-target TS2352 with "Property X missing" elaboration (`genericTypeAssertions2_ts`) — requires TypeScript-style `comparable` relation with full structural elaboration.
+- Overload-aware TS2416 for lib generic interfaces (`implementArrayInterface_ts` emits 2 extra diagnostics because lib's `every`/`filter` have type-predicate overloads that user code only implements one of).
+- Multi-statement bodies with single return for `inferSimpleReturnTypeFromBody`.
+- Identifier returns (`return param`, `return this.field`) for return-type-from-body inference.
+
+- **Yield**: ≤ 10 tests across all sub-cases.
+- **Scope**: contained to checker (no binder/parser changes).
+- **Why demoted**: infrastructure work is largely done; remaining test gains are individual-test scale, not pattern-level. Best handled opportunistically when a specific case aligns with surgical session's budget.
+
+#### 5. JSDoc type annotations — LOW yield (~5–10 tests), LOW risk
+
+`@type {T}`, `@this {T}`, `@typedef`, `@param {T}` — we bind `@typedef` nominally but don't honor `@type` assertions or `@this` parameter types.
+
+- **Yield**: 5–10 `.js` file tests.
+- **Scope**: JSDoc parsing (scanner comment handling) and a new JSDoc-to-TypeNode bridge in the checker. Does not touch non-JS checking paths.
+- **Why fifth (was second)**: low blast radius means low risk, but absolute yield is small. Higher-yield blockers (#1, #2, #3) take priority for "session-scale architectural work" budget.
+
+#### 6. TS7006 over-suppression for callback parameters — LOW yield (~3–5 tests), MEDIUM risk
+
+We suppress TS7006 for any `contextuallyTyped=true` param. TypeScript only suppresses when the contextual type actually provides param types (bidirectional inference succeeds).
+
+- **Yield**: 3–5 tests (`intraBindingPattern`, `subtypeReduction`, `signatureCombiningRestParameters`).
+- **Scope**: requires bidirectional inference plumbing in contextual typing.
+- **Why sixth**: low yield + needs new infrastructure. Defer.
+
+#### 7. Parser error-recovery asymmetry — LOW yield (1–2 per case), HIGH risk per attempt
+
+Several tests expect specific token-consumption-then-continue recovery (e.g. `declare class foo();` → class with empty body + phantom `()` statement + next function).
+
+- **Yield**: 1–2 tests per case, case-by-case.
+- **Scope**: per-case parser edits.
+- **Why last**: per-case work, no multiplier, regression-prone. Best handled opportunistically.
 
 ---
 
-**Parallelism note**: #1, #2, and #4 can be worked independently in parallel (different agents / different sessions). #3 and #5 are sequential — #3 depends on enough contextual-typing infrastructure that #1's checker work should land first; #5 is intentionally last.
+#### MAINT-1. Stale skip-log audit — UNKNOWN yield (likely 5–15 tests), LOW risk
+
+Every recent session that audited the skip log found 1–3 entries marked "stuck on Blocker #X" that have actually been passing for sessions (e.g. 16.4gl-recon found `genericCloneReturnTypes`/`genericCloneReturnTypes2` stale; 16.4go found `generics4`/`genericDerivedTypeWithSpecializedBase`/`genericPrototypeProperty3` stale; this session found `genericPrototypeProperty3` again). The cumulative impact of stale entries blocking the candidate finder is probably 5–15 tests.
+
+- **Yield**: unknown but likely 5–15 candidates that re-surface as fresh.
+- **Scope**: walk every entry in the "Explored-but-skipped tests" section, run the test, mark stale (~), update reason if still failing.
+- **Risk**: zero (read-only investigation).
+- **Why a maintenance task**: not architectural but high-leverage. Should be run as a one-off "audit session" before any session that uses `find_candidates.py --fresh` for surgical work, or after every major architectural fix lands.
+
+---
+
+**Parallelism note**: Blockers #1, #2, #5, #7 can be worked independently. #3 should run after #1/#2 have resolved their fraction of overlapping cases (clearer "remaining failures pointing to #3" set). #4's remaining sub-cases pair naturally with surgical sessions — not a full-session investment. #6 depends on enough contextual-typing infrastructure that #2's inference work should land first.
+
+**Recommended next sessions (in order):**
+1. **MAINT-1** (1 session): clean up stale skip log → frees `find_candidates.py --fresh` to find genuine candidates.
+2. **Blocker #1 step 1** (1–2 sessions): build flow-graph infra in binder; no behavior change yet.
+3. **Blocker #1 step 2** (2 sessions): wire flow-graph into TS2454/TS2339/TS2774 emission sites.
+4. **Blocker #2** (2 sessions): generic argument inference + constraint check.
+5. **Blocker #3** (3+ sessions): per-file scope construction behind a flag, then per-file flip.
 
 ### Candidate-picking workflow for surgical fixes
 
@@ -3791,14 +3858,21 @@ When context starts a new session, the fastest path to wins is:
 
 ### Queue execution strategy
 
-**Sequence:** 16.0 → 16.1 → 16.2 → 16.3 → 16.4
+**Original Phase 16 sequence (DONE/IN PROGRESS):** 16.0 → 16.1 → 16.2 → 16.3 → 16.4
 
-**Rationale:**
-1. **16.0 first** — highest unblocking potential AND enables 16.1/16.2 to produce concrete types to work with. Without contextual typing, argument/property types remain `anyType` and downstream features have nothing to check.
-2. **16.1 second** — quick follow-up that leverages 16.0's resolved types to produce elaborated TS2322 diagnostics.
-3. **16.2 third** — overload resolution needs resolved argument types (16.0) and the structural comparison from 16.1.
-4. **16.3 fourth** — narrowing is orthogonal but complex; defer to after easier wins.
-5. **16.4 last** — generic inference is a multiplier on 16.2 and benefits from all prior features.
+**Status:** 16.0/16.1/16.2 DONE, 16.3 PARTIAL (full flow-graph deferred → now Blocker #1), 16.4 IN PROGRESS (generic infrastructure largely done; remaining sub-cases moved to Blocker #4).
+
+**NEW sequence (2026-04-25 reshuffle) — as the surgical pool is exhausted, commit entire sessions to architectural blockers:**
+
+**Phase 17 sequence:** MAINT-1 → Blocker #1 (control flow narrowing) → Blocker #2 (generic argument inference) → Blocker #3 (cross-file scope) → Blocker #4 / #5 / #6 / #7 opportunistically.
+
+**Rationale (priority-by-yield × tractability):**
+1. **MAINT-1 first** — stale skip-log audit. Read-only, ~1 session, surfaces 5–15 already-passing tests as fresh candidates that would otherwise stay hidden behind `[SKIP]` markers in `find_candidates.py`. Cheap, no regression risk, and clears the deck for #1's diagnosis.
+2. **Blocker #1 (control flow narrowing) second** — highest absolute yield (~60–100 tests realistic). The remaining failing tests across many categories (TS2339, TS2454, TS2774, TS2839) all converge on this. Build flow-graph in binder, wire into emitters in two stages.
+3. **Blocker #2 (generic argument inference) third** — stacks on the 16.4 generic infrastructure already in place. ~20–40 tests. Lower risk than Blocker #3.
+4. **Blocker #3 (cross-file scope) fourth** — high yield but highest risk; defer until #1/#2 have cleared their fraction so the residual is well-characterized.
+5. **Blocker #4 (remaining structural generic gaps) opportunistically** — small (~10 tests), pairs with surgical sessions, not full-session work.
+6. **Blockers #5/#6/#7** — low yield, defer.
 
 **Hard rules:**
 - Each feature must land behind a feature flag or with conservative guards initially.
