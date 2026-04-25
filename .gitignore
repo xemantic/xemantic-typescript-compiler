@@ -51,3 +51,8 @@ bin/
 /typescript-repo/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+### run-loop.sh artifacts ###
+/logs/
+/STOP-LOOP
+/scripts/__pycache__/
