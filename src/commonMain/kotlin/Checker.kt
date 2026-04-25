@@ -423,6 +423,8 @@ class Checker(
         checkImportEqualsRequireOfNonModule()
         // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
         checkNullTypeAssertionOverlap()
+        // 14''b. Check same-target Reference cast bidirectional non-overlap for TS2352
+        checkSameTargetReferenceCastOverlap()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -24959,6 +24961,80 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * Emits TS2352 for `<Foo<X>>foo` casts where `foo` already has type `Foo<Y>`
+     * (same generic target) and the type-arg pair X/Y is non-comparable in both
+     * directions. Narrow gate: skips Any/Unknown/Never/Void/error/TypeParam args
+     * to avoid FPs in partially-resolved generic contexts.
+     */
+    private fun checkSameTargetReferenceCastOverlap() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            val savedCheckFileName = currentCheckFileName
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfSameTargetMismatch)
+                }
+            } finally {
+                currentFileLocals = savedLocals
+                currentCheckFileName = savedCheckFileName
+            }
+        }
+    }
+
+    private fun emitTS2352IfSameTargetMismatch(
+        expr: TypeAssertionExpression, source: String, fileName: String,
+    ) {
+        val inner = expr.expression
+        val typeNode = expr.type
+        val sourceType = try { getTypeOfExpression(inner) } catch (_: StackOverflowError) { return }
+        val targetType = try { getTypeFromTypeNode(typeNode) } catch (_: StackOverflowError) { return }
+        if (sourceType !is Type.Reference) return
+        if (targetType !is Type.Reference) return
+        if (sourceType.target !== targetType.target) return
+        val sourceArgs = sourceType.resolvedTypeArguments ?: return
+        val targetArgs = targetType.resolvedTypeArguments ?: return
+        if (sourceArgs.size != targetArgs.size) return
+        if (sourceArgs.isEmpty()) return
+        for (a in sourceArgs) {
+            if (a is Type.TypeParam) return
+            if (a.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never or TypeFlags.Void)) return
+        }
+        for (a in targetArgs) {
+            if (a is Type.TypeParam) return
+            if (a.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never or TypeFlags.Void)) return
+        }
+        for (i in sourceArgs.indices) {
+            val s = sourceArgs[i]
+            val t = targetArgs[i]
+            val sToT = try { checkTypeRelatedTo(s, t, assignableRelation) } catch (_: StackOverflowError) { return }
+            if (sToT) continue
+            val tToS = try { checkTypeRelatedTo(t, s, assignableRelation) } catch (_: StackOverflowError) { return }
+            if (tToS) continue
+            val start = expr.pos
+            val endPos = expressionTrueEnd(inner)
+            val length = (endPos - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Conversion of type '${typeToString(sourceType)}' to type '${typeToString(targetType)}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+                messageChain = listOf("  Type '${typeToString(s)}' is not comparable to type '${typeToString(t)}'."),
+                category = DiagnosticCategory.Error,
+                code = 2352,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            return
+        }
     }
 
     // -----------------------------------------------------------------------
