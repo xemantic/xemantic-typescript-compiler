@@ -14,6 +14,8 @@ remains empty after the audit.
 **Recommended next sessions (highest absolute yield first):**
 1. ~~**MAINT-1**: Stale skip-log audit (~1 session, +5–15 tests).~~ Done.
 2. **Blocker #1**: Full control flow narrowing (~2–4 sessions, +60–100 tests).
+   - **Step 1 (2026-04-25, 17.1a)**: Flow-graph infrastructure in binder — DONE (no behavior change yet, 0 tests). `Flow.kt` + `FlowGraphBuilder` integrated into `BinderResult.flowGraph`.
+   - **Step 2 (next)**: Wire flow graph into Checker — `getNarrowedType(symbol, atFlowNode)` walker + emission-site adoption for TS2454/TS2339/TS2774.
 3. **Blocker #2**: Generic argument inference (~2 sessions, +20–40 tests).
 4. **Blocker #3**: Cross-file global scope refactor (~3+ sessions, +30+ tests).
 
