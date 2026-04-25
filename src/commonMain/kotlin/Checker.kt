@@ -33699,6 +33699,7 @@ interface DataView {
                 SyntaxKind.ExclamationEqualsEquals,
                 SyntaxKind.ExclamationEquals -> narrowByEquality(t, expr, equal = !isTrue, name)
                 SyntaxKind.InstanceOfKeyword -> narrowByInstanceOf(t, expr, isMatch = isTrue, name)
+                SyntaxKind.InKeyword -> narrowByInOperator(t, expr, hasProp = isTrue, name)
                 else -> t
             }
             else -> t
@@ -33735,6 +33736,67 @@ interface DataView {
             // narrowByTypeOfGuard's same-shape behavior for typeof tags.
             else -> neverType
         }
+    }
+
+    /**
+     * Narrow `t` by a `"prop" in name` check. `hasProp=true` (positive branch):
+     * keep types whose own property set includes `prop`. `hasProp=false` (else
+     * branch): keep types that don't have `prop`. The LHS of `in` must be a
+     * StringLiteral / NumericLiteral / NoSubstitutionTemplateLiteral and the
+     * RHS must be the identifier matching [name]. Falls back to `t` unchanged
+     * for non-literal LHS or non-matching RHS.
+     *
+     * Implementation note: TypeScript's actual `in` narrowing is subtler around
+     * intersection types and Record-like types — this surgical version handles
+     * the common Type.Object / Type.Interface union case and is intentionally
+     * conservative on edge shapes (returns `t` rather than risk over-narrowing).
+     */
+    private fun narrowByInOperator(
+        t: Type, expr: BinaryExpression, hasProp: Boolean, name: String,
+    ): Type {
+        // RHS (right of `in`) must be the identifier we're narrowing.
+        val right = expr.right
+        if (right !is Identifier || right.text != name) return t
+        // LHS (left of `in`) must be a literal property name we can statically resolve.
+        val propName: String = when (val left = expr.left) {
+            is StringLiteralNode -> left.text
+            is NoSubstitutionTemplateLiteralNode -> left.text
+            is NumericLiteralNode -> left.text
+            else -> return t
+        }
+        if (t is Type.Union) {
+            val filtered = if (hasProp) {
+                t.types.filter { typeHasOwnProperty(it, propName) }
+            } else {
+                t.types.filter { !typeHasOwnProperty(it, propName) }
+            }
+            return getUnionType(filtered)
+        }
+        // Non-union: contradiction → never; otherwise unchanged.
+        val present = typeHasOwnProperty(t, propName)
+        return when {
+            present == hasProp -> t
+            // present=true, hasProp=false: source HAS the prop but we're in
+            // the !in branch — contradiction → never. Mirrors instanceof/typeof.
+            !hasProp -> neverType
+            // present=false, hasProp=true: source DOESN'T have the prop but
+            // we're in the `in` branch — TypeScript widens to source &
+            // Record<prop, unknown>; we just keep `t` (conservative).
+            else -> t
+        }
+    }
+
+    /**
+     * True if [type] has an own property named [propName]. Looks up the
+     * property via [getPropertyOfType] for object/interface/reference types.
+     * Returns false for primitives / union / intersection / any / never —
+     * `narrowByInOperator` handles unions before reaching this.
+     */
+    private fun typeHasOwnProperty(type: Type, propName: String): Boolean {
+        if (type !is Type.Object) return false
+        return try {
+            getPropertyOfType(type, propName) != null
+        } catch (_: StackOverflowError) { false }
     }
 
     /**
