@@ -15024,6 +15024,15 @@ class Checker(
          * blanket-permit the comparison. */
         private val WRAPPER_INTERFACE_NAMES = setOf("String", "Number", "Boolean", "Symbol", "BigInt")
 
+        /** Reserved primitive/intrinsic type names that cannot be used as a type
+         *  parameter name (TS2368). Mirrors TypeScript's check on reserved type
+         *  names — anywhere `<string>(x: string)` appears in a type-parameter list
+         *  position, TypeScript flags `string` because it's a primitive type name. */
+        private val RESERVED_TYPE_PARAM_NAMES = setOf(
+            "string", "number", "boolean", "void", "any", "never",
+            "object", "bigint", "symbol", "unknown", "null", "undefined",
+        )
+
         /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts).
          *  Excludes "static" because `static static foo` legitimately gets TS2300. */
         private val MODIFIER_KEYWORDS_SET = setOf("public", "private", "protected", "readonly", "abstract", "override")
@@ -25245,6 +25254,26 @@ interface DataView {
         parentAliasName: String? = null,
     ) {
         if (tparams.isEmpty()) return
+        // TS2368: reserved primitive/intrinsic type names cannot be used as type
+        // parameter names (e.g. `foo<string>(x: string)`). The set mirrors what
+        // TypeScript flags as "reserved type names" via Identifier.originalKeywordKind.
+        for (tp in tparams) {
+            val tpName = tp.name.text
+            if (tpName in RESERVED_TYPE_PARAM_NAMES) {
+                val start = tp.name.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type parameter name cannot be '$tpName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2368,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = tpName.length,
+                ))
+            }
+        }
         val names = tparams.map { it.name.text }
         var anyCircular = false
         for (i in tparams.indices) {
@@ -34033,17 +34062,25 @@ interface DataView {
     /** Format a signature as a string like `(x: number) => string` or `new (x: number) => Foo`. */
     private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) "new " else ""
+        val tps = sig.typeParameters
+        val tpStr = if (!tps.isNullOrEmpty()) {
+            "<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+        } else ""
         val params = sig.parameters.joinToString(", ") { formatParameter(it) }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
-        return "$prefix($params) => $retType"
+        return "$prefix$tpStr($params) => $retType"
     }
 
     /** Format a signature using colon notation like `(x: number): string` for use in `{ }` blocks. */
     private fun signatureToStringColon(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) "new " else ""
+        val tps = sig.typeParameters
+        val tpStr = if (!tps.isNullOrEmpty()) {
+            "<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+        } else ""
         val params = sig.parameters.joinToString(", ") { formatParameter(it) }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
-        return "$prefix($params): $retType"
+        return "$prefix$tpStr($params): $retType"
     }
 
     private fun typeToString(type: Type): String {
@@ -36542,12 +36579,13 @@ interface DataView {
                         val chain = mutableListOf<String>()
                         chain.add("  Type '${typeToString(derivedType)}' is not assignable to type '${typeToString(basePropType)}'.")
 
-                        // Add signature elaboration for function types
-                        addSignatureElaboration(derivedType, basePropType, chain)
-
                         // TS2208 related info: when derived is an unconstrained TypeParam declared
                         // on this class, hint that adding `extends {}` might resolve the mismatch.
                         val relatedInfo = mutableListOf<Diagnostic>()
+                        // Add signature elaboration for function types
+                        // (also populates `relatedInfo` with TS2208 when base has a
+                        // method-level TypeParam that derived overrides with a concrete type).
+                        addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source)
                         if (derivedType is Type.TypeParam && derivedType.constraint == null &&
                             classTypeParams != null) {
                             val tpName = derivedType.symbol?.name
@@ -37100,7 +37138,14 @@ interface DataView {
     }
 
     /** Add signature-level elaboration for function type mismatches in TS2416 chains. */
-    private fun addSignatureElaboration(derivedType: Type, basePropType: Type, chain: MutableList<String>) {
+    private fun addSignatureElaboration(
+        derivedType: Type,
+        basePropType: Type,
+        chain: MutableList<String>,
+        relatedInfo: MutableList<Diagnostic>? = null,
+        fileName: String? = null,
+        source: String? = null,
+    ) {
         if (derivedType !is Type.Object || basePropType !is Type.Object) return
         val derivedSigs = derivedType.callSignatures
         val baseSigs = basePropType.callSignatures
@@ -37127,6 +37172,32 @@ interface DataView {
             if (!checkTypeRelatedTo(baseParamType, derivedParamType, assignableRelation)) {
                 chain.add("    Types of parameters '${derivedParam.name}' and '${baseParam.name}' are incompatible.")
                 chain.add("      Type '${typeToString(baseParamType)}' is not assignable to type '${typeToString(derivedParamType)}'.")
+                // TS2208 related info: when the BASE method has a method-level
+                // TypeParam in this position and the derived overrides with a
+                // concrete type, TypeScript hints that the base TypeParam might
+                // need an `extends <derivedType>` constraint to allow the override.
+                // Only emit when relatedInfo collector is present (TS2416 path).
+                if (relatedInfo != null && fileName != null && source != null &&
+                    baseParamType is Type.TypeParam && derivedParamType !is Type.TypeParam) {
+                    val baseDecl = baseSig.declaration
+                    val baseTpName = baseParamType.symbol?.name
+                    val baseTpDecls = (baseDecl as? MethodDeclaration)?.typeParameters
+                    val baseTpDecl = baseTpDecls?.firstOrNull { it.name.text == baseTpName }
+                    if (baseTpDecl != null) {
+                        val tpPos = baseTpDecl.name.pos
+                        val (tpLine, tpChar) = getLineAndCharacterOfPosition(source, tpPos)
+                        relatedInfo.add(Diagnostic(
+                            message = "This type parameter might need an `extends ${typeToString(derivedParamType)}` constraint.",
+                            category = DiagnosticCategory.Message,
+                            code = 2208,
+                            fileName = fileName,
+                            line = tpLine,
+                            character = tpChar,
+                            start = tpPos,
+                            length = baseTpDecl.name.text.length,
+                        ))
+                    }
+                }
                 return
             }
         }
