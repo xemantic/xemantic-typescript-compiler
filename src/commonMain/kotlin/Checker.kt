@@ -44538,11 +44538,55 @@ interface DataView {
         }
     }
 
-    private fun checkDownlevelIterationInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkDownlevelIterationInStmt(stmt, source, fileName)
+    private fun checkDownlevelIterationInStatements(
+        stmts: List<Statement>, source: String, fileName: String,
+        iteratorVars: Set<String> = emptySet(),
+    ) {
+        for (stmt in stmts) checkDownlevelIterationInStmt(stmt, source, fileName, iteratorVars)
     }
 
-    private fun checkDownlevelIterationInStmt(stmt: Statement, source: String, fileName: String) {
+    /** Collect names of vars initialized from `arguments[<expr>]` at this body's top level.
+     *  These produce `ArrayIterator<any>` when called, so iterating their result needs TS2802. */
+    private fun collectArgumentsIteratorVars(stmts: List<Statement>): Set<String> {
+        val names = mutableSetOf<String>()
+        for (stmt in stmts) {
+            if (stmt !is VariableStatement) continue
+            for (decl in stmt.declarationList.declarations) {
+                val name = decl.name
+                val init = decl.initializer ?: continue
+                if (name !is Identifier) continue
+                if (init !is ElementAccessExpression) continue
+                val target = init.expression
+                if (target is Identifier && target.text == "arguments") {
+                    names.add(name.text)
+                }
+            }
+        }
+        return names
+    }
+
+    /** For a `Identifier(...)` call expression, compute the squiggle length covering
+     *  the callee identifier through the matching `)`. */
+    private fun computeIdentCallSpanLength(callee: Identifier, source: String): Int {
+        var i = callee.pos + callee.text.length
+        while (i < source.length && source[i].isWhitespace()) i++
+        if (i >= source.length || source[i] != '(') return callee.text.length
+        var depth = 1
+        i++
+        while (i < source.length && depth > 0) {
+            when (source[i]) {
+                '(' -> depth++
+                ')' -> depth--
+            }
+            i++
+        }
+        return i - callee.pos
+    }
+
+    private fun checkDownlevelIterationInStmt(
+        stmt: Statement, source: String, fileName: String,
+        iteratorVars: Set<String> = emptySet(),
+    ) {
         when (stmt) {
             is ForOfStatement -> {
                 // Check if the expression is `arguments` (type IArguments)
@@ -44559,11 +44603,27 @@ interface DataView {
                         start = expr.pos,
                         length = expr.text.length,
                     ))
+                } else if (expr is CallExpression) {
+                    val callee = expr.expression
+                    if (callee is Identifier && callee.text in iteratorVars) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                        val len = computeIdentCallSpanLength(callee, source)
+                        diagnostics.add(Diagnostic(
+                            message = "Type 'ArrayIterator<any>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
+                            category = DiagnosticCategory.Error,
+                            code = 2802,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = callee.pos,
+                            length = len,
+                        ))
+                    }
                 }
                 // Recurse into body
                 when (val body = stmt.statement) {
-                    is Block -> checkDownlevelIterationInStatements(body.statements, source, fileName)
-                    else -> checkDownlevelIterationInStmt(body, source, fileName)
+                    is Block -> checkDownlevelIterationInStatements(body.statements, source, fileName, iteratorVars)
+                    else -> checkDownlevelIterationInStmt(body, source, fileName, iteratorVars)
                 }
             }
             is VariableStatement -> {
@@ -44592,18 +44652,24 @@ interface DataView {
                     }
                 }
             }
-            is Block -> checkDownlevelIterationInStatements(stmt.statements, source, fileName)
+            is Block -> checkDownlevelIterationInStatements(stmt.statements, source, fileName, iteratorVars)
             is IfStatement -> {
-                checkDownlevelIterationInStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkDownlevelIterationInStmt(it, source, fileName) }
+                checkDownlevelIterationInStmt(stmt.thenStatement, source, fileName, iteratorVars)
+                stmt.elseStatement?.let { checkDownlevelIterationInStmt(it, source, fileName, iteratorVars) }
             }
-            is WhileStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName)
-            is ForStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
+            is WhileStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
+            is ForStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
+            is FunctionDeclaration -> stmt.body?.let {
+                checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
+            }
             is ClassDeclaration -> for (member in stmt.members) {
                 when (member) {
-                    is MethodDeclaration -> member.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
-                    is Constructor -> member.body?.let { checkDownlevelIterationInStatements(it.statements, source, fileName) }
+                    is MethodDeclaration -> member.body?.let {
+                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
+                    }
+                    is Constructor -> member.body?.let {
+                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
+                    }
                     else -> {}
                 }
             }
