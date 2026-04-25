@@ -275,6 +275,10 @@ class Checker(
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val strictNullChecks: Boolean = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
 
+    // Stack of scope-shadowed names for TS2774 (push on function entry, pop on exit).
+    // MUST be declared before init {} to avoid Kotlin property initialization order issue.
+    private val uncalledShadowedScopes: ArrayDeque<MutableSet<String>> = ArrayDeque()
+
     // Built-in generic type names — skip TS2315/TS2344 checks for these
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val BUILTIN_GENERICS = setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
@@ -472,6 +476,9 @@ class Checker(
         checkTypeUsedAsValue()
         // 20. Check always-truthy expressions (TS2872)
         checkAlwaysTruthy()
+        // 20a. Check uncalled function in conditional position (TS2774)
+        // Strict-null-checks-only — see helper for full conditions.
+        checkUncalledFunctionsInConditions()
         // 20b. Check comma operator left side unused (TS2695)
         checkCommaOperatorUnused()
         // 21. Check null/undefined used in invalid positions (TS18050)
@@ -16548,6 +16555,383 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2774: This condition will always return true since this function is
+    // always defined. Did you mean to call it instead?
+    //
+    // Fires under strictNullChecks when a callable identifier is used as a
+    // condition without being called. Walks the operands of an `||`/`??` chain
+    // (TypeScript only walks LHS of those, not `&&`).
+    //
+    // Suppressed when:
+    //   - the operand's type can be undefined/null (not "always defined")
+    //   - the operand is itself a CallExpression / AwaitExpression / unary
+    //   - the body of the condition references the same identifier (e.g.
+    //     `if (foo) { foo() }` is intentional defined-check + call)
+    // -----------------------------------------------------------------------
+
+    private fun checkUncalledFunctionsInConditions() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            currentFlowGraph = result.flowGraph
+            uncalledShadowedScopes.clear()
+            walkUncalledChecksInStatements(result.sourceFile.statements, source, fileName)
+            currentFlowGraph = null
+        }
+    }
+
+    private fun isUncalledShadowed(name: String): Boolean {
+        for (scope in uncalledShadowedScopes) if (name in scope) return true
+        return false
+    }
+
+    private inline fun withUncalledScope(params: List<Parameter>, body: () -> Unit) {
+        val scope = mutableSetOf<String>()
+        for (p in params) {
+            collectBindingNames(p.name, scope)
+        }
+        uncalledShadowedScopes.addLast(scope)
+        try { body() } finally { uncalledShadowedScopes.removeLast() }
+    }
+
+    private fun walkUncalledChecksInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkUncalledChecksInStatement(stmt, source, fileName)
+    }
+
+    private fun walkUncalledChecksInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is IfStatement -> {
+                checkUncalledInCondition(stmt.expression, stmt.thenStatement, source, fileName)
+                walkUncalledChecksInExpression(stmt.expression, source, fileName)
+                walkUncalledChecksInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkUncalledChecksInStatement(it, source, fileName) }
+            }
+            is WhileStatement -> {
+                checkUncalledInCondition(stmt.expression, stmt.statement, source, fileName)
+                walkUncalledChecksInExpression(stmt.expression, source, fileName)
+                walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                checkUncalledInCondition(stmt.expression, stmt.statement, source, fileName)
+                walkUncalledChecksInExpression(stmt.expression, source, fileName)
+                walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            }
+            is ForStatement -> {
+                stmt.condition?.let { cond ->
+                    checkUncalledInCondition(cond, stmt.statement, source, fileName)
+                    walkUncalledChecksInExpression(cond, source, fileName)
+                }
+                walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            }
+            is Block -> walkUncalledChecksInStatements(stmt.statements, source, fileName)
+            is ExpressionStatement -> walkUncalledChecksInExpression(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { body ->
+                withUncalledScope(stmt.parameters) {
+                    walkUncalledChecksInStatements(body.statements, source, fileName)
+                }
+            }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { body ->
+                        withUncalledScope(m.parameters) {
+                            walkUncalledChecksInStatements(body.statements, source, fileName)
+                        }
+                    }
+                    is Constructor -> m.body?.let { body ->
+                        withUncalledScope(m.parameters) {
+                            walkUncalledChecksInStatements(body.statements, source, fileName)
+                        }
+                    }
+                    is GetAccessor -> m.body?.let { body ->
+                        withUncalledScope(m.parameters) {
+                            walkUncalledChecksInStatements(body.statements, source, fileName)
+                        }
+                    }
+                    is SetAccessor -> m.body?.let { body ->
+                        withUncalledScope(m.parameters) {
+                            walkUncalledChecksInStatements(body.statements, source, fileName)
+                        }
+                    }
+                    is PropertyDeclaration -> m.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ForInStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> for (c in stmt.caseBlock) {
+                val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                walkUncalledChecksInStatements(clauseStmts, source, fileName)
+            }
+            is TryStatement -> {
+                walkUncalledChecksInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkUncalledChecksInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+            is LabeledStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkUncalledChecksInExpression(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ConditionalExpression -> {
+                checkUncalledInCondition(expr.condition, null, source, fileName)
+                walkUncalledChecksInExpression(expr.condition, source, fileName)
+                walkUncalledChecksInExpression(expr.whenTrue, source, fileName)
+                walkUncalledChecksInExpression(expr.whenFalse, source, fileName)
+            }
+            is BinaryExpression -> {
+                walkUncalledChecksInExpression(expr.left, source, fileName)
+                walkUncalledChecksInExpression(expr.right, source, fileName)
+            }
+            is ParenthesizedExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is CallExpression -> {
+                walkUncalledChecksInExpression(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkUncalledChecksInExpression(arg, source, fileName)
+            }
+            is NewExpression -> {
+                walkUncalledChecksInExpression(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkUncalledChecksInExpression(it, source, fileName) }
+            }
+            is ArrowFunction -> {
+                withUncalledScope(expr.parameters) {
+                    val body = expr.body
+                    if (body is Block) walkUncalledChecksInStatements(body.statements, source, fileName)
+                    else if (body is Expression) walkUncalledChecksInExpression(body, source, fileName)
+                }
+            }
+            is FunctionExpression -> {
+                withUncalledScope(expr.parameters) {
+                    walkUncalledChecksInStatements(expr.body.statements, source, fileName)
+                }
+            }
+            is PropertyAccessExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkUncalledChecksInExpression(expr.expression, source, fileName)
+                walkUncalledChecksInExpression(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkUncalledChecksInExpression(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkUncalledChecksInExpression(expr.operand, source, fileName)
+            is SpreadElement -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkUncalledChecksInExpression(span.expression, source, fileName)
+            is ArrayLiteralExpression -> for (e in expr.elements) walkUncalledChecksInExpression(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> walkUncalledChecksInExpression(p.initializer, source, fileName)
+                    is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is AsExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is NonNullExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
+            is AwaitExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) walkUncalledChecksInExpression(e, source, fileName)
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk LHS-of-||/?? chain operands of a condition expression and emit
+     * TS2774 for each operand that is an "always defined" callable identifier.
+     * Mirrors TypeScript's `bothHelper` walker.
+     */
+    private fun checkUncalledInCondition(cond: Expression, body: Statement?, source: String, fileName: String) {
+        var current: Expression = cond
+        while (current is ParenthesizedExpression) current = current.expression
+        emitUncalledHelper(current, body, source, fileName)
+        while (current is BinaryExpression && (current.operator == SyntaxKind.BarBar || current.operator == SyntaxKind.QuestionQuestion)) {
+            current = current.left
+            while (current is ParenthesizedExpression) current = current.expression
+            emitUncalledHelper(current, body, source, fileName)
+        }
+    }
+
+    private fun emitUncalledHelper(operand: Expression, body: Statement?, source: String, fileName: String) {
+        // If operand is itself a chain head (||/??), the LOCATION to test is the right operand.
+        var location: Expression = operand
+        if (operand is BinaryExpression && (operand.operator == SyntaxKind.BarBar || operand.operator == SyntaxKind.QuestionQuestion)) {
+            location = operand.right
+        }
+        while (location is ParenthesizedExpression) location = location.expression
+        // Skip non-checkable kinds
+        if (location is CallExpression) return
+        if (location is NewExpression) return
+        if (location is AwaitExpression) return
+        if (location is PrefixUnaryExpression) return
+        if (location is BinaryExpression) return
+        // Limit to simple Identifier for v1 — PropertyAccessExpression cases need richer body-walk.
+        if (location !is Identifier) return
+        // Skip identifiers shadowed by an enclosing function parameter — `getTypeOfExpression`
+        // doesn't model function-local scopes, so it would resolve through to an outer
+        // file-level declaration and emit a false positive.
+        if (isUncalledShadowed(location.text)) return
+
+        val type = try { getTypeOfExpression(location) } catch (_: StackOverflowError) { return }
+        if (type === errorType || type === anyType) return
+        if (!isAlwaysCallableType(type)) return
+        if (typeIsPossiblyNullish(type)) return
+
+        val name = location.text
+        if (body != null && bodyReferencesName(body, name)) return
+
+        val start = location.pos
+        val length = expressionTrueEnd(location) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This condition will always return true since this function is always defined. Did you mean to call it instead?",
+            category = DiagnosticCategory.Error,
+            code = 2774,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun isAlwaysCallableType(type: Type): Boolean {
+        return when (type) {
+            is Type.Object -> {
+                try { resolveStructuredTypeMembers(type) } catch (_: StackOverflowError) { return false }
+                !type.callSignatures.isNullOrEmpty()
+            }
+            is Type.Union -> type.types.isNotEmpty() && type.types.all { isAlwaysCallableType(it) }
+            else -> false
+        }
+    }
+
+    private fun typeIsPossiblyNullish(type: Type): Boolean {
+        return when (type) {
+            is Type.Union -> type.types.any { typeIsPossiblyNullish(it) }
+            else -> type.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+        }
+    }
+
+    private fun bodyReferencesName(stmt: Statement, name: String): Boolean = statementReferencesName(stmt, name)
+
+    private fun statementReferencesName(stmt: Statement, name: String): Boolean {
+        when (stmt) {
+            is Block -> return stmt.statements.any { statementReferencesName(it, name) }
+            is ExpressionStatement -> return expressionReferencesName(stmt.expression, name)
+            is ReturnStatement -> return stmt.expression?.let { expressionReferencesName(it, name) } ?: false
+            is IfStatement -> {
+                if (expressionReferencesName(stmt.expression, name)) return true
+                if (statementReferencesName(stmt.thenStatement, name)) return true
+                stmt.elseStatement?.let { if (statementReferencesName(it, name)) return true }
+            }
+            is WhileStatement -> {
+                if (expressionReferencesName(stmt.expression, name)) return true
+                if (statementReferencesName(stmt.statement, name)) return true
+            }
+            is DoStatement -> {
+                if (expressionReferencesName(stmt.expression, name)) return true
+                if (statementReferencesName(stmt.statement, name)) return true
+            }
+            is ForStatement -> {
+                stmt.condition?.let { if (expressionReferencesName(it, name)) return true }
+                if (statementReferencesName(stmt.statement, name)) return true
+            }
+            is ForInStatement -> {
+                if (expressionReferencesName(stmt.expression, name)) return true
+                if (statementReferencesName(stmt.statement, name)) return true
+            }
+            is ForOfStatement -> {
+                if (expressionReferencesName(stmt.expression, name)) return true
+                if (statementReferencesName(stmt.statement, name)) return true
+            }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { if (expressionReferencesName(it, name)) return true }
+            }
+            is SwitchStatement -> {
+                if (expressionReferencesName(stmt.expression, name)) return true
+                for (c in stmt.caseBlock) {
+                    if (c is CaseClause && expressionReferencesName(c.expression, name)) return true
+                    val stmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                    if (stmts.any { statementReferencesName(it, name) }) return true
+                }
+            }
+            is TryStatement -> {
+                if (stmt.tryBlock.statements.any { statementReferencesName(it, name) }) return true
+                stmt.catchClause?.let { if (it.block.statements.any { s -> statementReferencesName(s, name) }) return true }
+                stmt.finallyBlock?.let { if (it.statements.any { s -> statementReferencesName(s, name) }) return true }
+            }
+            is ThrowStatement -> return stmt.expression?.let { expressionReferencesName(it, name) } ?: false
+            is LabeledStatement -> return statementReferencesName(stmt.statement, name)
+            else -> {}
+        }
+        return false
+    }
+
+    private fun expressionReferencesName(expr: Expression, name: String): Boolean {
+        when (expr) {
+            is Identifier -> return expr.text == name
+            is BinaryExpression -> return expressionReferencesName(expr.left, name) || expressionReferencesName(expr.right, name)
+            is ParenthesizedExpression -> return expressionReferencesName(expr.expression, name)
+            is CallExpression -> {
+                if (expressionReferencesName(expr.expression, name)) return true
+                return expr.arguments.any { expressionReferencesName(it, name) }
+            }
+            is NewExpression -> {
+                if (expressionReferencesName(expr.expression, name)) return true
+                return expr.arguments?.any { expressionReferencesName(it, name) } ?: false
+            }
+            is PropertyAccessExpression -> return expressionReferencesName(expr.expression, name)
+            is ElementAccessExpression -> return expressionReferencesName(expr.expression, name) || expressionReferencesName(expr.argumentExpression, name)
+            is PrefixUnaryExpression -> return expressionReferencesName(expr.operand, name)
+            is PostfixUnaryExpression -> return expressionReferencesName(expr.operand, name)
+            is ConditionalExpression -> return expressionReferencesName(expr.condition, name) || expressionReferencesName(expr.whenTrue, name) || expressionReferencesName(expr.whenFalse, name)
+            is ArrayLiteralExpression -> return expr.elements.any { expressionReferencesName(it, name) }
+            is ObjectLiteralExpression -> return expr.properties.any { p ->
+                when (p) {
+                    is PropertyAssignment -> expressionReferencesName(p.initializer, name)
+                    is ShorthandPropertyAssignment -> p.name.text == name
+                    else -> false
+                }
+            }
+            is SpreadElement -> return expressionReferencesName(expr.expression, name)
+            is AsExpression -> return expressionReferencesName(expr.expression, name)
+            is TypeAssertionExpression -> return expressionReferencesName(expr.expression, name)
+            is SatisfiesExpression -> return expressionReferencesName(expr.expression, name)
+            is NonNullExpression -> return expressionReferencesName(expr.expression, name)
+            is AwaitExpression -> return expressionReferencesName(expr.expression, name)
+            is YieldExpression -> return expr.expression?.let { expressionReferencesName(it, name) } ?: false
+            is TemplateExpression -> return expr.templateSpans.any { expressionReferencesName(it.expression, name) }
+            is CommaListExpression -> return expr.elements.any { expressionReferencesName(it, name) }
+            // Don't descend into nested function bodies that may shadow the name.
+            is ArrowFunction -> {
+                if (expr.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                val body = expr.body
+                return when (body) {
+                    is Block -> body.statements.any { statementReferencesName(it, name) }
+                    is Expression -> expressionReferencesName(body, name)
+                    else -> false
+                }
+            }
+            is FunctionExpression -> {
+                if (expr.name?.text == name) return false
+                if (expr.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                return expr.body.statements.any { statementReferencesName(it, name) }
+            }
+            else -> {}
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
