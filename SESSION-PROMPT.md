@@ -99,7 +99,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-25, 8339 passing):** Surgical pool is exhausted (6+
+**Status (2026-04-25, 8342 passing):** Surgical pool is exhausted (6+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
 progress with infrastructure largely in place:
@@ -112,6 +112,10 @@ progress with infrastructure largely in place:
   fix (net-zero infra)
 - 17.1f: `in` operator narrowing (net-zero infra)
 - 17.2a: TS2774 "uncalled function in conditional" Identifier-only (+1)
+- 17.3a: type-predicate fn narrowing + symbol-identity instanceof +
+  flow-graph in checkPropertyAccess (+1)
+- 17.4a: TS2774 PropertyAccessExpression + parameter/local-fn typed
+  scope + `this` tracking + path-aware body suppression (+2)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
@@ -119,20 +123,17 @@ remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
 them only opportunistically. Default workflow (steps 1-9 above)
 applies, with these candidates as the next concrete moves:
 
-- **TS2774 PropertyAccessExpression operands**: extend the 17.2a
-  walker to handle `x.foo.bar` / `this.isUser` / `stats.isDirectory`
-  patterns. Targets `truthinessCallExpressionCoercion[1,2]_ts` (~7
-  TS2774 emissions each). Needs property-path body-walk for
-  suppression and parameter-type lookup for callable params (e.g.
-  `function f(required: () => boolean)`).
-- **TS2774 + `&&` chain narrowing**: `uncalledFunctionChecksInConditional2_ts`
+- **TS2774 + `&&`-chain operand WALKING**: `truthinessCallExpressionCoercion2_ts`
+  (35 emissions) needs `bothHelper(left, right)` for `&&` so each
+  operand of an `&&`-chain is checked. Suppression rules need to
+  consider sibling operands (`if (isFoo && isFoo())` → no error
+  because sibling is a call to `isFoo`). Distinct from `&&`-chain
+  NARROWING below.
+- **TS2774 + `&&`-chain narrowing**: `uncalledFunctionChecksInConditional2_ts`
   needs `perf && perf.measure && perf.clearMarks && perf.clearMeasures`
   to narrow `perf` from `Performance | undefined` to defined by the time
   the last operand fires. Requires `&&`-chain operand narrowing wired
   through `applyConditionNarrowing`.
-- **Type-predicate function narrowing** (`function isC1(c): c is A`):
-  when called as a condition, narrows the named arg. Unblocks
-  `instanceofWithStructurallyIdenticalTypes_ts` and similar.
 - **TS2454 via flow-graph definite-assignment**: replace the ad-hoc
   walker. Note 17.1c session warned a snapshot/restore approach
   regressed -7 tests; tread carefully.
