@@ -33698,10 +33698,52 @@ interface DataView {
                 SyntaxKind.EqualsEquals -> narrowByEquality(t, expr, equal = isTrue, name)
                 SyntaxKind.ExclamationEqualsEquals,
                 SyntaxKind.ExclamationEquals -> narrowByEquality(t, expr, equal = !isTrue, name)
+                SyntaxKind.InstanceOfKeyword -> narrowByInstanceOf(t, expr, isMatch = isTrue, name)
                 else -> t
             }
             else -> t
         }
+    }
+
+    /**
+     * Narrow `t` by an `name instanceof Class` check. `isMatch=true` keeps types
+     * assignable from the class (filtered out of a union); `false` removes them.
+     * Resolves the RHS expression to a class type via `getDeclaredTypeOfSymbol`
+     * — supports identifier and qualified-name references to a class. Falls
+     * back to `t` unchanged if the RHS doesn't resolve to an object type.
+     */
+    private fun narrowByInstanceOf(
+        t: Type, expr: BinaryExpression, isMatch: Boolean, name: String,
+    ): Type {
+        val left = expr.left
+        if (left !is Identifier || left.text != name) return t
+        val classType = resolveInstanceOfRhsType(expr.right) ?: return t
+        if (t is Type.Union) {
+            val filtered = if (isMatch) {
+                t.types.filter { checkTypeRelatedTo(it, classType, assignableRelation) }
+            } else {
+                t.types.filter { !checkTypeRelatedTo(it, classType, assignableRelation) }
+            }
+            return getUnionType(filtered)
+        }
+        val matches = checkTypeRelatedTo(t, classType, assignableRelation)
+        return if (matches == isMatch) t else if (isMatch) classType else t
+    }
+
+    /**
+     * Resolve the RHS of an `instanceof` to its instance type. For `x instanceof C`
+     * where C is a class, returns the class instance type. Returns null if C
+     * isn't a class symbol or the RHS isn't a recognized class reference.
+     */
+    private fun resolveInstanceOfRhsType(expr: Expression): Type? {
+        val symbol = when (expr) {
+            is Identifier -> currentFileLocals?.get(expr.text) ?: globals[expr.text]
+            else -> null
+        } ?: return null
+        if (!symbol.flags.hasAny(SymbolFlags.Class)) return null
+        return try {
+            getDeclaredTypeOfSymbol(symbol).takeIf { it !== anyType && it !== errorType }
+        } catch (_: StackOverflowError) { null }
     }
 
     /**
