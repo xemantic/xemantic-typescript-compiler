@@ -39572,7 +39572,23 @@ interface DataView {
                     // TS2344: Check type argument constraints
                     checkCallTypeArgConstraints(genericSig.typeParameters!!, resolvedTypeArgs, typeArgs, mapper, source, fileName)
                     val instantiated = instantiateSignature(genericSig, mapper)
-                    val implRelated = getOverloadImplementationRelated(genericSig, source, fileName)
+                    // TS2793: only attach "implementation would have succeeded" related info
+                    // when the implementation signature actually accepts these args under
+                    // the supplied type-args. For overloaded generic functions like
+                    // `foo<T extends Date>(test: T)` / `foo<T extends Number>(test: string)`
+                    // / `foo<T extends String>(test: any)` (impl), calling `foo<Date>("")`
+                    // doesn't satisfy the impl's `T extends String` constraint, so the impl
+                    // wouldn't have succeeded either — TS2793 should be suppressed.
+                    var implRelated: Diagnostic? = null
+                    val implRelatedCandidate = getOverloadImplementationRelated(genericSig, source, fileName)
+                    if (implRelatedCandidate != null) {
+                        val implSig = getImplementationSignature(genericSig, source, fileName)
+                        if (implSig != null && allArgumentsMatch(expr.arguments, implSig) &&
+                            implTypeArgConstraintsSatisfied(implSig, resolvedTypeArgs)
+                        ) {
+                            implRelated = implRelatedCandidate
+                        }
+                    }
                     checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated)
                     return
                 }
@@ -39868,6 +39884,41 @@ interface DataView {
             )
         }
         return null
+    }
+
+    /**
+     * Check whether the implementation signature's own type-param constraints accept
+     * the given resolved type-args. Used as a TS2793 gate — when the user calls
+     * `foo<X>(args)` with explicit type-args and the impl's type-param has a constraint
+     * that `X` doesn't satisfy (e.g. impl is `foo<T extends String>(test: any)` and
+     * caller passes `<Date>`), the impl wouldn't have succeeded either, so the
+     * "implementation would have matched" related info should be suppressed.
+     *
+     * Returns true when constraints are satisfied (or no constraints / mismatched arity
+     * / resolution errors — conservative default to allow TS2793).
+     */
+    private fun implTypeArgConstraintsSatisfied(
+        implSig: Signature,
+        resolvedTypeArgs: List<Type>,
+    ): Boolean {
+        val decl = implSig.declaration ?: return true
+        val tpNodes = when (decl) {
+            is FunctionDeclaration -> decl.typeParameters
+            is MethodDeclaration -> decl.typeParameters
+            else -> null
+        } ?: return true
+        if (tpNodes.size != resolvedTypeArgs.size) return true
+        for (i in tpNodes.indices) {
+            val constraintNode = tpNodes[i].constraint ?: continue
+            try {
+                val constraint = getTypeFromTypeNode(constraintNode)
+                if (constraint === errorType || constraint === anyType) continue
+                if (!checkTypeRelatedTo(resolvedTypeArgs[i], constraint, assignableRelation)) {
+                    return false
+                }
+            } catch (_: StackOverflowError) { /* skip */ }
+        }
+        return true
     }
 
     /**
