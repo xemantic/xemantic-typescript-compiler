@@ -116,6 +116,8 @@ progress with infrastructure largely in place:
   flow-graph in checkPropertyAccess (+1)
 - 17.4a: TS2774 PropertyAccessExpression + parameter/local-fn typed
   scope + `this` tracking + path-aware body suppression (+2)
+- 17.4b: TS2774 `&&`-chain walking + ExpressionStatement-level +
+  arrow-body-level (net-zero infra; test2 reaches 34/35)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The

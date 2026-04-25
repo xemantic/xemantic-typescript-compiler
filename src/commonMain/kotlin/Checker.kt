@@ -16600,6 +16600,13 @@ interface DataView {
         return false
     }
 
+    /** True if [expr] (after stripping parens) is a truthiness-test BinaryExpression (`&&`/`||`/`??`). */
+    private fun isTruthinessChain(expr: Expression): Boolean {
+        var cur: Expression = expr
+        while (cur is ParenthesizedExpression) cur = cur.expression
+        return cur is BinaryExpression && (cur.operator == SyntaxKind.AmpersandAmpersand || cur.operator == SyntaxKind.BarBar || cur.operator == SyntaxKind.QuestionQuestion)
+    }
+
     private fun lookupUncalledTypedLocal(name: String): Type? {
         for (i in uncalledTypedLocalsStack.indices.reversed()) {
             uncalledTypedLocalsStack[i][name]?.let { return it }
@@ -16728,7 +16735,14 @@ interface DataView {
                 walkUncalledChecksInStatement(stmt.statement, source, fileName)
             }
             is Block -> walkUncalledChecksInStatements(stmt.statements, source, fileName)
-            is ExpressionStatement -> walkUncalledChecksInExpression(stmt.expression, source, fileName)
+            is ExpressionStatement -> {
+                // Treat top-level `&&`/`||`/`??` BinaryExpression as a truthiness-test
+                // site (mirrors TypeScript's check on every BE with these operators).
+                if (isTruthinessChain(stmt.expression)) {
+                    checkUncalledInCondition(stmt.expression, null, source, fileName)
+                }
+                walkUncalledChecksInExpression(stmt.expression, source, fileName)
+            }
             is ReturnStatement -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
                 d.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
@@ -16821,7 +16835,13 @@ interface DataView {
                 val body = expr.body
                 withUncalledScope(expr.parameters, body as? Block) {
                     if (body is Block) walkUncalledChecksInStatements(body.statements, source, fileName)
-                    else if (body is Expression) walkUncalledChecksInExpression(body, source, fileName)
+                    else if (body is Expression) {
+                        // Expression-bodied arrow: treat top-level `&&`/`||`/`??` as a check site.
+                        if (isTruthinessChain(body)) {
+                            checkUncalledInCondition(body, null, source, fileName)
+                        }
+                        walkUncalledChecksInExpression(body, source, fileName)
+                    }
                 }
             }
             is FunctionExpression -> {
@@ -16858,27 +16878,55 @@ interface DataView {
     }
 
     /**
-     * Walk LHS-of-||/?? chain operands of a condition expression and emit
-     * TS2774 for each operand that is an "always defined" callable identifier.
-     * Mirrors TypeScript's `bothHelper` walker.
+     * Walk a truthiness-test expression and emit TS2774 for each operand that
+     * is an "always defined" callable identifier or property-access path.
+     *
+     * For `&&` operators, walks BOTH operands and adds the OTHER operand to
+     * suppression sources (so `isFoo && isFoo()` does not emit on `isFoo` —
+     * the sibling `isFoo()` is a call referencing the same path).
+     * For `||`/`??` operators, walks BOTH operands but does NOT add siblings
+     * to suppression sources (`isFoo || isFoo()` still emits on `isFoo`).
+     * Mirrors TypeScript's `bothHelper`/`helper` truthiness-walker pair.
      */
     private fun checkUncalledInCondition(cond: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression> = emptyList()) {
-        var current: Expression = cond
-        while (current is ParenthesizedExpression) current = current.expression
-        emitUncalledHelper(current, body, source, fileName, extraBodies)
-        while (current is BinaryExpression && (current.operator == SyntaxKind.BarBar || current.operator == SyntaxKind.QuestionQuestion)) {
-            current = current.left
-            while (current is ParenthesizedExpression) current = current.expression
-            emitUncalledHelper(current, body, source, fileName, extraBodies)
+        walkUncalledChain(cond, body, source, fileName, extraBodies, andSiblings = emptyList())
+    }
+
+    private fun walkUncalledChain(
+        expr: Expression,
+        body: Statement?,
+        source: String,
+        fileName: String,
+        extraBodies: List<Expression>,
+        andSiblings: List<Expression>,
+    ) {
+        var cur: Expression = expr
+        while (cur is ParenthesizedExpression) cur = cur.expression
+        if (cur is BinaryExpression) {
+            when (cur.operator) {
+                SyntaxKind.AmpersandAmpersand -> {
+                    // `&&`: each operand sees the OTHER as a suppression source.
+                    walkUncalledChain(cur.left, body, source, fileName, extraBodies, andSiblings + cur.right)
+                    walkUncalledChain(cur.right, body, source, fileName, extraBodies, andSiblings + cur.left)
+                    return
+                }
+                SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
+                    // `||`/`??`: walk both operands; siblings are NOT suppression sources
+                    // (because the right side may not execute when left is truthy).
+                    // But the parent's andSiblings still apply.
+                    walkUncalledChain(cur.left, body, source, fileName, extraBodies, andSiblings)
+                    walkUncalledChain(cur.right, body, source, fileName, extraBodies, andSiblings)
+                    return
+                }
+                else -> {}
+            }
         }
+        // Leaf: emit if applicable, with sibling-aware suppression.
+        emitUncalledHelper(cur, body, source, fileName, extraBodies + andSiblings)
     }
 
     private fun emitUncalledHelper(operand: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression> = emptyList()) {
-        // If operand is itself a chain head (||/??), the LOCATION to test is the right operand.
         var location: Expression = operand
-        if (operand is BinaryExpression && (operand.operator == SyntaxKind.BarBar || operand.operator == SyntaxKind.QuestionQuestion)) {
-            location = operand.right
-        }
         while (location is ParenthesizedExpression) location = location.expression
         // Skip non-checkable kinds
         if (location is CallExpression) return
