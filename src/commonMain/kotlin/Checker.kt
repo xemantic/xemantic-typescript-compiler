@@ -278,6 +278,12 @@ class Checker(
     // Stack of scope-shadowed names for TS2774 (push on function entry, pop on exit).
     // MUST be declared before init {} to avoid Kotlin property initialization order issue.
     private val uncalledShadowedScopes: ArrayDeque<MutableSet<String>> = ArrayDeque()
+    // Parallel stack of typed locals (param/local-fn/local-var with annotated or
+    // function-shaped initializer types) for TS2774 PropertyAccessExpression and
+    // parameter-type lookups. Takes precedence over getTypeOfIdentifier.
+    private val uncalledTypedLocalsStack: ArrayDeque<MutableMap<String, Type>> = ArrayDeque()
+    // Stack of `this` types for TS2774 (instance type when inside a class method).
+    private val uncalledThisTypeStack: ArrayDeque<Type> = ArrayDeque()
 
     // Built-in generic type names — skip TS2315/TS2344 checks for these
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
@@ -16582,6 +16588,8 @@ interface DataView {
             currentCheckFileName = fileName
             currentFlowGraph = result.flowGraph
             uncalledShadowedScopes.clear()
+            uncalledTypedLocalsStack.clear()
+            uncalledThisTypeStack.clear()
             walkUncalledChecksInStatements(result.sourceFile.statements, source, fileName)
             currentFlowGraph = null
         }
@@ -16592,13 +16600,102 @@ interface DataView {
         return false
     }
 
-    private inline fun withUncalledScope(params: List<Parameter>, body: () -> Unit) {
-        val scope = mutableSetOf<String>()
-        for (p in params) {
-            collectBindingNames(p.name, scope)
+    private fun lookupUncalledTypedLocal(name: String): Type? {
+        for (i in uncalledTypedLocalsStack.indices.reversed()) {
+            uncalledTypedLocalsStack[i][name]?.let { return it }
         }
-        uncalledShadowedScopes.addLast(scope)
-        try { body() } finally { uncalledShadowedScopes.removeLast() }
+        return null
+    }
+
+    /**
+     * Compute the param-annotated type for TS2774 typed-local scope.
+     * Returns null when the param is unannotated (would resolve to `any`).
+     * Wraps in a union with `undefined` when the param has `?` (optional).
+     */
+    private fun resolveUncalledParamType(p: Parameter): Type? {
+        val pType = p.type ?: return null
+        val resolved = try { getTypeFromTypeNode(pType) } catch (_: Throwable) { return null }
+        if (resolved === errorType || resolved === anyType) return null
+        if (p.questionToken) return getUnionType(listOf(resolved, undefinedType))
+        return resolved
+    }
+
+    /**
+     * Pre-scan a function/method body for nested function declarations and
+     * variable declarations whose annotated type or initializer would resolve
+     * to a callable shape. The resulting types power TS2774 lookups for
+     * PropertyAccessExpression / Identifier operands that refer to bindings
+     * declared in the enclosing function scope.
+     */
+    private fun collectUncalledTypedLocalsFromBody(body: Block, into: MutableMap<String, Type>, shadowed: MutableSet<String>) {
+        for (stmt in body.statements) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    val fnName = (stmt.name)?.text ?: continue
+                    val sigType = buildCallableTypeForLocalFunction(stmt) ?: continue
+                    into[fnName] = sigType
+                    shadowed.add(fnName)
+                }
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    val vName = (d.name as? Identifier)?.text ?: continue
+                    val annotated = d.type?.let { try { getTypeFromTypeNode(it) } catch (_: Throwable) { null } }
+                    val resolved: Type? = when {
+                        annotated != null && annotated !== errorType && annotated !== anyType -> annotated
+                        d.initializer != null -> try {
+                            val t = getTypeOfExpression(d.initializer!!)
+                            if (t === anyType || t === errorType) null else t
+                        } catch (_: Throwable) { null }
+                        else -> null
+                    }
+                    if (resolved != null) {
+                        into[vName] = resolved
+                        shadowed.add(vName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** Resolve the instance type for `this` inside a class body. */
+    private fun resolveUncalledThisType(cls: ClassDeclaration): Type? {
+        val name = cls.name?.text ?: return null
+        val symbol = currentFileLocals?.get(name) ?: globals[name] ?: return null
+        if (!symbol.flags.hasAny(SymbolFlags.Class)) return null
+        return try { getDeclaredTypeOfSymbol(symbol).takeIf { it !== anyType && it !== errorType } } catch (_: Throwable) { null }
+    }
+
+    /** Build an anonymous Type.Object with a single call signature for a local function declaration. */
+    private fun buildCallableTypeForLocalFunction(fn: FunctionDeclaration): Type? {
+        // Build minimal call signature; param/return types are unimportant for the
+        // "always callable + not nullish" classification used by TS2774.
+        val sig = Signature(
+            parameters = emptyList(),
+            resolvedReturnType = anyType,
+            minArgumentCount = 0,
+        )
+        val obj = Type.Object()
+        obj.callSignatures = listOf(sig)
+        return obj
+    }
+
+    private inline fun withUncalledScope(params: List<Parameter>, body: Block?, doBody: () -> Unit) {
+        val shadowed = mutableSetOf<String>()
+        val typed = mutableMapOf<String, Type>()
+        for (p in params) {
+            collectBindingNames(p.name, shadowed)
+            val pName = (p.name as? Identifier)?.text
+            if (pName != null) {
+                resolveUncalledParamType(p)?.let { typed[pName] = it }
+            }
+        }
+        if (body != null) collectUncalledTypedLocalsFromBody(body, typed, shadowed)
+        uncalledShadowedScopes.addLast(shadowed)
+        uncalledTypedLocalsStack.addLast(typed)
+        try { doBody() } finally {
+            uncalledShadowedScopes.removeLast()
+            uncalledTypedLocalsStack.removeLast()
+        }
     }
 
     private fun walkUncalledChecksInStatements(stmts: List<Statement>, source: String, fileName: String) {
@@ -16637,34 +16734,48 @@ interface DataView {
                 d.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
             }
             is FunctionDeclaration -> stmt.body?.let { body ->
-                withUncalledScope(stmt.parameters) {
+                withUncalledScope(stmt.parameters, body) {
                     walkUncalledChecksInStatements(body.statements, source, fileName)
                 }
             }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { body ->
-                        withUncalledScope(m.parameters) {
-                            walkUncalledChecksInStatements(body.statements, source, fileName)
+            is ClassDeclaration -> {
+                val classThisType = resolveUncalledThisType(stmt)
+                if (classThisType != null) uncalledThisTypeStack.addLast(classThisType)
+                try {
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { body ->
+                                val isStatic = ModifierFlag.Static in m.modifiers
+                                if (isStatic && classThisType != null) uncalledThisTypeStack.removeLast()
+                                try {
+                                    withUncalledScope(m.parameters, body) {
+                                        walkUncalledChecksInStatements(body.statements, source, fileName)
+                                    }
+                                } finally {
+                                    if (isStatic && classThisType != null) uncalledThisTypeStack.addLast(classThisType)
+                                }
+                            }
+                            is Constructor -> m.body?.let { body ->
+                                withUncalledScope(m.parameters, body) {
+                                    walkUncalledChecksInStatements(body.statements, source, fileName)
+                                }
+                            }
+                            is GetAccessor -> m.body?.let { body ->
+                                withUncalledScope(m.parameters, body) {
+                                    walkUncalledChecksInStatements(body.statements, source, fileName)
+                                }
+                            }
+                            is SetAccessor -> m.body?.let { body ->
+                                withUncalledScope(m.parameters, body) {
+                                    walkUncalledChecksInStatements(body.statements, source, fileName)
+                                }
+                            }
+                            is PropertyDeclaration -> m.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
+                            else -> {}
                         }
                     }
-                    is Constructor -> m.body?.let { body ->
-                        withUncalledScope(m.parameters) {
-                            walkUncalledChecksInStatements(body.statements, source, fileName)
-                        }
-                    }
-                    is GetAccessor -> m.body?.let { body ->
-                        withUncalledScope(m.parameters) {
-                            walkUncalledChecksInStatements(body.statements, source, fileName)
-                        }
-                    }
-                    is SetAccessor -> m.body?.let { body ->
-                        withUncalledScope(m.parameters) {
-                            walkUncalledChecksInStatements(body.statements, source, fileName)
-                        }
-                    }
-                    is PropertyDeclaration -> m.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
-                    else -> {}
+                } finally {
+                    if (classThisType != null) uncalledThisTypeStack.removeLast()
                 }
             }
             is ForInStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
@@ -16688,7 +16799,7 @@ interface DataView {
     private fun walkUncalledChecksInExpression(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is ConditionalExpression -> {
-                checkUncalledInCondition(expr.condition, null, source, fileName)
+                checkUncalledInCondition(expr.condition, null, source, fileName, extraBodies = listOf(expr.whenTrue, expr.whenFalse))
                 walkUncalledChecksInExpression(expr.condition, source, fileName)
                 walkUncalledChecksInExpression(expr.whenTrue, source, fileName)
                 walkUncalledChecksInExpression(expr.whenFalse, source, fileName)
@@ -16707,14 +16818,14 @@ interface DataView {
                 expr.arguments?.forEach { walkUncalledChecksInExpression(it, source, fileName) }
             }
             is ArrowFunction -> {
-                withUncalledScope(expr.parameters) {
-                    val body = expr.body
+                val body = expr.body
+                withUncalledScope(expr.parameters, body as? Block) {
                     if (body is Block) walkUncalledChecksInStatements(body.statements, source, fileName)
                     else if (body is Expression) walkUncalledChecksInExpression(body, source, fileName)
                 }
             }
             is FunctionExpression -> {
-                withUncalledScope(expr.parameters) {
+                withUncalledScope(expr.parameters, expr.body) {
                     walkUncalledChecksInStatements(expr.body.statements, source, fileName)
                 }
             }
@@ -16751,18 +16862,18 @@ interface DataView {
      * TS2774 for each operand that is an "always defined" callable identifier.
      * Mirrors TypeScript's `bothHelper` walker.
      */
-    private fun checkUncalledInCondition(cond: Expression, body: Statement?, source: String, fileName: String) {
+    private fun checkUncalledInCondition(cond: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression> = emptyList()) {
         var current: Expression = cond
         while (current is ParenthesizedExpression) current = current.expression
-        emitUncalledHelper(current, body, source, fileName)
+        emitUncalledHelper(current, body, source, fileName, extraBodies)
         while (current is BinaryExpression && (current.operator == SyntaxKind.BarBar || current.operator == SyntaxKind.QuestionQuestion)) {
             current = current.left
             while (current is ParenthesizedExpression) current = current.expression
-            emitUncalledHelper(current, body, source, fileName)
+            emitUncalledHelper(current, body, source, fileName, extraBodies)
         }
     }
 
-    private fun emitUncalledHelper(operand: Expression, body: Statement?, source: String, fileName: String) {
+    private fun emitUncalledHelper(operand: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression> = emptyList()) {
         // If operand is itself a chain head (||/??), the LOCATION to test is the right operand.
         var location: Expression = operand
         if (operand is BinaryExpression && (operand.operator == SyntaxKind.BarBar || operand.operator == SyntaxKind.QuestionQuestion)) {
@@ -16775,20 +16886,22 @@ interface DataView {
         if (location is AwaitExpression) return
         if (location is PrefixUnaryExpression) return
         if (location is BinaryExpression) return
-        // Limit to simple Identifier for v1 — PropertyAccessExpression cases need richer body-walk.
-        if (location !is Identifier) return
-        // Skip identifiers shadowed by an enclosing function parameter — `getTypeOfExpression`
-        // doesn't model function-local scopes, so it would resolve through to an outer
-        // file-level declaration and emit a false positive.
-        if (isUncalledShadowed(location.text)) return
 
-        val type = try { getTypeOfExpression(location) } catch (_: StackOverflowError) { return }
+        // Extract the property path: head + property names. Returns null if the
+        // expression isn't a pure Identifier or PropertyAccessExpression chain
+        // (e.g. contains a CallExpression base) — those aren't supported.
+        val path = extractUncalledPath(location) ?: return
+        if (path.isEmpty()) return
+
+        // Resolve the type at the operand position using typed-locals scope when
+        // available (parameters, local function/var decls, `this.X` chains).
+        val type = resolveUncalledOperandType(location, path) ?: return
         if (type === errorType || type === anyType) return
         if (!isAlwaysCallableType(type)) return
         if (typeIsPossiblyNullish(type)) return
 
-        val name = location.text
-        if (body != null && bodyReferencesName(body, name)) return
+        if (body != null && bodyReferencesPath(body, path)) return
+        if (extraBodies.any { expressionReferencesPath(it, path) }) return
 
         val start = location.pos
         val length = expressionTrueEnd(location) - start
@@ -16804,6 +16917,81 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * Extract the property path of an Identifier-or-PropertyAccessExpression chain.
+     * For Identifier(`x`) returns ["x"]. For `this.foo.bar` returns ["this", "foo", "bar"].
+     * Returns null if any segment's base isn't an Identifier or PropertyAccessExpression
+     * (e.g. `f().bar` — base of `.bar` is a CallExpression — is rejected).
+     */
+    private fun extractUncalledPath(operand: Expression): List<String>? {
+        val rev = mutableListOf<String>()
+        var cur: Expression = operand
+        while (cur is PropertyAccessExpression) {
+            rev.add(cur.name.text)
+            cur = cur.expression
+            while (cur is ParenthesizedExpression) cur = cur.expression
+        }
+        if (cur !is Identifier) return null
+        rev.add(cur.text)
+        return rev.reversed()
+    }
+
+    /**
+     * Resolve the type at an Identifier or PropertyAccessExpression operand using
+     * the typed-locals stack at the head, then walking property segments via
+     * `getApparentType` + `getPropertyOfType`. Returns null when the operand
+     * cannot be classified (head is shadowed without typed info, or any segment
+     * resolves to anyType / errorType).
+     */
+    private fun resolveUncalledOperandType(operand: Expression, path: List<String>): Type? {
+        val head = path[0]
+        // Resolve head type
+        val headType: Type = when {
+            head == "this" -> uncalledThisTypeStack.lastOrNull() ?: return null
+            else -> {
+                lookupUncalledTypedLocal(head) ?: run {
+                    // Fall back to identifier resolution. If shadowed without typed
+                    // info, bail to avoid resolving to an unrelated outer binding.
+                    if (isUncalledShadowed(head)) return null
+                    val headExpr = if (operand is Identifier) operand else findHeadIdentifier(operand) ?: return null
+                    val t = try { getTypeOfIdentifier(headExpr) } catch (_: Throwable) { return null }
+                    if (t === anyType || t === errorType) return null
+                    t
+                }
+            }
+        }
+        // Walk property chain
+        var t = headType
+        for (i in 1 until path.size) {
+            if (t === anyType || t === errorType) return null
+            val app = try { getApparentType(t) } catch (_: Throwable) { return null }
+            val prop = try { getPropertyOfType(app, path[i]) } catch (_: Throwable) { null } ?: return null
+            t = try {
+                if (app is Type.Reference) {
+                    resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
+                } else {
+                    getTypeOfSymbol(prop)
+                }
+            } catch (_: Throwable) { return null }
+            // Honor optional class properties / interface members: `foo?: T`
+            // adds undefined to the property type for nullish-detection purposes.
+            if (isOptionalProperty(prop)) {
+                t = getUnionType(listOf(t, undefinedType))
+            }
+        }
+        if (t === anyType || t === errorType) return null
+        return t
+    }
+
+    private fun findHeadIdentifier(expr: Expression): Identifier? {
+        var cur: Expression = expr
+        while (cur is PropertyAccessExpression) {
+            cur = cur.expression
+            while (cur is ParenthesizedExpression) cur = cur.expression
+        }
+        return cur as? Identifier
     }
 
     private fun isAlwaysCallableType(type: Type): Boolean {
@@ -16825,6 +17013,125 @@ interface DataView {
     }
 
     private fun bodyReferencesName(stmt: Statement, name: String): Boolean = statementReferencesName(stmt, name)
+
+    /** Path-aware body suppression: `bodyReferencesPath(body, ["a", "stats", "isDirectory"])` returns true if the body uses `a.stats.isDirectory` (or a call on it) anywhere. */
+    private fun bodyReferencesPath(stmt: Statement, path: List<String>): Boolean {
+        if (path.size == 1) return statementReferencesName(stmt, path[0])
+        return statementReferencesPath(stmt, path)
+    }
+
+    private fun statementReferencesPath(stmt: Statement, path: List<String>): Boolean {
+        when (stmt) {
+            is Block -> return stmt.statements.any { statementReferencesPath(it, path) }
+            is ExpressionStatement -> return expressionReferencesPath(stmt.expression, path)
+            is ReturnStatement -> return stmt.expression?.let { expressionReferencesPath(it, path) } ?: false
+            is IfStatement -> {
+                if (expressionReferencesPath(stmt.expression, path)) return true
+                if (statementReferencesPath(stmt.thenStatement, path)) return true
+                stmt.elseStatement?.let { if (statementReferencesPath(it, path)) return true }
+            }
+            is WhileStatement -> {
+                if (expressionReferencesPath(stmt.expression, path)) return true
+                if (statementReferencesPath(stmt.statement, path)) return true
+            }
+            is DoStatement -> {
+                if (expressionReferencesPath(stmt.expression, path)) return true
+                if (statementReferencesPath(stmt.statement, path)) return true
+            }
+            is ForStatement -> {
+                stmt.condition?.let { if (expressionReferencesPath(it, path)) return true }
+                if (statementReferencesPath(stmt.statement, path)) return true
+            }
+            is ForInStatement -> {
+                if (expressionReferencesPath(stmt.expression, path)) return true
+                if (statementReferencesPath(stmt.statement, path)) return true
+            }
+            is ForOfStatement -> {
+                if (expressionReferencesPath(stmt.expression, path)) return true
+                if (statementReferencesPath(stmt.statement, path)) return true
+            }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { if (expressionReferencesPath(it, path)) return true }
+            }
+            is SwitchStatement -> {
+                if (expressionReferencesPath(stmt.expression, path)) return true
+                for (c in stmt.caseBlock) {
+                    if (c is CaseClause && expressionReferencesPath(c.expression, path)) return true
+                    val stmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                    if (stmts.any { statementReferencesPath(it, path) }) return true
+                }
+            }
+            is TryStatement -> {
+                if (stmt.tryBlock.statements.any { statementReferencesPath(it, path) }) return true
+                stmt.catchClause?.let { if (it.block.statements.any { s -> statementReferencesPath(s, path) }) return true }
+                stmt.finallyBlock?.let { if (it.statements.any { s -> statementReferencesPath(s, path) }) return true }
+            }
+            is ThrowStatement -> return stmt.expression?.let { expressionReferencesPath(it, path) } ?: false
+            is LabeledStatement -> return statementReferencesPath(stmt.statement, path)
+            else -> {}
+        }
+        return false
+    }
+
+    private fun expressionReferencesPath(expr: Expression, path: List<String>): Boolean {
+        // Try to extract this expression's own path; if it matches `path`, this is a reference.
+        extractUncalledPath(expr)?.let { ownPath ->
+            // Single-name path: name shadowing rules already enforced by descend logic.
+            if (ownPath == path) return true
+        }
+        // Recurse into children for nested matches.
+        when (expr) {
+            is PropertyAccessExpression -> return expressionReferencesPath(expr.expression, path)
+            is BinaryExpression -> return expressionReferencesPath(expr.left, path) || expressionReferencesPath(expr.right, path)
+            is ParenthesizedExpression -> return expressionReferencesPath(expr.expression, path)
+            is CallExpression -> {
+                if (expressionReferencesPath(expr.expression, path)) return true
+                return expr.arguments.any { expressionReferencesPath(it, path) }
+            }
+            is NewExpression -> {
+                if (expressionReferencesPath(expr.expression, path)) return true
+                return expr.arguments?.any { expressionReferencesPath(it, path) } ?: false
+            }
+            is ElementAccessExpression -> return expressionReferencesPath(expr.expression, path) || expressionReferencesPath(expr.argumentExpression, path)
+            is PrefixUnaryExpression -> return expressionReferencesPath(expr.operand, path)
+            is PostfixUnaryExpression -> return expressionReferencesPath(expr.operand, path)
+            is ConditionalExpression -> return expressionReferencesPath(expr.condition, path) || expressionReferencesPath(expr.whenTrue, path) || expressionReferencesPath(expr.whenFalse, path)
+            is ArrayLiteralExpression -> return expr.elements.any { expressionReferencesPath(it, path) }
+            is ObjectLiteralExpression -> return expr.properties.any { p ->
+                when (p) {
+                    is PropertyAssignment -> expressionReferencesPath(p.initializer, path)
+                    is ShorthandPropertyAssignment -> path.size == 1 && p.name.text == path[0]
+                    else -> false
+                }
+            }
+            is SpreadElement -> return expressionReferencesPath(expr.expression, path)
+            is AsExpression -> return expressionReferencesPath(expr.expression, path)
+            is TypeAssertionExpression -> return expressionReferencesPath(expr.expression, path)
+            is SatisfiesExpression -> return expressionReferencesPath(expr.expression, path)
+            is NonNullExpression -> return expressionReferencesPath(expr.expression, path)
+            is AwaitExpression -> return expressionReferencesPath(expr.expression, path)
+            is YieldExpression -> return expr.expression?.let { expressionReferencesPath(it, path) } ?: false
+            is TemplateExpression -> return expr.templateSpans.any { expressionReferencesPath(it.expression, path) }
+            is CommaListExpression -> return expr.elements.any { expressionReferencesPath(it, path) }
+            // Don't descend into nested function bodies that may shadow the head name.
+            is ArrowFunction -> {
+                if (expr.parameters.any { (it.name as? Identifier)?.text == path[0] }) return false
+                val body = expr.body
+                return when (body) {
+                    is Block -> body.statements.any { statementReferencesPath(it, path) }
+                    is Expression -> expressionReferencesPath(body, path)
+                    else -> false
+                }
+            }
+            is FunctionExpression -> {
+                if (expr.name?.text == path[0]) return false
+                if (expr.parameters.any { (it.name as? Identifier)?.text == path[0] }) return false
+                return expr.body.statements.any { statementReferencesPath(it, path) }
+            }
+            else -> {}
+        }
+        return false
+    }
 
     private fun statementReferencesName(stmt: Statement, name: String): Boolean {
         when (stmt) {
