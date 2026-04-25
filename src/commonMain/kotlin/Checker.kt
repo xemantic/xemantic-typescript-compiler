@@ -173,6 +173,11 @@ class Checker(
      *  on `arguments = <primitive>` assignments (implicit `arguments` has type IArguments). */
     private var inNonArrowFunctionBody = false
 
+    /** True while walking the body of an `async` function/method/arrow.
+     *  Used by `checkReturnAssignability` to also accept `T` when the declared
+     *  return type is `Promise<T>` — async functions implicitly wrap returns. */
+    private var inAsyncFunctionBody = false
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -15010,6 +15015,12 @@ class Checker(
             "toString", "toLocaleString", "valueOf", "constructor",
             "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
         )
+
+        /** Names of the built-in primitive wrapper interfaces.
+         * Used to keep TS2322 firing for wrapper-to-mismatched-primitive assignments
+         * even when the primitive→Object apparent-type fallback would otherwise
+         * blanket-permit the comparison. */
+        private val WRAPPER_INTERFACE_NAMES = setOf("String", "Number", "Boolean", "Symbol", "BigInt")
 
         /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts).
          *  Excludes "static" because `static static foo` legitimately gets TS2300. */
@@ -30860,7 +30871,8 @@ interface DataView {
                     }
                 }
                 is FunctionDeclaration -> {
-                    checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes)
+                    checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes,
+                        isAsync = ModifierFlag.Async in stmt.modifiers)
                 }
                 is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                 is IfStatement -> {
@@ -30877,7 +30889,8 @@ interface DataView {
                     for (member in stmt.members) {
                         when (member) {
                             is MethodDeclaration -> {
-                                checkFunctionBody(member.body, member.type, member.parameters, member.typeParameters, source, fileName, varTypes, classTypeParams)
+                                checkFunctionBody(member.body, member.type, member.parameters, member.typeParameters, source, fileName, varTypes, classTypeParams,
+                                    isAsync = ModifierFlag.Async in member.modifiers)
                             }
                             is Constructor -> member.body?.let { body ->
                                 val ctorTypes = varTypes.toMutableMap()
@@ -30970,7 +30983,8 @@ interface DataView {
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?,
         source: String, fileName: String, varTypes: MutableMap<String, String>,
-        outerTypeParams: Set<String> = emptySet()
+        outerTypeParams: Set<String> = emptySet(),
+        isAsync: Boolean = false,
     ) {
         body?.let {
             val innerTypes = varTypes.toMutableMap()
@@ -30982,6 +30996,8 @@ interface DataView {
             // flag to emit TS2322 for `arguments = <primitive>`.
             val savedInFunc = inNonArrowFunctionBody
             inNonArrowFunctionBody = true
+            val savedAsync = inAsyncFunctionBody
+            inAsyncFunctionBody = isAsync
             for (param in parameters) {
                 val paramType = param.type
                 val paramName = param.name
@@ -31013,6 +31029,7 @@ interface DataView {
                 checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
             } finally {
                 inNonArrowFunctionBody = savedInFunc
+                inAsyncFunctionBody = savedAsync
             }
             // Restore outer local types
             currentLocalTypes = savedLocalTypes
@@ -31036,11 +31053,13 @@ interface DataView {
     ) {
         when (expr) {
             is FunctionExpression -> {
-                checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams)
+                checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
+                    isAsync = ModifierFlag.Async in expr.modifiers)
             }
             is ArrowFunction -> {
                 (expr.body as? Block)?.let { body ->
-                    checkFunctionBody(body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams)
+                    checkFunctionBody(body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
+                        isAsync = ModifierFlag.Async in expr.modifiers)
                 }
             }
             is ArrayLiteralExpression -> expr.elements.forEach {
@@ -31728,6 +31747,22 @@ interface DataView {
                     }
                 }
                 if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                    // Async-function returns: declared `Promise<T>` accepts `T` directly.
+                    // The returned value is implicitly wrapped in a Promise at runtime,
+                    // so the assignability check must compare against `T` (the awaited
+                    // form) rather than `Promise<T>`. Without this, `async function f():
+                    // Promise<number> { return 1 }` spuriously emits TS2322.
+                    if (inAsyncFunctionBody && targetType is Type.Reference &&
+                        targetType.target.symbol?.name == "Promise") {
+                        val args = targetType.resolvedTypeArguments
+                        if (args != null && args.size == 1) {
+                            val awaited = args[0]
+                            if (awaited === anyType || awaited === errorType ||
+                                checkTypeRelatedTo(sourceType, awaited, assignableRelation)) {
+                                return // assignable to awaited form — no diagnostic
+                            }
+                        }
+                    }
                     val displaySource = typeToString(sourceType)
                     val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                     val returnKeywordLength = 6
@@ -37232,6 +37267,7 @@ interface DataView {
                     val argMembers = argType.members
                     for (cp in constraintProps) {
                         if (isOptionalProperty(cp)) continue
+                        if (cp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
                         if (argMembers == null || cp.name !in argMembers) {
                             chain.add("  Property '${cp.name}' is missing in type '$argDisplay' but required in type '$constraintDisplay'.")
                             // TS2728 related info: point to constraint property declaration
@@ -40921,6 +40957,28 @@ interface DataView {
         if (source is Type.Object && target is Type.Object) {
             return objectTypeRelatedTo(source, target, relation)
         }
+        // Primitive source vs Object target: use the source's apparent (wrapper) type
+        // and recurse. `string` → `Object` is assignable because `String` (wrapper)
+        // extends `Object`. Without this, primitives fail to satisfy any object
+        // constraint that mentions `Object` even though TypeScript treats them as
+        // assignable via apparent type.
+        // Scope: bare named interfaces only (Type.Interface). Skip Type.Reference
+        // (generic instantiations like `Promise<number>` need true assignability —
+        // an async function returning `1` should compare via Awaited unwrapping,
+        // not via Number-wrapper-extends-Object). Also skip wrapper interfaces
+        // themselves so TS2322 keeps firing for primitive→mismatched-wrapper.
+        if (target is Type.Interface && target !is Type.Reference &&
+            (source is Type.Intrinsic || source is Type.StringLiteral ||
+                source is Type.NumberLiteral || source is Type.BigIntLiteral)) {
+            val targetName = target.symbol?.name
+            val isWrapperTarget = targetName in WRAPPER_INTERFACE_NAMES
+            if (!isWrapperTarget) {
+                val apparent = getApparentType(source)
+                if (apparent !== source && apparent is Type.Object) {
+                    return checkTypeRelatedTo(apparent, target, relation)
+                }
+            }
+        }
         // TypeParam vs TypeParam: relate via apparent types (constraint, or {} when
         // unconstrained). Matters for generic-method signature comparison where source's
         // K and target's K (separate fresh params from `resolveGenericPropertyType`) would
@@ -40988,6 +41046,11 @@ interface DataView {
         val sourceMembers = source.members ?: return targetProps.isEmpty()
         for (targetProp in targetProps) {
             val targetName = targetProp.name
+            // Inherited Object prototype members (constructor, toString, valueOf, …)
+            // are never "missing" — every JS object has them via the prototype chain.
+            // Without this filter, an empty `{a:string}` fails to satisfy `Object` because
+            // `constructor` etc. are listed as Object's own properties in our embedded lib.
+            if (targetName in OBJECT_PROTOTYPE_PROPERTIES) continue
             // Check if property is optional (question mark in declaration)
             val isOptional = isOptionalProperty(targetProp)
             val sourceProp = sourceMembers[targetName]
