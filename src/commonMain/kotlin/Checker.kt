@@ -36412,8 +36412,29 @@ interface DataView {
                 } ?: continue
 
                 val baseSymbol = globals[baseName] ?: continue
-                val baseType = getDeclaredTypeOfSymbol(baseSymbol)
-                if (baseType !is Type.Object) continue
+                val baseTypeRaw = getDeclaredTypeOfSymbol(baseSymbol)
+                if (baseTypeRaw !is Type.Object) continue
+                // Instantiate generic base when heritage clause supplies type args
+                // (`implements IFoo<number>`, `extends List<string>`). Without this,
+                // member comparison runs against the raw generic interface and
+                // `foo(x: T): T` looks like `(x: T) => T` instead of `(x: number) => number`,
+                // masking TS2416 mismatches in concrete generic implementations.
+                val baseType: Type.Object = run {
+                    val args = typeExpr.typeArguments
+                    if (baseTypeRaw is Type.Interface && baseTypeRaw !is Type.Reference &&
+                        !args.isNullOrEmpty()) {
+                        val tparams = baseTypeRaw.typeParameters
+                        if (!tparams.isNullOrEmpty() && tparams.size == args.size) {
+                            try {
+                                val resolved = args.map { getTypeFromTypeNode(it) }
+                                if (resolved.none { it === errorType }) {
+                                    return@run getOrInternReference(baseTypeRaw, resolved)
+                                }
+                            } catch (_: StackOverflowError) {}
+                        }
+                    }
+                    baseTypeRaw
+                }
                 resolveStructuredTypeMembers(baseType)
                 val baseMembers = baseType.members ?: continue
 
@@ -36502,7 +36523,16 @@ interface DataView {
                     }
 
                     val derivedType = getTypeOfMemberDecl(member) ?: continue
-                    val basePropType = getTypeOfMemberDecl(baseDecl) ?: continue
+                    // For Type.Reference bases, use getPropertyTypeForRelation to obtain the
+                    // mapper-instantiated property type. `getTypeOfMemberDecl(baseDecl)` returns
+                    // the raw declared type (`(x: T) => T`); we need the substituted form
+                    // (`(x: number) => number`) so TS2416 fires for `implements IFoo<number>`
+                    // when the override has the wrong signature.
+                    val basePropType = if (baseType is Type.Reference) {
+                        getPropertyTypeForRelation(baseType, basePropSymbol)
+                    } else {
+                        getTypeOfMemberDecl(baseDecl) ?: continue
+                    }
 
                     if (derivedType === anyType || basePropType === anyType) continue
 
@@ -37081,6 +37111,24 @@ interface DataView {
         if (derivedSig.minArgumentCount > baseSig.parameters.size) {
             chain.add("    Target signature provides too few arguments. Expected ${derivedSig.parameters.size} or more, but got ${baseSig.parameters.size}.")
             return
+        }
+        // Check parameter type mismatches (contravariant: base.param must be assignable
+        // to derived.param). Emit a "Types of parameters 'x' and 'y' are incompatible"
+        // chain for the FIRST failing pair so the elaboration matches TypeScript's
+        // baseline format for TS2416 method-override mismatches like
+        // `class IntFooBad implements IFoo<number> { foo(x: string) ... }`.
+        val pairCount = minOf(derivedSig.parameters.size, baseSig.parameters.size)
+        for (i in 0 until pairCount) {
+            val derivedParam = derivedSig.parameters[i]
+            val baseParam = baseSig.parameters[i]
+            val derivedParamType = getTypeOfSymbol(derivedParam)
+            val baseParamType = getTypeOfSymbol(baseParam)
+            if (derivedParamType === anyType || baseParamType === anyType) continue
+            if (!checkTypeRelatedTo(baseParamType, derivedParamType, assignableRelation)) {
+                chain.add("    Types of parameters '${derivedParam.name}' and '${baseParam.name}' are incompatible.")
+                chain.add("      Type '${typeToString(baseParamType)}' is not assignable to type '${typeToString(derivedParamType)}'.")
+                return
+            }
         }
         // Check return type mismatch
         val sourceReturn = derivedSig.resolvedReturnType ?: anyType
