@@ -395,6 +395,12 @@ class Binder(private val options: CompilerOptions) {
         // TypeScript allows namespace augmentation of const/let/var declarations.
         if (existing.hasAny(SymbolFlags.Variable) && incoming.hasAny(SymbolFlags.Module)) return true
         if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Variable)) return true
+        // Variable + Interface (e.g. `interface Symbol {}` + `declare var Symbol: SymbolConstructor;`).
+        // Without this, the second declaration silently overwrites the first symbol — losing the
+        // type-position declaration. Affects wrapper types and class+interface constructor patterns
+        // (`class B extends A` where A is both interface and constructor var).
+        if (existing.hasAny(SymbolFlags.Variable) && incoming.hasAny(SymbolFlags.Interface)) return true
+        if (existing.hasAny(SymbolFlags.Interface) && incoming.hasAny(SymbolFlags.Variable)) return true
         // Enum + Enum (merge across declarations)
         if (existing.hasAny(SymbolFlags.Enum) && incoming.hasAny(SymbolFlags.Enum)) return true
         // var + var (re-declarations allowed)
