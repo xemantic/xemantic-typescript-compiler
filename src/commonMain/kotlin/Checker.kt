@@ -31507,9 +31507,11 @@ interface DataView {
             val rawSourceType = getTypeOfExpression(init)
             contextualType = savedContextual
             // Phase 17 / Blocker #1 step 2: narrow the source type via flow graph
-            // when the target is `never`. Other targets still use the raw type —
-            // broader emission-site adoption is deferred to subsequent commits.
-            val sourceType = if (targetType === neverType) {
+            // when the target is a primitive-shaped type (never, intrinsic, or
+            // a literal). Object/Interface/Reference targets still use the raw
+            // type — narrowing into those would interact with structural-
+            // comparison gaps and is deferred.
+            val sourceType = if (init is Identifier && isNarrowableTarget(targetType)) {
                 getNarrowedTypeForReference(rawSourceType, init)
             } else rawSourceType
             lastMissingPropertyName = null // reset before comparison
@@ -33587,6 +33589,19 @@ interface DataView {
     // adoption lands. -----------------------------------------------------
     // -----------------------------------------------------------------------
 
+    /**
+     * True if narrowing should be applied for var-decl assignability against
+     * this target. Excludes Object/Interface/Reference targets to avoid
+     * interactions with structural-comparison gaps.
+     */
+    private fun isNarrowableTarget(target: Type): Boolean = when (target) {
+        is Type.Intrinsic -> true
+        is Type.StringLiteral -> true
+        is Type.NumberLiteral -> true
+        is Type.BigIntLiteral -> true
+        else -> target === neverType
+    }
+
     /** Look up the [FlowNode] recorded for a node's reference position. */
     private fun getFlowAt(node: Node): FlowNode? {
         val graph = currentFlowGraph ?: return null
@@ -33692,12 +33707,14 @@ interface DataView {
     /**
      * Narrow type [t] given a `===`/`==`/`!==`/`!=` comparison. [equal] is the
      * effective polarity (true means "expression evaluates to equal").
-     * If one side is the reference `name` and the other side is a literal,
-     * filter union members to keep/remove the literal accordingly.
+     * Handles `typeof x === "string"` first, then falls back to
+     * `x === literal` direct equality narrowing.
      */
     private fun narrowByEquality(
         t: Type, expr: BinaryExpression, equal: Boolean, name: String,
     ): Type {
+        tryNarrowByTypeOf(t, expr, equal, name)?.let { return it }
+
         val leftIsRef = expr.left is Identifier && (expr.left as Identifier).text == name
         val rightIsRef = expr.right is Identifier && (expr.right as Identifier).text == name
         val other = when {
@@ -33707,6 +33724,54 @@ interface DataView {
         }
         val literalType = literalTypeOfExpression(other) ?: return t
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * Try to narrow `t` for a `typeof name === "tag"` (or `!==`) comparison.
+     * Returns the narrowed type if the expression matches, or `null` if the
+     * expression isn't a typeof-against-string-literal comparison on `name`.
+     */
+    private fun tryNarrowByTypeOf(
+        t: Type, expr: BinaryExpression, equal: Boolean, name: String,
+    ): Type? {
+        val leftTypeofRef = isTypeOfRef(expr.left, name)
+        val rightTypeofRef = isTypeOfRef(expr.right, name)
+        if (!leftTypeofRef && !rightTypeofRef) return null
+        val literalSide = if (leftTypeofRef) expr.right else expr.left
+        val guard = when (literalSide) {
+            is StringLiteralNode -> literalSide.text
+            is NoSubstitutionTemplateLiteralNode -> literalSide.text
+            else -> return null
+        }
+        return narrowByTypeOfGuard(t, guard, isMatch = equal)
+    }
+
+    private fun isTypeOfRef(expr: Expression, name: String): Boolean {
+        if (expr !is TypeOfExpression) return false
+        val inner = expr.expression
+        return inner is Identifier && inner.text == name
+    }
+
+    /**
+     * Narrow `t` by a typeof tag (`"string"` / `"number"` / etc.). For unions,
+     * filters constituents by their TypeFlags. For non-unions, returns `t` if
+     * the type matches the tag and `isMatch` is true (or doesn't match and
+     * `isMatch` is false), else returns `never`. `"function"` and `"object"`
+     * tags fall back to `t` unchanged (can't be filtered by flags alone).
+     */
+    private fun narrowByTypeOfGuard(t: Type, guard: String, isMatch: Boolean): Type {
+        val flags = typeofTypeGuardFlags(guard) ?: return t
+        if (flags == TypeFlags.None) return t
+        if (t is Type.Union) {
+            val filtered = if (isMatch) {
+                t.types.filter { it.flags.hasAny(flags) }
+            } else {
+                t.types.filter { !it.flags.hasAny(flags) }
+            }
+            return getUnionType(filtered)
+        }
+        val typeMatches = t.flags.hasAny(flags)
+        return if (typeMatches == isMatch) t else neverType
     }
 
     /**
