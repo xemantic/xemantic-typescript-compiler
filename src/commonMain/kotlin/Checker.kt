@@ -33719,6 +33719,22 @@ interface DataView {
                     }
                 } catch (_: StackOverflowError) { /* circular */ }
             }
+            // 16.4gi: "Constructor interface" pattern — `declare var Object: ObjectConstructor`
+            // where `interface ObjectConstructor { new(): Object }`. The new-expression's
+            // return type is the construct signature's return type, not the constructor
+            // interface itself. Class instance types (also Type.Interface) don't have
+            // construct signatures (see CLAUDE.md "Class construct signatures are static-side
+            // only"), so they fall through to `return calleeType` unchanged.
+            if (typeArgs.isNullOrEmpty()) {
+                try {
+                    resolveStructuredTypeMembers(calleeType)
+                    val sigs = calleeType.constructSignatures
+                    if (!sigs.isNullOrEmpty()) {
+                        val ret = sigs[0].resolvedReturnType
+                        if (ret != null && ret !== errorType) return ret
+                    }
+                } catch (_: StackOverflowError) { /* circular */ }
+            }
             return calleeType
         }
         if (calleeType !is Type.Object) return anyType
