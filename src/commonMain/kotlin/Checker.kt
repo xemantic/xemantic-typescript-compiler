@@ -213,6 +213,11 @@ class Checker(
     /** The file name currently being checked — used to look up file-level type maps. */
     private var currentCheckFileName: String? = null
 
+    /** Control-flow graph for the file currently being checked. Looked up via
+     *  [getFlowAt] during narrowing in [checkVarDeclAssignability]. Null in passes
+     *  that don't initialize it (narrowing is opt-in per emission site). */
+    private var currentFlowGraph: FlowGraph? = null
+
     /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
@@ -15000,6 +15005,9 @@ class Checker(
     }
 
     companion object {
+        /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
+        private const val NARROW_MAX_DEPTH = 50
+
         /** Predefined type names that cannot be used as class/interface names (TS2414/TS2427). */
         private val PREDEFINED_TYPE_NAMES = setOf(
             "any", "number", "boolean", "string", "void", "never", "object",
@@ -30947,7 +30955,9 @@ interface DataView {
             currentLocalTypes = mutableMapOf()
             currentFileLocals = result.locals
             currentCheckFileName = fileName
+            currentFlowGraph = result.flowGraph
             checkTypeAssignabilityInStatements(result.sourceFile.statements, source, fileName, varTypes, returnType = null, typeParams = emptySet())
+            currentFlowGraph = null
         }
         // Post-filter: suppress TS2322 for null/undefined→NamedType when the named type
         // also has TS2304 (unresolved) or TS2314 (wrong type arg count) in the same file
@@ -31494,8 +31504,14 @@ interface DataView {
             if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
                 contextualType = targetType
             }
-            val sourceType = getTypeOfExpression(init)
+            val rawSourceType = getTypeOfExpression(init)
             contextualType = savedContextual
+            // Phase 17 / Blocker #1 step 2: narrow the source type via flow graph
+            // when the target is `never`. Other targets still use the raw type —
+            // broader emission-site adoption is deferred to subsequent commits.
+            val sourceType = if (targetType === neverType) {
+                getNarrowedTypeForReference(rawSourceType, init)
+            } else rawSourceType
             lastMissingPropertyName = null // reset before comparison
             val canUse = canUseTypeEngine(sourceType, targetType)
             val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
@@ -31630,15 +31646,20 @@ interface DataView {
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
                     chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
                 } else if (sourceType is Type.Union) {
-                    // Union source: find the last failing constituent for elaboration (matches TypeScript)
-                    var lastFailingConstituent: Type? = null
+                    // Union source: find the failing constituent for elaboration.
+                    // For `never` targets, TypeScript picks the FIRST failing
+                    // member (`narrowingUnionToNeverAssigment_ts`); for other
+                    // targets we keep the historical "last failing" picker.
+                    val pickFirst = targetType === neverType
+                    var pickedFailing: Type? = null
                     for (constituent in sourceType.types) {
                         if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
-                            lastFailingConstituent = constituent
+                            pickedFailing = constituent
+                            if (pickFirst) break
                         }
                     }
-                    if (lastFailingConstituent != null) {
-                        val constStr = typeToString(lastFailingConstituent)
+                    if (pickedFailing != null) {
+                        val constStr = typeToString(pickedFailing)
                         chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                     }
                 } else {
@@ -33544,6 +33565,205 @@ interface DataView {
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Control-flow narrowing (Phase 17 / Blocker #1 step 2 — minimal v1)
+    //
+    // [getNarrowedTypeForReference] takes a declared type for an identifier
+    // reference and the reference expression, looks up the [FlowNode] from the
+    // current file's flow graph, and walks antecedents to apply narrowing.
+    //
+    // Currently supports a narrow set of operations sufficient for assignment-
+    // to-`never` cases like `narrowingUnionToNeverAssigment_ts`:
+    //   - `===` / `!==` / `==` / `!=` against literal types narrows union
+    //   - `&&` / `||` of those (via De Morgan)
+    //   - FlowBranchLabel joins (union of antecedent narrowings)
+    //   - FlowStart / FlowAssignment / FlowCall / FlowSwitchClause /
+    //     FlowArrayMutation / FlowLoopLabel: pass-through (no narrowing yet)
+    //
+    // Caller is responsible for opting in (e.g., only on `never` targets) so
+    // narrowing remains conservative until step 2's broader emission-site
+    // adoption lands. -----------------------------------------------------
+    // -----------------------------------------------------------------------
+
+    /** Look up the [FlowNode] recorded for a node's reference position. */
+    private fun getFlowAt(node: Node): FlowNode? {
+        val graph = currentFlowGraph ?: return null
+        return graph.nodeToFlow[nodeKey(node)]
+    }
+
+    /**
+     * Compute the narrowed type for an identifier reference at [expr], starting
+     * from its [declaredType]. Only attempts narrowing if a flow node exists;
+     * returns [declaredType] unchanged when narrowing isn't applicable.
+     *
+     * Conservative bound: walks at most [NARROW_MAX_DEPTH] antecedents to keep
+     * the helper cheap.
+     */
+    private fun getNarrowedTypeForReference(declaredType: Type, expr: Expression): Type {
+        if (expr !is Identifier) return declaredType
+        val flow = getFlowAt(expr) ?: return declaredType
+        val seen = mutableSetOf<Int>()
+        return narrowTypeFromFlow(declaredType, flow, expr.text, seen, depth = 0)
+    }
+
+    private fun narrowTypeFromFlow(
+        declaredType: Type, flowNode: FlowNode, name: String,
+        seen: MutableSet<Int>, depth: Int,
+    ): Type {
+        if (depth >= NARROW_MAX_DEPTH) return declaredType
+        if (!seen.add(flowNode.id)) return declaredType
+        return when (flowNode) {
+            is FlowStart -> declaredType
+            is FlowUnreachable -> neverType
+            is FlowCondition -> {
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                applyConditionNarrowing(antecedent, flowNode.expression, flowNode.isTrue, name)
+            }
+            is FlowBranchLabel -> {
+                if (flowNode.antecedents.isEmpty()) return neverType
+                val branchTypes = flowNode.antecedents.map {
+                    narrowTypeFromFlow(declaredType, it, name, mutableSetOf<Int>().apply { addAll(seen) }, depth + 1)
+                }
+                getUnionType(branchTypes)
+            }
+            // Loop / assignment / call / switch / array mutation: pass-through for now.
+            // Loop back-edge handling would require widening to declared on cycle —
+            // for the current scope, recursing into the antecedent is safe because
+            // the FlowGraphBuilder doesn't create unbounded antecedent chains.
+            is FlowLoopLabel -> {
+                if (flowNode.antecedents.isEmpty()) return declaredType
+                // Conservative: fall back to declared type at loop joins to avoid
+                // back-edge widening complexity.
+                declaredType
+            }
+            is FlowAssignment -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowCall -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowSwitchClause -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowArrayMutation -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+        }
+    }
+
+    /**
+     * Apply narrowing for a condition expression at the given polarity.
+     * Handles `&&`/`||` recursively (De Morgan) and `===`/`!==`/`==`/`!=`
+     * against literal values.
+     */
+    private fun applyConditionNarrowing(
+        t: Type, expr: Expression, isTrue: Boolean, name: String,
+    ): Type {
+        return when (expr) {
+            is ParenthesizedExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
+            is PrefixUnaryExpression -> if (expr.operator == SyntaxKind.Exclamation) {
+                applyConditionNarrowing(t, expr.operand, !isTrue, name)
+            } else t
+            is BinaryExpression -> when (expr.operator) {
+                SyntaxKind.BarBar -> if (isTrue) {
+                    // `a || b` is true if a or b is true: result is union
+                    val tA = applyConditionNarrowing(t, expr.left, true, name)
+                    val tB = applyConditionNarrowing(t, expr.right, true, name)
+                    getUnionType(listOf(tA, tB))
+                } else {
+                    // !(a || b) ⇔ !a && !b
+                    val tA = applyConditionNarrowing(t, expr.left, false, name)
+                    applyConditionNarrowing(tA, expr.right, false, name)
+                }
+                SyntaxKind.AmpersandAmpersand -> if (isTrue) {
+                    // `a && b` true: both true
+                    val tA = applyConditionNarrowing(t, expr.left, true, name)
+                    applyConditionNarrowing(tA, expr.right, true, name)
+                } else {
+                    // !(a && b) ⇔ !a || !b
+                    val tA = applyConditionNarrowing(t, expr.left, false, name)
+                    val tB = applyConditionNarrowing(t, expr.right, false, name)
+                    getUnionType(listOf(tA, tB))
+                }
+                SyntaxKind.EqualsEqualsEquals,
+                SyntaxKind.EqualsEquals -> narrowByEquality(t, expr, equal = isTrue, name)
+                SyntaxKind.ExclamationEqualsEquals,
+                SyntaxKind.ExclamationEquals -> narrowByEquality(t, expr, equal = !isTrue, name)
+                else -> t
+            }
+            else -> t
+        }
+    }
+
+    /**
+     * Narrow type [t] given a `===`/`==`/`!==`/`!=` comparison. [equal] is the
+     * effective polarity (true means "expression evaluates to equal").
+     * If one side is the reference `name` and the other side is a literal,
+     * filter union members to keep/remove the literal accordingly.
+     */
+    private fun narrowByEquality(
+        t: Type, expr: BinaryExpression, equal: Boolean, name: String,
+    ): Type {
+        val leftIsRef = expr.left is Identifier && (expr.left as Identifier).text == name
+        val rightIsRef = expr.right is Identifier && (expr.right as Identifier).text == name
+        val other = when {
+            leftIsRef && !rightIsRef -> expr.right
+            rightIsRef && !leftIsRef -> expr.left
+            else -> return t
+        }
+        val literalType = literalTypeOfExpression(other) ?: return t
+        return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * Extract a literal Type from an expression (string/number/boolean/null/undefined).
+     * Returns null for non-literal expressions — narrowing only applies to literal comparisons.
+     */
+    private fun literalTypeOfExpression(expr: Expression): Type? = when (expr) {
+        is StringLiteralNode -> Type.StringLiteral(expr.text)
+        is NoSubstitutionTemplateLiteralNode -> Type.StringLiteral(expr.text)
+        is NumericLiteralNode -> Type.NumberLiteral(expr.text.toDoubleOrNull() ?: return null)
+        is PrefixUnaryExpression -> if (expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode) {
+            Type.NumberLiteral(-((expr.operand as NumericLiteralNode).text.toDoubleOrNull() ?: return null))
+        } else null
+        is BigIntLiteralNode -> Type.BigIntLiteral(expr.text.removeSuffix("n"))
+        is Identifier -> when (expr.text) {
+            "true" -> trueType
+            "false" -> falseType
+            "null" -> nullType
+            "undefined" -> undefinedType
+            else -> null
+        }
+        else -> null
+    }
+
+    /**
+     * Narrow union [t] by [literalType]. When [keep] is true (== comparison
+     * with isTrue), keep only members assignable from [literalType]. When
+     * [keep] is false (!= comparison with isTrue, or == with isFalse), remove
+     * members exactly matching [literalType].
+     */
+    private fun narrowUnionByLiteral(t: Type, literalType: Type, keep: Boolean): Type {
+        if (t !is Type.Union) {
+            // For non-union, narrowing-by-literal still applies for the keep=false case
+            // (e.g., `s: string` and `s !== "x"` doesn't change `s`'s type).
+            return t
+        }
+        val filtered = if (keep) {
+            t.types.filter { areLiteralTypesEquivalent(it, literalType) }
+        } else {
+            t.types.filter { !areLiteralTypesEquivalent(it, literalType) }
+        }
+        return getUnionType(filtered)
+    }
+
+    /**
+     * True if two literal types match (same value). Conservative: returns false
+     * for non-literal types — narrowing only removes/keeps exact literal matches.
+     */
+    private fun areLiteralTypesEquivalent(a: Type, b: Type): Boolean = when {
+        a is Type.StringLiteral && b is Type.StringLiteral -> a.value == b.value
+        a is Type.NumberLiteral && b is Type.NumberLiteral -> a.value == b.value
+        a is Type.BigIntLiteral && b is Type.BigIntLiteral -> a.value == b.value
+        a === trueType && b === trueType -> true
+        a === falseType && b === falseType -> true
+        a === nullType && b === nullType -> true
+        a === undefinedType && b === undefinedType -> true
+        else -> false
     }
 
     /** Get the type of an object literal expression as an anonymous object type. */
