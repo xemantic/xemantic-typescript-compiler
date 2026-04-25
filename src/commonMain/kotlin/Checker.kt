@@ -41966,6 +41966,16 @@ interface DataView {
         if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
         val sourceSig = sourceSigs.first()
         val targetSig = targetSigs.first()
+        // Arity mismatch: source requires more arguments than target provides.
+        // Emit "Target signature provides too few arguments. Expected N or more, but got M."
+        // — matches `signatureLengthMismatchCall`-style baselines for TS2345 with
+        // function args. Take this branch BEFORE per-param comparison since the
+        // arity gap is more fundamental than any individual param-type mismatch.
+        if (sourceSig.minArgumentCount > targetSig.parameters.size) {
+            return listOf(
+                "  Target signature provides too few arguments. Expected ${sourceSig.parameters.size} or more, but got ${targetSig.parameters.size}."
+            )
+        }
         // 16.4dw: Check parameter type mismatch FIRST (contravariant) — TypeScript reports
         // the parameter mismatch before the return-type mismatch when both fail, because
         // params are contravariant and the failure is more fundamental.
@@ -42259,7 +42269,13 @@ interface DataView {
             ) {
                 getFunctionMismatchElaboration(srcObjForCollapse, tgtObjForCollapse)
             } else null
-            if (funcMismatch != null && funcMismatch.size == 1) {
+            // Use collapsed "types returned by" form ONLY for pure return-type mismatch:
+            // funcMismatch returns one "  Type 'A' is not assignable to type 'B'." line.
+            // Arity mismatch (Target signature provides too few...) and param mismatch
+            // (Types of parameters...) keep the standard "Types of property" + function-
+            // type-display + funcExtra format.
+            if (funcMismatch != null && funcMismatch.size == 1 &&
+                funcMismatch[0].trimStart().startsWith("Type '")) {
                 val collapsedHeader = if (path.isEmpty()) {
                     "  The types returned by '${chosen.name}()' are incompatible between these types."
                 } else {
