@@ -17258,10 +17258,38 @@ interface DataView {
             is ClassDeclaration -> {
                 // `extends X` takes a value expression, so type-only names in it are TS2693.
                 // `implements X` is a type position and is handled elsewhere.
+                // Specialization: when the extended name resolves to a pure interface (no
+                // Class/Variable/Function backing), emit TS2689 "Cannot extend an interface
+                // 'X'. Did you mean 'implements'?" instead of the generic TS2693. Only the
+                // bare-Identifier form (`extends Comparable`, `extends Comparable<T>`) is
+                // specialized — qualified names and computed expressions fall through to
+                // the existing TS2693 path.
                 stmt.heritageClauses?.forEach { clause ->
                     if (clause.token == SyntaxKind.ExtendsKeyword) {
                         clause.types.forEach { ewta ->
-                            checkTypeAsValueInExpr(ewta.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                            val expr = ewta.expression
+                            val asInterface = (expr as? Identifier)?.let { id ->
+                                if (id.text in valueNames) null
+                                else (currentFileLocals?.get(id.text) ?: globals[id.text])?.takeIf { sym ->
+                                    sym.flags.hasAny(SymbolFlags.Interface) &&
+                                        !sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Function)
+                                }?.let { id }
+                            }
+                            if (asInterface != null) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, asInterface.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot extend an interface '${asInterface.text}'. Did you mean 'implements'?",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2689,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = asInterface.pos,
+                                    length = asInterface.text.length,
+                                ))
+                            } else {
+                                checkTypeAsValueInExpr(expr, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                            }
                         }
                     }
                 }
