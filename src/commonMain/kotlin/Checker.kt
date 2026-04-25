@@ -17267,28 +17267,22 @@ interface DataView {
                 stmt.heritageClauses?.forEach { clause ->
                     if (clause.token == SyntaxKind.ExtendsKeyword) {
                         clause.types.forEach { ewta ->
-                            val expr = ewta.expression
-                            val asInterface = (expr as? Identifier)?.let { id ->
-                                if (id.text in valueNames) null
-                                else (currentFileLocals?.get(id.text) ?: globals[id.text])?.takeIf { sym ->
-                                    sym.flags.hasAny(SymbolFlags.Interface) &&
-                                        !sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Function)
-                                }?.let { id }
-                            }
-                            if (asInterface != null) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, asInterface.pos)
+                            val ts2689 = tryClassifyExtendsInterface(ewta.expression, valueNames)
+                            if (ts2689 != null) {
+                                val (leftmost, displayName) = ts2689
+                                val (line, character) = getLineAndCharacterOfPosition(source, leftmost.pos)
                                 diagnostics.add(Diagnostic(
-                                    message = "Cannot extend an interface '${asInterface.text}'. Did you mean 'implements'?",
+                                    message = "Cannot extend an interface '$displayName'. Did you mean 'implements'?",
                                     category = DiagnosticCategory.Error,
                                     code = 2689,
                                     fileName = fileName,
                                     line = line,
                                     character = character,
-                                    start = asInterface.pos,
-                                    length = asInterface.text.length,
+                                    start = leftmost.pos,
+                                    length = leftmost.text.length,
                                 ))
                             } else {
-                                checkTypeAsValueInExpr(expr, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                                checkTypeAsValueInExpr(ewta.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                             }
                         }
                     }
@@ -17312,6 +17306,47 @@ interface DataView {
             }
             else -> {}
         }
+    }
+
+    /**
+     * If the heritage `extends` expression resolves to a pure interface (bare or namespace-
+     * qualified like `M.I` / `Mod.Nested.I`), return `(leftmostIdentifier, fullDisplayName)`
+     * so the caller can emit TS2689 instead of the generic TS2693/TS2708. Returns null when
+     * the expression isn't a bare/qualified-name access, or when the resolved symbol carries
+     * value-side flags (Class/Variable/Function) — those are valid `extends` targets.
+     */
+    private fun tryClassifyExtendsInterface(
+        expr: Expression, valueNames: Set<String>,
+    ): Pair<Identifier, String>? {
+        // Walk the property-access chain leftward, collecting names.
+        val names = mutableListOf<String>()
+        var leftmost: Identifier? = null
+        var current: Expression = expr
+        while (true) {
+            when (current) {
+                is Identifier -> {
+                    names.add(0, current.text)
+                    leftmost = current
+                    break
+                }
+                is PropertyAccessExpression -> {
+                    names.add(0, current.name.text)
+                    current = current.expression
+                }
+                else -> return null
+            }
+        }
+        if (leftmost == null || leftmost.text in valueNames) return null
+        // Walk the symbol chain: leftmost in scope, then each step via `exports`.
+        var symbol: Symbol? = currentFileLocals?.get(names[0]) ?: globals[names[0]] ?: return null
+        for (i in 1 until names.size) {
+            val nextSym = symbol?.exports?.get(names[i]) ?: return null
+            symbol = nextSym
+        }
+        val resolved = symbol ?: return null
+        if (!resolved.flags.hasAny(SymbolFlags.Interface)) return null
+        if (resolved.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Function)) return null
+        return leftmost to names.joinToString(".")
     }
 
     private fun checkTypeAsValueInExpr(
