@@ -39525,7 +39525,34 @@ interface DataView {
             // `get`/`set` accessors. The property resolves to its return type
             // (e.g. `number`), which has no call signatures, so an attempted
             // `obj.prop()` is a user error — they likely meant `obj.prop`.
-            checkTs6234GetAccessorCall(expr, calleeType, source, fileName)
+            val firedTs6234 = checkTs6234GetAccessorCall(expr, calleeType, source, fileName)
+            // 16.4gk: TS2349 "This expression is not callable." Narrow gate on
+            // primitives: when the callee resolves to a Type.Intrinsic (number,
+            // string, boolean, etc.), the call is definitively invalid. Display
+            // uses the wrapper interface name (e.g. 'Number' for number).
+            // Skip when TS6234 already fired (get-accessor calls share the same
+            // primitive return-type pattern).
+            if (!firedTs6234 && calleeType is Type.Intrinsic && calleeType !== voidType &&
+                calleeType !== nullType && calleeType !== undefinedType &&
+                calleeType !== neverType && calleeType !== unknownType) {
+                val displayType = typeToString(getApparentType(calleeType))
+                val start = calleeExpr.pos
+                val length = expressionTrueEnd(calleeExpr) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error,
+                        code = 2349,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        messageChain = listOf("  Type '$displayType' has no call signatures."),
+                    ))
+                }
+            }
             return
         }
         // 16.4: Instantiate signature when explicit type arguments are provided
@@ -39576,27 +39603,27 @@ interface DataView {
         calleeType: Type,
         source: String,
         fileName: String,
-    ) {
-        val callee = expr.expression as? PropertyAccessExpression ?: return
-        val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { return }
-        if (recvType === anyType || recvType === errorType) return
+    ): Boolean {
+        val callee = expr.expression as? PropertyAccessExpression ?: return false
+        val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { return false }
+        if (recvType === anyType || recvType === errorType) return false
         val apparent = getApparentType(recvType)
-        val prop = getPropertyOfType(apparent, callee.name.text) ?: return
+        val prop = getPropertyOfType(apparent, callee.name.text) ?: return false
         val decls = prop.declarations
-        if (decls.isEmpty()) return
+        if (decls.isEmpty()) return false
         var hasGetter = false
         for (d in decls) {
             when (d) {
                 is GetAccessor -> hasGetter = true
                 is SetAccessor -> { /* getter+setter pair still qualifies */ }
-                else -> return
+                else -> return false
             }
         }
-        if (!hasGetter) return
+        if (!hasGetter) return false
         val name = callee.name
         val start = name.pos
         val length = name.text.length
-        if (length <= 0) return
+        if (length <= 0) return false
         val displayType = typeToString(getApparentType(calleeType))
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
@@ -39610,6 +39637,7 @@ interface DataView {
             length = length,
             messageChain = listOf("  Type '$displayType' has no call signatures."),
         ))
+        return true
     }
 
     /**
@@ -40256,6 +40284,11 @@ interface DataView {
     private fun getCalleeType(expr: Expression): Type {
         return when (expr) {
             is Identifier -> {
+                // Local scope (function params, block-scoped vars) shadows globals.
+                // E.g. `function b1(b1: number) { b1(12); }` — the inner `b1` is the
+                // param, not the outer function — so resolving via globals would
+                // miss the primitive-callee case.
+                currentLocalTypes[expr.text]?.let { return it }
                 val symbol = globals[expr.text] ?: return anyType
                 getTypeOfSymbol(symbol)
             }
