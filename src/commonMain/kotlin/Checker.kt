@@ -32063,6 +32063,14 @@ interface DataView {
                             val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                             val chain = mutableListOf<String>()
                             lastChainMissingPropSymbol = null // ensure relatedInfo doesn't pick up stale state
+                            // Wrapper interface (Number/String/Boolean/Symbol/BigInt) → primitive:
+                            // emit "X is a primitive, but Y is a wrapper object. Prefer using X when
+                            // possible." TypeScript adds this advisory chain line whenever the source
+                            // is a named wrapper interface and the target is the matching primitive.
+                            val wrapperElab = getWrapperToPrimitiveElaboration(sourceType, displayTarget)
+                            if (wrapperElab != null) {
+                                chain.add(wrapperElab)
+                            } else
                             // Function→function: add specific elaboration
                             if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                                 tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
@@ -33811,6 +33819,27 @@ interface DataView {
             type.flags.hasAny(TypeFlags.BooleanLike) -> getBuiltinWrapperType("Boolean") { booleanWrapperType } ?.also { booleanWrapperType = it } ?: anyType
             else -> type
         }
+    }
+
+    /**
+     * Wrapper interface (Number/String/Boolean/Symbol/BigInt) → primitive elaboration.
+     * Returns the chain line "  'X' is a primitive, but 'Y' is a wrapper object. Prefer
+     * using 'X' when possible." when source is a named wrapper interface and the displayed
+     * target is exactly the matching primitive name. Returns null otherwise.
+     */
+    private fun getWrapperToPrimitiveElaboration(sourceType: Type, displayTarget: String): String? {
+        if (sourceType !is Type.Interface) return null
+        val sourceName = sourceType.symbol?.name ?: return null
+        val primitive = when (sourceName) {
+            "String" -> "string"
+            "Number" -> "number"
+            "Boolean" -> "boolean"
+            "Symbol" -> "symbol"
+            "BigInt" -> "bigint"
+            else -> return null
+        }
+        if (displayTarget != primitive) return null
+        return "  '$primitive' is a primitive, but '$sourceName' is a wrapper object. Prefer using '$primitive' when possible."
     }
 
     /** Resolve a built-in wrapper type from globals, caching the result. */
