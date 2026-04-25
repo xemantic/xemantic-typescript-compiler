@@ -32431,6 +32431,9 @@ interface DataView {
                             }
                             val rawReturn = md.type?.let { getTypeFromTypeNode(it) }
                                 ?: inferSimpleReturnTypeFromBody(md)
+                                ?: md.body?.let {
+                                    if (!bodyHasReturnValue(it)) voidType else null
+                                }
                                 ?: anyType
                             val returnType = if (rawReturn === errorType) anyType
                                              else instantiateType(rawReturn, mapper)
