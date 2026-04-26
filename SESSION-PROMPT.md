@@ -104,15 +104,17 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8397 passing):** Surgical pool is exhausted (12+
+**Status (2026-04-26, 8400 passing):** Surgical pool is exhausted (12+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
-0/0/0, filtered from 8/101/23). Phase 17 / Blocker #1 (full control
-flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.16 series
-landed an additional +48 from architectural-leaning surgical fixes
+0/0/0, filtered from 8/100/22). Phase 17 / Blocker #1 (full control
+flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.19 series
+landed an additional +51 from architectural-leaning surgical fixes
 (namespace-aware identifier resolution, optional/index-sig/privacy
 elaboration depth, generic ctor inference, `typeof Class`
 construct-sig elaboration, fn-vs-fn-arg overload chain, ambient-module
-`export = X` named-import alias resolution). All sub-steps:
+`export = X` named-import alias resolution, this-parameter handling,
+TS2417 clodule static-side, `super(...)` arg checking with heritage
+type-arg substitution). All sub-steps:
 
 - 17.1a: Flow-graph infra in binder (no behavior change)
 - 17.1b: var-decl `never` target narrowing wired (+1)
@@ -196,6 +198,23 @@ construct-sig elaboration, fn-vs-fn-arg overload chain, ambient-module
   through a new `resolveAmbientModuleExportEquals` helper that walks
   the `ModuleDeclaration.body` for `ExportAssignment{isExportEquals=true}`
   (+1 — flips `aliasDoesNotDuplicateSignatures_ts`)
+- 17.17: `this`-parameter handling in FunctionExpression — param-type
+  indexing fix in `getTypeOfFunctionExpression` + `this:` display in
+  `signatureToString` + literal-return inference in
+  `inferReturnTypeFromFunctionExpressionBody` (+1 — flips
+  `contextualTyping24_ts`)
+- 17.18: TS2417 namespace-vs-namespace for clodule (class+namespace)
+  merges — `checkClassStaticSideExtends` recurses into ModuleDeclaration
+  pair members' exports to find first missing base export, emits TS2417
+  with `Property X is missing` chain + TS2728 related info (+1 — flips
+  `clodulesDerivedClasses_ts`)
+- 17.19: `super(...)` arg checking — new `currentSuperBaseSig` state
+  + `buildBaseConstructorSignatureForSuper` helper that pushes base
+  class typeParameters onto `currentTypeParamScope` while resolving
+  ctor param types, then instantiates via heritage clause type args.
+  Wired into `checkSingleCallExpressionTypes` super-callee branch
+  before the standard anyType bail (+1 — flips
+  `superCallArgsMustMatch_ts`)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
@@ -203,7 +222,7 @@ remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
 them only opportunistically. Default workflow (steps 1-9 above)
 applies. The `assignmentCompatabilityNN_ts` numbered family (11–43
 series) is **fully healed** as of 17.15b — 0 of 38 numbered tests
-fail. Remaining candidates classified by post-17.16 recon:
+fail. Remaining candidates classified by post-17.19 recon:
 
 - **`assignmentCompatability_checking-call|apply-member-off-of-function-interface_ts`**:
   needs Function-apparent-type infrastructure (source `() => any`

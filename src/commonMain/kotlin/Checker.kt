@@ -241,6 +241,13 @@ class Checker(
      *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
     private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
 
+    /** 17.19: Base-class constructor signature for `super(...)` arg checking.
+     *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around each
+     *  Constructor body when the class extends another class; instantiated with
+     *  the heritage clause's type args. Consumed by [checkSingleCallExpressionTypes]
+     *  when the callee is `Identifier("super")`. */
+    private var currentSuperBaseSig: Signature? = null
+
     /** Global Array interface — used as target for `Type.Reference` in array types.
      *  Initialized from built-in lib during init; falls back to empty interface if not found. */
     private var globalArrayType: Type.Interface = Type.Interface().also {
@@ -41625,6 +41632,25 @@ interface DataView {
                 }
             }
             is ClassDeclaration -> {
+                // 17.19: Resolve the base class's constructor signature once per class so
+                // `super(...)` calls inside the constructor body can be argument-checked.
+                // Substitutes heritage-clause type args (e.g. `extends T5<number>` → T = number).
+                val baseSig: Signature? = run {
+                    val extClause = stmt.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                        ?: return@run null
+                    val baseExpr = extClause.types.firstOrNull() ?: return@run null
+                    val baseName = when (val bn = baseExpr.expression) {
+                        is Identifier -> bn.text
+                        else -> return@run null
+                    }
+                    val baseSym = globals[baseName] ?: return@run null
+                    val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
+                        try { getTypeFromTypeNode(tn).takeIf { it !== errorType } } catch (_: StackOverflowError) { null }
+                    }.orEmpty()
+                    try {
+                        buildBaseConstructorSignatureForSuper(baseSym, typeArgs)
+                    } catch (_: StackOverflowError) { null }
+                }
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
@@ -41645,10 +41671,16 @@ interface DataView {
                             }
                             member.body?.let { body ->
                                 val savedLocalTypes = currentLocalTypes
+                                val savedSuperBaseSig = currentSuperBaseSig
                                 currentLocalTypes = currentLocalTypes.toMutableMap()
-                                populateParameterLocalTypes(member.parameters)
-                                checkCallTypesInStatements(body.statements, source, fileName)
-                                currentLocalTypes = savedLocalTypes
+                                currentSuperBaseSig = baseSig
+                                try {
+                                    populateParameterLocalTypes(member.parameters)
+                                    checkCallTypesInStatements(body.statements, source, fileName)
+                                } finally {
+                                    currentLocalTypes = savedLocalTypes
+                                    currentSuperBaseSig = savedSuperBaseSig
+                                }
                             }
                         }
                         is GetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
@@ -41870,6 +41902,16 @@ interface DataView {
                     length = length,
                 ))
             }
+        }
+        // 17.19: `super(...)` arg checking via the base ctor signature stashed by the
+        // ClassDeclaration handler. `getCalleeType("super")` returns anyType (no global
+        // entry), so the standard path early-returns at the anyType bail below. Handle
+        // here, then return.
+        if (calleeExpr is Identifier && calleeExpr.text == "super") {
+            currentSuperBaseSig?.let { sig ->
+                checkArgumentsAgainstSignature(expr.arguments, sig, source, fileName)
+            }
+            return
         }
         // Resolve callee to get its type
         val calleeType = getCalleeType(expr.expression)
@@ -45522,6 +45564,69 @@ interface DataView {
         ctorType.symbol = symbol
         ctorType.constructSignatures = sigs
         return ctorType
+    }
+
+    /**
+     * 17.19: Build the base-class constructor signature for `super(...)` checking,
+     * substituting the heritage clause's type arguments for the base class's
+     * type parameters. Returns null if the base symbol can't be resolved or has
+     * no constructor decl. Picks the first implementation ctor if any; otherwise
+     * the first overload decl.
+     *
+     * @param baseSymbol  The base class's symbol (resolved from the heritage clause)
+     * @param typeArgs    Resolved heritage-clause type arguments, or empty list for non-generic
+     */
+    private fun buildBaseConstructorSignatureForSuper(
+        baseSymbol: Symbol,
+        typeArgs: List<Type>,
+    ): Signature? {
+        if (!baseSymbol.flags.hasAny(SymbolFlags.Class)) return null
+        val baseDecl = baseSymbol.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+            ?: return null
+        val ctors = baseDecl.members.filterIsInstance<Constructor>()
+        // Prefer the implementation (body present); else the first overload decl.
+        val ctor = ctors.firstOrNull { it.body != null } ?: ctors.firstOrNull()
+        val params = ctor?.parameters?.let { getParameterSymbols(it) } ?: emptyList()
+        val minArgs = ctor?.parameters?.count {
+            !it.questionToken && !it.dotDotDotToken && it.initializer == null
+        } ?: 0
+        val baseType = getDeclaredTypeOfSymbol(baseSymbol) as? Type.Interface ?: return null
+        val baseTypeParams = baseType.typeParameters.orEmpty()
+        // Resolve param types in the base class's type-param scope so `T` resolves to
+        // the base's TypeParam (not errorType). Cache into symbolTypes per param.
+        if (ctor != null) {
+            val savedScope = currentTypeParamScope
+            try {
+                if (baseTypeParams.isNotEmpty()) {
+                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                    baseTypeParams.forEach { tp ->
+                        tp.symbol?.name?.let { scope[it] = tp }
+                    }
+                    currentTypeParamScope = scope
+                }
+                for ((pi, paramSym) in params.withIndex()) {
+                    if (pi < ctor.parameters.size) {
+                        val paramTypeNode = ctor.parameters[pi].type
+                        if (paramTypeNode != null) {
+                            try {
+                                symbolTypes[paramSym.id] = getTypeFromTypeNode(paramTypeNode)
+                            } catch (_: StackOverflowError) { /* leave unresolved */ }
+                        }
+                    }
+                }
+            } finally {
+                currentTypeParamScope = savedScope
+            }
+        }
+        val rawSig = Signature(
+            declaration = ctor,
+            parameters = params,
+            resolvedReturnType = baseType,
+            minArgumentCount = minArgs,
+        )
+        if (baseTypeParams.isEmpty() || typeArgs.size != baseTypeParams.size) return rawSig
+        val mapper = createTypeMapper(baseTypeParams, typeArgs)
+        return instantiateSignature(rawSig, mapper)
     }
 
     /**
