@@ -2,7 +2,7 @@
 
 **Phase 4 — Checker buildout.** 8,406 / 10,078 tests passing (~83%).
 
-**Surgical pool is exhausted (13+ consecutive sessions confirmed).** Queue
+**Surgical pool is exhausted (14+ consecutive sessions confirmed).** Queue
 reshuffled 2026-04-25: next sessions should commit to architectural blockers
 rather than searching for surgical wins. Recent 17.9–17.21 series landed
 cumulative +53 from architectural-leaning surgical fixes (namespace-aware
