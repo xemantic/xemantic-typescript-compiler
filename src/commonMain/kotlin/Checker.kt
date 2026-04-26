@@ -34442,6 +34442,32 @@ interface DataView {
                 else -> t
             }
             is CallExpression -> narrowByCallPredicate(t, expr, isMatch = isTrue, name)
+            is Identifier -> if (expr.text == name) narrowByTruthiness(t, truthy = isTrue) else t
+            else -> t
+        }
+    }
+
+    /**
+     * Narrow [t] by truthiness. Conservative: on truthy positions remove
+     * intrinsics that are always falsy (undefined, null, void, false). On
+     * falsy positions return [t] unchanged — narrowing to "definitely
+     * falsy" requires removing all definitely-truthy union members which
+     * is more aggressive and risks regressions.
+     */
+    private fun narrowByTruthiness(t: Type, truthy: Boolean): Type {
+        if (!truthy) return t
+        return when (t) {
+            undefinedType, nullType, voidType, falseType -> neverType
+            is Type.Union -> {
+                val kept = t.types.filter {
+                    it !== undefinedType && it !== nullType && it !== voidType && it !== falseType
+                }
+                when {
+                    kept.isEmpty() -> neverType
+                    kept.size == t.types.size -> t
+                    else -> getUnionType(kept)
+                }
+            }
             else -> t
         }
     }
