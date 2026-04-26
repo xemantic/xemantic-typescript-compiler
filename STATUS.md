@@ -1,13 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,407 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,409 / 10,078 tests passing (~83%).
 
-**Surgical pool is largely exhausted but 17.26 surfaced one additional win** —
-narrow TS2301-vs-TS2663 disambiguation for parameter-property shadowing in
-module-file class initializers. Queue reshuffled 2026-04-25: subsequent
-sessions should still commit to architectural blockers rather than searching
-for surgical wins. 17.9–17.26 series landed cumulative +58 from
-architectural-leaning surgical fixes (namespace-aware inference,
+**Surgical pool is largely exhausted but 17.27 surfaced one additional win** —
+Function-prototype-method satisfaction in `propertiesRelatedTo` plus
+TS2345 + missing-property chain emission for Reference-source vs
+named-Interface-target call args (flips assignmentCompatability call/apply
+member-off-of-function-interface tests). Queue reshuffled 2026-04-25:
+subsequent sessions should still commit to architectural blockers rather
+than searching for surgical wins. 17.9–17.27 series landed cumulative +60
+from architectural-leaning surgical fixes (namespace-aware inference,
 optional/index-sig/privacy elaboration, generic ctor inference,
 ambient-module export-equals named-import resolution, this-parameter
 display, TS2417 clodule static-side, super-call arg checking with
@@ -16,7 +18,8 @@ new-expression arg checking with class TypeParam scope re-resolution,
 TS2339 enum-member-access chain, TS2493 assignment-tuple-bounds, fn-vs-fn
 arity TS2345, void-return inference for unannotated fn-decl bodies,
 TS2663-vs-TS2301 narrow disambiguation for parameter-property shadow in
-module-file class initializers).
+module-file class initializers, Function-prototype satisfaction +
+Reference-vs-named-Interface arg missing-property chain).
 
 **MAINT-1 done 2026-04-25**: 32 stale skip-log entries marked
 strikethrough; `find_candidates.py` updated to strip `~~...~~` spans. Net
