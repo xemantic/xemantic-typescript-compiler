@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-25, 8343 passing):** Surgical pool is exhausted (6+
+**Status (2026-04-26, 8345 passing):** Surgical pool is exhausted (7+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
 progress with infrastructure largely in place:
@@ -125,6 +125,19 @@ progress with infrastructure largely in place:
   arrow-body-level (net-zero infra; test2 reaches 34/35)
 - 17.5a: `x.constructor === Class` narrowing wired into
   `narrowByEquality` (+1; flips `typeGuardConstructorDerivedClass_ts`)
+- 17.5b: ElementAccessExpression `["constructor"]` form +
+  negative-direction `!==` correctness fix (net-zero infra)
+- 17.6a: union-receiver TS2339 multi-member elaboration with
+  all-primitives gate (+1; flips `typeGuardConstructorClassAndNumber_ts`)
+- 17.7a: discriminant-property narrowing in `narrowByEquality` —
+  `name.propX === literal` filters union members by literal-match
+  (net-zero infra)
+- 17.7b: lift 17.6a's all-primitives gate on multi-member TS2339
+  (+1; flips `nonexistentPropertyOnUnion_ts`)
+- 17.7c: narrowed-to-single-Object TS2339 emission for anonymous
+  `Type.Object` receivers (net-zero infra)
+- 17.7d: 17.7c gate also accepts `Type.Interface` with no base types
+  (net-zero infra)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
