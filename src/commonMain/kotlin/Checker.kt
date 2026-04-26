@@ -20589,6 +20589,43 @@ interface DataView {
         }
     }
 
+    /**
+     * 17.23: TS2493 for destructuring assignment `[a, b, c] = tuple` where the RHS has a
+     * static tuple type (`Type.Object` with non-null `tupleElementTypes`) and its length is
+     * shorter than the LHS arity. Squiggle covers the offending element via `expressionTrueEnd`.
+     * Conservative gates: skip when LHS contains a spread (rest covers the remainder), skip
+     * `OmittedExpression` slots (sparse destructuring is intentional), and skip non-tuple RHS.
+     */
+    private fun checkAssignmentTupleBounds(
+        arrayLit: ArrayLiteralExpression, rhs: Expression,
+        source: String, fileName: String,
+    ) {
+        if (arrayLit.elements.any { it is SpreadElement }) return
+        val rhsType = try { getTypeOfExpression(rhs) } catch (_: StackOverflowError) { return }
+        if (rhsType !is Type.Object) return
+        val tupleElems = rhsType.tupleElementTypes ?: return
+        val tupleLen = tupleElems.size
+        val tupleDisplay = typeToString(rhsType)
+        for ((i, el) in arrayLit.elements.withIndex()) {
+            if (i < tupleLen) continue
+            if (el is OmittedExpression) continue
+            val elStart = el.pos
+            val elEnd = expressionTrueEnd(el)
+            val elLen = (elEnd - elStart).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, elStart)
+            diagnostics.add(Diagnostic(
+                message = "Tuple type '$tupleDisplay' of length '$tupleLen' has no element at index '$i'.",
+                category = DiagnosticCategory.Error,
+                code = 2493,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = elStart,
+                length = elLen,
+            ))
+        }
+    }
+
     private fun checkVarDeclTupleBounds(decl: VariableDeclaration, source: String, fileName: String) {
         val pattern = decl.name as? ArrayBindingPattern ?: return
         val init = decl.initializer as? ArrayLiteralExpression ?: return
@@ -40050,6 +40087,10 @@ interface DataView {
                 }
             }
             is BinaryExpression -> {
+                // 17.23: TS2493 for `[a, b, c] = tuple` where tuple's static length < LHS arity.
+                if (expr.operator == SyntaxKind.Equals && expr.left is ArrayLiteralExpression) {
+                    checkAssignmentTupleBounds(expr.left as ArrayLiteralExpression, expr.right, source, fileName)
+                }
                 checkPropertyAccessInExpr(expr.left, source, fileName, enclosingClassType)
                 checkPropertyAccessInExpr(expr.right, source, fileName, enclosingClassType)
             }
