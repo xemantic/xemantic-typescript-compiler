@@ -33926,18 +33926,45 @@ interface DataView {
                 val sigDecls = if (overloadDecls.isNotEmpty()) overloadDecls else listOfNotNull(implDecl)
                 fnType.callSignatures = if (sigDecls.isNotEmpty()) {
                     sigDecls.map { md ->
-                        val returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        // 17.11c: Mirror getTypeOfFunction (line ~33988) — push the method's
+                        // typeParameters into currentTypeParamScope BEFORE resolving param
+                        // type annotations / return type / constraints. Without this, type
+                        // names like `T` in `c: Array<T>` resolved via global lookup → errorType,
+                        // making `Array<T>` resolve as `Array<error>`. Cache resolved param
+                        // types in `symbolTypes` so later `getTypeOfSymbol(paramSymbol)` calls
+                        // return the in-scope-resolved type even after the scope is restored.
                         val typeParams = md.typeParameters?.map { tp ->
                             val param = Type.TypeParam()
                             param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                            tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
-                            tp.default?.let { param.default = getTypeFromTypeNode(it) }
                             param
                         }
+                        val savedScope = currentTypeParamScope
+                        if (typeParams != null && typeParams.isNotEmpty()) {
+                            val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                            typeParams.forEachIndexed { i, tp ->
+                                scope[md.typeParameters!![i].name.text] = tp
+                            }
+                            currentTypeParamScope = scope
+                        }
+                        // Resolve constraints/defaults AFTER scope is set
+                        typeParams?.forEachIndexed { i, tp ->
+                            md.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                            md.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                        }
+                        val returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        val paramSymbols = getParameterSymbols(md.parameters)
+                        for ((pi, param) in paramSymbols.withIndex()) {
+                            if (pi < md.parameters.size) {
+                                md.parameters[pi].type?.let { typeNode ->
+                                    symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                                }
+                            }
+                        }
+                        currentTypeParamScope = savedScope
                         Signature(
                             declaration = md,
                             typeParameters = typeParams,
-                            parameters = getParameterSymbols(md.parameters),
+                            parameters = paramSymbols,
                             resolvedReturnType = returnType,
                             minArgumentCount = md.parameters.count {
                                 !it.questionToken && !it.dotDotDotToken && it.initializer == null
@@ -42688,6 +42715,43 @@ interface DataView {
                             length = length,
                         ))
                         continue
+                    }
+                }
+            }
+            // 17.11c: TS2345 for null/undefined argument vs Type.Reference parameter
+            // whose resolvedTypeArguments contain unconstrained sig-side TypeParams.
+            // Example: `fold<T,S>(c: Array<T>, ...)` called with `null` — null isn't
+            // structurally assignable to any Array instantiation. Display substitutes
+            // each sig-side TypeParam with `unknown` (so `T[]` renders as `unknown[]`),
+            // matching TypeScript's "T inferred as unknown when no information" rule.
+            // Skip when the relation actually accepts null (e.g. paramType happens to
+            // include null in a constraint) so we don't regress tests where null is
+            // compatible.
+            if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+                paramType is Type.Reference) {
+                val sigTps = sig.typeParameters
+                val refArgs = paramType.resolvedTypeArguments
+                val hasSigTp = !sigTps.isNullOrEmpty() && refArgs != null &&
+                    refArgs.any { sourceContainsTypeParam(it, sigTps) }
+                if (hasSigTp && !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                    val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
+                    val displayParam = typeToStringWithMapper(paramType, mapper)
+                    val argTypeStr = typeToString(argType)
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$displayParam'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                        break
                     }
                 }
             }
