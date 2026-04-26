@@ -10508,6 +10508,49 @@ class Checker(
             is Type.NumberLiteral -> numberType
             is Type.BigIntLiteral -> bigintType
             trueType, falseType -> booleanType
+            is Type.Reference -> {
+                // Widen Array<T>/ReadonlyArray<T> element type so `[true]` infers as
+                // `boolean[]` (not `true[]`). Other generic instantiations preserved.
+                val targetName = type.target.symbol?.name
+                val args = type.resolvedTypeArguments
+                if ((targetName == "Array" || targetName == "ReadonlyArray") && args?.size == 1) {
+                    val origArg = args[0]
+                    val widenedArg = widenType(origArg)
+                    if (widenedArg !== origArg) getOrInternReference(type.target, listOf(widenedArg))
+                    else type
+                } else type
+            }
+            is Type.Interface -> type
+            is Type.Object -> {
+                // Recursively widen anonymous object literal member types — matches
+                // TypeScript's behavior where `let x = {a: true}` infers `{a: boolean}`.
+                // Skip Reference/Interface (handled above) — only fresh anonymous Object
+                // types from object-literal initializers need member widening; named
+                // interfaces preserve their declared member literal types.
+                val members = type.members ?: return type
+                var changed = false
+                val widenedMembers = members.mapValues { (_, sym) ->
+                    val origType = symbolTypes[sym.id] ?: getTypeOfSymbol(sym)
+                    val widened = widenType(origType)
+                    if (widened !== origType) {
+                        changed = true
+                        val newSym = Symbol(sym.flags, sym.name)
+                        sym.declarations.forEach { newSym.declarations.add(it) }
+                        newSym.valueDeclaration = sym.valueDeclaration
+                        newSym.parent = sym.parent
+                        symbolTypes[newSym.id] = widened
+                        newSym
+                    } else sym
+                }
+                if (!changed) return type
+                val widened = Type.Object()
+                widened.members = widenedMembers.toMutableMap()
+                widened.callSignatures = type.callSignatures
+                widened.constructSignatures = type.constructSignatures
+                widened.stringIndexInfo = type.stringIndexInfo
+                widened.numberIndexInfo = type.numberIndexInfo
+                widened
+            }
             else -> type
         }
     }
