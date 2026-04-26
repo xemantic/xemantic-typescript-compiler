@@ -3585,6 +3585,8 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 **Explored-but-skipped this session:**
 - ~~`genericFunctionCallSignatureReturnTypeMismatch_ts` / `functionTypeArgumentAssignmentCompat_ts`~~ → flipped 17.11a (S→unknown substitution + "T could be instantiated" elaboration in `getFunctionMismatchElaboration`).
 - ~~`typeAssertionToGenericFunctionType_ts`~~ → flipped 17.11b (TS2554 for property-access call expressions in `checkSingleCallExpressionTypes`).
+- ~~`genericFunctionsWithOptionalParameters2_ts`~~ → flipped 17.11c (MethodDeclaration scope-push + null-vs-Type.Reference TS2345).
+- `superWithTypeArgument3_ts` — needs TS2345 + "T could be instantiated" chain for `super.bar<T>(null)`. Blocked on `getCalleeType(super)` returning `anyType` (no `super` keyword resolution); the call expression early-returns at `if (calleeType === anyType) return` before reaching `checkArgumentsAgainstSignature`. Attempted a generic "null vs bare Type.TypeParam param" emission (17.11d) — caused -1 regression elsewhere; reverted. Real fix needs `super` callee resolution (resolve `super` to the base class's instance type, then look up the property method on the base) — broader scope, deferred.
 
 **Recommended next session**: Surgical pool likely empty again (need fresh `find_candidates.py --fresh` after the 17.10 series settles). The natural next architectural pieces are (a) full type-arg inference in `signatureRelatedTo` (substitute pinned TypeParams into return types and remaining param positions, build per-pair elaboration chain) — this would flip `contextualSignatureInstatiationContravariance` and adjacent tests, AND (b) extending TS2554 walker to property-access calls. Both are scoped.
 
