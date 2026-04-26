@@ -1,6 +1,29 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,414 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,415 / 10,078 tests passing (~83%).
+
+**17.31b (2026-04-26, +1)** — Multi-arg same-typeParam conflict detection
+with literal-preserving display for context-sensitive sigs. Refactored
+`tryInferSingleTypeParamFromArgs` to gather candidates from EVERY bare-T
+positional param (not just the first); detects cross-base conflicts via
+mutual `checkTypeRelatedTo`. When conflict occurs AND sig has a function-
+type parameter mentioning T (new `tparamMentionedInFunctionType` helper
+recurses into Object call/construct sigs), emits TS2345 directly at the
+failing arg position with LITERAL-form display (`'3' is not assignable to
+'""'`) and returns null so the standard arg-check loop doesn't double-emit
+(bare-T params silently pass `checkTypeRelatedTo(arg, T)` because
+unconstrained T's apparent type is `{}`). Without function-type-T param,
+falls through to widened first-candidate substitution (17.31a behavior).
+Same-base-different-literal multi-arg cases (e.g. `g("a","b")`) resolve
+via mutual-assignability check passing — both widened to same intrinsic
+→ no conflict → substitute T=widened. Optional `source`/`fileName` params
+on the helper; return-type call site (`getReturnTypeOfCallExpression`)
+passes nulls so it just returns null on conflict-with-preserveLiterals.
+Flips `typeInferenceConflictingCandidates_ts` (`g<T>(a:T,b:T,c:(t:T)=>T)`
+with `g("", 3, a => a)` — context-sensitive sig due to arrow `c` arg
+mentioning T → emits `Argument of type '3' is not assignable to parameter
+of type '""'.` at `(3,7)`). Foundation for 17.31c (multi-typeParam
+inference) and 17.31d (Reference-arg inference for rest-args).
 
 **17.31a (2026-04-26, +2)** — Single-typeParam inference for non-overloaded
 sigs landed. New `tryInferSingleTypeParamFromArgs` helper + narrow gate wired
