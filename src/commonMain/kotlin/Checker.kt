@@ -35662,10 +35662,63 @@ interface DataView {
                 // back-edge widening complexity.
                 declaredType
             }
-            is FlowAssignment -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowAssignment -> {
+                // 17.30b: When the assignment binds [name] AND the RHS is a literal
+                // (string/number/bigint/template/true/false/null/undefined), narrow
+                // [declaredType] using the RHS's literal type. Conservative gate on
+                // literal AST shapes (via [literalTypeOfExpression]) avoids recursion
+                // through getTypeOfExpression on identifier/call RHSes during
+                // narrowing — purely structural lookup.
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                val rhsLiteralType = if (flowAssignmentTargetsName(flowNode.node, name))
+                    getLiteralRhsTypeForAssignment(flowNode.node) else null
+                if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
+                else antecedent
+            }
             is FlowCall -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
             is FlowSwitchClause -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
             is FlowArrayMutation -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+        }
+    }
+
+    /**
+     * Extract the RHS literal type for a FlowAssignment node, or null when the
+     * RHS isn't a recognized literal shape. Reuses [literalTypeOfExpression]
+     * which already handles strings/numbers/bigints/templates/true/false/null/
+     * undefined and unary-minus on numerics.
+     *
+     * Recognized assignment shapes:
+     *   - VariableDeclaration with initializer  (`var x = "foo"`)
+     *   - BinaryExpression with `=` operator    (`x = "foo"`)
+     * Compound assignments (`+=`, `-=`, etc.) and unary `++`/`--` are
+     * intentionally skipped — their result types depend on the LHS's prior type
+     * and would need a value-aware computation rather than a syntactic literal lookup.
+     */
+    private fun getLiteralRhsTypeForAssignment(node: Node): Type? {
+        val rhs: Expression? = when (node) {
+            is VariableDeclaration -> node.initializer
+            is BinaryExpression -> if (node.operator == SyntaxKind.Equals) node.right else null
+            else -> null
+        }
+        return rhs?.let { literalTypeOfExpression(it) }
+    }
+
+    /**
+     * Narrow a Union [declared] by filtering to members compatible with [rhsType]
+     * (a recently-assigned literal). Non-union types are returned unchanged —
+     * RHS narrowing only refines unions; collapsing a flat type to a more
+     * precise literal would risk over-narrowing in downstream assignability.
+     */
+    private fun narrowUnionByRhsAssignment(declared: Type, rhsType: Type): Type {
+        if (declared !is Type.Union) return declared
+        val filtered = declared.types.filter {
+            checkTypeRelatedTo(rhsType, it, assignableRelation)
+        }
+        return when {
+            filtered.isEmpty() -> declared
+            filtered.size == declared.types.size -> declared
+            filtered.size == 1 -> filtered[0]
+            else -> getUnionType(filtered)
         }
     }
 

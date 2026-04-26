@@ -2,6 +2,24 @@
 
 **Phase 4 — Checker buildout.** 8,412 / 10,078 tests passing (~83%).
 
+**17.30b (2026-04-26, net-zero infra)** — FlowAssignment-RHS narrowing landed
+in `narrowTypeFromFlow`'s FlowAssignment branch. When an assignment binds the
+queried identifier and the RHS is a recognized literal shape (string / number /
+bigint / template / true / false / null / undefined / unary-minus on numerics
+— via the existing `literalTypeOfExpression` helper), filter the antecedent's
+union members to those compatible with the RHS literal type and return the
+narrowed shape. Conservative: only Union antecedents are narrowed (flat types
+returned unchanged); RHS shapes that aren't pure literals (CallExpression /
+NewExpression / Identifier RHSes) fall through to the prior pass-through behavior.
+Function boundaries respected via the existing FlowGraphBuilder isolation
+(`bindFunctionLikeBody` saves/restores `currentFlow` + starts a new `FlowStart`
+for each inner function body). Test count unchanged (8412 / 1663 / 3); both
+known wire-up call sites (checkVarDeclAssignability + checkSinglePropertyAccess
+union receiver) now consume RHS narrowing but no failing test gates solely on
+this. Foundation for follow-on substeps where TS2339-on-primitive emission for
+narrowed function-local receivers, or downstream callable narrowing, can convert
+the now-precise type into emissions.
+
 **17.30a (2026-04-26, +1)** — TS2454 via flow-graph definite-assignment
 landed: new `checkDefiniteAssignmentViaFlowGraph` walks if/while/for/switch/try
 bodies that the ad-hoc walker explicitly skips, with positive-typeof /
@@ -9,9 +27,8 @@ truthy / `!= null` / `!== undefined` assertion-implies-assigned detection.
 Sidesteps the 17.1c snapshot/restore -7 regression by following only
 `antecedents[0]` at FlowLoopLabel (avoiding back-edge narrowing leaks).
 Flips `nestedLoopTypeGuards_ts`. First substep of Blocker #1 step 2h —
-remaining substeps: 17.30b (FlowAssignment-RHS narrowing), 17.30c (`&&`-chain
-narrowing into TS2774), 17.30d (discriminated-union property-equality
-narrowing).
+remaining substeps: 17.30c (`&&`-chain narrowing into TS2774),
+17.30d (discriminated-union property-equality narrowing).
 
 **Surgical pool was exhausted (post-17.29: pool re-confirmed for 22+
 consecutive recon sessions, but spot-checking flips occasional +1).**
