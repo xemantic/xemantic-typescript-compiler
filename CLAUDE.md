@@ -265,27 +265,40 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 **Phase 16: Fundamental Type System Features.** Pipeline: Scanner → Parser → **Binder → Checker → Transformer → Emitter**. Phase 16 builds core type system features: contextual typing, structural comparison, overload resolution, control flow narrowing. Live test count is in `STATUS.md` (kept separate to avoid churn in this file). See `PLAN-PHASE-4.md` § "Known architectural blockers" for recurring multi-test issues that won't yield to surgical fixes.
 
-### Execution protocol (MANDATORY — follow exactly)
+### Execution protocol
 
-PLAN-PHASE-4.md contains the **QUEUE**. Execute top-to-bottom, **fixing as many items per session as the budget allows** — do not stop after a single item if there is remaining context and more tractable work ahead. The outer loop:
+PLAN-PHASE-4.md contains the **QUEUE**. Default order is top-to-bottom, **fixing as many items per session as the budget allows** — do not stop after a single item if there is remaining context and more tractable work ahead. The outer loop:
 
-1. Find the first unchecked (`- [ ]`) item in the QUEUE (or next unfinished sub-step of an `IN PROGRESS` item).
+1. Pick the first tractable unchecked (`- [ ]`) item in the QUEUE (or next unfinished sub-step of an `IN PROGRESS` item). "Tractable" = not blocked on missing infrastructure outside the item's scope. If the top item is blocked, mark it (see autonomous-decision policy below) and move to the next.
 2. Implement it — the item describes the deliverable.
 3. Run the full suite (`rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "tests completed"`).
 4. Verify no regressions from the currently passing test count.
 5. Check off the item (`- [x]`), add a CLAUDE.md gotcha if applicable, **commit and push** (one commit per sub-step — keeps history bisectable and lets the next agent pick up mid-stream without re-running everything).
 6. **Loop back to step 1** and pick up the next item. Keep going until one of these stop conditions:
-   - The queue is empty or all remaining items are blocked/skipped.
-   - You are genuinely stuck (a fix regresses repeatedly, required infrastructure is missing, or the approach needs user input).
+   - All remaining queue items are marked blocked or skipped.
    - Context budget is running out — finish the current item cleanly, commit, then stop.
-7. End the session with a concise summary of items completed and net test count delta.
+   - A change requires user input (see "Guardrails requiring user input" below).
+7. End the session with a concise summary of items completed, items skipped/blocked (with reasons), and net test count delta.
 
-**HARD RULES:**
-- **Do NOT skip ahead** in the queue — work item 0 before item 1, always. "Multi-item per session" means sequential progress through the queue, not cherry-picking.
+**Autonomous-decision policy (when an item appears blocked):**
+
+When an item can't be implemented surgically — e.g. the diagnostic relies on infrastructure that doesn't exist yet (super-keyword resolution, full flow-graph, generic argument inference) — make the call without asking:
+
+- **Skip + log** (default): mark the queue item with a one-line `BLOCKED:` reason naming what would unblock it, then move to the next item. Add a session note to PLAN-PHASE-4.md so the next agent (or the user) can audit.
+- **Expand scope** (only when bounded): attempt the broader fix only if it fits all of: (a) ≤ ~1 file of new/changed code, (b) no cross-cutting infra change (no new caches, no scope-chain restructuring, no binder rework), (c) clear test gain ≥ 1. Otherwise skip.
+- **Time budget per attempt**: cap the first viable patch at one full-suite verification cycle. If it regresses, revert and skip — do not iterate. Iterating on a regressing fix is the dominant time-sink across past sessions.
+- **No silent abandonment**: every skip writes a session note with root cause, attempt summary (if any), and unblock prerequisite. Never just leave an item half-done in the working tree.
+
+**Guardrails requiring user input** (do NOT decide autonomously):
+- Build system changes (Gradle config, dependency add/remove/upgrade, Kotlin version bump).
+- Test-generation pipeline changes (`generateTypeScriptTests`, baseline format, skipped-tests log structure).
+- Re-enabling currently-disabled test categories (e.g. `.errors.txt` → +9k tests).
+- Architectural blocker work that touches >1 phase (e.g. binder + checker together) — pause and propose first.
+
+**Other rules:**
 - **Do NOT switch items** mid-task — finish the current item (commit + push) before starting the next.
 - **Commit between items** — never bundle two unrelated sub-steps into one commit. Each committed sub-step leaves the repo in a clean state for the next agent.
 - **Analysis items** (item 0) should produce written artifacts (design docs, categorized lists) before any code is written.
-- **Infrastructure items** (items 1-3) are foundational — correctness matters more than speed. Read TypeScript's architecture first.
 - **No regressions** — the currently passing tests must continue to pass after every change. Re-run the full suite between sub-steps; a +1 / -2 swap is still a regression.
 - **Full-suite run caveat**: a clean JVM test run takes ~4-6 minutes. Budget accordingly when deciding whether to attempt another item.
 
