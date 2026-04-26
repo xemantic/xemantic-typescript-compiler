@@ -36,6 +36,18 @@ strikethrough; `find_candidates.py` updated to strip `~~...~~` spans. Net
 zero test-count delta (all stale entries already pass). Surgical pool
 remains empty after the audit.
 
+**MAINT-1b (2026-04-26, post-17.29 recon #5)**: 6 additional stale
+skip-log entries marked strikethrough — `clodulesDerivedClasses_ts`
+(flipped 17.18), `derivedClassConstructorWithExplicitReturns01_ts`
+(es5/es2015 variants, flipped earlier), `letConstInCaseClauses_ts`
+(es5/es2015 variants, flipped earlier), `exportStarFromEmptyModule_ts`
+(es5/es2015 variants, flipped 16.4fj), `superWithTypeArgument3_ts`
+(flipped 17.20, was duplicate-listed), and the
+`assignmentCompatability37/38/39/40/41/42_ts` cluster (flipped by
+17.14b/17.15b). Net zero test-count delta (all stale entries already
+pass — pure documentation hygiene). Re-confirms post-17.29 pool empty
+(23+ consecutive recon sessions).
+
 **Recommended next sessions (highest absolute yield first):**
 1. ~~**MAINT-1**: Stale skip-log audit (~1 session, +5–15 tests).~~ Done.
 2. **Blocker #1**: Full control flow narrowing (~2–4 sessions, +60–100 tests).
