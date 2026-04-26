@@ -44877,11 +44877,9 @@ interface DataView {
     /** Create a function type from a FunctionType node. */
     private fun getFunctionTypeFromNode(node: FunctionType): Type {
         val fnType = Type.Object()
-        val sig = Signature(
-            declaration = node,
-            parameters = getParameterSymbols(node.parameters),
-            resolvedReturnType = getTypeFromTypeNode(node.type),
-            minArgumentCount = node.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+        val sig = buildSignatureForFunctionLikeTypeNode(
+            decl = node, typeParamDecls = node.typeParameters,
+            params = node.parameters, returnTypeNode = node.type,
         )
         fnType.callSignatures = listOf(sig)
         return fnType
@@ -44890,14 +44888,64 @@ interface DataView {
     /** Create a constructor type from a ConstructorType node. */
     private fun getFunctionTypeFromConstructorNode(node: ConstructorType): Type {
         val ctorType = Type.Object()
-        val sig = Signature(
-            declaration = node,
-            parameters = getParameterSymbols(node.parameters),
-            resolvedReturnType = getTypeFromTypeNode(node.type),
-            minArgumentCount = node.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+        val sig = buildSignatureForFunctionLikeTypeNode(
+            decl = node, typeParamDecls = node.typeParameters,
+            params = node.parameters, returnTypeNode = node.type,
         )
         ctorType.constructSignatures = listOf(sig)
         return ctorType
+    }
+
+    /**
+     * 17.10b: Shared signature builder for `FunctionType` / `ConstructorType` nodes.
+     * Builds Type.TypeParam objects from `typeParamDecls`, pushes them into
+     * `currentTypeParamScope`, eagerly resolves param types within that scope
+     * (cached via `symbolTypes`), then resolves the return type. Without the
+     * scope, type-param-named annotations like `<T>(x: T) => T`'s `T` resolve
+     * via global lookup and the displayed signature drops `<T>` and shows raw `T`.
+     */
+    private fun buildSignatureForFunctionLikeTypeNode(
+        decl: Node, typeParamDecls: List<TypeParameter>?,
+        params: List<Parameter>, returnTypeNode: TypeNode?,
+    ): Signature {
+        val sigTypeParams = typeParamDecls?.map { tpDecl ->
+            Type.TypeParam().also { tp ->
+                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+            }
+        }
+        val savedScope = currentTypeParamScope
+        if (!sigTypeParams.isNullOrEmpty()) {
+            val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+            sigTypeParams.forEachIndexed { i, tp ->
+                scope[typeParamDecls!![i].name.text] = tp
+            }
+            currentTypeParamScope = scope
+        }
+        val paramSyms = getParameterSymbols(params)
+        val returnType: Type
+        try {
+            sigTypeParams?.forEachIndexed { i, tp ->
+                typeParamDecls!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                typeParamDecls[i].default?.let { tp.default = getTypeFromTypeNode(it) }
+            }
+            for ((pi, param) in paramSyms.withIndex()) {
+                if (pi < params.size) {
+                    params[pi].type?.let { typeNode ->
+                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                    }
+                }
+            }
+            returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: anyType
+        } finally {
+            currentTypeParamScope = savedScope
+        }
+        return Signature(
+            declaration = decl,
+            typeParameters = sigTypeParams,
+            parameters = paramSyms,
+            resolvedReturnType = returnType,
+            minArgumentCount = params.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+        )
     }
 
     /** Create an object type from a TypeLiteral node (e.g., `{ x: number; y: string }`). */
@@ -45493,6 +45541,10 @@ interface DataView {
                     if (only is MethodDeclaration) {
                         val name = (only.name as? Identifier)?.text
                         if (name == "" || name == "new") {
+                            // 17.10b: Include type parameters from the call/construct sig
+                            // so `{<T>(x:T): T}` displays as `<T>(x: T) => T` not `(x: T) => T`.
+                            val sigTps = only.typeParameters ?: emptyList()
+                            val tpStr = if (sigTps.isNotEmpty()) "<${sigTps.joinToString(", ") { it.name.text }}>" else ""
                             val params = only.parameters.joinToString(", ") { p ->
                                 val pName = (p.name as? Identifier)?.text ?: "_"
                                 val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
@@ -45500,7 +45552,7 @@ interface DataView {
                             }
                             val retType = only.type?.let { formatTypeForDisplay(it) } ?: "any"
                             val prefix = if (name == "new") "new " else ""
-                            return "$prefix($params) => $retType"
+                            return "$prefix$tpStr($params) => $retType"
                         }
                     }
                 }
