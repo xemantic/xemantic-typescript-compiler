@@ -32238,6 +32238,44 @@ interface DataView {
         // Use the Type-based engine (Phase 4) for clear-cut cases
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
+            // Class-Identifier-as-value with construct-sig target — `const foo: { new(): Foo } = Foo`.
+            // canUseTypeEngine skips class-instance-vs-constructor comparisons, so this case
+            // would otherwise fall through to the string fallback (no chain). Display the
+            // source as `typeof X` and emit a construct-signature mismatch elaboration.
+            if (init is Identifier &&
+                targetType is Type.Object &&
+                !targetType.constructSignatures.isNullOrEmpty()
+            ) {
+                val initSym = currentFileLocals?.get(init.text) ?: globals[init.text]
+                if (initSym != null && initSym.flags.hasAny(SymbolFlags.Class) &&
+                    !initSym.flags.hasAny(SymbolFlags.Variable)
+                ) {
+                    val srcCtorType = buildClassValueConstructorTypeForDisplay(initSym)
+                    if (srcCtorType != null) {
+                        val sourceSig = srcCtorType.constructSignatures!!.first()
+                        val targetSig = targetType.constructSignatures!!.first()
+                        val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation)
+                        if (!ok) {
+                            val displaySource = "typeof ${initSym.name}"
+                            val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                            val chain = getConstructMismatchElaboration(srcCtorType, targetType)
+                            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2322,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = name.pos,
+                                length = name.text.length,
+                                messageChain = chain,
+                            ))
+                            return
+                        }
+                    }
+                }
+            }
             // Set contextual type for function expression parameter inference
             val savedContextual = contextualType
             if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
@@ -35433,7 +35471,9 @@ interface DataView {
 
     /** Format a signature as a string like `(x: number) => string` or `new (x: number) => Foo`. */
     private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
-        val prefix = if (isConstruct) "new " else ""
+        val prefix = if (isConstruct) {
+            if (sig.isAbstract) "abstract new " else "new "
+        } else ""
         val tps = sig.typeParameters
         val tpStr = if (!tps.isNullOrEmpty()) {
             "<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
@@ -35445,7 +35485,9 @@ interface DataView {
 
     /** Format a signature using colon notation like `(x: number): string` for use in `{ }` blocks. */
     private fun signatureToStringColon(sig: Signature, isConstruct: Boolean): String {
-        val prefix = if (isConstruct) "new " else ""
+        val prefix = if (isConstruct) {
+            if (sig.isAbstract) "abstract new " else "new "
+        } else ""
         val tps = sig.typeParameters
         val tpStr = if (!tps.isNullOrEmpty()) {
             "<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
@@ -44368,10 +44410,15 @@ interface DataView {
                 if (classType === anyType || classType === errorType) return anyType
                 val ctorType = Type.Object()
                 ctorType.symbol = symbol
+                // Mark `abstract new (...) => X` if the class declaration has the abstract modifier.
+                // Display-only (signatureToString prepends "abstract"); does not affect comparison.
+                val classDecl = symbol.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                val isAbstract = classDecl != null && ModifierFlag.Abstract in classDecl.modifiers
                 // Create construct signature that returns the class instance type
                 val ctorSig = Signature(
                     resolvedReturnType = classType,
                     parameters = emptyList(), // simplified — TODO: actual ctor params
+                    isAbstract = isAbstract,
                 )
                 ctorType.constructSignatures = listOf(ctorSig)
                 // Copy static members from class symbol exports
@@ -44393,6 +44440,97 @@ interface DataView {
             }
             else -> getTypeOfSymbol(symbol)
         }
+    }
+
+    /**
+     * Build a Type.Object representing the constructor side of a class symbol —
+     * a `Type.Object` carrying the class's actual constructor parameter list(s)
+     * as its `constructSignatures`. Used for diagnostic display when a class
+     * Identifier is used in value position (e.g. `const foo = Foo`); the
+     * resulting type is what TypeScript would print as `typeof Foo`.
+     *
+     * Reads the class declaration's first explicit Constructor member; falls
+     * back to a 0-param implicit constructor if none. Marks the construct sig
+     * `isAbstract` when the class itself is abstract.
+     */
+    private fun buildClassValueConstructorTypeForDisplay(symbol: Symbol): Type.Object? {
+        val classDecl = symbol.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+            ?: return null
+        val classType = getDeclaredTypeOfSymbol(symbol)
+        if (classType === anyType || classType === errorType) return null
+        val isAbstract = ModifierFlag.Abstract in classDecl.modifiers
+        // First Constructor declaration with a body, falling back to first overload signature.
+        val ctors = classDecl.members.filterIsInstance<Constructor>()
+        val ctor = ctors.firstOrNull { it.body != null } ?: ctors.firstOrNull()
+        val params = ctor?.parameters?.let { getParameterSymbols(it) } ?: emptyList()
+        val minArgs = ctor?.parameters?.count {
+            !it.questionToken && !it.dotDotDotToken && it.initializer == null
+        } ?: 0
+        val sig = Signature(
+            declaration = ctor,
+            parameters = params,
+            resolvedReturnType = classType,
+            minArgumentCount = minArgs,
+            isAbstract = isAbstract,
+        )
+        val ctorType = Type.Object()
+        ctorType.symbol = symbol
+        ctorType.constructSignatures = listOf(sig)
+        return ctorType
+    }
+
+    /**
+     * Generate a TS2322 elaboration chain for a construct-signature mismatch.
+     * Mirrors `getFunctionMismatchElaboration` but operates on `constructSignatures`,
+     * and prefixes the chain with `Types of construct signatures are incompatible.`
+     * to match TypeScript's baseline format (see `assignmentCompatability44/45`).
+     *
+     * Returns `emptyList()` when neither side has construct sigs or when the
+     * single-sig pair is mutually compatible (defensive — caller should only
+     * invoke this after confirming `signaturesRelatedTo(... isConstruct=true)`
+     * returned false).
+     */
+    private fun getConstructMismatchElaboration(
+        source: Type.Object, target: Type.Object,
+    ): List<String> {
+        val sourceSigs = source.constructSignatures
+        val targetSigs = target.constructSignatures
+        if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
+        val sourceSig = sourceSigs.first()
+        val targetSig = targetSigs.first()
+        val sourceStr = signatureToString(sourceSig, isConstruct = true)
+        val targetStr = signatureToString(targetSig, isConstruct = true)
+        val chain = mutableListOf(
+            "  Types of construct signatures are incompatible.",
+            "    Type '$sourceStr' is not assignable to type '$targetStr'.",
+        )
+        if (sourceSig.minArgumentCount > targetSig.parameters.size) {
+            chain.add(
+                "      Target signature provides too few arguments. Expected ${sourceSig.parameters.size} or more, but got ${targetSig.parameters.size}."
+            )
+            return chain
+        }
+        // Per-parameter contravariant check
+        val len = minOf(sourceSig.parameters.size, targetSig.parameters.size)
+        for (i in 0 until len) {
+            val sp = getTypeOfSymbol(sourceSig.parameters[i])
+            val tp = getTypeOfSymbol(targetSig.parameters[i])
+            if (!checkTypeRelatedTo(tp, sp, assignableRelation)) {
+                chain.add(
+                    "      Types of parameters '${sourceSig.parameters[i].name}' and '${targetSig.parameters[i].name}' are incompatible."
+                )
+                chain.add("        Type '${typeToString(tp)}' is not assignable to type '${typeToString(sp)}'.")
+                return chain
+            }
+        }
+        // Return-type mismatch (covariant)
+        val sourceRet = sourceSig.resolvedReturnType ?: anyType
+        val targetRet = targetSig.resolvedReturnType ?: anyType
+        if (!targetRet.flags.hasAny(TypeFlags.Void) &&
+            !checkTypeRelatedTo(sourceRet, targetRet, assignableRelation)) {
+            chain.add("      Type '${typeToString(sourceRet)}' is not assignable to type '${typeToString(targetRet)}'.")
+        }
+        return chain
     }
 
     /** Create a Type from a literal type node (e.g., `type X = "hello"` or `type Y = 42`). */
