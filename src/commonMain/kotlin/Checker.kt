@@ -45781,6 +45781,21 @@ interface DataView {
         return if (cons != null) "$name extends $cons" else name
     }
 
+    /**
+     * Format a Parameter AST node for display in function/constructor type strings.
+     * Honors `?` (optional → `name?: type | undefined`) and `...` (rest → `...name: type`).
+     * Mirrors [formatParameter] (which operates on Symbol) but works directly on the AST.
+     */
+    private fun formatParameterDecl(p: Parameter): String {
+        val pName = (p.name as? Identifier)?.text ?: "_"
+        val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+        return when {
+            p.dotDotDotToken -> "...$pName: $pType"
+            p.questionToken -> "$pName?: $pType | undefined"
+            else -> "$pName: $pType"
+        }
+    }
+
     private fun formatTypeForDisplay(typeNode: TypeNode): String? {
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
@@ -45840,22 +45855,14 @@ interface DataView {
             is FunctionType -> {
                 val typeParams = typeNode.typeParameters ?: emptyList()
                 val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { tpDeclToDisplay(it) }}>" else ""
-                val params = typeNode.parameters.joinToString(", ") { p ->
-                    val pName = (p.name as? Identifier)?.text ?: "_"
-                    val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
-                    "$pName: $pType"
-                }
+                val params = typeNode.parameters.joinToString(", ") { formatParameterDecl(it) }
                 val retType = formatTypeForDisplay(typeNode.type) ?: return null
                 "$tpStr($params) => $retType"
             }
             is ConstructorType -> {
                 val typeParams = typeNode.typeParameters ?: emptyList()
                 val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { tpDeclToDisplay(it) }}>" else ""
-                val params = typeNode.parameters.joinToString(", ") { p ->
-                    val pName = (p.name as? Identifier)?.text ?: "_"
-                    val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
-                    "$pName: $pType"
-                }
+                val params = typeNode.parameters.joinToString(", ") { formatParameterDecl(it) }
                 val retType = formatTypeForDisplay(typeNode.type) ?: return null
                 "new $tpStr($params) => $retType"
             }
@@ -45880,11 +45887,7 @@ interface DataView {
                             // so `{<T>(x:T): T}` displays as `<T>(x: T) => T` not `(x: T) => T`.
                             val sigTps = only.typeParameters ?: emptyList()
                             val tpStr = if (sigTps.isNotEmpty()) "<${sigTps.joinToString(", ") { tpDeclToDisplay(it) }}>" else ""
-                            val params = only.parameters.joinToString(", ") { p ->
-                                val pName = (p.name as? Identifier)?.text ?: "_"
-                                val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
-                                "$pName: $pType"
-                            }
+                            val params = only.parameters.joinToString(", ") { formatParameterDecl(it) }
                             val retType = only.type?.let { formatTypeForDisplay(it) } ?: "any"
                             val prefix = if (name == "new") "new " else ""
                             return "$prefix$tpStr($params) => $retType"
@@ -45913,11 +45916,7 @@ interface DataView {
                         }
                         is MethodDeclaration -> {
                             val methodName = (member.name as? Identifier)?.text ?: continue
-                            val params = member.parameters.joinToString(", ") { p ->
-                                val pName = (p.name as? Identifier)?.text ?: "_"
-                                val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
-                                "$pName: $pType"
-                            }
+                            val params = member.parameters.joinToString(", ") { formatParameterDecl(it) }
                             val retType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
                             parts.add("$methodName($params): $retType")
                         }
