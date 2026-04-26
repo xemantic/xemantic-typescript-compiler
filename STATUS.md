@@ -2,7 +2,7 @@
 
 **Phase 4 — Checker buildout.** 8,411 / 10,078 tests passing (~83%).
 
-**Surgical pool is exhausted (post-17.29: pool re-confirmed for 19+
+**Surgical pool is exhausted (post-17.29: pool re-confirmed for 20+
 consecutive recon sessions, but spot-checking flips occasional +1).**
 Last surgical win was 17.29 (Type.Interface source vs different-symbol
 Type.Interface target arg-mismatch path in `checkArgumentsAgainstSignature`
