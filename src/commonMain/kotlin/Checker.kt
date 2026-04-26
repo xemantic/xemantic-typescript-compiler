@@ -462,6 +462,8 @@ class Checker(
         checkNullTypeAssertionOverlap()
         // 14''b. Check same-target Reference cast bidirectional non-overlap for TS2352
         checkSameTargetReferenceCastOverlap()
+        // 14''c. Check array-source -> class-target cast non-overlap for TS2352
+        checkArrayToClassCastOverlap()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -26012,6 +26014,115 @@ interface DataView {
             ))
             return
         }
+    }
+
+    /**
+     * Emits TS2352 for `<C<X>>arr` casts where `arr` is array-typed and `C` is a different
+     * named class with at least one required non-prototype property. Conservative gates:
+     * source target.symbol.name == "Array"; target target is a Class (Type.Interface with
+     * SymbolFlags.Class) different from Array; first missing prop drives the chain message.
+     */
+    private fun checkArrayToClassCastOverlap() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            val savedCheckFileName = currentCheckFileName
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfArrayToClassMismatch)
+                }
+            } finally {
+                currentFileLocals = savedLocals
+                currentCheckFileName = savedCheckFileName
+            }
+        }
+    }
+
+    private fun emitTS2352IfArrayToClassMismatch(
+        expr: TypeAssertionExpression, source: String, fileName: String,
+    ) {
+        val inner = expr.expression
+        val typeNode = expr.type
+        // Empty array literal `[]` is inferred as `anyType` by getTypeOfArrayLiteral, so
+        // synthesize a `never[]` Type.Reference for the comparison and display.
+        val sourceType: Type = if (inner is ArrayLiteralExpression && inner.elements.isEmpty()) {
+            getArrayType(neverType)
+        } else {
+            try { getTypeOfExpression(inner) } catch (_: StackOverflowError) { return }
+        }
+        val targetType = try { getTypeFromTypeNode(typeNode) } catch (_: StackOverflowError) { return }
+        if (sourceType !is Type.Reference) return
+        if (sourceType.target.symbol?.name != "Array") return
+        if (targetType !is Type.Reference) return
+        val targetClass = targetType.target
+        if (targetClass.symbol?.name == "Array") return
+        val classSym = targetClass.symbol ?: return
+        if (!classSym.flags.hasAny(SymbolFlags.Class)) return
+        try { resolveStructuredTypeMembers(sourceType) } catch (_: StackOverflowError) { return }
+        try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { return }
+        val sourceMembers = sourceType.members ?: return
+        val targetProps = targetType.properties ?: return
+        var firstMissing: Symbol? = null
+        for (prop in targetProps) {
+            if (isOptionalProperty(prop)) continue
+            if (prop.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (prop.name !in sourceMembers) {
+                firstMissing = prop
+                break
+            }
+        }
+        if (firstMissing == null) return
+        val sourceDisplay = typeToString(sourceType)
+        val targetDisplay = typeToString(targetType)
+        val start = expr.pos
+        val endPos = expressionTrueEnd(inner)
+        val length = (endPos - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val related = mutableListOf<Diagnostic>()
+        val firstDecl = firstMissing.declarations.firstOrNull()
+        if (firstDecl != null) {
+            val declPos = when (firstDecl) {
+                is PropertyDeclaration -> firstDecl.name.pos
+                is MethodDeclaration -> firstDecl.name.let { (it as? Identifier)?.pos ?: firstDecl.pos }
+                else -> firstDecl.pos
+            }
+            val (resolvedFile, resolvedSource) = resolveDeclarationSourceFile(declPos)
+            val declFile = resolvedFile ?: fileName
+            val declSource = resolvedSource ?: source
+            val isLib = isLibFileName(declFile)
+            val (dline, dchar) = if (isLib) {
+                Pair(null as Int?, null as Int?)
+            } else {
+                val p = getLineAndCharacterOfPosition(declSource, declPos)
+                Pair(p.first, p.second)
+            }
+            related.add(Diagnostic(
+                message = "'${firstMissing.name}' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = declFile,
+                line = dline,
+                character = dchar,
+                start = declPos,
+                length = firstMissing.name.length,
+            ))
+        }
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '$sourceDisplay' to type '$targetDisplay' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            messageChain = listOf("  Property '${firstMissing.name}' is missing in type '$sourceDisplay' but required in type '$targetDisplay'."),
+            category = DiagnosticCategory.Error,
+            code = 2352,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = related,
+        ))
     }
 
     // -----------------------------------------------------------------------

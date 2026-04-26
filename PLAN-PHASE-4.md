@@ -2519,6 +2519,19 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-26 (17.28, 8409 → 8410, +1) — TS2352 array-source → class-target cast non-overlap:** Flips `genericTypeAssertions2_ts`. Test pattern: `class A<T> { foo(x: T) {} } var r5: A<number> = <A<number>>[]; // error`. TypeScript expects TS2352 "Conversion of type 'never[]' to type 'A<number>' may be a mistake because neither type sufficiently overlaps with the other..." with chain "Property 'foo' is missing in type 'never[]' but required in type 'A<number>'." + TS2728 related info pointing to `foo`'s declaration. Previously: no TS2352 emission for this shape — only the existing `<Class>null` path (`emitTS2352IfNullCast`) and same-target Reference path (`emitTS2352IfSameTargetMismatch`) covered TS2352.
+
+  New checker init step `checkArrayToClassCastOverlap` + `emitTS2352IfArrayToClassMismatch` emitter (Checker.kt). Walks type assertions via the existing `walkTypeAssertionsInStmt`; for each `<T>arr`:
+  1. Empty array literal `[]` is treated as `never[]` directly (`getTypeOfArrayLiteral` returns `anyType` for empty arrays — synthesizing `getArrayType(neverType)` lets the comparison + display work without changing the global inference rule).
+  2. Source must be `Type.Reference` whose target.symbol.name == "Array".
+  3. Target must be `Type.Reference` whose target is a class (`SymbolFlags.Class`) with a different name than "Array".
+  4. After `resolveStructuredTypeMembers`, walk target's properties — first required (non-optional, non-OBJECT_PROTOTYPE) prop missing from source's members is the firstMissing.
+  5. Emit TS2352 with chain `Property 'X' is missing in type 'never[]' but required in type 'C<...>'.` + TS2728 ("'X' is declared here.") at the prop declaration position, mirroring the existing TS2728 wiring in `checkArgumentsAgainstSignature`'s missing-required-property branch.
+
+  Squiggle: `expr.pos` to `expressionTrueEnd(inner)` — for `<A<number>>[]` that spans the entire 13-char assertion-plus-array `<A<number>>[]`. PropertyDeclaration / MethodDeclaration declarations both handled for the TS2728 declPos lookup; lib declarations get `line=null, character=null` for the `lib.es5.d.ts:--:--` convention.
+
+  Zero regressions across the 10078-test suite (1666 → 1665 failed; 8409 → 8410 passing). The narrow gate (Array source target.symbol.name + class target.symbol.flags) keeps blast radius near zero — no other tests' type assertions match this exact shape (Array → non-Array Class with required non-prototype props).
+
   **Session 2026-04-26 (post-17.27 recon #2, 8409 passing) — surgical pool re-confirmed empty (18+ consecutive); five candidates spot-checked, all architectural/multi-piece:** Full-suite reproduces 8409 / 1666 / 3 (matches 17.27 baseline exactly — no drift). `find_candidates.py --fresh` returns 0/0/0 (filtered from 8/93/22). Spot-checked five candidates this session to characterize blocker depth, all confirmed architectural or multi-piece; no skip-log entries needed updates beyond what's already there:
 
   - `declarationEmitExpressionInExtends4_ts` (MISS TS2315 "Type 'D' is not generic." for `class C extends getSomething()<number, string>`): requires return-type inference for class-expression-bodied function (`function getSomething() { return class D { } }`). `getReturnTypeOfCallExpression` resolves the function callee but `getTypeOfFunction` falls through to `anyType` because the body has a real return statement (so `bodyHasNoReturn` is false) and there's no return-type annotation. Multi-piece — needs class-expression-return inference + `ExpressionWithTypeArguments` CallExpression branch in `checkConstraintsInExprWithTypeArgs`. Skip-log entry (line ~3676) already correctly characterized.
@@ -3992,7 +4005,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 
 **Session 2026-04-18 (16.4dg) additional explored-but-skipped:**
 - `getAndSetNotIdenticalType2_ts` / `getAndSetNotIdenticalType3_ts` → MISS 2× TS2322 for `this.data = v` (inside setter body) and `x.x = r` (top-level). Both assignments to a get/set accessor property. Root causes: (a) `this` inside method bodies resolves to `anyType` so `this.data = v` never reaches `checkPropertyAccessAssignment`; (b) the checker uses the getter's return type as the property type instead of the setter's parameter type, so `x.x = r` sees target `A<number>` (matches source `A<number>`) when it should see `A<string>` (setter param). Both need focused fixes (proper `this` typing in methods; setter-param-aware prop type for assignment context) — not step (c) or (d).
-- ~~`genericTypeAssertions1_ts`~~ / `genericTypeAssertions2_ts` → MISS TS2352 "Conversion of type … may be a mistake because neither type sufficiently overlaps" for type-assertion casts (`<A<A<number>>>foo`, `<A<number>>new A()` etc.). TS2352 diagnostic not implemented — needs a mutual-assignability check (`!assignable(A,B) && !assignable(B,A)`) at cast sites, plus a companion "may be a mistake" message formatter.
+- ~~`genericTypeAssertions1_ts`~~ / ~~`genericTypeAssertions2_ts`~~ → MISS TS2352 "Conversion of type … may be a mistake because neither type sufficiently overlaps" for type-assertion casts. genericTypeAssertions1 flipped 16.4gp (same-target Reference cast); genericTypeAssertions2 flipped 17.28 (array-source → class-target cast non-overlap with missing-prop chain + TS2728).
 - ~~`infinitelyExpandingTypes1_ts`~~ → MISS TS2367 "This comparison appears to be unintentional because the types 'List<number>' and 'List<string>' have no overlap." for `==`/`===` between different same-target refs. TS2367 not implemented — equality-operator compatibility check needed (step (a)'s infra covers the relation test, just needs wiring at `BinaryExpression(==|===|!=|!==)` emission).
 
 **Session 2026-04-19 (16.4du/dv/dw) additional explored-but-skipped:**
@@ -4149,7 +4162,7 @@ Blocks fine-grained module-visibility diagnostics: TS2301 vs TS2663 distinction,
 **Status (2026-04-25, 8337 passing):** Steps (a), (b), (c) partial, (d) partial all landed across 16.4dc–df, dg, dm, gr, gs. Type.Reference interning, cycle/depth heuristic, TypeParam apparent-type comparison, `resolvedPropertyTypes` cache, heritage-clause type-arg instantiation, base-chain inheritance via `resolveGenericPropertyType`, parameter-mismatch chain elaboration, base-method TypeParam TS2208 — all in place.
 
 **What's left (small, gated by other blockers):**
-- Different-target TS2352 with "Property X missing" elaboration (`genericTypeAssertions2_ts`) — requires TypeScript-style `comparable` relation with full structural elaboration.
+- ~~Different-target TS2352 with "Property X missing" elaboration (`genericTypeAssertions2_ts`)~~ — flipped 17.28 (narrow array-source → class-target case). Generalizing to all different-target casts still requires a TypeScript-style `comparable` relation with full structural elaboration.
 - Overload-aware TS2416 for lib generic interfaces (`implementArrayInterface_ts` emits 2 extra diagnostics because lib's `every`/`filter` have type-predicate overloads that user code only implements one of).
 - Multi-statement bodies with single return for `inferSimpleReturnTypeFromBody`.
 - Identifier returns (`return param`, `return this.field`) for return-type-from-body inference.
