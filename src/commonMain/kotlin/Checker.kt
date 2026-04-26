@@ -391,6 +391,7 @@ class Checker(
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
         if (shouldCheckDefiniteAssignment) {
             checkDefiniteAssignment()
+            checkDefiniteAssignmentViaFlowGraph()
         }
         // 6. Check for class properties without initializer (TS2564)
         // Suppressed when strict=false, or when strictPropertyInitialization=false explicitly set
@@ -5989,6 +5990,574 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+
+    // -----------------------------------------------------------------------
+    // 17.30a: Flow-graph-based definite-assignment supplement (TS2454)
+    // -----------------------------------------------------------------------
+    //
+    // Augments the ad-hoc walker above. The ad-hoc walker explicitly does NOT
+    // recurse into IfStatement / WhileStatement / ForStatement / SwitchStatement /
+    // TryStatement bodies (Checker.kt:5436+), missing TS2454 for reads inside
+    // those bodies (e.g. `nestedLoopTypeGuards_ts` line 9). This pass walks
+    // those bodies via the file's pre-built flow graph (`Flow.kt` /
+    // `FlowGraphBuilder`) and emits TS2454 only when the flow walk confirms
+    // the variable has no reaching FlowAssignment AND the path has no
+    // type-guard condition implying assignment (e.g. `typeof a === 'string'`
+    // true-branch).
+    //
+    // Narrow gate (per 17.30a):
+    //   - Function-local `let`/`var` only (function-scoped uninitialized).
+    //   - Same suppression filters as the ad-hoc walker (any/unknown/import
+    //     types/types-including-undefined/declare/namespace-typed).
+    //   - Emits ONLY when the read is inside an unchecked body context
+    //     (if/while/for/switch/try body) — top-level reads remain the
+    //     ad-hoc walker's responsibility, and dedup via emitted-positions
+    //     prevents any double-fire.
+    //
+    // 17.1c history: a prior snapshot/restore attempt regressed -7 (emitted
+    // at body reads like `a.length` because TypeScript's TS2454 treats a
+    // successful positive type-guard as implicit assignment for subsequent
+    // reads). This pass models that by walking through `FlowCondition` nodes
+    // and recognizing a small set of conditions that imply assignment.
+    private fun checkDefiniteAssignmentViaFlowGraph() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            currentFlowGraph = result.flowGraph
+            try {
+                val emittedTs2454Positions = mutableSetOf<Int>()
+                for (d in diagnostics) {
+                    if (d.code == 2454 && d.fileName == fileName) {
+                        d.start?.let { emittedTs2454Positions.add(it) }
+                    }
+                }
+                for (stmt in result.sourceFile.statements) {
+                    walkTopForFlowTS2454(stmt, source, fileName, emittedTs2454Positions, result.locals)
+                }
+            } finally {
+                currentFlowGraph = null
+            }
+        }
+    }
+
+    private fun walkTopForFlowTS2454(
+        stmt: Statement, source: String, fileName: String,
+        emitted: MutableSet<Int>, fileLocals: SymbolTable?,
+    ) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                stmt.body?.let { runFlowTS2454OnFunction(it, stmt.parameters, source, fileName, emitted, fileLocals) }
+            }
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { runFlowTS2454OnFunction(it, m.parameters, source, fileName, emitted, fileLocals) }
+                        is Constructor -> m.body?.let { runFlowTS2454OnFunction(it, m.parameters, source, fileName, emitted, fileLocals) }
+                        is GetAccessor -> m.body?.let { runFlowTS2454OnFunction(it, m.parameters, source, fileName, emitted, fileLocals) }
+                        is SetAccessor -> m.body?.let { runFlowTS2454OnFunction(it, m.parameters, source, fileName, emitted, fileLocals) }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                when (val body = stmt.body) {
+                    is ModuleBlock -> body.statements.forEach {
+                        walkTopForFlowTS2454(it, source, fileName, emitted, fileLocals)
+                    }
+                    is ModuleDeclaration -> walkTopForFlowTS2454(body, source, fileName, emitted, fileLocals)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun runFlowTS2454OnFunction(
+        body: Block, parameters: List<Parameter>, source: String, fileName: String,
+        emitted: MutableSet<Int>, fileLocals: SymbolTable?,
+    ) {
+        val preInit = collectParamNames(parameters)
+        val uninitialized = mutableSetOf<String>()
+        collectAllUninitVarsInFunction(body.statements, uninitialized, preInit, fileLocals)
+        if (uninitialized.isNotEmpty()) {
+            for (s in body.statements) {
+                walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
+            }
+        }
+        // Recurse into nested function-likes (their own scope, fresh uninit set)
+        for (s in body.statements) {
+            walkTopForFlowTS2454(s, source, fileName, emitted, fileLocals)
+            walkExprForNestedFunctionLikes(s, source, fileName, emitted, fileLocals)
+        }
+    }
+
+    private fun collectAllUninitVarsInFunction(
+        stmts: List<Statement>, uninitialized: MutableSet<String>,
+        preInit: Set<String>, fileLocals: SymbolTable?,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    for (decl in stmt.declarationList.declarations) {
+                        addIfUninitForFlow(decl, uninitialized, preInit, fileLocals)
+                    }
+                }
+                is Block -> collectAllUninitVarsInFunction(stmt.statements, uninitialized, preInit, fileLocals)
+                is IfStatement -> {
+                    collectAllUninitVarsInFunction(listOf(stmt.thenStatement), uninitialized, preInit, fileLocals)
+                    stmt.elseStatement?.let { collectAllUninitVarsInFunction(listOf(it), uninitialized, preInit, fileLocals) }
+                }
+                is ForStatement -> {
+                    (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                        addIfUninitForFlow(it, uninitialized, preInit, fileLocals)
+                    }
+                    collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                }
+                is ForInStatement -> {
+                    (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                        addIfUninitForFlow(it, uninitialized, preInit, fileLocals)
+                    }
+                    collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                }
+                is ForOfStatement -> {
+                    (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                        addIfUninitForFlow(it, uninitialized, preInit, fileLocals)
+                    }
+                    collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                }
+                is WhileStatement -> collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                is DoStatement -> collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        val cs = when (clause) {
+                            is CaseClause -> clause.statements
+                            is DefaultClause -> clause.statements
+                            else -> emptyList()
+                        }
+                        collectAllUninitVarsInFunction(cs, uninitialized, preInit, fileLocals)
+                    }
+                }
+                is TryStatement -> {
+                    collectAllUninitVarsInFunction(stmt.tryBlock.statements, uninitialized, preInit, fileLocals)
+                    stmt.catchClause?.block?.statements?.let { collectAllUninitVarsInFunction(it, uninitialized, preInit, fileLocals) }
+                    stmt.finallyBlock?.statements?.let { collectAllUninitVarsInFunction(it, uninitialized, preInit, fileLocals) }
+                }
+                is LabeledStatement -> collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                is WithStatement -> collectAllUninitVarsInFunction(listOf(stmt.statement), uninitialized, preInit, fileLocals)
+                else -> {} // function/class declarations have their own scope
+            }
+        }
+    }
+
+    private fun addIfUninitForFlow(
+        decl: VariableDeclaration, uninitialized: MutableSet<String>,
+        preInit: Set<String>, fileLocals: SymbolTable?,
+    ) {
+        if (decl.type == null || decl.initializer != null || decl.exclamationToken) return
+        if (isAnyType(decl.type)) return
+        if (isUnresolvedGenericType(decl.type)) return
+        if (typeContainsImportType(decl.type)) return
+        if (typeIncludesUndefined(decl.type)) return
+        if (fileLocals != null && isNamespaceTypeRef(decl.type, fileLocals)) return
+        val name = decl.name
+        if (name is Identifier && name.text !in preInit) {
+            uninitialized.add(name.text)
+        }
+    }
+
+    private fun walkStmtForFlowTS2454(
+        stmt: Statement, uninitialized: Set<String>,
+        source: String, fileName: String,
+        emitted: MutableSet<Int>, inUncheckedBody: Boolean,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+                }
+            }
+            is ExpressionStatement -> walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is ReturnStatement -> stmt.expression?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+            is ThrowStatement -> stmt.expression?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+            is IfStatement -> {
+                walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkStmtForFlowTS2454(stmt.thenStatement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                stmt.elseStatement?.let { walkStmtForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody = true) }
+            }
+            is WhileStatement -> {
+                walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+            }
+            is DoStatement -> {
+                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { decl ->
+                    decl.initializer?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+                }
+                stmt.condition?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+                stmt.incrementor?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+            }
+            is ForInStatement -> {
+                walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+            }
+            is ForOfStatement -> {
+                walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+            }
+            is SwitchStatement -> {
+                walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            walkExprForFlowTS2454(clause.expression, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                            for (s in clause.statements) walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                        }
+                        is DefaultClause -> {
+                            for (s in clause.statements) walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                // Skip catchClause body to avoid catch-variable-shadowing FPs:
+                // a catch `(a)` introduces an `a` binding that shadows any outer
+                // `a` in the function scope. Without per-scope name tracking,
+                // walking into the catch body would FP-emit TS2454 on
+                // catch-bound reads.
+                stmt.finallyBlock?.statements?.forEach { walkStmtForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody = true) }
+            }
+            is Block -> for (s in stmt.statements) walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is LabeledStatement -> walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is WithStatement -> walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+            is ClassDeclaration -> {
+                stmt.heritageClauses?.forEach { clause ->
+                    for (type in clause.types) walkExprForFlowTS2454(type.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                }
+            }
+            is ExportAssignment -> stmt.expression?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForFlowTS2454(
+        expr: Expression, uninitialized: Set<String>,
+        source: String, fileName: String,
+        emitted: MutableSet<Int>, inUncheckedBody: Boolean,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                if (inUncheckedBody && expr.text in uninitialized) {
+                    val pos = expr.pos
+                    if (pos !in emitted) {
+                        val flow = getFlowAt(expr)
+                        if (!isAssignedAtFlow(flow, expr.text, mutableSetOf())) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Variable '${expr.text}' is used before being assigned.",
+                                category = DiagnosticCategory.Error,
+                                code = 2454,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = pos,
+                                length = expr.text.length,
+                            ))
+                            emitted.add(pos)
+                        }
+                    }
+                }
+            }
+            is PropertyAccessExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is ElementAccessExpression -> {
+                walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkExprForFlowTS2454(expr.argumentExpression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            }
+            is CallExpression -> {
+                walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                for (arg in expr.arguments) walkExprForFlowTS2454(arg, uninitialized, source, fileName, emitted, inUncheckedBody)
+            }
+            is NewExpression -> {
+                walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                expr.arguments?.forEach { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+            }
+            is BinaryExpression -> {
+                // Iterative left-spine to avoid StackOverflow on deep binary chains.
+                var current: Expression = expr
+                while (current is BinaryExpression && current.operator != SyntaxKind.Equals && current.operator != SyntaxKind.Comma) {
+                    walkExprForFlowTS2454(current.right, uninitialized, source, fileName, emitted, inUncheckedBody)
+                    current = current.left
+                }
+                if (current is BinaryExpression) {
+                    if (current.operator == SyntaxKind.Equals) {
+                        walkExprForFlowTS2454(current.right, uninitialized, source, fileName, emitted, inUncheckedBody)
+                        when (val left = current.left) {
+                            is PropertyAccessExpression -> walkExprForFlowTS2454(left.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                            is ElementAccessExpression -> {
+                                walkExprForFlowTS2454(left.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                                walkExprForFlowTS2454(left.argumentExpression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                            }
+                            else -> {} // Identifier / destructuring patterns: write target — no read-time check
+                        }
+                    } else { // Comma
+                        walkExprForFlowTS2454(current.left, uninitialized, source, fileName, emitted, inUncheckedBody)
+                        walkExprForFlowTS2454(current.right, uninitialized, source, fileName, emitted, inUncheckedBody)
+                    }
+                } else {
+                    walkExprForFlowTS2454(current, uninitialized, source, fileName, emitted, inUncheckedBody)
+                }
+            }
+            is ConditionalExpression -> {
+                walkExprForFlowTS2454(expr.condition, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkExprForFlowTS2454(expr.whenTrue, uninitialized, source, fileName, emitted, inUncheckedBody)
+                walkExprForFlowTS2454(expr.whenFalse, uninitialized, source, fileName, emitted, inUncheckedBody)
+            }
+            is PrefixUnaryExpression -> walkExprForFlowTS2454(expr.operand, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is PostfixUnaryExpression -> walkExprForFlowTS2454(expr.operand, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is ParenthesizedExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is ArrayLiteralExpression -> for (el in expr.elements) walkExprForFlowTS2454(el, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> {
+                            (prop.name as? ComputedPropertyName)?.let { walkExprForFlowTS2454(it.expression, uninitialized, source, fileName, emitted, inUncheckedBody) }
+                            walkExprForFlowTS2454(prop.initializer, uninitialized, source, fileName, emitted, inUncheckedBody)
+                        }
+                        is ShorthandPropertyAssignment -> walkExprForFlowTS2454(prop.name, uninitialized, source, fileName, emitted, inUncheckedBody)
+                        is SpreadAssignment -> walkExprForFlowTS2454(prop.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                        else -> {}
+                    }
+                }
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForFlowTS2454(it.expression, uninitialized, source, fileName, emitted, inUncheckedBody) }
+            is TaggedTemplateExpression -> walkExprForFlowTS2454(expr.tag, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is SpreadElement -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is AwaitExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is YieldExpression -> expr.expression?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
+            is AsExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is NonNullExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is TypeOfExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is DeleteExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is VoidExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is TypeAssertionExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is SatisfiesExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is CommaListExpression -> for (e in expr.elements) walkExprForFlowTS2454(e, uninitialized, source, fileName, emitted, inUncheckedBody)
+            else -> {} // literals, arrows, function expressions — nested-function descent runs separately
+        }
+    }
+
+    /** Recurse into nested function/class expressions inside a statement so their bodies get their own pass. */
+    private fun walkExprForNestedFunctionLikes(
+        stmt: Statement, source: String, fileName: String,
+        emitted: MutableSet<Int>, fileLocals: SymbolTable?,
+    ) {
+        // Currently we let `walkTopForFlowTS2454` recurse via outer FunctionDeclaration /
+        // ClassDeclaration / ModuleDeclaration handling. Function/Class EXPRESSIONS
+        // inside other constructs are not yet recursed (would require an expression
+        // walker mirroring `checkDefiniteAssignmentInExprContext`). The narrow gate
+        // for 17.30a accepts this gap — top-level decls cover the nestedLoopTypeGuards
+        // case and most real-world function-local TS2454 sites.
+        // (Hook reserved for future widening — left intentionally empty.)
+    }
+
+    /**
+     * Walk the flow graph backward from [flow] and return true if every reaching
+     * path has either:
+     *   - a [FlowAssignment] whose target binds [varName], OR
+     *   - a [FlowCondition] whose expression+polarity implies [varName] is
+     *     definitely assigned (e.g. `typeof x === '<not undefined>'` true-branch).
+     *
+     * The "any reaching path" framing here is actually "any direct walk-back path"
+     * — we use OR-semantics across [FlowBranchLabel] / [FlowLoopLabel] antecedents
+     * rather than AND. This matches the existing ad-hoc walker's leniency
+     * (assignment in any branch suppresses TS2454) and minimizes regression risk
+     * for the first commit. A stricter "all paths must assign" version is a
+     * follow-up. Returns false when the walk reaches [FlowStart] or
+     * [FlowUnreachable] without finding evidence.
+     */
+    private fun isAssignedAtFlow(
+        flow: FlowNode?, varName: String, visited: MutableSet<Int>,
+    ): Boolean {
+        if (flow == null) return false
+        if (!visited.add(flow.id)) return false
+        return when (flow) {
+            is FlowStart -> false
+            is FlowUnreachable -> false
+            is FlowAssignment -> {
+                if (flowAssignmentTargetsName(flow.node, varName)) true
+                else isAssignedAtFlow(flow.antecedent, varName, visited)
+            }
+            is FlowBranchLabel -> flow.antecedents.any { isAssignedAtFlow(it, varName, visited) }
+            // FlowLoopLabel back-edges are pointers to post-iteration flow that
+            // can include type-guard true-branches (`typeof a === 'string'`) from
+            // an inner conditional. Walking them naively makes a read inside the
+            // loop body reach those guards through the back-edge cycle, FP-asserting
+            // assignment. Only follow antecedents[0], the pre-loop entry — same
+            // conservative bound `narrowTypeFromFlow` uses (returns declaredType
+            // at loop joins to avoid back-edge widening). Continue/end-of-body
+            // back-edges are antecedents[1+].
+            is FlowLoopLabel -> if (flow.antecedents.isEmpty()) false
+                                else isAssignedAtFlow(flow.antecedents[0], varName, visited)
+            is FlowCondition -> {
+                val implies = if (flow.isTrue) conditionImpliesAssignedTrue(flow.expression, varName)
+                              else conditionImpliesAssignedFalse(flow.expression, varName)
+                if (implies) true
+                else isAssignedAtFlow(flow.antecedent, varName, visited)
+            }
+            is FlowCall -> isAssignedAtFlow(flow.antecedent, varName, visited)
+            is FlowSwitchClause -> isAssignedAtFlow(flow.antecedent, varName, visited)
+            is FlowArrayMutation -> isAssignedAtFlow(flow.antecedent, varName, visited)
+        }
+    }
+
+    private fun flowAssignmentTargetsName(node: Node, varName: String): Boolean {
+        return when (node) {
+            // Bare `var a: T;` creates a FlowAssignment in Flow.kt for binding-introduction
+            // bookkeeping, but no value is assigned. Only count VariableDeclarations that
+            // actually assign a value (initializer present) — otherwise the declaration
+            // itself would mask every TS2454 candidate.
+            is VariableDeclaration -> {
+                if (node.initializer == null) false
+                else (node.name as? Identifier)?.text == varName
+            }
+            is Parameter -> (node.name as? Identifier)?.text == varName
+            is BindingElement -> (node.name as? Identifier)?.text == varName
+            is BinaryExpression -> (node.left as? Identifier)?.text == varName
+            is Identifier -> node.text == varName // ++x / x++ pattern
+            else -> false
+        }
+    }
+
+    /**
+     * Patterns whose true-branch implies [varName] is definitely assigned:
+     *   - `varName`           (truthy → not undefined/null/0/'')
+     *   - `typeof varName === '<not undefined>'`  (loose or strict)
+     *   - `typeof varName !== 'undefined'`        (loose or strict)
+     *   - `varName !== undefined`                 (strict)
+     *   - `varName != null`                       (loose — covers undefined too)
+     *   - `varName != undefined`                  (loose — same shape)
+     *   - `varName === <something other than undefined/null>`  (strict)
+     *   - `!<something whose false branch implies assigned>`
+     *   - `<lhs> && <rhs>` where either side implies assigned
+     */
+    private fun conditionImpliesAssignedTrue(expr: Expression, varName: String): Boolean {
+        val e = unwrapParensExpr(expr)
+        return when (e) {
+            is Identifier -> e.text == varName
+            is PrefixUnaryExpression -> if (e.operator == SyntaxKind.Exclamation) {
+                conditionImpliesAssignedFalse(e.operand, varName)
+            } else false
+            is BinaryExpression -> when (e.operator) {
+                SyntaxKind.AmpersandAmpersand -> {
+                    conditionImpliesAssignedTrue(e.left, varName) || conditionImpliesAssignedTrue(e.right, varName)
+                }
+                SyntaxKind.EqualsEqualsEquals, SyntaxKind.EqualsEquals -> {
+                    if (isTypeofOf(e.left, varName) && isStringLiteralNotUndefined(e.right)) return true
+                    if (isTypeofOf(e.right, varName) && isStringLiteralNotUndefined(e.left)) return true
+                    if (isVarRef(e.left, varName) && isNotNullOrUndefinedRef(e.right)) return true
+                    if (isVarRef(e.right, varName) && isNotNullOrUndefinedRef(e.left)) return true
+                    false
+                }
+                SyntaxKind.ExclamationEqualsEquals -> {
+                    if (isTypeofOf(e.left, varName) && isUndefinedStringLiteral(e.right)) return true
+                    if (isTypeofOf(e.right, varName) && isUndefinedStringLiteral(e.left)) return true
+                    if (isVarRef(e.left, varName) && isUndefinedRef(e.right)) return true
+                    if (isVarRef(e.right, varName) && isUndefinedRef(e.left)) return true
+                    false
+                }
+                SyntaxKind.ExclamationEquals -> {
+                    // x != null (loose) / x != undefined — both filter undefined too
+                    if (isTypeofOf(e.left, varName) && isUndefinedStringLiteral(e.right)) return true
+                    if (isTypeofOf(e.right, varName) && isUndefinedStringLiteral(e.left)) return true
+                    if (isVarRef(e.left, varName) && (isNullRef(e.right) || isUndefinedRef(e.right))) return true
+                    if (isVarRef(e.right, varName) && (isNullRef(e.left) || isUndefinedRef(e.left))) return true
+                    false
+                }
+                else -> false
+            }
+            else -> false
+        }
+    }
+
+    private fun conditionImpliesAssignedFalse(expr: Expression, varName: String): Boolean {
+        val e = unwrapParensExpr(expr)
+        return when (e) {
+            is PrefixUnaryExpression -> if (e.operator == SyntaxKind.Exclamation) {
+                conditionImpliesAssignedTrue(e.operand, varName)
+            } else false
+            is BinaryExpression -> when (e.operator) {
+                SyntaxKind.BarBar -> {
+                    // !(a || b) ⇔ !a && !b — both must imply assigned
+                    conditionImpliesAssignedFalse(e.left, varName) && conditionImpliesAssignedFalse(e.right, varName)
+                }
+                SyntaxKind.EqualsEqualsEquals, SyntaxKind.EqualsEquals -> {
+                    // typeof x === 'undefined' (false) → x assigned; x === undefined (false) → x assigned
+                    if (isTypeofOf(e.left, varName) && isUndefinedStringLiteral(e.right)) return true
+                    if (isTypeofOf(e.right, varName) && isUndefinedStringLiteral(e.left)) return true
+                    if (isVarRef(e.left, varName) && isUndefinedRef(e.right)) return true
+                    if (isVarRef(e.right, varName) && isUndefinedRef(e.left)) return true
+                    false
+                }
+                SyntaxKind.ExclamationEqualsEquals -> {
+                    // typeof x !== '<not undefined>' (false) → x has that typeof → assigned
+                    if (isTypeofOf(e.left, varName) && isStringLiteralNotUndefined(e.right)) return true
+                    if (isTypeofOf(e.right, varName) && isStringLiteralNotUndefined(e.left)) return true
+                    false
+                }
+                else -> false
+            }
+            else -> false
+        }
+    }
+
+    private fun unwrapParensExpr(expr: Expression): Expression =
+        if (expr is ParenthesizedExpression) unwrapParensExpr(expr.expression) else expr
+
+    private fun isTypeofOf(expr: Expression, varName: String): Boolean {
+        return expr is TypeOfExpression && (expr.expression as? Identifier)?.text == varName
+    }
+
+    private fun isStringLiteralNotUndefined(expr: Expression): Boolean {
+        val text = (expr as? StringLiteralNode)?.text
+            ?: (expr as? NoSubstitutionTemplateLiteralNode)?.text
+            ?: return false
+        return text != "undefined"
+    }
+
+    private fun isUndefinedStringLiteral(expr: Expression): Boolean {
+        val text = (expr as? StringLiteralNode)?.text
+            ?: (expr as? NoSubstitutionTemplateLiteralNode)?.text
+            ?: return false
+        return text == "undefined"
+    }
+
+    private fun isVarRef(expr: Expression, varName: String): Boolean {
+        return (expr as? Identifier)?.text == varName
+    }
+
+    private fun isUndefinedRef(expr: Expression): Boolean {
+        return (expr as? Identifier)?.text == "undefined"
+    }
+
+    private fun isNullRef(expr: Expression): Boolean {
+        return expr.kind == SyntaxKind.NullKeyword
+    }
+
+    private fun isNotNullOrUndefinedRef(expr: Expression): Boolean {
+        return !isUndefinedRef(expr) && !isNullRef(expr)
     }
 
 
