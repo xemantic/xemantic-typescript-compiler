@@ -2173,9 +2173,20 @@ class Checker(
                                             // Ambient module fallback — `declare module "X"` in a .d.ts file.
                                             val ambient = globals[specifier2]
                                             if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
-                                                val target = ambient.exports?.get(originalName) ?: continue
-                                                setSymbolTarget(symbol, target)
-                                                return resolveAlias(target, visited)
+                                                ambient.exports?.get(originalName)?.let { target ->
+                                                    setSymbolTarget(symbol, target)
+                                                    return resolveAlias(target, visited)
+                                                }
+                                                // Fallback: ambient module body has `export = X`
+                                                // (e.g. `import alias = demoNS; export = alias`) —
+                                                // resolve X then look up `originalName` in X's exports.
+                                                val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
+                                                if (exportEqualsTarget != null) {
+                                                    exportEqualsTarget.exports?.get(originalName)?.let { target ->
+                                                        setSymbolTarget(symbol, target)
+                                                        return resolveAlias(target, visited)
+                                                    }
+                                                }
                                             }
                                             continue
                                         }
@@ -2206,6 +2217,42 @@ class Checker(
             }
         }
         return null
+    }
+
+    /**
+     * Resolve an ambient module symbol's `export = X` to the target symbol.
+     * Walks the module's [ModuleDeclaration] body for an [ExportAssignment]
+     * with `isExportEquals=true`, then resolves the expression — looking up
+     * Identifiers in the module's own exports first (so `import alias = X;
+     * export = alias` works) before falling back to globals.
+     * Returns null if no export-equals exists or the target can't be resolved.
+     */
+    private fun resolveAmbientModuleExportEquals(moduleSym: Symbol, visited: MutableSet<Int>): Symbol? {
+        for (decl in moduleSym.declarations) {
+            if (decl !is ModuleDeclaration) continue
+            val body = decl.body as? ModuleBlock ?: continue
+            for (stmt in body.statements) {
+                if (stmt is ExportAssignment && stmt.isExportEquals) {
+                    return resolveExpressionInAmbientModule(stmt.expression, moduleSym, visited)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun resolveExpressionInAmbientModule(expr: Expression, moduleSym: Symbol, visited: MutableSet<Int>): Symbol? {
+        return when (expr) {
+            is Identifier -> {
+                val sym = moduleSym.exports?.get(expr.text) ?: globals[expr.text] ?: return null
+                resolveAlias(sym, visited)
+            }
+            is PropertyAccessExpression -> {
+                val parent = resolveExpressionInAmbientModule(expr.expression, moduleSym, visited) ?: return null
+                val child = parent.exports?.get(expr.name.text) ?: return null
+                resolveAlias(child, visited)
+            }
+            else -> null
+        }
     }
 
     /**
