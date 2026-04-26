@@ -34258,7 +34258,13 @@ interface DataView {
                 decl.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                 decl.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
             }
-            val returnType = decl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            // 17.25: When the function has a body and contains no return statement at all,
+            // infer return type as `void`. Mirrors TypeScript's `function f() {}` → `() => void`.
+            // Conservative: only when there are zero return statements. Functions with mixed
+            // returns (some bare `return`, some with values) keep the anyType default.
+            val returnType = decl.type?.let { getTypeFromTypeNode(it) }
+                ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
+                ?: anyType
             // Resolve parameter types eagerly within the type param scope
             val paramSymbols = getParameterSymbols(decl.parameters)
             for ((pi, param) in paramSymbols.withIndex()) {
@@ -39268,6 +39274,46 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * 17.25: Returns true when the body block contains no `ReturnStatement` anywhere
+     * (recursively into nested if/loop/switch/try/labeled/block bodies, but NOT into
+     * nested function/arrow/class bodies — those have their own return-type analysis).
+     * Used to default an unannotated function's return type to `void` instead of `any`.
+     */
+    private fun bodyHasNoReturn(body: Node): Boolean {
+        if (body !is Block) return false
+        return !nodeContainsReturn(body)
+    }
+
+    private fun nodeContainsReturn(node: Node): Boolean {
+        return when (node) {
+            is ReturnStatement -> true
+            is Block -> node.statements.any { nodeContainsReturn(it) }
+            is IfStatement -> nodeContainsReturn(node.thenStatement) ||
+                (node.elseStatement?.let { nodeContainsReturn(it) } ?: false)
+            is ForStatement -> nodeContainsReturn(node.statement)
+            is ForInStatement -> nodeContainsReturn(node.statement)
+            is ForOfStatement -> nodeContainsReturn(node.statement)
+            is WhileStatement -> nodeContainsReturn(node.statement)
+            is DoStatement -> nodeContainsReturn(node.statement)
+            is SwitchStatement -> node.caseBlock.any { clause ->
+                when (clause) {
+                    is CaseClause -> clause.statements.any { nodeContainsReturn(it) }
+                    is DefaultClause -> clause.statements.any { nodeContainsReturn(it) }
+                    else -> false
+                }
+            }
+            is TryStatement -> nodeContainsReturn(node.tryBlock) ||
+                (node.catchClause?.block?.let { nodeContainsReturn(it) } ?: false) ||
+                (node.finallyBlock?.let { nodeContainsReturn(it) } ?: false)
+            is LabeledStatement -> nodeContainsReturn(node.statement)
+            is WithStatement -> nodeContainsReturn(node.statement)
+            // Don't recurse into nested function/arrow/class bodies — their return
+            // statements belong to those inner scopes, not the enclosing function.
+            else -> false
+        }
     }
 
     /** Add signature-level elaboration for function type mismatches in TS2416 chains. */
