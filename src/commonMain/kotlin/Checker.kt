@@ -43980,20 +43980,47 @@ interface DataView {
         val sourceParams = source.parameters
         val targetParams = target.parameters
         if (source.minArgumentCount > targetParams.size) return false
+        // 17.10d: Light type-param inference for the SOURCE-generic, TARGET-non-generic
+        // case. When source has type parameters and target doesn't, treat source's
+        // TypeParam-typed param positions as "wildcards" pinned to the target's
+        // concrete type at that position — a single TypeParam appearing multiple times
+        // must map to the SAME target type (modulo subtyping); otherwise the comparison
+        // fails. Each pinning must also satisfy the TypeParam's constraint. Without
+        // this, FunctionType nodes with type params (added in 17.10b) FP-reject
+        // legitimate contravariant param assignments like `(g: Giraffe) => void` ←
+        // `<T extends Animal>(x: T) => void`.
+        val sourceHasTpInParams = !source.typeParameters.isNullOrEmpty() &&
+            target.typeParameters.isNullOrEmpty() &&
+            sourceParams.any { getTypeOfSymbol(it) is Type.TypeParam }
+        val tpAssignments = if (sourceHasTpInParams) mutableMapOf<Int, Type>() else null
+        // Check parameter types (contravariant). We do params BEFORE return type so
+        // the type-param assignments from param pinning could (in a future extension)
+        // also drive return-type substitution.
+        val len = minOf(sourceParams.size, targetParams.size)
+        for (i in 0 until len) {
+            val sourceParamType = getTypeOfSymbol(sourceParams[i])
+            val targetParamType = getTypeOfSymbol(targetParams[i])
+            if (tpAssignments != null && sourceParamType is Type.TypeParam) {
+                val tpId = sourceParamType.id
+                val existing = tpAssignments[tpId]
+                if (existing != null && existing !== targetParamType) return false
+                tpAssignments[tpId] = targetParamType
+                // Constraint check: target must satisfy source TypeParam's constraint
+                val cons = sourceParamType.constraint
+                if (cons != null && cons !== errorType) {
+                    if (!checkTypeRelatedTo(targetParamType, cons, relation)) return false
+                }
+                continue
+            }
+            // Standard contravariant: target param must be assignable to source param
+            if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation)) return false
+        }
         // Check return types (covariant)
         // Void target return accepts any source return type (void means "don't care about return")
         val sourceReturn = source.resolvedReturnType ?: anyType
         val targetReturn = target.resolvedReturnType ?: anyType
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
-        // Check parameter types (contravariant)
-        val len = minOf(sourceParams.size, targetParams.size)
-        for (i in 0 until len) {
-            val sourceParamType = getTypeOfSymbol(sourceParams[i])
-            val targetParamType = getTypeOfSymbol(targetParams[i])
-            // Contravariant: target param must be assignable to source param
-            if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation)) return false
-        }
         return true
     }
 
