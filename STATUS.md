@@ -2,6 +2,17 @@
 
 **Phase 4 — Checker buildout.** 8,412 / 10,078 tests passing (~83%).
 
+**Post-17.30b queue audit (2026-04-26)**: 17.30c (`&&`-chain NARROWING for TS2774)
+is BLOCKED-PENDING-USER on lib.dom.d.ts loading — cross-corpus search confirms
+the ONLY failing TS2774 candidates that would flip with `&&`-chain narrowing
+all reference `window.<x>` and gate on `window` resolving past `anyType`.
+17.30d (discriminated-union narrowing through property-equality) was ALREADY
+done via 17.7a (`narrowByDiscriminantProperty`); queue item was a duplicate.
+Remaining work in Blocker #1 step 2h is just 17.30c which needs the
+significant lib.dom.d.ts infrastructure piece. Next session should pick up
+17.31 (Generic argument inference, smallest substep — single-arg single-typeParam
+inference for non-overloaded sigs).
+
 **17.30b (2026-04-26, net-zero infra)** — FlowAssignment-RHS narrowing landed
 in `narrowTypeFromFlow`'s FlowAssignment branch. When an assignment binds the
 queried identifier and the RHS is a recognized literal shape (string / number /
