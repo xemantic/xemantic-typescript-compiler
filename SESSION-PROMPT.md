@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8347 passing):** Surgical pool is exhausted (7+
+**Status (2026-04-26, 8348 passing):** Surgical pool is exhausted (7+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
 progress with infrastructure largely in place:
@@ -147,6 +147,11 @@ progress with infrastructure largely in place:
   for class-Identifier-as-value var-decls (+2 — flips
   `assignmentCompatability44/45_ts`; not narrowing — surgical
   carve-out for the case `canUseTypeEngine` deliberately skips)
+- 17.8b: populate real ctor params in `getTypeOfSymbolForTypeQuery`'s
+  Class branch (+1 — flips `classSideInheritance3_ts`; closes the
+  FP 17.8a's full-suite re-run revealed where target `typeof A`
+  ctor sig had 0 params and source's 1-param ctor wrongly tripped
+  the arity gap)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The

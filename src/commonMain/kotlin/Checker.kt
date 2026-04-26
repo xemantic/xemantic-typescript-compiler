@@ -44411,13 +44411,24 @@ interface DataView {
                 val ctorType = Type.Object()
                 ctorType.symbol = symbol
                 // Mark `abstract new (...) => X` if the class declaration has the abstract modifier.
-                // Display-only (signatureToString prepends "abstract"); does not affect comparison.
                 val classDecl = symbol.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                 val isAbstract = classDecl != null && ModifierFlag.Abstract in classDecl.modifiers
-                // Create construct signature that returns the class instance type
+                // Use the class's actual constructor parameters (or empty for implicit no-arg
+                // ctor). Without real params, structural comparison of `typeof Class` against
+                // another constructor-typed target is too loose — see classSideInheritance3
+                // where C's 1-param ctor must match A's 1-param ctor through `typeof A`.
+                val ctor = classDecl?.members?.filterIsInstance<Constructor>()?.let { ctors ->
+                    ctors.firstOrNull { it.body != null } ?: ctors.firstOrNull()
+                }
+                val params = ctor?.parameters?.let { getParameterSymbols(it) } ?: emptyList()
+                val minArgs = ctor?.parameters?.count {
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                } ?: 0
                 val ctorSig = Signature(
+                    declaration = ctor,
+                    parameters = params,
                     resolvedReturnType = classType,
-                    parameters = emptyList(), // simplified — TODO: actual ctor params
+                    minArgumentCount = minArgs,
                     isAbstract = isAbstract,
                 )
                 ctorType.constructSignatures = listOf(ctorSig)
