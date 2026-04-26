@@ -35753,6 +35753,13 @@ interface DataView {
         }
     }
 
+    /** 17.10c: Format a Type.TypeParam as `name` or `name extends Constraint`. */
+    private fun typeParamToString(tp: Type.TypeParam): String {
+        val name = tp.symbol?.name ?: "T"
+        val cons = tp.constraint
+        return if (cons != null && cons !== errorType) "$name extends ${typeToString(cons)}" else name
+    }
+
     /** Format a signature as a string like `(x: number) => string` or `new (x: number) => Foo`. */
     private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) {
@@ -35760,7 +35767,7 @@ interface DataView {
         } else ""
         val tps = sig.typeParameters
         val tpStr = if (!tps.isNullOrEmpty()) {
-            "<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+            "<${tps.joinToString(", ") { typeParamToString(it) }}>"
         } else ""
         val params = sig.parameters.joinToString(", ") { formatParameter(it) }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
@@ -35774,7 +35781,7 @@ interface DataView {
         } else ""
         val tps = sig.typeParameters
         val tpStr = if (!tps.isNullOrEmpty()) {
-            "<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+            "<${tps.joinToString(", ") { typeParamToString(it) }}>"
         } else ""
         val params = sig.parameters.joinToString(", ") { formatParameter(it) }
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
@@ -45446,6 +45453,13 @@ interface DataView {
      * Format a TypeNode for display in TS2322 messages (no "@" prefix).
      * Returns null for unsupported types (caller falls back to typeToString).
      */
+    /** 17.10c: Format a TypeParameter AST node as `name` or `name extends Constraint`. */
+    private fun tpDeclToDisplay(tp: TypeParameter): String {
+        val name = tp.name.text
+        val cons = tp.constraint?.let { formatTypeForDisplay(it) }
+        return if (cons != null) "$name extends $cons" else name
+    }
+
     private fun formatTypeForDisplay(typeNode: TypeNode): String? {
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
@@ -45504,7 +45518,7 @@ interface DataView {
             }
             is FunctionType -> {
                 val typeParams = typeNode.typeParameters ?: emptyList()
-                val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { it.name.text }}>" else ""
+                val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { tpDeclToDisplay(it) }}>" else ""
                 val params = typeNode.parameters.joinToString(", ") { p ->
                     val pName = (p.name as? Identifier)?.text ?: "_"
                     val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
@@ -45515,7 +45529,7 @@ interface DataView {
             }
             is ConstructorType -> {
                 val typeParams = typeNode.typeParameters ?: emptyList()
-                val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { it.name.text }}>" else ""
+                val tpStr = if (typeParams.isNotEmpty()) "<${typeParams.joinToString(", ") { tpDeclToDisplay(it) }}>" else ""
                 val params = typeNode.parameters.joinToString(", ") { p ->
                     val pName = (p.name as? Identifier)?.text ?: "_"
                     val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
@@ -45544,7 +45558,7 @@ interface DataView {
                             // 17.10b: Include type parameters from the call/construct sig
                             // so `{<T>(x:T): T}` displays as `<T>(x: T) => T` not `(x: T) => T`.
                             val sigTps = only.typeParameters ?: emptyList()
-                            val tpStr = if (sigTps.isNotEmpty()) "<${sigTps.joinToString(", ") { it.name.text }}>" else ""
+                            val tpStr = if (sigTps.isNotEmpty()) "<${sigTps.joinToString(", ") { tpDeclToDisplay(it) }}>" else ""
                             val params = only.parameters.joinToString(", ") { p ->
                                 val pName = (p.name as? Identifier)?.text ?: "_"
                                 val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
