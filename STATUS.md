@@ -2,14 +2,18 @@
 
 **Phase 4 — Checker buildout.** 8,409 / 10,078 tests passing (~83%).
 
-**Surgical pool is largely exhausted but 17.27 surfaced one additional win** —
-Function-prototype-method satisfaction in `propertiesRelatedTo` plus
-TS2345 + missing-property chain emission for Reference-source vs
-named-Interface-target call args (flips assignmentCompatability call/apply
-member-off-of-function-interface tests). Queue reshuffled 2026-04-25:
-subsequent sessions should still commit to architectural blockers rather
-than searching for surgical wins. 17.9–17.27 series landed cumulative +60
-from architectural-leaning surgical fixes (namespace-aware inference,
+**Surgical pool is exhausted (17+ consecutive recon sessions confirmed).**
+Last surgical win was 17.27 (Function-prototype-method satisfaction in
+`propertiesRelatedTo` + TS2345 + missing-property chain emission for
+Reference-source vs named-Interface-target call args, flipping
+assignmentCompatability call/apply member-off-of-function-interface
+tests). Post-17.27 recon (2026-04-26) confirmed `find_candidates.py
+--fresh` returns 0/0/0 (filtered from 8/93/22) and identified
+`arrayAssignmentTest4_ts` as a lib-version-aware-loading architectural
+case (logged to skip log). Queue reshuffled 2026-04-25: subsequent
+sessions must commit to architectural blockers rather than searching
+for surgical wins. 17.9–17.27 series landed cumulative +60 from
+architectural-leaning surgical fixes (namespace-aware inference,
 optional/index-sig/privacy elaboration, generic ctor inference,
 ambient-module export-equals named-import resolution, this-parameter
 display, TS2417 clodule static-side, super-call arg checking with
