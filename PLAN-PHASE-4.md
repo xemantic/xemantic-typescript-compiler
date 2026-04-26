@@ -2489,6 +2489,34 @@ These are UPPER bounds — a test usually needs multiple features. Realistic gai
 
 ### QUEUE — prioritized by unblocking potential, then by implementation cost
 
+**Note (2026-04-26 restructure):** the architectural blockers below — previously
+documented only in the "Known architectural blockers" section near the bottom of
+this file — are now promoted to top-level checkbox items so step 1 of the
+execution protocol ("pick first unchecked item") lands the agent on real
+blocker work instead of re-entering the exhausted 16.4 surgical pool. **Pick
+items top-to-bottom; do not drop down to 16.4 unless every blocker substep
+above it is checked off OR genuinely blocked on a Guardrails decision.** See
+the "Known architectural blockers" section (line ~4148) for full per-blocker
+rationale, yield estimates, and risk notes — those long-form descriptions are
+the source of truth; the queue items below are pointers + smallest-substep
+decompositions.
+
+- [ ] **17.30. Blocker #1 step 2h — Full control flow narrowing remaining wire-ups (HIGHEST yield ~60–100 tests, MEDIUM risk).** Flow-graph infra landed 17.1a–17.7. Remaining substeps, smallest-first:
+  - [ ] **17.30a. TS2454 via flow-graph definite-assignment.** Replace the ad-hoc walker that currently emits TS2454/TS2564 with a flow-graph consult: at each Identifier read, ask the flow graph whether every reaching path includes a definite assignment. The 17.1c session note warns a snapshot/restore approach regresses -7 — start with a narrow gate (function-local `let`/`var` only, skip captured-by-closure cases) and widen as regressions allow. Commit per gate-widening.
+  - [ ] **17.30b. FlowAssignment-RHS narrowing.** `var x: T | undefined; x = 5; x.foo();` should narrow `x` to `number` after the assignment. Wire into `getNarrowedTypeForReference` walker. MEDIUM risk — could over-narrow legitimate union-source TS2322 cases; gate on RHS being a literal/primitive type initially.
+  - [ ] **17.30c. `&&`-chain NARROWING wired into TS2774 emission.** `uncalledFunctionChecksInConditional2_ts` — extends 17.4b's `&&`-chain WALKING (suppression) with actual narrowing of the chain's later operands. Also blocked partially on `window` global type resolving past `anyType`; land the narrowing piece independently and document the `window` blocker if still partial.
+  - [ ] **17.30d. Discriminated-union narrowing through property-equality.** `if (ab.type === 'a') { ab.aProp }` — the equality check should filter the union to members where `type` is the literal `'a'`. New narrowing operator in `applyConditionNarrowing`'s BinaryExpression branch, mirror of `narrowByConstructorEquals`. Conservative gate: only fire when LHS is `PropertyAccessExpression` on an Identifier whose type is a Type.Union of Type.Object members all having the accessed property as a literal type.
+
+- [ ] **17.31. Blocker #2 step 1 — Generic argument inference, smallest substep (HIGH yield ~20–40 tests, MEDIUM risk).** Stacks on the 16.4 generic infrastructure. Smallest-substep decomposition:
+  - [ ] **17.31a. Single-arg single-typeParam inference for non-overloaded sigs.** `f<T>(x: T): T` called with `f("hi")` should infer `T = "hi"` (literal) or `T = string` (widened, depending on context). Wire into `checkArgumentsAgainstSignature` BEFORE the existing `isSimpleCheckableType(paramType)` gate. Conservative gate: only fire when (a) signature has exactly 1 type parameter, (b) no explicit type args supplied, (c) every parameter type either references that single TypeParam or is a concrete type. Apply inferred type to constraint check (TS2344 if violation) and re-substitute into other param types for assignability checks.
+  - [ ] **17.31b. Multi-arg inference into the same TypeParam (least-upper-bound).** `f<T>(a: T, b: T)` called with `f(1, "x")` infers `T = string | number`. Extends 17.31a.
+  - [ ] **17.31c. Multi-typeParam inference (independent T, U).** `f<T, U>(a: T, b: U)`. Extends 17.31a.
+  - [ ] **17.31d. Inference from generic type arguments (`Array<T>` from `[1,2]`).** Extends 17.31a–c into `Type.Reference` arg shapes — match source's resolvedTypeArguments to target's TypeParam positions.
+
+- [ ] **17.32. Blocker #3 step 1 — Cross-file global scope conflation, infrastructure-only sub-step (MEDIUM-HIGH yield ~30+ tests, HIGHEST risk).** Per the blocker description, recommended approach is "introduce per-file-scope construction behind a flag, run side-by-side, then flip per file." Smallest substep:
+  - [ ] **17.32a. Build per-file scope tables (no consult yet).** In `Checker.init`, alongside the existing `mergeSymbolTable(globals, result.locals)`, also construct a per-file `Map<SourceFile, SymbolTable>` of "true visible scope from this file" = lib + KNOWN_GLOBALS + script-file locals across all files + this file's own locals + this file's import aliases. NO consult sites changed. Net-zero behavior; pure infrastructure. Commit and verify 0 regressions, then the next session can begin per-call-site flips.
+  - **17.32b+ (queued by 17.32a's session note):** flip individual identifier-resolution call sites to consult the per-file scope instead of the merged `globals` map, one site per commit. Order: TS2304 (highest blast radius — defer), TS2663-vs-TS2301 disambiguation (narrow — start here), TS2552 spelling suggestion candidate set, default-import-from-export-equals visibility.
+
 ---
 
 ### Completed items (16.0–16.3) — archived
