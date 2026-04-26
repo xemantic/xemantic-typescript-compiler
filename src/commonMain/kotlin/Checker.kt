@@ -44068,12 +44068,58 @@ interface DataView {
         // 16.4dw: Check parameter type mismatch FIRST (contravariant) — TypeScript reports
         // the parameter mismatch before the return-type mismatch when both fail, because
         // params are contravariant and the failure is more fundamental.
+        // 17.10e: Mirror `signatureRelatedTo`'s light type-param inference. When source has
+        // type parameters and target doesn't, the FAILING pair is the one where the source
+        // TypeParam was already pinned to a different target type — and the elaboration
+        // should display the EARLIER pinned target (substituted) instead of the raw `T`.
+        // Example: `<T>(x: T, y: T) => void` vs `(g: Giraffe, e: Elephant) => void`
+        //   → first pair pins T = Giraffe (passes constraint Animal); second pair fails
+        //     because Elephant !== Giraffe; report `(y, e)` mismatch with substituted
+        //     `Type 'Elephant' is not assignable to type 'Giraffe'.`
         val sourceParams = sourceSig.parameters
         val targetParams = targetSig.parameters
+        val sigHasTpInParams = !sourceSig.typeParameters.isNullOrEmpty() &&
+            targetSig.typeParameters.isNullOrEmpty() &&
+            sourceParams.any { getTypeOfSymbol(it) is Type.TypeParam }
+        val tpAssignments = if (sigHasTpInParams) mutableMapOf<Int, Type>() else null
         val len = minOf(sourceParams.size, targetParams.size)
         for (i in 0 until len) {
             val sourceParamType = getTypeOfSymbol(sourceParams[i])
             val targetParamType = getTypeOfSymbol(targetParams[i])
+            if (tpAssignments != null && sourceParamType is Type.TypeParam) {
+                val tpId = sourceParamType.id
+                val existing = tpAssignments[tpId]
+                if (existing != null && existing !== targetParamType) {
+                    // Pinning conflict — substitute the EARLIER pinned target into the
+                    // source param display, then run a property-elaboration to surface
+                    // a "Property X is missing in Y but required in Z" line if applicable.
+                    val pinned = existing
+                    val nestedChain = if (targetParamType is Type.Object && pinned is Type.Object) {
+                        getPropertyElaborationChain(targetParamType, pinned)
+                    } else null
+                    val secondLine = if (!nestedChain.isNullOrEmpty()) {
+                        // getPropertyElaborationChain returns lines indented "  ..." — bump to "    ..."
+                        nestedChain.first().replaceFirst("  ", "    ")
+                    } else {
+                        "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(pinned)}'."
+                    }
+                    return listOf(
+                        "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                        secondLine,
+                    )
+                }
+                tpAssignments[tpId] = targetParamType
+                val cons = sourceParamType.constraint
+                if (cons != null && cons !== errorType) {
+                    if (!checkTypeRelatedTo(targetParamType, cons, assignableRelation)) {
+                        return listOf(
+                            "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                            "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(cons)}'.",
+                        )
+                    }
+                }
+                continue
+            }
             if (!checkTypeRelatedTo(targetParamType, sourceParamType, assignableRelation)) {
                 return listOf(
                     "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
