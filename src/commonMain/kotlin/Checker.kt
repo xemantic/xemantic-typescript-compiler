@@ -44683,6 +44683,26 @@ interface DataView {
                 }
             }
 
+            // 17.14c: Asymmetric privacy mismatch — target has a private property whose
+            // source counterpart isn't private (or vice versa). Matches TypeScript's
+            // "Property 'X' is private in type 'A' but not in type 'B'." for the
+            // `assignmentCompatability40-42` family. Emitted at the FIRST asymmetric
+            // mismatch — symmetric brand mismatches above take precedence.
+            for (targetProp in targetProps) {
+                val sourceProp = sourceMembers[targetProp.name] ?: continue
+                val tDecl = targetProp.valueDeclaration ?: targetProp.declarations.firstOrNull()
+                val sDecl = sourceProp.valueDeclaration ?: sourceProp.declarations.firstOrNull()
+                if (tDecl == null || sDecl == null) continue
+                val tPriv = isMemberPrivate(tDecl)
+                val sPriv = isMemberPrivate(sDecl)
+                if (tPriv && !sPriv) {
+                    return listOf("  Property '${targetProp.name}' is private in type '${typeToString(target)}' but not in type '${typeToString(source)}'.")
+                }
+                if (sPriv && !tPriv) {
+                    return listOf("  Property '${targetProp.name}' is private in type '${typeToString(source)}' but not in type '${typeToString(target)}'.")
+                }
+            }
+
             // Collect all incompatible properties
             data class IncompatibleProp(
                 val name: String,
