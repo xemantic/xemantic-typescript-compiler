@@ -41844,7 +41844,7 @@ interface DataView {
             val hasTypeParams = signatures.any { !it.typeParameters.isNullOrEmpty() }
             if (hasTypeParams) return
             // Overload resolution: try each signature in order
-            checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName)
+            checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName, expr.expression)
         }
     }
 
@@ -42268,19 +42268,25 @@ interface DataView {
         if (signatures.size == 1) {
             checkArgumentsAgainstSignature(args, signatures[0], source, fileName)
         } else {
-            checkArgumentsAgainstOverloads(args, signatures, source, fileName)
+            checkArgumentsAgainstOverloads(args, signatures, source, fileName, expr.expression)
         }
     }
 
     /**
      * Try each overload signature in order. If any overload accepts all arguments, no error.
      * If none succeed, report TS2345 against the last overload (TypeScript convention).
+     *
+     * 17.15b: [callee] is the call/new expression's callee. When provided AND the failing
+     * arg is a fn-type-vs-fn-type mismatch (TypeScript treats this as a "more fundamental"
+     * error pointing at the callee), TS2769 is squiggled at the callee position
+     * (e.g. `x3` for `x3(...)`) instead of the failing argument.
      */
     private fun checkArgumentsAgainstOverloads(
         args: List<Expression>,
         signatures: List<Signature>,
         source: String,
         fileName: String,
+        callee: Expression? = null,
     ) {
         // Filter overloads by arity — if only one matches by arity,
         // check it as a single signature (TS2345, not TS2769).
@@ -42318,10 +42324,20 @@ interface DataView {
             }
         }
         if (overloadErrors.isNotEmpty()) {
-            // Find the error position — use the first failing argument position from any overload
-            val firstArgError = getFirstFailingArgPosition(args, signatures.last())
-            if (firstArgError != null) {
-                val (argStart, argLength) = firstArgError
+            // 17.15b: When ANY overload's first failing arg is a fn-type-vs-fn-type
+            // mismatch and we have a callee, point the squiggle at the callee instead
+            // of the failing argument — TypeScript treats fn-vs-fn arg mismatch as a
+            // more fundamental error and squiggles the callee identifier.
+            val anyFnFnMismatch = callee != null && overloadErrors.any { (_, sig, _) ->
+                getFirstFailingFnTypeArgPair(args, sig) != null
+            }
+            val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null) {
+                Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
+            } else {
+                getFirstFailingArgPosition(args, signatures.last())
+            }
+            if (pos != null) {
+                val (argStart, argLength) = pos
                 val (line, character) = getLineAndCharacterOfPosition(source, argStart)
                 val chain = mutableListOf<String>()
                 val totalOverloads = signatures.size
@@ -42329,6 +42345,14 @@ interface DataView {
                     val sigStr = signatureToString(sig)
                     chain.add("  Overload $overloadIdx of $totalOverloads, '$sigStr', gave the following error.")
                     chain.add("    $errorMsg")
+                    // 17.15b: Add deeper "Types of parameters X and Y are incompatible." chain
+                    // when the failing arg is a function type vs function-type param.
+                    val firstFailingPair = getFirstFailingFnTypeArgPair(args, sig)
+                    if (firstFailingPair != null) {
+                        val (argFnType, paramFnType) = firstFailingPair
+                        val nested = getFunctionMismatchElaboration(argFnType, paramFnType)
+                        chain.addAll(nested.map { "    $it" })
+                    }
                 }
                 // Collect related info: TS6500/TS2728 for property source, TS2793 for implementation
                 val related = mutableListOf<Diagnostic>()
@@ -42374,6 +42398,37 @@ interface DataView {
         // Fallback: no position found despite errors — try fallback TS2345
         val lastSig = signatures.last()
         checkArgumentsAgainstSignature(args, lastSig, source, fileName)
+    }
+
+    /**
+     * 17.15b: For overload error chain elaboration. When the first failing arg is a
+     * function-type vs function-type-param, return the (argType, paramType) pair so the
+     * caller can append the deeper "Types of parameters X and Y are incompatible." chain
+     * via [getFunctionMismatchElaboration]. Returns null when the first failing arg is
+     * not a fn-vs-fn mismatch (or none fails).
+     */
+    private fun getFirstFailingFnTypeArgPair(args: List<Expression>, sig: Signature): Pair<Type.Object, Type.Object>? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // Both anonymous Type.Object with non-empty callSignatures = fn-type vs fn-type.
+                if (argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface &&
+                    argType.symbol == null && !argType.callSignatures.isNullOrEmpty() &&
+                    paramType is Type.Object && paramType !is Type.Reference && paramType !is Type.Interface &&
+                    paramType.symbol == null && !paramType.callSignatures.isNullOrEmpty()
+                ) {
+                    return Pair(argType, paramType)
+                }
+                return null
+            }
+        }
+        return null
     }
 
     /** Get the first argument type error message for a signature, or null if all match. */
