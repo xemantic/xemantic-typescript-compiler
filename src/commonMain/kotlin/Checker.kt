@@ -248,6 +248,14 @@ class Checker(
      *  when the callee is `Identifier("super")`. */
     private var currentSuperBaseSig: Signature? = null
 
+    /** 17.20: Base-class instance type for `super.method(...)` arg checking.
+     *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around both
+     *  Constructor AND Method bodies; either a [Type.Interface] for non-generic
+     *  bases or a [Type.Reference] instantiated with heritage clause type args.
+     *  Consumed by [checkSingleCallExpressionTypes] when callee is
+     *  `PropertyAccess(super, methodName)`. */
+    private var currentSuperBaseType: Type? = null
+
     /** Global Array interface — used as target for `Type.Reference` in array types.
      *  Initialized from built-in lib during init; falls back to empty interface if not found. */
     private var globalArrayType: Type.Interface = Type.Interface().also {
@@ -41632,62 +41640,103 @@ interface DataView {
                 }
             }
             is ClassDeclaration -> {
-                // 17.19: Resolve the base class's constructor signature once per class so
-                // `super(...)` calls inside the constructor body can be argument-checked.
-                // Substitutes heritage-clause type args (e.g. `extends T5<number>` → T = number).
-                val baseSig: Signature? = run {
-                    val extClause = stmt.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                        ?: return@run null
-                    val baseExpr = extClause.types.firstOrNull() ?: return@run null
-                    val baseName = when (val bn = baseExpr.expression) {
-                        is Identifier -> bn.text
-                        else -> return@run null
-                    }
-                    val baseSym = globals[baseName] ?: return@run null
-                    val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
-                        try { getTypeFromTypeNode(tn).takeIf { it !== errorType } } catch (_: StackOverflowError) { null }
-                    }.orEmpty()
+                // 17.20: Push class type parameters onto `currentTypeParamScope` during
+                // heritage-clause resolution AND member body walks. Without this,
+                // `class D<T> extends C<T>` resolves the heritage `T` to errorType
+                // (D's T isn't in scope), so heritage type args drop to []. Same
+                // applies to `<T>` references inside method bodies (e.g.
+                // `super.bar<T>(null)`).
+                val classSym = stmt.name?.let { globals[it.text] }
+                val classTypeParams: List<Type.TypeParam> = if (classSym != null) {
                     try {
-                        buildBaseConstructorSignatureForSuper(baseSym, typeArgs)
-                    } catch (_: StackOverflowError) { null }
+                        (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
+                    } catch (_: StackOverflowError) { emptyList() }
+                } else emptyList()
+                val savedClassScope = currentTypeParamScope
+                if (classTypeParams.isNotEmpty()) {
+                    val newScope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                    for (tp in classTypeParams) {
+                        tp.symbol?.name?.let { newScope[it] = tp }
+                    }
+                    currentTypeParamScope = newScope
                 }
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> {
-                            for (param in member.parameters) {
-                                param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
-                            }
-                            member.body?.let { body ->
-                                val savedLocalTypes = currentLocalTypes
-                                currentLocalTypes = currentLocalTypes.toMutableMap()
-                                populateParameterLocalTypes(member.parameters)
-                                checkCallTypesInStatements(body.statements, source, fileName)
-                                currentLocalTypes = savedLocalTypes
-                            }
+                try {
+                    // 17.19/17.20: Resolve the base class's symbol + heritage type args
+                    // once per class. Used by both `super(...)` arg checking (17.19, via
+                    // baseSig) and `super.method(...)` arg checking (17.20, via
+                    // baseInstanceType). Heritage type args resolve in the class scope
+                    // so D's T is visible in `extends C<T>`.
+                    val baseResolution: Pair<Signature?, Type?> = run {
+                        val extClause = stmt.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                            ?: return@run null to null
+                        val baseExpr = extClause.types.firstOrNull() ?: return@run null to null
+                        val baseName = when (val bn = baseExpr.expression) {
+                            is Identifier -> bn.text
+                            else -> return@run null to null
                         }
-                        is Constructor -> {
-                            for (param in member.parameters) {
-                                param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
-                            }
-                            member.body?.let { body ->
-                                val savedLocalTypes = currentLocalTypes
-                                val savedSuperBaseSig = currentSuperBaseSig
-                                currentLocalTypes = currentLocalTypes.toMutableMap()
-                                currentSuperBaseSig = baseSig
-                                try {
-                                    populateParameterLocalTypes(member.parameters)
-                                    checkCallTypesInStatements(body.statements, source, fileName)
-                                } finally {
-                                    currentLocalTypes = savedLocalTypes
-                                    currentSuperBaseSig = savedSuperBaseSig
+                        val baseSym = globals[baseName] ?: return@run null to null
+                        val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
+                            try { getTypeFromTypeNode(tn).takeIf { it !== errorType } } catch (_: StackOverflowError) { null }
+                        }.orEmpty()
+                        val sig = try {
+                            buildBaseConstructorSignatureForSuper(baseSym, typeArgs)
+                        } catch (_: StackOverflowError) { null }
+                        val instType = try {
+                            buildBaseInstanceTypeForSuper(baseSym, typeArgs)
+                        } catch (_: StackOverflowError) { null }
+                        sig to instType
+                    }
+                    val baseSig = baseResolution.first
+                    val baseInstanceType = baseResolution.second
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> {
+                                for (param in member.parameters) {
+                                    param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                                }
+                                member.body?.let { body ->
+                                    val savedLocalTypes = currentLocalTypes
+                                    val savedSuperBaseType = currentSuperBaseType
+                                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentSuperBaseType = baseInstanceType
+                                    try {
+                                        populateParameterLocalTypes(member.parameters)
+                                        checkCallTypesInStatements(body.statements, source, fileName)
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
+                                        currentSuperBaseType = savedSuperBaseType
+                                    }
                                 }
                             }
+                            is Constructor -> {
+                                for (param in member.parameters) {
+                                    param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                                }
+                                member.body?.let { body ->
+                                    val savedLocalTypes = currentLocalTypes
+                                    val savedSuperBaseSig = currentSuperBaseSig
+                                    val savedSuperBaseType = currentSuperBaseType
+                                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentSuperBaseSig = baseSig
+                                    currentSuperBaseType = baseInstanceType
+                                    try {
+                                        populateParameterLocalTypes(member.parameters)
+                                        checkCallTypesInStatements(body.statements, source, fileName)
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
+                                        currentSuperBaseSig = savedSuperBaseSig
+                                        currentSuperBaseType = savedSuperBaseType
+                                    }
+                                }
+                            }
+                            is GetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                            is PropertyDeclaration -> member.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                            else -> {}
                         }
-                        is GetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> member.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
-                        is PropertyDeclaration -> member.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
-                        else -> {}
                     }
+                } finally {
+                    currentTypeParamScope = savedClassScope
                 }
             }
             is TryStatement -> {
@@ -41912,6 +41961,16 @@ interface DataView {
                 checkArgumentsAgainstSignature(expr.arguments, sig, source, fileName)
             }
             return
+        }
+        // 17.20: `super.method(...)` arg checking. Resolves the method on the base
+        // instance type stashed by the ClassDeclaration handler. The standard path
+        // would treat `super` as anyType and bail before reaching arg checking.
+        if (calleeExpr is PropertyAccessExpression && calleeExpr.expression is Identifier &&
+            (calleeExpr.expression as Identifier).text == "super") {
+            val baseType = currentSuperBaseType
+            if (baseType != null) {
+                if (handleSuperMethodCall(expr, calleeExpr, baseType, source, fileName)) return
+            }
         }
         // Resolve callee to get its type
         val calleeType = getCalleeType(expr.expression)
@@ -43192,6 +43251,38 @@ interface DataView {
                         ))
                         break
                     }
+                }
+            }
+            // 17.20: TS2345 for null/undefined argument vs unconstrained bare `Type.TypeParam`
+            // parameter. Example: `super.bar<T>(null)` where the base method is `bar<U>(x: U)`
+            // and explicit `<T>` substitutes U → T. The arg is null and the param is the bare
+            // unconstrained type-parameter — emit TS2345 with chain "'T' could be instantiated
+            // with an arbitrary type which could be unrelated to 'null'.".
+            // Constrained TypeParams are handled by the 16.4i branch below (which uses the
+            // constraint as the displayed param type, matching TypeScript's baseline for
+            // `fn<T extends string>(n:T)` called with `fn(null)`).
+            if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+                paramType is Type.TypeParam && paramType.constraint == null) {
+                val tpName = paramType.symbol?.name ?: "T"
+                val argTypeStr = typeToString(argType)
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$tpName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        messageChain = listOf(
+                            "  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$argTypeStr'.",
+                        ),
+                    ))
+                    break
                 }
             }
             // 16.4ds: Per-property TS2322 when paramType is a TypeParam whose CONSTRAINT
@@ -45627,6 +45718,89 @@ interface DataView {
         if (baseTypeParams.isEmpty() || typeArgs.size != baseTypeParams.size) return rawSig
         val mapper = createTypeMapper(baseTypeParams, typeArgs)
         return instantiateSignature(rawSig, mapper)
+    }
+
+    /**
+     * 17.20: Build the base-class instance type for `super.method(...)` lookups.
+     * Returns:
+     * - `Type.Reference(baseInterface, typeArgs)` if the base is generic and arity matches
+     * - the bare `Type.Interface` if the base is non-generic
+     * - the bare `Type.Interface` if arity doesn't match (raw — substitution skipped)
+     * - null if the base isn't a class symbol or its declared type isn't an Interface
+     */
+    private fun buildBaseInstanceTypeForSuper(
+        baseSymbol: Symbol,
+        typeArgs: List<Type>,
+    ): Type? {
+        if (!baseSymbol.flags.hasAny(SymbolFlags.Class)) return null
+        val baseType = getDeclaredTypeOfSymbol(baseSymbol) as? Type.Interface ?: return null
+        val baseTypeParams = baseType.typeParameters.orEmpty()
+        if (baseTypeParams.isEmpty()) return baseType
+        if (typeArgs.size != baseTypeParams.size) return baseType
+        return getOrInternReference(baseType, typeArgs)
+    }
+
+    /**
+     * 17.20: Resolve and arg-check `super.method(...)` against the base instance
+     * type stashed by the ClassDeclaration handler. Returns true if handled
+     * (caller skips standard arg-checking), false if not (caller falls through).
+     *
+     * Conservative — only fires when:
+     * - the method is found on the base type
+     * - the method has at least one call signature
+     * - either: explicit type args resolve cleanly to a generic sig, OR exactly one
+     *   non-generic signature (no overload resolution attempt with generics)
+     */
+    private fun handleSuperMethodCall(
+        expr: CallExpression,
+        callee: PropertyAccessExpression,
+        baseType: Type,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val methodName = callee.name.text
+        if (baseType !is Type.Object) return false
+        val methodSym = try {
+            getPropertyOfType(baseType, methodName)
+        } catch (_: StackOverflowError) { null } ?: return false
+        // Resolve method's type with substitution if base is a Reference
+        val methodType = try {
+            if (baseType is Type.Reference) {
+                resolveGenericPropertyType(baseType, methodSym) ?: getTypeOfSymbol(methodSym)
+            } else {
+                getTypeOfSymbol(methodSym)
+            }
+        } catch (_: StackOverflowError) { return false }
+        if (methodType !is Type.Object) return false
+        val sigs = methodType.callSignatures
+        if (sigs.isNullOrEmpty()) return false
+        val typeArgs = expr.typeArguments
+        // Explicit type args: instantiate matching generic sig
+        if (!typeArgs.isNullOrEmpty()) {
+            val resolvedTypeArgs = try {
+                typeArgs.map { getTypeFromTypeNode(it) }
+            } catch (_: StackOverflowError) { return false }
+            if (resolvedTypeArgs.any { it === errorType }) return false
+            val genericSig = sigs.firstOrNull { sig ->
+                val tp = sig.typeParameters
+                tp != null && tp.size == resolvedTypeArgs.size
+            }
+            if (genericSig?.typeParameters != null) {
+                val mapper = createTypeMapper(genericSig.typeParameters!!, resolvedTypeArgs)
+                val instantiated = try {
+                    instantiateSignature(genericSig, mapper)
+                } catch (_: StackOverflowError) { return false }
+                checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName)
+                return true
+            }
+            return false
+        }
+        // No explicit type args: only handle single non-generic signature.
+        if (sigs.size == 1 && sigs[0].typeParameters.isNullOrEmpty()) {
+            checkArgumentsAgainstSignature(expr.arguments, sigs[0], source, fileName)
+            return true
+        }
+        return false
     }
 
     /**
