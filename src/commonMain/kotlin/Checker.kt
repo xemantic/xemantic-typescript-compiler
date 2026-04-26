@@ -35487,7 +35487,8 @@ interface DataView {
             parameters = params,
             resolvedReturnType = returnType,
             minArgumentCount = expr.parameters.count {
-                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                (it.name as? Identifier)?.text != "this" &&
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
             },
         )
         val fnType = Type.Object()
@@ -35524,9 +35525,12 @@ interface DataView {
             }
             // Eagerly resolve param types within the scope and cache via symbolTypes
             // — later `getTypeOfSymbol(p)` calls won't have the scope active.
+            // Skip leading `this` pseudo-parameter when mapping symbol index → AST index.
+            val thisOffset = if (expr.parameters.firstOrNull()?.let { (it.name as? Identifier)?.text } == "this") 1 else 0
             for ((pi, param) in params.withIndex()) {
-                if (pi < expr.parameters.size) {
-                    expr.parameters[pi].type?.let { typeNode ->
+                val astIdx = pi + thisOffset
+                if (astIdx < expr.parameters.size) {
+                    expr.parameters[astIdx].type?.let { typeNode ->
                         symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
                     }
                 }
@@ -35548,7 +35552,8 @@ interface DataView {
             parameters = params,
             resolvedReturnType = returnType,
             minArgumentCount = expr.parameters.count {
-                !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                (it.name as? Identifier)?.text != "this" &&
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
             },
         )
         val fnType = Type.Object()
@@ -35566,16 +35571,20 @@ interface DataView {
     private fun inferReturnTypeFromFunctionExpressionBody(
         expr: FunctionExpression, params: List<Symbol>,
     ): Type? {
-        val stmts = expr.body?.statements ?: return null
+        val body = expr.body ?: return null
+        val stmts = body.statements
         if (stmts.size != 1) return null
         val retStmt = stmts[0] as? ReturnStatement ?: return null
         val retExpr = retStmt.expression ?: return null
         if (retExpr is Identifier) {
-            val match = params.firstOrNull { it.name == retExpr.text } ?: return null
-            val pt = symbolTypes[match.id] ?: return null
-            return pt
+            val match = params.firstOrNull { it.name == retExpr.text }
+            if (match != null) {
+                val pt = symbolTypes[match.id]
+                if (pt != null) return pt
+            }
+            // Fall through to literal inference for non-param identifier returns.
         }
-        return null
+        return inferReturnTypeFromBody(body)
     }
 
     /**
@@ -36033,6 +36042,28 @@ interface DataView {
         return if (cons != null && cons !== errorType) "$name extends ${typeToString(cons)}" else name
     }
 
+    /**
+     * Extract the `this:` parameter declaration from a Signature's declaration AST,
+     * if present. TypeScript's display format includes `this: T` as the first parameter
+     * for function types declared with a `this`-typed pseudo-parameter.
+     */
+    private fun extractThisParam(sig: Signature): String? {
+        val decl = sig.declaration ?: return null
+        val astParams: List<Parameter> = when (decl) {
+            is FunctionExpression -> decl.parameters
+            is ArrowFunction -> decl.parameters
+            is FunctionDeclaration -> decl.parameters
+            is MethodDeclaration -> decl.parameters
+            is FunctionType -> decl.parameters
+            is ConstructorType -> decl.parameters
+            else -> return null
+        }
+        val first = astParams.firstOrNull() ?: return null
+        if ((first.name as? Identifier)?.text != "this") return null
+        val typeStr = first.type?.let { formatTypeForDisplay(it) } ?: "any"
+        return "this: $typeStr"
+    }
+
     /** Format a signature as a string like `(x: number) => string` or `new (x: number) => Foo`. */
     private fun signatureToString(sig: Signature, isConstruct: Boolean): String {
         val prefix = if (isConstruct) {
@@ -36042,7 +36073,9 @@ interface DataView {
         val tpStr = if (!tps.isNullOrEmpty()) {
             "<${tps.joinToString(", ") { typeParamToString(it) }}>"
         } else ""
-        val params = sig.parameters.joinToString(", ") { formatParameter(it) }
+        val thisStr = extractThisParam(sig)
+        val paramParts = sig.parameters.map { formatParameter(it) }
+        val params = (if (thisStr != null) listOf(thisStr) + paramParts else paramParts).joinToString(", ")
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
         return "$prefix$tpStr($params) => $retType"
     }
@@ -36056,7 +36089,9 @@ interface DataView {
         val tpStr = if (!tps.isNullOrEmpty()) {
             "<${tps.joinToString(", ") { typeParamToString(it) }}>"
         } else ""
-        val params = sig.parameters.joinToString(", ") { formatParameter(it) }
+        val thisStr = extractThisParam(sig)
+        val paramParts = sig.parameters.map { formatParameter(it) }
+        val params = (if (thisStr != null) listOf(thisStr) + paramParts else paramParts).joinToString(", ")
         val retType = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
         return "$prefix$tpStr($params): $retType"
     }
