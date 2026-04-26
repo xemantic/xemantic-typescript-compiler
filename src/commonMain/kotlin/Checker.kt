@@ -35958,10 +35958,23 @@ interface DataView {
      */
     private fun formatParameter(p: Symbol): String {
         val decl = p.valueDeclaration as? Parameter
-        val pType = getTypeOfSymbol(p).let { if (it === anyType) "any" else typeToString(it) }
+        val resolvedType = getTypeOfSymbol(p)
+        val pType = resolvedType.let { if (it === anyType) "any" else typeToString(it) }
         return when {
             decl?.dotDotDotToken == true -> "...${p.name}: $pType"
-            decl?.questionToken == true -> "${p.name}?: $pType | undefined"
+            decl?.questionToken == true -> {
+                // 17.15a: Drop `| undefined` when the param type is a function/constructor
+                // type — the form `name?: T => U | undefined` would parse as a function
+                // returning `U | undefined`. TypeScript's display convention drops
+                // `| undefined` for fn-type params to avoid the precedence ambiguity.
+                val isFnType = decl.type is FunctionType || decl.type is ConstructorType ||
+                    (resolvedType is Type.Object && resolvedType !is Type.Reference &&
+                        resolvedType !is Type.Interface &&
+                        resolvedType.symbol == null &&
+                        !resolvedType.callSignatures.isNullOrEmpty() &&
+                        resolvedType.properties.isNullOrEmpty())
+                if (isFnType) "${p.name}?: $pType" else "${p.name}?: $pType | undefined"
+            }
             else -> "${p.name}: $pType"
         }
     }
@@ -44448,6 +44461,23 @@ interface DataView {
                 continue
             }
             if (!checkTypeRelatedTo(targetParamType, sourceParamType, assignableRelation)) {
+                // 17.15a: When both inner param types are function types, recurse
+                // for deeper "Types of parameters X and Y are incompatible" chain
+                // matching TypeScript's contravariant elaboration. The inner call's
+                // (source, target) mirror the outer-comparison's contravariant
+                // checkTypeRelatedTo direction: inner-source = outer-target's param,
+                // inner-target = outer-source's param.
+                if (targetParamType is Type.Object && sourceParamType is Type.Object &&
+                    !targetParamType.callSignatures.isNullOrEmpty() &&
+                    !sourceParamType.callSignatures.isNullOrEmpty()
+                ) {
+                    val nested = getFunctionMismatchElaboration(targetParamType, sourceParamType)
+                    if (nested.isNotEmpty()) {
+                        return listOf(
+                            "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                        ) + nested.map { "  $it" }
+                    }
+                }
                 return listOf(
                     "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
                     "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(sourceParamType)}'.",
@@ -45962,15 +45992,24 @@ interface DataView {
 
     /**
      * Format a Parameter AST node for display in function/constructor type strings.
-     * Honors `?` (optional → `name?: type | undefined`) and `...` (rest → `...name: type`).
+     * Honors `?` (optional → `name?: type | undefined` for non-fn types, `name?: type`
+     * for fn/ctor types) and `...` (rest → `...name: type`).
      * Mirrors [formatParameter] (which operates on Symbol) but works directly on the AST.
+     *
+     * 17.15a: Drop `| undefined` when the param type is itself a `FunctionType` or
+     * `ConstructorType`. The form `name?: T => U | undefined` would parse as a function
+     * returning `U | undefined` (`=>` binds tighter than `|`). TypeScript's display
+     * convention is to drop `| undefined` for fn-type params to avoid this ambiguity.
      */
     private fun formatParameterDecl(p: Parameter): String {
         val pName = (p.name as? Identifier)?.text ?: "_"
         val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
         return when {
             p.dotDotDotToken -> "...$pName: $pType"
-            p.questionToken -> "$pName?: $pType | undefined"
+            p.questionToken -> {
+                val isFnType = p.type is FunctionType || p.type is ConstructorType
+                if (isFnType) "$pName?: $pType" else "$pName?: $pType | undefined"
+            }
             else -> "$pName: $pType"
         }
     }
