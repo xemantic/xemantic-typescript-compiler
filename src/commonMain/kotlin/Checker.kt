@@ -31627,6 +31627,36 @@ interface DataView {
      * Returns true when both types are concrete (non-any, non-error) and the
      * comparison won't produce false positives from incomplete resolution.
      */
+    /**
+     * 17.14b: True when `t` represents a CLASS instance shape — Type.Interface or
+     * Type.Reference whose underlying symbol has the `Class` flag. Used by the
+     * `canUseTypeEngine` exemption for class-instance vs class-instance comparison
+     * (e.g. `interfaceX → classY<T,U>` for the `assignmentCompatability39-42` family).
+     *
+     * Restricted to Class (not Interface) on purpose: an interface target with an
+     * explicit construct signature (`interface Constructor<T> { new(...): T }`) must
+     * keep the existing skip — source-as-bare-class-identifier evaluates to the
+     * instance type in our checker (no typeof-Class inference), so structural
+     * comparison against `Constructor<B<bool>>` would FP-emit "missing prototype"
+     * (regresses `genericInheritedDefaultConstructors_ts`).
+     *
+     * Excludes Type.Object that merely carries a class symbol via
+     * `getTypeOfSymbolForTypeQuery` (those are constructor-side shapes for `typeof C`).
+     */
+    private fun isClassOrInterfaceInstanceType(t: Type): Boolean {
+        return when (t) {
+            is Type.Reference -> {
+                val ts = t.target.symbol
+                ts != null && ts.flags.hasAny(SymbolFlags.Class)
+            }
+            is Type.Interface -> {
+                val ts = t.symbol
+                ts != null && ts.flags.hasAny(SymbolFlags.Class)
+            }
+            else -> false
+        }
+    }
+
     private fun canUseTypeEngine(sourceType: Type, targetType: Type): Boolean {
         // Never compare when either side is unresolved
         if (sourceType === anyType || sourceType === errorType) return false
@@ -31684,9 +31714,20 @@ interface DataView {
             if (hasUnresolvedTypeParams(sourceType) || hasUnresolvedTypeParams(targetType)) return false
             resolveStructuredTypeMembers(sourceType)
             resolveStructuredTypeMembers(targetType)
-            // Skip class-instance vs constructor-type comparison (typeof C / new() => T)
-            if (sourceType.constructSignatures.isNullOrEmpty() && !targetType.constructSignatures.isNullOrEmpty()) return false
-            if (!sourceType.constructSignatures.isNullOrEmpty() && targetType.constructSignatures.isNullOrEmpty()) return false
+            // Skip class-instance vs constructor-type comparison (typeof C / new() => T).
+            // EXCEPTION: when the relevant side IS a class/interface instance type
+            // (Type.Interface, OR Type.Reference whose target carries Class/Interface flag),
+            // `objectTypeRelatedTo`'s `isClassInstance`-style logic should run — so an
+            // interface instance assigned to a generic class instance is a valid structural
+            // comparison (assignmentCompatability39-42 family). The check explicitly excludes
+            // Type.Object with a class symbol but no Interface kind (e.g. `typeof C` from
+            // `getTypeOfSymbolForTypeQuery` — keep the existing skip there).
+            val targetIsClassInstance = isClassOrInterfaceInstanceType(targetType)
+            val sourceIsClassInstance = isClassOrInterfaceInstanceType(sourceType)
+            if (sourceType.constructSignatures.isNullOrEmpty() &&
+                !targetType.constructSignatures.isNullOrEmpty() && !targetIsClassInstance) return false
+            if (!sourceType.constructSignatures.isNullOrEmpty() &&
+                targetType.constructSignatures.isNullOrEmpty() && !sourceIsClassInstance) return false
             // Empty source object {} — only skip if target also has no required properties
             // (empty→non-empty should fail, empty→empty is trivially assignable)
             if (sourceType.symbol == null && sourceType.properties.isNullOrEmpty() &&
@@ -33274,7 +33315,11 @@ interface DataView {
                 is InterfaceDeclaration -> tDecl.members
                 else -> return@any false
             }
-            classMembers.any { it === decl }
+            // Direct top-level member, OR a constructor parameter property whose
+            // Parameter node lives inside one of the class's Constructor members.
+            classMembers.any { it === decl } || classMembers.any { m ->
+                m is Constructor && m.parameters.any { it === decl }
+            }
         }
         if (!isDirectMember) {
             // Blocker #1 step (d): Inherited property — walk base chain.
@@ -33527,7 +33572,11 @@ interface DataView {
             // gate at ~31688 short-circuits this case to skip class-instance vs constructor-type
             // comparisons, but TypeScript flags the assignment with a "provides no match for
             // the signature 'new ...'" elaboration. Handle directly before the gate fires.
-            if (pt is Type.Object && !pt.constructSignatures.isNullOrEmpty()) {
+            // Skip when target is a class/interface instance type — its construct signatures
+            // belong to the static side, and instance↔instance comparisons should go through
+            // the regular relation path with property-mismatch elaboration.
+            if (pt is Type.Object && !pt.constructSignatures.isNullOrEmpty() &&
+                !isClassOrInterfaceInstanceType(pt)) {
                 val srcCtorElab = getNonConstructibleElaboration(valueType, pt)
                 if (srcCtorElab != null) {
                     val displaySource = typeToString(valueType)
@@ -35602,6 +35651,51 @@ interface DataView {
         return arityMatches[0]
     }
 
+    /**
+     * 17.14b: Infer type args from a `new` expression's argument list.
+     * For each class-level type parameter, find the FIRST constructor parameter
+     * whose declared type annotation is exactly that TypeParam (TypeReference
+     * named with the same identifier, no own typeArgs), and use the widened
+     * type of the corresponding call argument as the inferred type.
+     *
+     * Returns null when:
+     *   - The class has no Constructor declaration (default ctor).
+     *   - Any TypeParam isn't covered by a direct-TypeReference param.
+     *   - Any inferred arg type resolves to errorType.
+     *
+     * Conservative on purpose — doesn't infer through nested generic types
+     * (e.g. `Array<T>` would not yield T from `[1, 2, 3]`).
+     */
+    private fun inferTypeArgsFromConstructorCall(
+        classType: Type.Interface,
+        typeParams: List<Type.TypeParam>,
+        args: List<Expression>,
+    ): List<Type>? {
+        val classDecl = classType.symbol?.valueDeclaration as? ClassDeclaration ?: return null
+        val ctor = classDecl.members.firstOrNull { it is Constructor } as? Constructor ?: return null
+        val ctorParams = ctor.parameters
+        val result = mutableListOf<Type>()
+        for (tp in typeParams) {
+            val tpName = tp.symbol?.name ?: return null
+            var inferredType: Type? = null
+            for (i in ctorParams.indices) {
+                if (i >= args.size) break
+                val paramTypeNode = ctorParams[i].type ?: continue
+                if (paramTypeNode is TypeReference) {
+                    val tn = paramTypeNode.typeName
+                    if (tn is Identifier && tn.text == tpName &&
+                        paramTypeNode.typeArguments.isNullOrEmpty()) {
+                        inferredType = widenType(getTypeOfExpression(args[i]))
+                        break
+                    }
+                }
+            }
+            if (inferredType == null || inferredType === errorType) return null
+            result.add(inferredType)
+        }
+        return result
+    }
+
     /** Get the return type of a new expression by resolving the construct signature. */
     private fun getReturnTypeOfNewExpression(expr: NewExpression): Type {
         val calleeType = when (val callee = expr.expression) {
@@ -35621,6 +35715,22 @@ interface DataView {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                     if (resolvedArgs.none { it === errorType }) {
                         return getOrInternReference(calleeType, resolvedArgs)
+                    }
+                } catch (_: StackOverflowError) { /* circular */ }
+            }
+            // 17.14b: Generic argument inference from constructor call.
+            // `new Foo<T,U>(arg1, arg2)` infers T,U from arg types matching the
+            // class's constructor parameters' direct TypeReference annotations.
+            // Conservative: only matches when a constructor param's type annotation
+            // is exactly `T` (TypeReference whose name == typeParam.name, no own
+            // typeArgs). Doesn't infer through nested types like `Array<T>`.
+            val newArgs = expr.arguments
+            if (typeParams != null && typeParams.isNotEmpty() && typeArgs.isNullOrEmpty() &&
+                !newArgs.isNullOrEmpty()) {
+                try {
+                    val inferred = inferTypeArgsFromConstructorCall(calleeType, typeParams, newArgs)
+                    if (inferred != null && inferred.size == typeParams.size && inferred.none { it === errorType }) {
+                        return getOrInternReference(calleeType, inferred)
                     }
                 } catch (_: StackOverflowError) { /* circular */ }
             }
