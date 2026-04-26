@@ -44132,9 +44132,57 @@ interface DataView {
         val targetReturn = targetSig.resolvedReturnType ?: anyType
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
+            // 17.11a: When target's return type is one of target's own type
+            // parameters (e.g. `<T>(x:T) => T`) AND source has its own type
+            // parameters whose names appear in source's return type (e.g.
+            // `<S>() => S[]`), TypeScript displays the source return with each
+            // source TypeParam substituted by `unknown` and adds the elaboration
+            // line "'T' could be instantiated with an arbitrary type which could
+            // be unrelated to '<displayed-source>'." The intuition: source's `S`
+            // is unbound from target's `T`, so the caller's `T` can be any type
+            // the caller picks — yet source guarantees only `S[]` (which is
+            // `unknown[]` when displayed without context). The target TypeParam
+            // is therefore not safely instantiable to whatever the caller picks.
+            val targetTpReturn = targetReturn as? Type.TypeParam
+            val sourceTps = sourceSig.typeParameters
+            if (targetTpReturn != null
+                && targetSig.typeParameters?.contains(targetTpReturn) == true
+                && !sourceTps.isNullOrEmpty()
+                && sourceContainsTypeParam(sourceReturn, sourceTps)
+            ) {
+                val mapper = TypeMapper { tp ->
+                    if (sourceTps.contains(tp)) unknownType else null
+                }
+                val srcDisplay = typeToStringWithMapper(sourceReturn, mapper)
+                val tgtDisplay = typeToString(targetReturn)
+                return listOf(
+                    "  Type '$srcDisplay' is not assignable to type '$tgtDisplay'.",
+                    "    '$tgtDisplay' could be instantiated with an arbitrary type which could be unrelated to '$srcDisplay'.",
+                )
+            }
             return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
         }
         return emptyList()
+    }
+
+    /**
+     * 17.11a: True when [type] (or any TypeParam reachable via Type.Reference args
+     * / Union / Intersection) is one of the source-side TypeParam instances in
+     * [sourceTps]. Used to gate the "could be instantiated with an arbitrary type"
+     * elaboration so we don't substitute when source's return is a concrete type
+     * unrelated to its own type parameters.
+     */
+    private fun sourceContainsTypeParam(type: Type, sourceTps: List<Type.TypeParam>): Boolean {
+        return when (type) {
+            is Type.TypeParam -> sourceTps.contains(type)
+            is Type.Reference -> {
+                val args = type.resolvedTypeArguments ?: return false
+                args.any { sourceContainsTypeParam(it, sourceTps) }
+            }
+            is Type.Union -> type.types.any { sourceContainsTypeParam(it, sourceTps) }
+            is Type.Intersection -> type.types.any { sourceContainsTypeParam(it, sourceTps) }
+            else -> false
+        }
     }
 
     /**
