@@ -15252,6 +15252,11 @@ class Checker(
             "propertyIsEnumerable", "toLocaleString", "constructor",
         )
 
+        /** Function.prototype methods implicitly satisfied by any source with call signatures
+         *  (e.g. anonymous `() => T`). Used in `propertiesRelatedTo` to allow assignment to a
+         *  named-interface target whose only required member is `call`/`apply`/`bind`. */
+        private val FUNCTION_PROTOTYPE_METHODS = setOf("call", "apply", "bind")
+
         /** Words that are reserved as identifiers in strict mode (TS1212). */
         private val STRICT_MODE_RESERVED_WORDS = setOf(
             "let", "public", "private", "protected", "static",
@@ -43727,6 +43732,52 @@ interface DataView {
                 }
                 continue
             }
+            // 17.27: Type.Reference source (e.g. `string[]`) vs named-Interface target
+            // (e.g. `Callable` requiring `call`) — emit TS2345 + missing-property chain
+            // when the reference clearly lacks a required member. Gated on source NOT
+            // having callSignatures (real `() => T` already passes via Function.prototype
+            // satisfaction in `propertiesRelatedTo`); collectMissingProperties already
+            // filters OBJECT_PROTOTYPE and Function-prototype methods so we only emit
+            // for genuinely-missing members. Squiggle covers the whole arg expression.
+            if (!isRestParam && argType is Type.Reference && paramType is Type.Interface &&
+                paramType.symbol != null) {
+                try {
+                    resolveStructuredTypeMembers(argType)
+                    resolveStructuredTypeMembers(paramType)
+                    if (argType.callSignatures.isNullOrEmpty()) {
+                        val missing = collectMissingProperties(argType, paramType)
+                        if (missing.isNotEmpty()) {
+                            val argTypeStr = typeToString(argType)
+                            val paramTypeStr = typeToString(paramType)
+                            val start = arg.pos
+                            val length = expressionTrueEnd(arg) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                val firstMissing = missing[0]
+                                val chain = mutableListOf<String>()
+                                chain.add("  Property '$firstMissing' is missing in type '$argTypeStr' but required in type '$paramTypeStr'.")
+                                val missingPropSym = paramType.properties?.find { it.name == firstMissing }
+                                val related: List<Diagnostic> = missingPropSym?.let { sym ->
+                                    createPropertyDeclaredHereRelatedInfo(sym)?.let { listOf(it) }
+                                } ?: emptyList()
+                                diagnostics.add(Diagnostic(
+                                    message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2345,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                    messageChain = chain,
+                                    relatedInformation = related,
+                                ))
+                                break
+                            }
+                        }
+                    }
+                } catch (_: StackOverflowError) { /* circular type */ }
+            }
             // Conservative: only check when parameter type is a well-known type
             // (primitive, void, undefined, null, never). Skip object/interface/union/
             // intersection types which need deeper structural comparison or generics.
@@ -44293,7 +44344,8 @@ interface DataView {
         relation: Relation,
     ): Boolean {
         val targetProps = target.properties ?: return true
-        val sourceMembers = source.members ?: return targetProps.isEmpty()
+        val sourceHasCallSigs = !source.callSignatures.isNullOrEmpty()
+        val sourceMembers = source.members ?: if (sourceHasCallSigs) emptyMap() else return targetProps.isEmpty()
         for (targetProp in targetProps) {
             val targetName = targetProp.name
             // Inherited Object prototype members (constructor, toString, valueOf, …)
@@ -44301,6 +44353,10 @@ interface DataView {
             // Without this filter, an empty `{a:string}` fails to satisfy `Object` because
             // `constructor` etc. are listed as Object's own properties in our embedded lib.
             if (targetName in OBJECT_PROTOTYPE_PROPERTIES) continue
+            // 17.27: When source is a function type (has callSignatures), Function.prototype
+            // methods (call/apply/bind) are implicitly available through the apparent type.
+            // Lets `() => void` satisfy `interface Callable { call(blah: any) }` etc.
+            if (sourceHasCallSigs && targetName in FUNCTION_PROTOTYPE_METHODS) continue
             // Check if property is optional (question mark in declaration)
             val isOptional = isOptionalProperty(targetProp)
             val sourceProp = sourceMembers[targetName]
