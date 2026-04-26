@@ -205,6 +205,13 @@ class Checker(
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
 
+    /** Stack of containing namespace symbols pushed during lazy initializer-type inference
+     *  for namespace-scoped variables. [getTypeOfIdentifier] consults the top entry's parent
+     *  chain to resolve names exported by the enclosing namespace(s) — required so that
+     *  `namespace M { var x: T = ...; export var y = x; }` infers `y`'s type as `T` rather
+     *  than `anyType` when `x` is bound in `M.exports` (not in `currentFileLocals`/`globals`). */
+    private val inferenceNamespaceStack: ArrayDeque<Symbol> = ArrayDeque()
+
     /** Symbols (TypeAlias/Interface/Class) whose type parameter defaults emitted TS2744
      *  (circular / forward reference). Display as `Name<any, any, ...>` (with N args) when
      *  referenced without type arguments — matches TypeScript's substitution-on-invalid-default. */
@@ -33416,30 +33423,59 @@ interface DataView {
         target: PropertyAccessExpression, value: Expression, source: String, fileName: String
     ) {
         try {
-            val objType = getTypeOfExpression(target.expression)
-            if (objType === anyType || objType === errorType) return
-            if (objType !is Type.Object) return
-            resolveStructuredTypeMembers(objType)
             val propName = target.name.text
-            val propSym = objType.members?.get(propName) ?: return
-            // 16.0: For generic class instance types (Type.Reference with type args),
-            // resolve the property's declared type with the class's type parameters in
-            // scope, then apply the type mapper. This produces the correctly instantiated
-            // prop type (e.g. `T → string` for `new Test1<string>()`).
-            val propType = resolveGenericPropertyType(objType, propSym) ?: getTypeOfSymbol(propSym)
-            if (propType === anyType || propType === errorType) return
+            // Namespace-property fallback: when target is `Namespace.member` (or
+            // `Outer.Inner.member`), resolve the namespace symbol's exported member
+            // directly. Required because `getTypeOfExpression(Namespace_Identifier)`
+            // returns anyType (Module-flagged symbols have no Type representation),
+            // which would short-circuit the existing Type.Object path.
+            val nsBaseSymbol: Symbol? = when (val baseExpr = target.expression) {
+                is Identifier -> currentFileLocals?.get(baseExpr.text) ?: globals[baseExpr.text]
+                is PropertyAccessExpression -> resolvePropertyAccessToSymbol(baseExpr)
+                else -> null
+            }
+            var propType: Type? = null
+            if (nsBaseSymbol != null && nsBaseSymbol.flags.hasAny(SymbolFlags.Module)) {
+                val exportSym = nsBaseSymbol.exports?.get(propName)
+                if (exportSym != null) {
+                    val resolved = getTypeOfSymbol(exportSym)
+                    if (resolved !== anyType && resolved !== errorType) propType = resolved
+                }
+            }
+            if (propType == null) {
+                val objType = getTypeOfExpression(target.expression)
+                if (objType === anyType || objType === errorType) return
+                if (objType !is Type.Object) return
+                resolveStructuredTypeMembers(objType)
+                val propSym = objType.members?.get(propName) ?: return
+                // 16.0: For generic class instance types (Type.Reference with type args),
+                // resolve the property's declared type with the class's type parameters in
+                // scope, then apply the type mapper. This produces the correctly instantiated
+                // prop type (e.g. `T → string` for `new Test1<string>()`).
+                val resolved = resolveGenericPropertyType(objType, propSym) ?: getTypeOfSymbol(propSym)
+                if (resolved === anyType || resolved === errorType) return
+                propType = resolved
+            }
+            val pt = propType
             val valueType = getTypeOfExpression(value)
             if (valueType === anyType || valueType === errorType) return
             if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
-            if (!canUseTypeEngine(valueType, propType)) return
-            if (checkTypeRelatedTo(valueType, propType, assignableRelation)) return
+            if (!canUseTypeEngine(valueType, pt)) return
+            if (checkTypeRelatedTo(valueType, pt, assignableRelation)) return
             // Object literal — emit TS2353 for excess instead
             if (value is ObjectLiteralExpression) {
-                val displayTarget = typeToString(propType)
-                if (checkExcessProperties(value, valueType, propType, displayTarget, source, fileName)) return
+                val displayTarget = typeToString(pt)
+                if (checkExcessProperties(value, valueType, pt, displayTarget, source, fileName)) return
             }
             val displaySource = typeToString(valueType)
-            val displayTarget = typeToString(propType)
+            val displayTarget = typeToString(pt)
+            // Property-level elaboration chain (16.1) — adds "Types of property 'X' are
+            // incompatible." + nested type chain when source/target are both objects.
+            val chain = mutableListOf<String>()
+            if (valueType is Type.Object && pt is Type.Object) {
+                lastChainMissingPropSymbol = null
+                getPropertyElaborationChain(valueType, pt)?.let { chain.addAll(it) }
+            }
             // Squiggle spans the whole property access `obj.prop`
             val start = target.expression.pos
             val length = target.name.pos + target.name.text.length - start
@@ -33453,6 +33489,7 @@ interface DataView {
                 character = character,
                 start = start,
                 length = length,
+                messageChain = chain.toList(),
             ))
         } catch (_: StackOverflowError) { /* circular */ }
     }
@@ -33468,13 +33505,19 @@ interface DataView {
      * 16.0: When [currentTypeParamScope] is active, bypass the cache — the same node
      * may resolve differently depending on the enclosing class/interface's type
      * parameters in scope (e.g. `T` means different things in different classes).
+     *
+     * Also bypass the cache when [inferenceNamespaceStack] is active — namespace-aware
+     * lookup in [getTypeFromTypeReference] resolves type names against the enclosing
+     * namespace's exports, which may differ from the un-scoped resolution that would
+     * have been cached.
      */
     private fun getTypeFromTypeNode(node: TypeNode): Type {
-        if (currentTypeParamScope == null) {
+        val cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty()
+        if (cacheable) {
             nodeTypes[node]?.let { return it }
         }
         val type = getTypeFromTypeNodeWorker(node)
-        if (currentTypeParamScope == null) {
+        if (cacheable) {
             nodeTypes[node] = type
         }
         return type
@@ -33545,8 +33588,15 @@ interface DataView {
         }
         // 16.0: Check enclosing class/interface type parameter scope before globals
         currentTypeParamScope?.get(name)?.let { return it }
-        // Look up the symbol — try qualified name resolution first, then globals
-        val symbol = resolveTypeNameToSymbol(node.typeName) ?: globals[name]
+        // Look up the symbol — try qualified name resolution, then file-locals
+        // (namespace-aware), then globals. Namespace-aware lookup walks the
+        // [inferenceNamespaceStack]'s top entry's parent chain to resolve type
+        // names declared inside an enclosing `namespace M { interface I {} }`
+        // context — required for lazy variable type-resolution where the var's
+        // annotation references a namespace-local interface.
+        val symbol = resolveTypeNameToSymbol(node.typeName)
+            ?: (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
+            ?: globals[name]
         if (symbol != null) {
             val declaredType = getDeclaredTypeOfSymbol(symbol)
             // If the type has type parameters and the reference has type arguments,
@@ -33752,12 +33802,21 @@ interface DataView {
         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return anyType
         return when (decl) {
             is VariableDeclaration -> {
-                // Type annotation takes priority
-                decl.type?.let { return getTypeFromTypeNode(it) }
-                // Infer from initializer (widened: literals → base types)
-                decl.initializer?.let { init ->
-                    val inferred = inferTypeFromInitializer(init)
-                    if (inferred !== anyType && inferred !== errorType) return inferred
+                // Push the containing namespace (if any) so both annotation type
+                // resolution AND initializer inference can resolve namespace-local
+                // names via [getTypeOfIdentifier]/[getTypeFromTypeReference]'s
+                // namespace-aware fallback.
+                val pushed = pushInferenceNamespaceFor(symbol)
+                try {
+                    // Type annotation takes priority
+                    decl.type?.let { return getTypeFromTypeNode(it) }
+                    // Infer from initializer (widened: literals → base types)
+                    decl.initializer?.let { init ->
+                        val inferred = inferTypeFromInitializer(init)
+                        if (inferred !== anyType && inferred !== errorType) return inferred
+                    }
+                } finally {
+                    if (pushed) inferenceNamespaceStack.removeLast()
                 }
                 anyType
             }
@@ -34380,11 +34439,60 @@ interface DataView {
                     val type = getTypeOfSymbol(symbol)
                     if (type !== anyType && type !== errorType) return type
                 }
+                // Namespace-aware fallback: when this lookup happens during lazy
+                // initializer-type inference for a namespace-scoped variable, walk
+                // the enclosing namespace symbol's parent chain and consult each
+                // namespace's `exports` table. Required for patterns like:
+                //   namespace M { var x: T = ...; export var y = x; }
+                // where `x` is bound in `M.exports` (not in file locals/globals).
+                lookupInInferenceNamespace(id.text)?.let { return it }
                 // Then look up symbol in globals
                 val symbol = globals[id.text]
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
             }
         }
+    }
+
+    /** If a containing namespace was pushed by [pushInferenceNamespaceFor], walk its
+     *  parent chain looking for [name] in each namespace's `exports`. Returns the
+     *  resolved non-error type, or `null` if no namespace lookup applies/succeeds. */
+    private fun lookupInInferenceNamespace(name: String): Type? {
+        var current: Symbol? = inferenceNamespaceStack.lastOrNull() ?: return null
+        while (current != null && current.flags.hasAny(SymbolFlags.Module)) {
+            val exp = current.exports?.get(name)
+            if (exp != null) {
+                val type = getTypeOfSymbol(exp)
+                if (type !== anyType && type !== errorType) return type
+            }
+            current = current.parent
+        }
+        return null
+    }
+
+    /** Type-position counterpart of [lookupInInferenceNamespace]. Walks the
+     *  inference-namespace stack's top entry's parent chain looking for a type
+     *  symbol (Class/Interface/Enum/TypeAlias) named [name] in each namespace's
+     *  `exports`. Returns the resolved symbol or `null`. Used by
+     *  [getTypeFromTypeReference] so that an annotation like `var x: I = ...`
+     *  inside `namespace M { interface I {} }` resolves I correctly. */
+    private fun lookupTypeSymbolInInferenceNamespace(name: String): Symbol? {
+        var current: Symbol? = inferenceNamespaceStack.lastOrNull() ?: return null
+        while (current != null && current.flags.hasAny(SymbolFlags.Module)) {
+            val exp = current.exports?.get(name)
+            if (exp != null && exp.flags.hasAny(SymbolFlags.Type)) return exp
+            current = current.parent
+        }
+        return null
+    }
+
+    /** Push [symbol]'s parent onto [inferenceNamespaceStack] if the parent is a
+     *  namespace symbol (carries [SymbolFlags.Module]). Returns true when pushed
+     *  — caller is responsible for popping in a finally block. */
+    private fun pushInferenceNamespaceFor(symbol: Symbol): Boolean {
+        val parent = symbol.parent ?: return false
+        if (!parent.flags.hasAny(SymbolFlags.Module)) return false
+        inferenceNamespaceStack.addLast(parent)
+        return true
     }
 
     // -----------------------------------------------------------------------
