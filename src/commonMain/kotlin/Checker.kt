@@ -43460,7 +43460,8 @@ interface DataView {
             // Compare property types
             val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
             val targetPropType = getPropertyTypeForRelation(target, targetProp)
-            if (!checkTypeRelatedTo(sourcePropType, targetPropType, relation)) return false
+            val effectiveSource = widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)
+            if (!checkTypeRelatedTo(effectiveSource, targetPropType, relation)) return false
         }
         return true
     }
@@ -44504,7 +44505,12 @@ interface DataView {
             }
 
             // Collect all incompatible properties
-            data class IncompatibleProp(val name: String, val sourceType: Type, val targetType: Type)
+            data class IncompatibleProp(
+                val name: String,
+                val sourceType: Type,
+                val targetType: Type,
+                val sourceWidenedForOptional: Boolean,
+            )
             val incompatible = mutableListOf<IncompatibleProp>()
             for (targetProp in targetProps) {
                 val targetName = targetProp.name
@@ -44515,8 +44521,10 @@ interface DataView {
                 // assignable to type 'number'." instead of falling out silently.
                 val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
                 val targetPropType = getPropertyTypeForRelation(target, targetProp)
-                if (!checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) {
-                    incompatible.add(IncompatibleProp(targetName, sourcePropType, targetPropType))
+                val effectiveSource = widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)
+                val sourceWidened = effectiveSource !== sourcePropType
+                if (!checkTypeRelatedTo(effectiveSource, targetPropType, assignableRelation)) {
+                    incompatible.add(IncompatibleProp(targetName, effectiveSource, targetPropType, sourceWidened))
                 }
             }
             if (incompatible.isEmpty()) {
@@ -44627,10 +44635,18 @@ interface DataView {
                 }
                 getFunctionMismatchElaboration(srcObj, tgtObj).map { "    $it" }
             }
+            // When the source prop was widened from `T` to `T | undefined` because the
+            // source declares it optional but the target requires it (strictNullChecks),
+            // add the deeper "Type 'undefined' is not assignable to type '$target'." chain
+            // line to match TypeScript's elaboration depth (cf. `assignmentCompatability11`,
+            // `…15`, `…21`, `…25`, `…39`, `…43`, etc.).
+            val undefinedExtra: List<String> = if (chosen.sourceWidenedForOptional) {
+                listOf("      Type 'undefined' is not assignable to type '$targetPropStr'.")
+            } else emptyList()
             return listOf(
                 outerLine,
                 "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-            ) + funcExtra
+            ) + undefinedExtra + funcExtra
         } finally {
             state.elaborationStack.remove(pairKey)
         }
@@ -44685,6 +44701,23 @@ interface DataView {
             is MethodDeclaration -> decl.questionToken
             else -> false
         }
+    }
+
+    /**
+     * Under strictNullChecks, optional source property `prop?: T` accepts `undefined` —
+     * it widens to `T | undefined` when comparing against a target's required property.
+     * Returns the widened type, or the original type when widening doesn't apply.
+     */
+    private fun widenOptionalSourcePropType(
+        sourceType: Type,
+        sourceProp: Symbol,
+        targetProp: Symbol,
+    ): Type {
+        if (!strictNullChecks) return sourceType
+        if (!isOptionalProperty(sourceProp)) return sourceType
+        if (isOptionalProperty(targetProp)) return sourceType
+        if (typeIncludesUndefinedOrTop(sourceType)) return sourceType
+        return getUnionType(listOf(sourceType, undefinedType))
     }
 
     /**
