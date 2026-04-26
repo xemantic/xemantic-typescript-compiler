@@ -36518,7 +36518,20 @@ interface DataView {
             }
         }
         // Single signature — simple resolution
-        if (sigs.size == 1) return sigs[0].resolvedReturnType ?: anyType
+        if (sigs.size == 1) {
+            val sig = sigs[0]
+            // 17.31a: single-typeParam inference for non-overloaded sigs without
+            // explicit type args. Substitute T into the return type so downstream
+            // (e.g. `var n: number = identity("hi")`) sees the inferred result.
+            if (typeArgs.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
+                val mapper = tryInferSingleTypeParamFromArgs(sig, expr.arguments)
+                if (mapper != null) {
+                    val rt = sig.resolvedReturnType ?: return anyType
+                    return instantiateType(rt, mapper)
+                }
+            }
+            return sig.resolvedReturnType ?: anyType
+        }
         // Multiple signatures on interfaces — skip overload resolution (inherited overloads
         // with specialized string literal params need proper literal type matching)
         if (calleeType is Type.Interface) return anyType
@@ -36613,6 +36626,102 @@ interface DataView {
             result.add(inferredType)
         }
         return result
+    }
+
+    /**
+     * 17.31a: Single-typeParam inference for non-overloaded call signatures.
+     *
+     * Conservative gate: only fires when (a) sig has exactly one type parameter,
+     * (b) every parameter type is either a bare reference to that TypeParam OR a
+     * fully concrete type (no nested T anywhere). Returns a [TypeMapper] mapping
+     * `T -> inferredType` from the FIRST parameter that IS the bare TypeParam,
+     * using the corresponding argument's expression type. Returns null when the
+     * gate fails or no bare-T parameter is matched by an argument.
+     *
+     * Matches `f<T>(x: T): T` called with `f("hi")` → T=string (the "widened"
+     * form, since [getTypeOfExpression] returns wrapper-typed values for string
+     * and number literals). Doesn't infer through `Array<T>` / object members /
+     * unions — those are explicitly out of scope for 17.31a (handled later by
+     * 17.31d / 17.31b respectively).
+     */
+    private fun tryInferSingleTypeParamFromArgs(
+        sig: Signature,
+        args: List<Expression>,
+    ): TypeMapper? {
+        val tps = sig.typeParameters ?: return null
+        if (tps.size != 1) return null
+        val tp = tps[0]
+        val params = sig.parameters
+        if (params.isEmpty() || args.isEmpty()) return null
+
+        for (p in params) {
+            val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { return null }
+            if (pt === errorType) return null
+            if (!isParamShapeAllowedFor17_31a(pt, tp)) return null
+        }
+
+        for (i in params.indices) {
+            if (i >= args.size) break
+            val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+            if (pt !== tp) continue
+            val arg = args[i]
+            if (arg is SpreadElement) continue
+            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+            if (argType === anyType || argType === errorType) return null
+            if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+            // 17.31a refinement: only fire when the inferred type is a "named-like"
+            // type (Interface, Reference, Intrinsic / literal) AND, when T has a
+            // constraint, the inferred type satisfies it. Anonymous Type.Object
+            // results (object literals like `{x: null}`) go through the bare-T
+            // path so existing per-property constraint elaborations (16.4ds /
+            // 16.4dt) keep firing — substitution would erase paramType's TypeParam
+            // identity and skip those branches. The constraint check protects 16.4i
+            // (constrained TypeParam emits TS2345 with constraint as effective
+            // param type) from being bypassed when the inferred type is non-
+            // assignable to T's constraint.
+            val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
+                argType is Type.Intrinsic ||
+                argType.flags.hasAny(
+                    TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                    TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                    TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                )
+            if (!isNamedLike) return null
+            val constraint = tp.constraint
+            if (constraint != null) {
+                val ok = try {
+                    checkTypeRelatedTo(argType, constraint, assignableRelation)
+                } catch (_: StackOverflowError) { return null }
+                if (!ok) return null
+            }
+            return createTypeMapper(listOf(tp), listOf(argType))
+        }
+        return null
+    }
+
+    /**
+     * 17.31a gate helper: a parameter shape is allowed when it is the bare
+     * single-TypeParam itself OR a fully-concrete type that does NOT mention
+     * the TypeParam anywhere. Bails on Type.Reference / Type.Object / unions
+     * containing the TypeParam (those need richer inference shapes).
+     */
+    private fun isParamShapeAllowedFor17_31a(type: Type, tp: Type.TypeParam): Boolean {
+        if (type === tp) return true
+        return !typeMentionsTypeParam(type, tp)
+    }
+
+    /** True if [type] structurally references [tp] (recurses into Reference/Union/Intersection). */
+    private fun typeMentionsTypeParam(type: Type, tp: Type.TypeParam): Boolean {
+        return when (type) {
+            is Type.TypeParam -> type === tp
+            is Type.Reference -> {
+                val args = type.resolvedTypeArguments ?: return false
+                args.any { typeMentionsTypeParam(it, tp) }
+            }
+            is Type.Union -> type.types.any { typeMentionsTypeParam(it, tp) }
+            is Type.Intersection -> type.types.any { typeMentionsTypeParam(it, tp) }
+            else -> false
+        }
     }
 
     /** Get the return type of a new expression by resolving the construct signature. */
@@ -44089,11 +44198,21 @@ interface DataView {
      */
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
-        sig: Signature,
+        sigIn: Signature,
         source: String,
         fileName: String,
         implementationRelated: Diagnostic? = null,
     ) {
+        // 17.31a: Single-typeParam inference for non-overloaded sigs.
+        // When the gate matches, instantiate the signature with the inferred T so
+        // subsequent T-typed parameters are checked against the substituted type
+        // instead of falling through the 16.4i bare-TypeParam continue. Eg.
+        // `f<T>(x: T, y: T)` called with `f(1, "")` infers T=number from arg[0],
+        // then arg[1]: "" vs number fires TS2345 via the standard path.
+        val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
+            val mapper = tryInferSingleTypeParamFromArgs(sigIn, args)
+            if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
+        }
         val params = sig.parameters
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break // extra args handled by TS2554

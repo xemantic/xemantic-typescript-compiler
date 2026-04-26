@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,412 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,414 / 10,078 tests passing (~83%).
+
+**17.31a (2026-04-26, +2)** — Single-typeParam inference for non-overloaded
+sigs landed. New `tryInferSingleTypeParamFromArgs` helper + narrow gate wired
+into both `checkArgumentsAgainstSignature` (instantiates sig so other-arg
+checks see substituted T) AND `getReturnTypeOfCallExpression` (substitutes T
+into return type for downstream var-decl / property-access checks). Gate:
+sig has exactly 1 typeParam; every param either is bare T or fully concrete
+(no nested T); inferred type must be "named-like" (Type.Interface /
+Type.Reference / Type.Intrinsic / literal flags) so anonymous Object literals
+fall through to existing per-property paths (16.4ds / 16.4dt); when T is
+constrained, inferred type must satisfy the constraint so 16.4i's
+constraint-aware TS2345 still fires for non-assignable arg types. Flips
+`fixTypeParameterInSignatureWithRestParameters_ts` (`bar<T>(item1: T, item2: T)`
+called with `bar(1, "")` infers T=number, fires TS2345 at "" arg) and
+`typeArgumentInferenceWithConstraintAsCommonRoot_ts` (`f<T extends Animal>(g, e)`
+infers T=Giraffe, fires TS2345 with missing-prop chain at Elephant arg).
+Foundation for 17.31b–d substeps (multi-arg LUB, multi-typeParam, Reference
+inference).
 
 **Post-17.30b queue audit (2026-04-26)**: 17.30c (`&&`-chain NARROWING for TS2774)
 is BLOCKED-PENDING-USER on lib.dom.d.ts loading — cross-corpus search confirms
@@ -9,9 +27,7 @@ all reference `window.<x>` and gate on `window` resolving past `anyType`.
 17.30d (discriminated-union narrowing through property-equality) was ALREADY
 done via 17.7a (`narrowByDiscriminantProperty`); queue item was a duplicate.
 Remaining work in Blocker #1 step 2h is just 17.30c which needs the
-significant lib.dom.d.ts infrastructure piece. Next session should pick up
-17.31 (Generic argument inference, smallest substep — single-arg single-typeParam
-inference for non-overloaded sigs).
+significant lib.dom.d.ts infrastructure piece.
 
 **17.30b (2026-04-26, net-zero infra)** — FlowAssignment-RHS narrowing landed
 in `narrowTypeFromFlow`'s FlowAssignment branch. When an assignment binds the
