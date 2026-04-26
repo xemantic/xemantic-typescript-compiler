@@ -32939,6 +32939,47 @@ interface DataView {
                     }
                     if (targetType != null && targetType !== anyType && targetType !== errorType) {
                         val tt = targetType!!
+                        // Class-Identifier-as-value RHS with construct-sig target — `d = C`.
+                        // Mirrors the var-decl branch in checkVarDeclAssignability (17.8a):
+                        // canUseTypeEngine skips class-instance-vs-constructor comparisons,
+                        // so without a special-case the assignment falls through and emits
+                        // no diagnostic. Display the source as `typeof X` and emit the
+                        // construct-signature mismatch elaboration chain.
+                        val rhs = expr.right
+                        if (rhs is Identifier &&
+                            tt is Type.Object &&
+                            !tt.constructSignatures.isNullOrEmpty()
+                        ) {
+                            val rhsSym = currentFileLocals?.get(rhs.text) ?: globals[rhs.text]
+                            if (rhsSym != null && rhsSym.flags.hasAny(SymbolFlags.Class) &&
+                                !rhsSym.flags.hasAny(SymbolFlags.Variable)
+                            ) {
+                                val srcCtorType = buildClassValueConstructorTypeForDisplay(rhsSym)
+                                if (srcCtorType != null) {
+                                    val sourceSig = srcCtorType.constructSignatures!!.first()
+                                    val targetSig = tt.constructSignatures!!.first()
+                                    val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation)
+                                    if (!ok) {
+                                        val displaySource = "typeof ${rhsSym.name}"
+                                        val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                                        val chain = getConstructMismatchElaboration(srcCtorType, tt)
+                                        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                        diagnostics.add(Diagnostic(
+                                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2322,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = target.pos,
+                                            length = target.text.length,
+                                            messageChain = chain,
+                                        ))
+                                        return
+                                    }
+                                }
+                            }
+                        }
                         // Set contextual type for function expression parameter inference
                         val savedContextual = contextualType
                         if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression)) {
@@ -44470,23 +44511,38 @@ interface DataView {
         val classType = getDeclaredTypeOfSymbol(symbol)
         if (classType === anyType || classType === errorType) return null
         val isAbstract = ModifierFlag.Abstract in classDecl.modifiers
-        // First Constructor declaration with a body, falling back to first overload signature.
         val ctors = classDecl.members.filterIsInstance<Constructor>()
-        val ctor = ctors.firstOrNull { it.body != null } ?: ctors.firstOrNull()
-        val params = ctor?.parameters?.let { getParameterSymbols(it) } ?: emptyList()
-        val minArgs = ctor?.parameters?.count {
-            !it.questionToken && !it.dotDotDotToken && it.initializer == null
-        } ?: 0
-        val sig = Signature(
-            declaration = ctor,
-            parameters = params,
-            resolvedReturnType = classType,
-            minArgumentCount = minArgs,
-            isAbstract = isAbstract,
-        )
+        // Prefer overload signatures (body-less) over the implementation when both are present —
+        // matches TypeScript's caller-visible signature set. When no explicit ctor, synthesize
+        // a single 0-param signature (the implicit constructor).
+        val sigDecls = if (ctors.any { it.body == null && ctors.size > 1 }) {
+            ctors.filter { it.body == null }
+        } else if (ctors.isNotEmpty()) {
+            listOf(ctors.first())
+        } else {
+            emptyList()
+        }
+        val sigs = if (sigDecls.isEmpty()) {
+            listOf(Signature(
+                resolvedReturnType = classType,
+                parameters = emptyList(),
+                minArgumentCount = 0,
+                isAbstract = isAbstract,
+            ))
+        } else sigDecls.map { ctor ->
+            Signature(
+                declaration = ctor,
+                parameters = getParameterSymbols(ctor.parameters),
+                resolvedReturnType = classType,
+                minArgumentCount = ctor.parameters.count {
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                },
+                isAbstract = isAbstract,
+            )
+        }
         val ctorType = Type.Object()
         ctorType.symbol = symbol
-        ctorType.constructSignatures = listOf(sig)
+        ctorType.constructSignatures = sigs
         return ctorType
     }
 
