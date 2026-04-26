@@ -34641,6 +34641,7 @@ interface DataView {
     ): Type {
         tryNarrowByTypeOf(t, expr, equal, name)?.let { return it }
         narrowByConstructorEquals(t, expr, equal, name)?.let { return it }
+        narrowByDiscriminantProperty(t, expr, equal, name)?.let { return it }
 
         val leftIsRef = expr.left is Identifier && (expr.left as Identifier).text == name
         val rightIsRef = expr.right is Identifier && (expr.right as Identifier).text == name
@@ -34651,6 +34652,77 @@ interface DataView {
         }
         val literalType = literalTypeOfExpression(other) ?: return t
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * Discriminated-union narrowing through property-equality.
+     * Pattern: `name.propX === literal` (or `!==`, or symmetric).
+     *
+     * For each Union member, look up `propX`'s declared type. If it's a literal
+     * type, compare against the RHS literal: positive branch keeps members whose
+     * `propX` matches; negative branch drops members whose `propX` exactly matches.
+     *
+     * Conservative gates (returns null / keeps member unchanged):
+     * - `t` must be a Type.Union (no narrowing on a single type — could regress).
+     * - LHS or RHS must be `name.propX` PropertyAccessExpression with Identifier name.
+     * - Other side must be a recognizable literal expression.
+     * - Members without the property are kept (can't prove the comparison false).
+     * - Members whose propX is non-literal (e.g. `string` instead of `'a'`) are
+     *   kept (could match any value).
+     * - Returns null if the expression doesn't match the discriminant shape, so
+     *   callers fall through to direct-equality narrowing.
+     */
+    private fun narrowByDiscriminantProperty(
+        t: Type, expr: BinaryExpression, equal: Boolean, name: String,
+    ): Type? {
+        if (t !is Type.Union) return null
+        val propAccess: PropertyAccessExpression
+        val literalSide: Expression
+        when {
+            isDiscriminantAccessOf(expr.left, name) -> {
+                propAccess = expr.left as PropertyAccessExpression
+                literalSide = expr.right
+            }
+            isDiscriminantAccessOf(expr.right, name) -> {
+                propAccess = expr.right as PropertyAccessExpression
+                literalSide = expr.left
+            }
+            else -> return null
+        }
+        val propName = (propAccess.name as? Identifier)?.text ?: return null
+        if (propName.isEmpty()) return null
+        val literalType = literalTypeOfExpression(literalSide) ?: return null
+        val filtered = t.types.filter { member ->
+            val apparent = try { getApparentType(member) } catch (_: StackOverflowError) { return@filter true }
+            if (apparent !is Type.Object) return@filter true
+            val propSym = try { getPropertyOfType(apparent, propName) } catch (_: StackOverflowError) { return@filter true }
+                ?: return@filter true
+            val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return@filter true }
+            if (propType === anyType || propType === errorType || propType === unknownType) return@filter true
+            if (!isLiteralKindForDiscriminant(propType)) return@filter true
+            val matches = literalsEqualForDiscriminant(propType, literalType)
+            if (equal) matches else !matches
+        }
+        return getUnionType(filtered)
+    }
+
+    private fun isDiscriminantAccessOf(expr: Expression, name: String): Boolean {
+        if (expr !is PropertyAccessExpression) return false
+        val obj = expr.expression
+        return obj is Identifier && obj.text == name && expr.name is Identifier
+    }
+
+    private fun isLiteralKindForDiscriminant(t: Type): Boolean =
+        t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral ||
+            t === trueType || t === falseType
+
+    private fun literalsEqualForDiscriminant(a: Type, b: Type): Boolean = when {
+        a is Type.StringLiteral && b is Type.StringLiteral -> a.value == b.value
+        a is Type.NumberLiteral && b is Type.NumberLiteral -> a.value == b.value
+        a is Type.BigIntLiteral && b is Type.BigIntLiteral -> a.value == b.value
+        a === trueType && b === trueType -> true
+        a === falseType && b === falseType -> true
+        else -> false
     }
 
     /**
