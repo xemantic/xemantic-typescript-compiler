@@ -33523,6 +33523,32 @@ interface DataView {
             val valueType = getTypeOfExpression(value)
             if (valueType === anyType || valueType === errorType) return
             if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            // 17.14a: Non-constructible source vs constructible target — `canUseTypeEngine`'s
+            // gate at ~31688 short-circuits this case to skip class-instance vs constructor-type
+            // comparisons, but TypeScript flags the assignment with a "provides no match for
+            // the signature 'new ...'" elaboration. Handle directly before the gate fires.
+            if (pt is Type.Object && !pt.constructSignatures.isNullOrEmpty()) {
+                val srcCtorElab = getNonConstructibleElaboration(valueType, pt)
+                if (srcCtorElab != null) {
+                    val displaySource = typeToString(valueType)
+                    val displayTarget = typeToString(pt)
+                    val start = target.expression.pos
+                    val length = target.name.pos + target.name.text.length - start
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        messageChain = srcCtorElab,
+                    ))
+                    return
+                }
+            }
             if (!canUseTypeEngine(valueType, pt)) return
             lastMissingIndexSigKind = null
             if (checkTypeRelatedTo(valueType, pt, assignableRelation)) return
@@ -33592,6 +33618,29 @@ interface DataView {
         val targetSig = targetSigs.first()
         return listOf(
             "  Type '${typeToString(source)}' provides no match for the signature '${signatureToStringColon(targetSig, isConstruct = false)}'."
+        )
+    }
+
+    /**
+     * 17.14a: Mirror of [getCallableMismatchElaboration] for the construct-sig case.
+     * Returns "  Type 'X' provides no match for the signature 'new <T>(p: T): R'."
+     * when the source has NO construct signatures while the target has at least one
+     * — covers the assignmentCompatability37/38 family (interface-instance source vs
+     * `{ new <T>(p: T): any }` target).
+     */
+    private fun getNonConstructibleElaboration(source: Type, target: Type): List<String>? {
+        if (target !is Type.Object) return null
+        try { resolveStructuredTypeMembers(target) } catch (_: StackOverflowError) { return null }
+        val targetSigs = target.constructSignatures
+        if (targetSigs.isNullOrEmpty()) return null
+        val sourceObj = source as? Type.Object
+        if (sourceObj != null) {
+            try { resolveStructuredTypeMembers(sourceObj) } catch (_: StackOverflowError) { return null }
+            if (!sourceObj.constructSignatures.isNullOrEmpty()) return null
+        }
+        val targetSig = targetSigs.first()
+        return listOf(
+            "  Type '${typeToString(source)}' provides no match for the signature '${signatureToStringColon(targetSig, isConstruct = true)}'."
         )
     }
 
