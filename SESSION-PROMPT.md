@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8348 passing):** Surgical pool is exhausted (7+
+**Status (2026-04-26, 8349 passing):** Surgical pool is exhausted (7+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
 progress with infrastructure largely in place:
@@ -152,6 +152,10 @@ progress with infrastructure largely in place:
   FP 17.8a's full-suite re-run revealed where target `typeof A`
   ctor sig had 0 params and source's 1-param ctor wrongly tripped
   the arity gap)
+- 17.8c: extend the 17.8a typeof-Class + construct-sig branch to
+  assignment expressions + prefer overload sigs over impl in source
+  ctor builder (+1 — flips `assignmentCompatWithOverloads_ts` line
+  30 `d = C`)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
