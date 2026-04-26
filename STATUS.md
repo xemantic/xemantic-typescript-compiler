@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,401 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,402 / 10,078 tests passing (~83%).
 
 **Surgical pool is exhausted (12+ consecutive sessions confirmed).** Queue
 reshuffled 2026-04-25: next sessions should commit to architectural blockers

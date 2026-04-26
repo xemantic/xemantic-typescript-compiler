@@ -41646,7 +41646,14 @@ interface DataView {
                 // (D's T isn't in scope), so heritage type args drop to []. Same
                 // applies to `<T>` references inside method bodies (e.g.
                 // `super.bar<T>(null)`).
-                val classSym = stmt.name?.let { globals[it.text] }
+                //
+                // 17.21: When inside a namespace (`inferenceNamespaceStack` non-empty),
+                // the class symbol is in the enclosing namespace's `exports`, not in
+                // `globals` — fall back to that lookup so e.g. a class declared in
+                // `namespace Editor { class List<T> {} }` still gets its TypeParam scope.
+                val classSym = stmt.name?.let { name ->
+                    globals[name.text] ?: inferenceNamespaceStack.lastOrNull()?.exports?.get(name.text)
+                }
                 val classTypeParams: List<Type.TypeParam> = if (classSym != null) {
                     try {
                         (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
@@ -41699,12 +41706,21 @@ interface DataView {
                                     val savedSuperBaseType = currentSuperBaseType
                                     currentLocalTypes = currentLocalTypes.toMutableMap()
                                     currentSuperBaseType = baseInstanceType
+                                    // 17.21: Static methods don't see class TypeParams (TypeScript
+                                    // emits TS2302 for any reference). Pop the class scope while
+                                    // walking a static method body so re-resolution of `<T>` etc.
+                                    // returns errorType, which the new-expression type-arg gate
+                                    // uses to skip the 17.20 null-vs-bare-TypeParam emission.
+                                    val isStatic = ModifierFlag.Static in member.modifiers
+                                    val savedMethodScope = currentTypeParamScope
+                                    if (isStatic) currentTypeParamScope = savedClassScope
                                     try {
                                         populateParameterLocalTypes(member.parameters)
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
                                         currentSuperBaseType = savedSuperBaseType
+                                        currentTypeParamScope = savedMethodScope
                                     }
                                 }
                             }
@@ -41749,6 +41765,37 @@ interface DataView {
             is WithStatement -> {
                 checkCallTypesInExpr(stmt.expression, source, fileName)
                 checkCallTypesInStatement(stmt.statement, source, fileName)
+            }
+            is ModuleDeclaration -> {
+                // 17.21: Recurse into namespace bodies so call/new arg checking fires
+                // inside namespace-scoped classes/functions. Pushes the namespace symbol
+                // onto `inferenceNamespaceStack` so [getCalleeType]'s Identifier branch
+                // (and downstream lookups) can resolve namespace-internal names via
+                // [lookupInInferenceNamespace]. Mirrors the precedent in
+                // `checkTypeAssignabilityInStmt`.
+                if (ModifierFlag.Declare !in stmt.modifiers) {
+                    val nameNode = stmt.name
+                    val moduleSymbol = if (nameNode is Identifier) {
+                        if (inferenceNamespaceStack.isNotEmpty()) {
+                            inferenceNamespaceStack.last().exports?.get(nameNode.text)
+                        } else {
+                            currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
+                        }
+                    } else null
+                    val pushed = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) {
+                        inferenceNamespaceStack.addLast(moduleSymbol)
+                        true
+                    } else false
+                    try {
+                        when (val body = stmt.body) {
+                            is ModuleBlock -> checkCallTypesInStatements(body.statements, source, fileName)
+                            is ModuleDeclaration -> checkCallTypesInStatement(body, source, fileName)
+                            else -> {}
+                        }
+                    } finally {
+                        if (pushed) inferenceNamespaceStack.removeLast()
+                    }
+                }
             }
             else -> {}
         }
@@ -42509,10 +42556,83 @@ interface DataView {
         // Get construct signatures
         val signatures = getConstructSignaturesOfType(calleeType)
         if (signatures.isEmpty()) return
-        if (signatures.size == 1) {
-            checkArgumentsAgainstSignature(args, signatures[0], source, fileName)
+        // 17.21: When the class has its own TypeParameters (e.g. `class List<T>`)
+        // AND the call site has explicit type arguments (e.g. `new List<T>(...)`),
+        // build a fresh signature with each param's type re-resolved under the
+        // class TypeParam scope. The original sig's params may have been cached
+        // as `errorType` from an earlier eager-pass resolution that ran with no
+        // scope — re-resolving here lets the 17.20 null-vs-unconstrained-TypeParam
+        // path fire on the bare `T` parameter. We mint fresh Symbols + cache
+        // entries so the original cache isn't disturbed (which would break
+        // `instantiateSignature`-produced sigs in `handleSuperMethodCall`).
+        //
+        // The explicit-type-args gate is critical: without it, `new D(null)`
+        // where `class D<T> { constructor(x: T) }` would FP-emit TS2345 because
+        // we don't perform generic argument inference (TypeScript would infer
+        // T = null and silently accept). With explicit type args, TypeScript
+        // bypasses inference so a bare `<T>` (unconstrained) → null arg fires.
+        //
+        // Also skip when any explicit type arg resolves to errorType — that
+        // means the call site can't actually access the type (e.g. inside a
+        // static method, a class-level T is out of scope and TypeScript already
+        // emits TS2302; emitting TS2345 too would double-fault).
+        val classTypeParams = (calleeType as? Type.Interface)?.typeParameters
+        val hasExplicitTypeArgs = !expr.typeArguments.isNullOrEmpty()
+        val explicitArgsAllResolve = hasExplicitTypeArgs && expr.typeArguments!!.all { tn ->
+            try { getTypeFromTypeNode(tn) !== errorType } catch (_: StackOverflowError) { false }
+        }
+        val effectiveSigs: List<Signature> = if (!classTypeParams.isNullOrEmpty() && explicitArgsAllResolve) {
+            signatures.map { sig -> reresolveSigParamsUnderClassScope(sig, classTypeParams) }
+        } else signatures
+        if (effectiveSigs.size == 1) {
+            checkArgumentsAgainstSignature(args, effectiveSigs[0], source, fileName)
         } else {
-            checkArgumentsAgainstOverloads(args, signatures, source, fileName, expr.expression)
+            checkArgumentsAgainstOverloads(args, effectiveSigs, source, fileName, expr.expression)
+        }
+    }
+
+    /**
+     * 17.21: Build a fresh [Signature] with each parameter's type re-resolved
+     * under [classTypeParams] in scope. Mints new parameter Symbols and stores
+     * their types in [symbolTypes] so [getTypeOfSymbol] returns the re-resolved
+     * type without re-running the AST resolution path. Preserves the original
+     * symbols' cache entries (used by `instantiateSignature` in [handleSuperMethodCall]).
+     */
+    private fun reresolveSigParamsUnderClassScope(
+        sig: Signature,
+        classTypeParams: List<Type.TypeParam>,
+    ): Signature {
+        val savedScope = currentTypeParamScope
+        val newScope = (savedScope?.toMutableMap() ?: mutableMapOf())
+        for (tp in classTypeParams) tp.symbol?.name?.let { newScope[it] = tp }
+        currentTypeParamScope = newScope
+        try {
+            var changed = false
+            val freshParams = sig.parameters.map { p ->
+                val decl = p.valueDeclaration as? Parameter
+                val typeNode = decl?.type
+                if (typeNode == null) return@map p
+                val freshType = try { getTypeFromTypeNode(typeNode) } catch (_: StackOverflowError) { return@map p }
+                if (freshType === errorType) return@map p
+                val cached = symbolTypes[p.id]
+                if (cached === freshType) return@map p
+                changed = true
+                val freshSym = Symbol(p.flags, p.name)
+                freshSym.declarations.addAll(p.declarations)
+                freshSym.valueDeclaration = p.valueDeclaration
+                freshSym.parent = p.parent
+                symbolTypes[freshSym.id] = freshType
+                freshSym
+            }
+            return if (!changed) sig else Signature(
+                declaration = sig.declaration,
+                typeParameters = sig.typeParameters,
+                parameters = freshParams,
+                resolvedReturnType = sig.resolvedReturnType,
+                minArgumentCount = sig.minArgumentCount,
+            )
+        } finally {
+            currentTypeParamScope = savedScope
         }
     }
 
@@ -42939,6 +43059,13 @@ interface DataView {
                 // param, not the outer function — so resolving via globals would
                 // miss the primitive-callee case.
                 currentLocalTypes[expr.text]?.let { return it }
+                // 17.21: Namespace fallback so a class/fn declared inside `namespace M`
+                // is reachable from a call/new inside another method in the same
+                // namespace. Without this, `new List<T>(null)` inside
+                // `namespace Editor { class ListFactory<T> { make() { ... } } }` would
+                // bail at anyType and skip arg-type checking. Mirrors
+                // `getTypeOfIdentifier`'s namespace fallback.
+                lookupInInferenceNamespace(expr.text)?.let { return it }
                 val symbol = globals[expr.text] ?: return anyType
                 getTypeOfSymbol(symbol)
             }
