@@ -104,17 +104,22 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8400 passing):** Surgical pool is exhausted (12+
+**Status (2026-04-26, 8409 passing):** Surgical pool is exhausted (16+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
-0/0/0, filtered from 8/100/22). Phase 17 / Blocker #1 (full control
-flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.19 series
-landed an additional +51 from architectural-leaning surgical fixes
+0/0/0, filtered from 8/93/22). Phase 17 / Blocker #1 (full control
+flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.27 series
+landed an additional +60 from architectural-leaning surgical fixes
 (namespace-aware identifier resolution, optional/index-sig/privacy
 elaboration depth, generic ctor inference, `typeof Class`
 construct-sig elaboration, fn-vs-fn-arg overload chain, ambient-module
 `export = X` named-import alias resolution, this-parameter handling,
 TS2417 clodule static-side, `super(...)` arg checking with heritage
-type-arg substitution). All sub-steps:
+type-arg substitution, super.method arg checking, namespace-aware
+new-expression arg checking, TS2339 enum-member-access chain, TS2493
+assignment-tuple-bounds, fn-vs-fn arity TS2345, void-return inference
+for unannotated fn-decl bodies, TS2663-vs-TS2301 narrow disambiguation
+for parameter-property shadow, Function-prototype satisfaction +
+Reference-vs-named-Interface arg missing-property chain). All sub-steps:
 
 - 17.1a: Flow-graph infra in binder (no behavior change)
 - 17.1b: var-decl `never` target narrowing wired (+1)
@@ -215,6 +220,18 @@ type-arg substitution). All sub-steps:
   Wired into `checkSingleCallExpressionTypes` super-callee branch
   before the standard anyType bail (+1 — flips
   `superCallArgsMustMatch_ts`)
+- 17.20–17.26: super.method arg checking (+1), namespace-aware
+  new-expression arg checking with class TypeParam scope (+1), TS2339
+  enum-member chain (+1), TS2493 assignment-tuple-bounds (+1), fn-vs-fn
+  arity TS2345 (+1), void-return inference for unannotated fn-decl
+  bodies (+1), TS2663-vs-TS2301 narrow disambiguation for
+  parameter-property shadow (+1)
+- 17.27: Function-prototype-method satisfaction in `propertiesRelatedTo`
+  (skip target props in `{call,apply,bind}` when source has callSignatures)
+  + new `Type.Reference` vs named `Type.Interface` arg branch in
+  `checkArgumentsAgainstSignature` that emits TS2345 + missing-prop chain
+  + TS2728 related info via `collectMissingProperties`. (+2 — flips
+  `assignmentCompatability_checking-call/apply-member-off-of-function-interface_ts`)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
@@ -224,13 +241,15 @@ applies. The `assignmentCompatabilityNN_ts` numbered family (11–43
 series) is **fully healed** as of 17.15b — 0 of 38 numbered tests
 fail. Remaining candidates classified by post-17.19 recon:
 
-- **`assignmentCompatability_checking-call|apply-member-off-of-function-interface_ts`**:
+- ~~**`assignmentCompatability_checking-call|apply-member-off-of-function-interface_ts`**:
   needs Function-apparent-type infrastructure (source `() => any`
   should structurally satisfy an interface requiring `.call(...)` /
-  `.apply(...)` because Function.prototype provides them). Either
-  fold Function members into `getApparentType` for Type.Object with
-  callSignatures, OR special-case `RUNTIME_PROPERTIES`-style misses
-  in `propertiesRelatedTo` when source has callSignatures. Both are
+  `.apply(...)` because Function.prototype provides them).~~ **Flipped
+  17.27 (2026-04-26)** — `propertiesRelatedTo` now skips target props
+  in `{call,apply,bind}` when source has callSignatures, and a new
+  `checkArgumentsAgainstSignature` branch emits TS2345 + missing-prop
+  chain for `Type.Reference` (no callSigs) vs named `Type.Interface`
+  args. Both are
   >1-file changes with cross-cutting risk (every fn-vs-interface
   comparison) — out of scope per autonomous-decision policy.
 - **`noStrictGenericChecks_ts`**: needs full type-param-vs-type-param
