@@ -33519,6 +33519,13 @@ interface DataView {
                 lastChainMissingPropSymbol = null
                 getPropertyElaborationChain(valueType, pt)?.let { chain.addAll(it) }
             }
+            // 17.10a: When source isn't callable but target is, emit
+            // "Type 'X' provides no match for the signature 'sig'." — matches
+            // TypeScript's elaboration for non-callable source vs callable target
+            // (e.g. interface instance assigned to a function-typed property).
+            if (chain.isEmpty()) {
+                getCallableMismatchElaboration(valueType, pt)?.let { chain.addAll(it) }
+            }
             // Squiggle spans the whole property access `obj.prop`
             val start = target.expression.pos
             val length = target.name.pos + target.name.text.length - start
@@ -33535,6 +33542,30 @@ interface DataView {
                 messageChain = chain.toList(),
             ))
         } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
+     * 17.10a: Elaboration line for non-callable source vs callable target.
+     * Returns "  Type 'X' provides no match for the signature 'sig'." when the
+     * source has NO call signatures while the target has at least one — covers
+     * the assignmentCompatability24/33/34 family and similar patterns.
+     * Returns null when not applicable (caller falls through to other elaboration paths).
+     */
+    private fun getCallableMismatchElaboration(source: Type, target: Type): List<String>? {
+        if (target !is Type.Object) return null
+        try { resolveStructuredTypeMembers(target) } catch (_: StackOverflowError) { return null }
+        val targetSigs = target.callSignatures
+        if (targetSigs.isNullOrEmpty()) return null
+        // Source must be non-callable (no own call sigs)
+        val sourceObj = source as? Type.Object
+        if (sourceObj != null) {
+            try { resolveStructuredTypeMembers(sourceObj) } catch (_: StackOverflowError) { return null }
+            if (!sourceObj.callSignatures.isNullOrEmpty()) return null
+        }
+        val targetSig = targetSigs.first()
+        return listOf(
+            "  Type '${typeToString(source)}' provides no match for the signature '${signatureToStringColon(targetSig, isConstruct = false)}'."
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -35268,13 +35299,53 @@ interface DataView {
 
     /** Get the type of a function expression. */
     private fun getTypeOfFunctionExpression(expr: FunctionExpression): Type {
-        val returnType = expr.type?.let { getTypeFromTypeNode(it) }
-            ?: if (expr.body != null && !hasReturnWithExpression(expr.body!!)) voidType else anyType
+        // 17.10a: Build the function-expression's own type parameters and push them
+        // into the type-param scope so `<Tstring>(a: Tstring): Tstring` resolves the
+        // `Tstring` annotations to our TypeParam (instead of falling through to global
+        // lookup → errorType → display `(a: error) => any`).
+        val sigTypeParams = expr.typeParameters?.map { tpDecl ->
+            Type.TypeParam().also { tp ->
+                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+            }
+        }
+        val savedScope = currentTypeParamScope
+        if (!sigTypeParams.isNullOrEmpty()) {
+            val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+            sigTypeParams.forEachIndexed { i, tp ->
+                scope[expr.typeParameters!![i].name.text] = tp
+            }
+            currentTypeParamScope = scope
+        }
         val params = getParameterSymbols(expr.parameters)
+        val returnType: Type
+        try {
+            sigTypeParams?.forEachIndexed { i, tp ->
+                expr.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                expr.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+            }
+            // Eagerly resolve param types within the scope and cache via symbolTypes
+            // — later `getTypeOfSymbol(p)` calls won't have the scope active.
+            for ((pi, param) in params.withIndex()) {
+                if (pi < expr.parameters.size) {
+                    expr.parameters[pi].type?.let { typeNode ->
+                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                    }
+                }
+            }
+            returnType = expr.type?.let { getTypeFromTypeNode(it) }
+                ?: when {
+                    expr.body == null -> anyType
+                    !hasReturnWithExpression(expr.body!!) -> voidType
+                    else -> inferReturnTypeFromFunctionExpressionBody(expr, params) ?: anyType
+                }
+        } finally {
+            currentTypeParamScope = savedScope
+        }
         // Apply contextual typing: infer parameter types from contextual call signature
         applyContextualParameterTypes(params, expr.parameters)
         val sig = Signature(
             declaration = expr,
+            typeParameters = sigTypeParams,
             parameters = params,
             resolvedReturnType = returnType,
             minArgumentCount = expr.parameters.count {
@@ -35285,6 +35356,27 @@ interface DataView {
         fnType.callSignatures = listOf(sig)
         fnType.properties = emptyList()
         return fnType
+    }
+
+    /**
+     * 17.10a: Narrow return-type-from-body inference for function expressions
+     * with no return annotation. Currently handles `return <param-identifier>`
+     * — the simplest case that matters for generic identity-like functions
+     * `function f<T>(a: T) { return a; }`. Returns null for unhandled patterns.
+     */
+    private fun inferReturnTypeFromFunctionExpressionBody(
+        expr: FunctionExpression, params: List<Symbol>,
+    ): Type? {
+        val stmts = expr.body?.statements ?: return null
+        if (stmts.size != 1) return null
+        val retStmt = stmts[0] as? ReturnStatement ?: return null
+        val retExpr = retStmt.expression ?: return null
+        if (retExpr is Identifier) {
+            val match = params.firstOrNull { it.name == retExpr.text } ?: return null
+            val pt = symbolTypes[match.id] ?: return null
+            return pt
+        }
+        return null
     }
 
     /**
@@ -44848,10 +44940,45 @@ interface DataView {
                         is StringLiteralNode -> nameNode.text
                         else -> ""
                     }
-                    val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                    // 17.10a: Build the call/construct/method signature's own type
+                    // parameters and push them into the type-param scope so
+                    // `<Tstring>(a: Tstring): Tstring` resolves the `Tstring`
+                    // annotations to our TypeParam (instead of falling through to
+                    // global lookup → errorType → display `(a: error) => any`).
+                    val sigTypeParams = member.typeParameters?.map { tpDecl ->
+                        Type.TypeParam().also { tp ->
+                            tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+                        }
+                    }
+                    val savedScope = currentTypeParamScope
+                    if (!sigTypeParams.isNullOrEmpty()) {
+                        val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                        sigTypeParams.forEachIndexed { i, tp ->
+                            scope[member.typeParameters!![i].name.text] = tp
+                        }
+                        currentTypeParamScope = scope
+                    }
                     val params = getParameterSymbols(member.parameters)
+                    val returnType: Type
+                    try {
+                        sigTypeParams?.forEachIndexed { i, tp ->
+                            member.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                            member.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                        }
+                        for ((pi, param) in params.withIndex()) {
+                            if (pi < member.parameters.size) {
+                                member.parameters[pi].type?.let { typeNode ->
+                                    symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                                }
+                            }
+                        }
+                        returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                    } finally {
+                        currentTypeParamScope = savedScope
+                    }
                     val sig = Signature(
                         declaration = member,
+                        typeParameters = sigTypeParams,
                         parameters = params,
                         resolvedReturnType = returnType,
                         minArgumentCount = member.parameters.count {
