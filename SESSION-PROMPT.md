@@ -104,10 +104,14 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8349 passing):** Surgical pool is exhausted (7+
+**Status (2026-04-26, 8396 passing):** Surgical pool is exhausted (9+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
-0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
-progress with infrastructure largely in place:
+0/0/0, filtered from 8/102/23). Phase 17 / Blocker #1 (full control
+flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.15 series
+landed an additional +47 from architectural-leaning surgical fixes
+(namespace-aware identifier resolution, optional/index-sig/privacy
+elaboration depth, generic ctor inference, `typeof Class`
+construct-sig elaboration, fn-vs-fn-arg overload chain). All sub-steps:
 
 - 17.1a: Flow-graph infra in binder (no behavior change)
 - 17.1b: var-decl `never` target narrowing wired (+1)
@@ -156,32 +160,63 @@ progress with infrastructure largely in place:
   assignment expressions + prefer overload sigs over impl in source
   ctor builder (+1 — flips `assignmentCompatWithOverloads_ts` line
   30 `d = C`)
+- 17.9a: namespace-aware identifier resolution — `inferenceNamespaceStack`
+  threads enclosing-namespace context through lazy variable type
+  resolution (+10; flips 10 `assignmentCompatabilityNN_ts` family tests)
+- 17.9b: deep widening of object-literal member types and Array
+  element types in `widenType` (+2)
+- 17.10a–e: type-parameter wiring on FunctionExpression / FunctionType
+  / TypeLiteral call sigs + substituted-pinning elaboration (+7)
+- 17.11a: `S→unknown` substitution + "T could be instantiated" chain
+  in `getFunctionMismatchElaboration` (+2)
+- 17.11b: TS2554 for property-access call expressions (+2)
+- 17.11c: MethodDeclaration scope-push for typeParameters + null/undef
+  vs Type.Reference TS2345 (+1)
+- 17.11e: push namespace symbol onto inferenceNamespaceStack for
+  ModuleDeclaration body in type-assignability walk (+1)
+- 17.12a: widen optional source props to `T | undefined` in
+  `propertiesRelatedTo` + deeper undef-vs-target chain line (+11)
+- 17.12b: number-index-signature missing diagnostic + Type.Reference
+  nominal-source detection + index-sig elaboration (+1)
+- 17.13: `formatTypeForDisplay` honors optional/rest param tokens
+  (net-zero infra)
+- 17.14a: `getNonConstructibleElaboration` for non-constructible
+  source vs constructible target in checkPropertyAccessAssignment (+2)
+- 17.14b: generic argument inference from `new` expressions +
+  class-instance comparison via canUseTypeEngine widening +
+  parameter-property type substitution (+3)
+- 17.14c: asymmetric privacy elaboration in `getPropertyElaborationChain` (+3)
+- 17.15a: drop `| undefined` for fn-type optional params + recurse
+  fn-mismatch chain for nested fn-type param mismatches (+1)
+- 17.15b: TS2769 overload-error fn-vs-fn arg chain + callee-position
+  squiggle (+1)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
 remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
 them only opportunistically. Default workflow (steps 1-9 above)
-applies, with these candidates as the next concrete moves:
+applies. The `assignmentCompatabilityNN_ts` numbered family (11–43
+series) is **fully healed** as of 17.15b — 0 of 38 numbered tests
+fail. Remaining candidates classified by post-17.15b recon:
 
-- **NEW (post-17.8c, ~30 tests)**: **Namespace-aware identifier
-  resolution** — `assignmentCompatabilityNN_ts` family (~30 failing
-  tests, 11–43 series). Item 6.4's "Unlocks ~38 namespace tests" claim
-  is partially fulfilled (property-access fallback in
-  `getTypeOfPropertyAccess` IS in place), but the broader
-  scope-walk extension was never implemented. Root cause confirmed
-  via prototype patch this session (reverted): `inferTypeFromInitializer`
-  for `var __val__obj4 = obj4` calls `getTypeOfIdentifier(obj4)`
-  which returns `anyType` because `obj4` is bound INSIDE the namespace
-  (not in `currentFileLocals` / `globals`). Fix needs (a) per-decl
-  containing-namespace tracking, (b) extending `getTypeOfIdentifier`
-  to consult enclosing namespace's exports. Risk: medium-low if
-  guarded; could expose latent gaps that previously hid behind
-  anyType bailouts. See post-17.8c session note for full traceback.
-- **TS2774 + `&&`-chain narrowing**: `uncalledFunctionChecksInConditional2_ts`
-  needs `perf && perf.measure && perf.clearMarks && perf.clearMeasures`
-  to narrow `perf` from `Performance | undefined` to defined by the time
-  the last operand fires. ALSO blocked on `window` resolving to `any`
-  (lib `Window & typeof globalThis` intersection unresolved); same gap
+- **`assignmentCompatability_checking-call|apply-member-off-of-function-interface_ts`**:
+  needs Function-apparent-type infrastructure (source `() => any`
+  should structurally satisfy an interface requiring `.call(...)` /
+  `.apply(...)` because Function.prototype provides them). Either
+  fold Function members into `getApparentType` for Type.Object with
+  callSignatures, OR special-case `RUNTIME_PROPERTIES`-style misses
+  in `propertiesRelatedTo` when source has callSignatures. Both are
+  >1-file changes with cross-cutting risk (every fn-vs-interface
+  comparison) — out of scope per autonomous-decision policy.
+- **`noStrictGenericChecks_ts`**: needs full type-param-vs-type-param
+  matching across nested fn signatures (`<S>(x:S, y:S)` vs
+  `<T,U>(x:T, y:U)` where S→T/U bipartition fails on second param).
+  Architectural — Blocker #2 (generic argument inference).
+- **TS2774 + `&&`-chain narrowing** (`uncalledFunctionChecksInConditional2_ts`):
+  needs `perf && perf.measure && ...` to narrow `perf` from
+  `Performance | undefined` to defined by the time the last operand
+  fires. ALSO blocked on `window` resolving to `any` (lib
+  `Window & typeof globalThis` intersection unresolved); same gap
   as the missing 35th emission in `truthinessCallExpressionCoercion2_ts`.
 - **TS2454 via flow-graph definite-assignment**: replace the ad-hoc
   walker (does NOT recurse into IfStatement bodies, blocking
@@ -189,11 +224,6 @@ applies, with these candidates as the next concrete moves:
   snapshot/restore approach regressed -7 tests; tread carefully.
 - **FlowAssignment-RHS narrowing**: medium risk — could over-narrow
   legitimate union-source TS2322 cases.
-- **ElementAccessExpression `var1["constructor"]`**: 17.5a only
-  handles PropertyAccessExpression form. Adding the bracket form would
-  unlock half the variants in `typeGuardConstructorClassAndNumber_ts`,
-  but that test ALSO needs multi-member union TS2339 elaboration —
-  not a single-step win.
 
 These leverage the installed flow-graph (`Flow.kt` / `FlowGraphBuilder`,
 `currentFlowGraph`, `nodeToFlow`, `applyConditionNarrowing`,

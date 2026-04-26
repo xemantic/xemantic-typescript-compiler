@@ -1,10 +1,13 @@
 # Status
 
-**Phase 4 — Checker buildout.** ~8,396 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,396 / 10,078 tests passing (~83%).
 
-**Surgical pool is exhausted (6+ consecutive sessions confirmed).** Queue
+**Surgical pool is exhausted (9+ consecutive sessions confirmed).** Queue
 reshuffled 2026-04-25: next sessions should commit to architectural blockers
-rather than searching for surgical wins.
+rather than searching for surgical wins. Recent 17.9–17.15 series landed
+cumulative +47 from architectural-leaning surgical fixes (namespace-aware
+inference, optional/index-sig/privacy elaboration, generic ctor inference);
+that vein is now also drained.
 
 **MAINT-1 done 2026-04-25**: 32 stale skip-log entries marked
 strikethrough; `find_candidates.py` updated to strip `~~...~~` spans. Net
