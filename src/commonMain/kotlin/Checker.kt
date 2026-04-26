@@ -40744,6 +40744,47 @@ interface DataView {
     }
 
     /**
+     * 17.22: Narrow TS2339 for `E.A.X` where `E.A` is an enum member access. The enum literal
+     * type's apparent value is the underlying primitive (number/string), so anything not present
+     * on the Number or String wrapper apparent type is a missing property. Display is `EnumName.MemberName`.
+     * Conservative gates: prop must not be empty / in RUNTIME_PROPERTIES, and must be absent from
+     * BOTH Number and String wrapper apparent types (we can't always tell numeric vs string enum
+     * without computing values, so we accept members of either to avoid FPs).
+     */
+    private fun tryEmitEnumMemberAccessTs2339(
+        enumAccess: PropertyAccessExpression, propName: String,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ): Boolean {
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
+        val enumIdent = enumAccess.expression as? Identifier ?: return false
+        val enumSym = currentFileLocals?.get(enumIdent.text) ?: globals[enumIdent.text] ?: return false
+        // Require an actual EnumDeclaration: namespaces holding only const enums get
+        // SymbolFlags.ConstEnum set via ModuleInstanceState.ConstEnumOnly, so checking
+        // the flag alone aliases real `enum E {}` declarations with `namespace M { const enum X {} }`.
+        if (enumSym.declarations.none { it is EnumDeclaration }) return false
+        val memberName = enumAccess.name.text
+        val memberSym = enumSym.exports?.get(memberName) ?: return false
+        if (!memberSym.flags.hasAny(SymbolFlags.EnumMember)) return false
+        val numHasIt = try { getPropertyOfType(getApparentType(numberType), propName) } catch (_: StackOverflowError) { null }
+        if (numHasIt != null) return false
+        val strHasIt = try { getPropertyOfType(getApparentType(stringType), propName) } catch (_: StackOverflowError) { null }
+        if (strHasIt != null) return false
+        val display = "${enumIdent.text}.$memberName"
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$display'.",
+            category = DiagnosticCategory.Error,
+            code = 2339,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = diagStart,
+            length = diagLength,
+        ))
+        return true
+    }
+
+    /**
      * 16.4ed: Narrow TS2339 for `g.prop` where `g: Partial<T>` / `Required<T>` / `Readonly<T>`.
      * These utility types preserve T's property set, so if `prop` isn't a member of T, the
      * access is invalid. Fires only when the inner type resolves to a plain Object/Interface
@@ -40920,6 +40961,13 @@ interface DataView {
             if (objectExpr is PropertyAccessExpression &&
                 objectExpr.expression is Identifier &&
                 tryEmitNamespaceMemberTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
+                return
+            }
+            // 17.22: `E.A.prop` — enum-member access then property. Emits TS2339 with `E.A` display
+            // when prop is absent from both Number and String wrapper apparent types.
+            if (objectExpr is PropertyAccessExpression &&
+                objectExpr.expression is Identifier &&
+                tryEmitEnumMemberAccessTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
                 return
             }
             if (objectExpr !is Identifier) return
