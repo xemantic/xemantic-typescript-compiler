@@ -104,14 +104,15 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8396 passing):** Surgical pool is exhausted (9+
+**Status (2026-04-26, 8397 passing):** Surgical pool is exhausted (11+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
-0/0/0, filtered from 8/102/23). Phase 17 / Blocker #1 (full control
-flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.15 series
-landed an additional +47 from architectural-leaning surgical fixes
+0/0/0, filtered from 8/101/23). Phase 17 / Blocker #1 (full control
+flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.16 series
+landed an additional +48 from architectural-leaning surgical fixes
 (namespace-aware identifier resolution, optional/index-sig/privacy
 elaboration depth, generic ctor inference, `typeof Class`
-construct-sig elaboration, fn-vs-fn-arg overload chain). All sub-steps:
+construct-sig elaboration, fn-vs-fn-arg overload chain, ambient-module
+`export = X` named-import alias resolution). All sub-steps:
 
 - 17.1a: Flow-graph infra in binder (no behavior change)
 - 17.1b: var-decl `never` target narrowing wired (+1)
@@ -190,6 +191,11 @@ construct-sig elaboration, fn-vs-fn-arg overload chain). All sub-steps:
   fn-mismatch chain for nested fn-type param mismatches (+1)
 - 17.15b: TS2769 overload-error fn-vs-fn arg chain + callee-position
   squiggle (+1)
+- 17.16: ambient-module `export = X` chain in `resolveAlias`'s
+  named-import branch — looks up `originalName` via `X.exports`
+  through a new `resolveAmbientModuleExportEquals` helper that walks
+  the `ModuleDeclaration.body` for `ExportAssignment{isExportEquals=true}`
+  (+1 — flips `aliasDoesNotDuplicateSignatures_ts`)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
@@ -197,7 +203,7 @@ remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
 them only opportunistically. Default workflow (steps 1-9 above)
 applies. The `assignmentCompatabilityNN_ts` numbered family (11–43
 series) is **fully healed** as of 17.15b — 0 of 38 numbered tests
-fail. Remaining candidates classified by post-17.15b recon:
+fail. Remaining candidates classified by post-17.16 recon:
 
 - **`assignmentCompatability_checking-call|apply-member-off-of-function-interface_ts`**:
   needs Function-apparent-type infrastructure (source `() => any`
