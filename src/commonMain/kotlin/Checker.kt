@@ -33524,6 +33524,7 @@ interface DataView {
             if (valueType === anyType || valueType === errorType) return
             if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
             if (!canUseTypeEngine(valueType, pt)) return
+            lastMissingIndexSigKind = null
             if (checkTypeRelatedTo(valueType, pt, assignableRelation)) return
             // Object literal — emit TS2353 for excess instead
             if (value is ObjectLiteralExpression) {
@@ -33538,6 +33539,12 @@ interface DataView {
             if (valueType is Type.Object && pt is Type.Object) {
                 lastChainMissingPropSymbol = null
                 getPropertyElaborationChain(valueType, pt)?.let { chain.addAll(it) }
+            }
+            // Missing index signature elaboration (mirrors var-decl path at ~33177): when
+            // the relation failed because target has a string/number index signature that
+            // source doesn't, emit "Index signature for type '<kind>' is missing in type 'X'.".
+            if (chain.isEmpty() && lastMissingIndexSigKind != null) {
+                chain.add("  Index signature for type '${lastMissingIndexSigKind}' is missing in type '$displaySource'.")
             }
             // 17.10a: When source isn't callable but target is, emit
             // "Type 'X' provides no match for the signature 'sig'." — matches
@@ -43397,16 +43404,29 @@ interface DataView {
         if (!isClassInstance) {
             if (!signaturesRelatedTo(source, target, relation, isConstruct = true)) return false
         }
-        // Check index signatures: if target has a string index signature but source (a named
-        // class/interface) doesn't declare one, TypeScript rejects the assignment with
-        // "Index signature for type 'string' is missing in type 'X'." This only applies to
-        // NOMINAL source types (named class/interface) — anonymous object literals use
+        // Check index signatures: if target has a string/number index signature but source
+        // (a named class/interface) doesn't declare one, TypeScript rejects the assignment
+        // with "Index signature for type '<kind>' is missing in type 'X'." This only applies
+        // to NOMINAL source types (named class/interface) — anonymous object literals use
         // a different rule where properties individually satisfy the index type.
-        if (target.stringIndexInfo != null && source.stringIndexInfo == null) {
-            val srcSym = source.symbol
-            val isNominalSource = srcSym != null && srcSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
-            if (isNominalSource) {
+        // Type.Reference's own `symbol` is null; its target's symbol carries the nominal info.
+        // Skip when the target's index type accepts `any`/`unknown` — any source satisfies
+        // it implicitly so emitting "missing index signature" would be a FP (cf.
+        // `assignmentCompatability36_ts`'s `{[k:string]:any}` target).
+        val srcNominalSym = source.symbol ?: (source as? Type.Reference)?.target?.symbol
+        val isNominalSource = srcNominalSym != null &&
+            srcNominalSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+        if (isNominalSource) {
+            val tgtStr = target.stringIndexInfo
+            if (tgtStr != null && source.stringIndexInfo == null &&
+                !tgtStr.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
                 lastMissingIndexSigKind = "string"
+                return false
+            }
+            val tgtNum = target.numberIndexInfo
+            if (tgtNum != null && source.numberIndexInfo == null &&
+                !tgtNum.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
+                lastMissingIndexSigKind = "number"
                 return false
             }
         }
