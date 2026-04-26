@@ -36067,7 +36067,14 @@ interface DataView {
     private fun formatParameter(p: Symbol): String {
         val decl = p.valueDeclaration as? Parameter
         val resolvedType = getTypeOfSymbol(p)
-        val pType = resolvedType.let { if (it === anyType) "any" else typeToString(it) }
+        // 17.24: When the resolved type is errorType (e.g. unresolved name like
+        // `items: ItemSet`), prefer rendering from the AST type-node so the displayed
+        // form preserves the source name (e.g. `ItemSet`) instead of `error`.
+        val pType = if (resolvedType === errorType) {
+            decl?.type?.let { formatTypeForDisplay(it) } ?: "any"
+        } else {
+            resolvedType.let { if (it === anyType) "any" else typeToString(it) }
+        }
         return when {
             decl?.dotDotDotToken == true -> "...${p.name}: $pType"
             decl?.questionToken == true -> {
@@ -43635,7 +43642,18 @@ interface DataView {
                 val allowFuncToFunc = paramIsAnonFunc && argIsAnonFunc &&
                     sigHasOnlySimpleTypes((paramType as Type.Object).callSignatures!!.first()) &&
                     sigHasOnlySimpleTypes((argType as Type.Object).callSignatures!!.first())
-                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc) continue
+                // 17.24: Arity-mismatch is a definitive function-vs-function failure regardless
+                // of param/return type complexity. When source's minArgumentCount exceeds
+                // target's total params, the assignment is invalid because a caller of the
+                // target signature would not pass enough arguments to satisfy the source.
+                // Allows the check even when sigHasOnlySimpleTypes fails (e.g. unresolved
+                // ItemSet → errorType, or `any` return type).
+                val allowArityMismatch = paramIsAnonFunc && argIsAnonFunc && run {
+                    val argSig = (argType as Type.Object).callSignatures!!.first()
+                    val paramSig = (paramType as Type.Object).callSignatures!!.first()
+                    argSig.minArgumentCount > paramSig.parameters.size
+                }
+                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch) continue
             }
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
