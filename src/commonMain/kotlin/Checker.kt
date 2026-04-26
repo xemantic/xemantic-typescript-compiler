@@ -41600,6 +41600,7 @@ interface DataView {
                             implRelated = implRelatedCandidate
                         }
                     }
+                    checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
                     checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated)
                     return
                 }
@@ -41608,6 +41609,7 @@ interface DataView {
         if (signatures.size == 1) {
             // Check if this is an overload with an implementation signature (TS2793)
             val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
+            checkTs2554ForPropertyAccessCall(expr, signatures[0], source, fileName)
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
             // Skip overload resolution when any signature has type parameters —
@@ -41618,6 +41620,67 @@ interface DataView {
             // Overload resolution: try each signature in order
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName)
         }
+    }
+
+    /**
+     * 17.11b: Emit TS2554 (Expected N arguments, but got M) for property-access
+     * call expressions like `x.b()` where the resolved sig requires more args
+     * than provided. The syntactic arg-count walker (`checkArgCountInExprCore`)
+     * only handles `Identifier` callees because it works without type
+     * resolution; PropertyAccess callees fall through. This type-aware check
+     * fills the gap for that subset. Squiggle is on the property name (matches
+     * TypeScript baseline). For too-few args, emits a TS6210 related info
+     * pointing to the missing parameter's declaration.
+     */
+    private fun checkTs2554ForPropertyAccessCall(
+        expr: CallExpression,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ) {
+        val callee = expr.expression as? PropertyAccessExpression ?: return
+        val params = sig.parameters
+        val hasRest = (params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        val argCount = expr.arguments.size
+        val minParams = sig.minArgumentCount
+        val maxParams = params.size
+        if (argCount >= minParams && (hasRest || argCount <= maxParams)) return
+        if (argCount >= minParams) return // too-many: squiggle differs (covers excess args) — defer to a future extension
+        val nameNode = callee.name
+        val start = nameNode.pos
+        val length = nameNode.text.length
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val relatedInfo = mutableListOf<Diagnostic>()
+        if (argCount < params.size) {
+            val missingSym = params[argCount]
+            val missingParam = missingSym.valueDeclaration as? Parameter
+            val pname = missingParam?.name as? Identifier
+            if (pname != null && missingParam.name !is ObjectBindingPattern && missingParam.name !is ArrayBindingPattern) {
+                val (rLine, rChar) = getLineAndCharacterOfPosition(source, pname.pos)
+                relatedInfo.add(Diagnostic(
+                    message = "An argument for '${pname.text}' was not provided.",
+                    category = DiagnosticCategory.Message,
+                    code = 6210,
+                    fileName = fileName,
+                    line = rLine,
+                    character = rChar,
+                    start = pname.pos,
+                    length = pname.text.length,
+                ))
+            }
+        }
+        diagnostics.add(Diagnostic(
+            message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $argCount.",
+            category = DiagnosticCategory.Error,
+            code = 2554,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = relatedInfo.ifEmpty { emptyList() },
+        ))
     }
 
     /**
