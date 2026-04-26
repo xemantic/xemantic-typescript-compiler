@@ -31919,7 +31919,27 @@ interface DataView {
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
-                    if (body is ModuleBlock) checkTypeAssignabilityInStatements(body.statements, source, fileName, varTypes.toMutableMap(), returnType = null, emptySet())
+                    // Push the namespace symbol onto the inference stack so identifier /
+                    // type-name lookups inside the body can resolve namespace-internal
+                    // declarations via [lookupTypeSymbolInInferenceNamespace] /
+                    // [lookupInInferenceNamespace]. Without this, an annotation like
+                    // `var t: IStateToken[]` inside `namespace M { interface IStateToken {} }`
+                    // resolves IStateToken to errorType (since IStateToken isn't in
+                    // file-locals or globals), which then masks downstream TS2322s
+                    // because errorType has TypeFlags.Any in `isSimpleTypeRelatedTo`.
+                    val nameNode = stmt.name
+                    val moduleSymbol = if (nameNode is Identifier) {
+                        currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
+                    } else null
+                    val pushed = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) {
+                        inferenceNamespaceStack.addLast(moduleSymbol)
+                        true
+                    } else false
+                    try {
+                        if (body is ModuleBlock) checkTypeAssignabilityInStatements(body.statements, source, fileName, varTypes.toMutableMap(), returnType = null, emptySet())
+                    } finally {
+                        if (pushed) inferenceNamespaceStack.removeLast()
+                    }
                 }
                 is TryStatement -> {
                     checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
