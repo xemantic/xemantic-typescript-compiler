@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8345 passing):** Surgical pool is exhausted (7+
+**Status (2026-04-26, 8347 passing):** Surgical pool is exhausted (7+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0). Phase 17 / Blocker #1 (full control flow narrowing) is in
 progress with infrastructure largely in place:
@@ -143,6 +143,10 @@ progress with infrastructure largely in place:
   (net-zero infra — completes the missing `is Identifier` branch so
   `if (x) { ... }` narrows `T | undefined` to `T`; falsy side
   conservatively unchanged)
+- 17.8a: `typeof Class` source display + construct-sig elaboration
+  for class-Identifier-as-value var-decls (+2 — flips
+  `assignmentCompatability44/45_ts`; not narrowing — surgical
+  carve-out for the case `canUseTypeEngine` deliberately skips)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The

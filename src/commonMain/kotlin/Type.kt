@@ -265,6 +265,7 @@ class Signature(
     val parameters: List<Symbol> = emptyList(),
     var resolvedReturnType: Type? = null,
     val minArgumentCount: Int = 0,
+    val isAbstract: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
