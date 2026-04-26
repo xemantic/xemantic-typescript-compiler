@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8397 passing):** Surgical pool is exhausted (11+
+**Status (2026-04-26, 8397 passing):** Surgical pool is exhausted (12+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0, filtered from 8/101/23). Phase 17 / Blocker #1 (full control
 flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.16 series
