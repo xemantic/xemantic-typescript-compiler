@@ -40245,6 +40245,38 @@ interface DataView {
                             return
                         }
                     }
+                    // Phase 17 / Blocker #1 step 2h (17.7c): narrowed-to-single-Object emission.
+                    // When discriminant/typeof/instanceof narrowing collapses a Union to a
+                    // single anonymous Type.Object (e.g. `if (ab.kind === 'a') ab.b` where
+                    // ab is narrowed to `{ kind: 'a', a: string }`), accessing a property
+                    // missing on that single member should fire TS2339. Conservative gate:
+                    //   - `narrowed` must be a Type.Object that is NEITHER Type.Interface
+                    //     (named class/interface — base-types may be incompletely resolved)
+                    //     NOR Type.Reference (generic instantiation — `resolveGenericPropertyType`
+                    //     interaction not handled here);
+                    //   - narrowing must have ACTUALLY changed the type (`narrowed !== rawForNarrowing`);
+                    //   - `propName` must not be empty or a RUNTIME_PROPERTIES member;
+                    //   - the property must not exist on the narrowed type.
+                    // Display uses the narrowed type's string form (NOT the un-narrowed union),
+                    // matching TypeScript's baseline format for narrowed property access.
+                    if (narrowed is Type.Object && narrowed !is Type.Interface && narrowed !is Type.Reference &&
+                        narrowed !== rawForNarrowing && propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES
+                    ) {
+                        try {
+                            resolveStructuredTypeMembers(narrowed)
+                            if (getPropertyOfType(narrowed, propName) == null) {
+                                val narrowedDisplay = typeToString(narrowed)
+                                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$propName' does not exist on type '$narrowedDisplay'.",
+                                    category = DiagnosticCategory.Error, code = 2339,
+                                    fileName = fileName, line = line, character = character,
+                                    start = diagStart, length = diagLength,
+                                ))
+                                return
+                            }
+                        } catch (_: StackOverflowError) { /* fall through to normal check */ }
+                    }
                 }
             } catch (_: StackOverflowError) { /* fall through to normal check */ }
 
