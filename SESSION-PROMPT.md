@@ -163,6 +163,20 @@ remaining sub-cases of Blocker #4 are demoted to LOW yield; pursue
 them only opportunistically. Default workflow (steps 1-9 above)
 applies, with these candidates as the next concrete moves:
 
+- **NEW (post-17.8c, ~30 tests)**: **Namespace-aware identifier
+  resolution** — `assignmentCompatabilityNN_ts` family (~30 failing
+  tests, 11–43 series). Item 6.4's "Unlocks ~38 namespace tests" claim
+  is partially fulfilled (property-access fallback in
+  `getTypeOfPropertyAccess` IS in place), but the broader
+  scope-walk extension was never implemented. Root cause confirmed
+  via prototype patch this session (reverted): `inferTypeFromInitializer`
+  for `var __val__obj4 = obj4` calls `getTypeOfIdentifier(obj4)`
+  which returns `anyType` because `obj4` is bound INSIDE the namespace
+  (not in `currentFileLocals` / `globals`). Fix needs (a) per-decl
+  containing-namespace tracking, (b) extending `getTypeOfIdentifier`
+  to consult enclosing namespace's exports. Risk: medium-low if
+  guarded; could expose latent gaps that previously hid behind
+  anyType bailouts. See post-17.8c session note for full traceback.
 - **TS2774 + `&&`-chain narrowing**: `uncalledFunctionChecksInConditional2_ts`
   needs `perf && perf.measure && perf.clearMarks && perf.clearMeasures`
   to narrow `perf` from `Performance | undefined` to defined by the time
