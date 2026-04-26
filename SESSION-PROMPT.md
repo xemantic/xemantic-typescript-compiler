@@ -138,6 +138,11 @@ progress with infrastructure largely in place:
   `Type.Object` receivers (net-zero infra)
 - 17.7d: 17.7c gate also accepts `Type.Interface` with no base types
   (net-zero infra)
+- 17.7e: bare-Identifier truthiness narrowing in
+  `applyConditionNarrowing` + `narrowByTruthiness` helper
+  (net-zero infra — completes the missing `is Identifier` branch so
+  `if (x) { ... }` narrows `T | undefined` to `T`; falsy side
+  conservatively unchanged)
 
 **Do NOT re-attempt** Blocker #4 step (b) (TypeParam-vs-TypeParam) —
 read 16.4df session note in PLAN-PHASE-4.md first if tempted. The
