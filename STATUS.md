@@ -2,17 +2,20 @@
 
 **Phase 4 — Checker buildout.** 8,406 / 10,078 tests passing (~83%).
 
-**Surgical pool is exhausted (14+ consecutive sessions confirmed).** Queue
+**Surgical pool is exhausted (15+ consecutive sessions confirmed).** Queue
 reshuffled 2026-04-25: next sessions should commit to architectural blockers
-rather than searching for surgical wins. Recent 17.9–17.21 series landed
-cumulative +53 from architectural-leaning surgical fixes (namespace-aware
+rather than searching for surgical wins. Recent 17.9–17.25 series landed
+cumulative +57 from architectural-leaning surgical fixes (namespace-aware
 inference, optional/index-sig/privacy elaboration, generic ctor inference,
 ambient-module export-equals named-import resolution, this-parameter
 display, TS2417 clodule static-side, super-call arg checking with
 heritage type-arg substitution, super.method arg checking, namespace-aware
-new-expression arg checking with class TypeParam scope re-resolution);
-that vein continues to yield +1 per session via re-examining previously-
-skipped tests after each round of infrastructure changes.
+new-expression arg checking with class TypeParam scope re-resolution,
+TS2339 enum-member-access chain, TS2493 assignment-tuple-bounds, fn-vs-fn
+arity TS2345, void-return inference for unannotated fn-decl bodies);
+that vein has run dry as of 2026-04-26 — three consecutive recon sessions
+(post-17.25, post-17.25 recon #2) returned 0/0/0 fresh candidates with
+no surgical fix opportunities surfacing.
 
 **MAINT-1 done 2026-04-25**: 32 stale skip-log entries marked
 strikethrough; `find_candidates.py` updated to strip `~~...~~` spans. Net
