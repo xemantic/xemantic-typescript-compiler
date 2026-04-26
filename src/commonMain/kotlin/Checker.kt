@@ -36629,24 +36629,43 @@ interface DataView {
     }
 
     /**
-     * 17.31a: Single-typeParam inference for non-overloaded call signatures.
+     * 17.31a / 17.31b: Single-typeParam inference for non-overloaded call signatures.
      *
      * Conservative gate: only fires when (a) sig has exactly one type parameter,
      * (b) every parameter type is either a bare reference to that TypeParam OR a
-     * fully concrete type (no nested T anywhere). Returns a [TypeMapper] mapping
-     * `T -> inferredType` from the FIRST parameter that IS the bare TypeParam,
-     * using the corresponding argument's expression type. Returns null when the
-     * gate fails or no bare-T parameter is matched by an argument.
+     * fully concrete type (no nested T in Reference/Union/Intersection — function-
+     * type params containing T are tolerated since they only act as inference
+     * sources for context-sensitive arrows).
+     *
+     * 17.31b extension: gathers candidates from EVERY bare-T positional param,
+     * not just the first. When candidates have incompatible base types (e.g.
+     * `g("", 3)` with literal candidates `""` and `3`), and the sig has a
+     * function-type parameter mentioning T (signaling TypeScript's literal-
+     * preserving two-pass inference is appropriate), this helper emits TS2345
+     * directly at the failing arg position using LITERAL-form display
+     * (`'3' is not assignable to '""'`) and returns null so the standard arg-
+     * check loop doesn't double-emit. Without a function-type-T param, the
+     * widened first-candidate substitution path is used (same as 17.31a),
+     * letting the standard loop emit the widened display.
+     *
+     * For non-conflicting multi-arg cases (same base type), substitutes T with
+     * the widened first-candidate type — covers `g("hello", "world", x => x)`
+     * where best-common-type is `string` and both args pass.
      *
      * Matches `f<T>(x: T): T` called with `f("hi")` → T=string (the "widened"
      * form, since [getTypeOfExpression] returns wrapper-typed values for string
      * and number literals). Doesn't infer through `Array<T>` / object members /
-     * unions — those are explicitly out of scope for 17.31a (handled later by
-     * 17.31d / 17.31b respectively).
+     * unions — those are explicitly out of scope (handled later by 17.31d).
+     *
+     * [source] and [fileName] are optional — when null (return-type inference
+     * call site), the literal-aware emission is skipped and the helper just
+     * returns null on conflict-with-preserveLiterals.
      */
     private fun tryInferSingleTypeParamFromArgs(
         sig: Signature,
         args: List<Expression>,
+        source: String? = null,
+        fileName: String? = null,
     ): TypeMapper? {
         val tps = sig.typeParameters ?: return null
         if (tps.size != 1) return null
@@ -36660,6 +36679,12 @@ interface DataView {
             if (!isParamShapeAllowedFor17_31a(pt, tp)) return null
         }
 
+        // 17.31b: gather candidates from EVERY bare-T positional param (not just
+        // the first), so multi-arg conflict detection can choose between widened
+        // substitution (existing 17.31a behavior) and literal-preserving direct
+        // emission (new 17.31b behavior for context-sensitive sigs).
+        data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?)
+        val candidates = mutableListOf<Candidate>()
         for (i in params.indices) {
             if (i >= args.size) break
             val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
@@ -36675,10 +36700,7 @@ interface DataView {
             // results (object literals like `{x: null}`) go through the bare-T
             // path so existing per-property constraint elaborations (16.4ds /
             // 16.4dt) keep firing — substitution would erase paramType's TypeParam
-            // identity and skip those branches. The constraint check protects 16.4i
-            // (constrained TypeParam emits TS2345 with constraint as effective
-            // param type) from being bypassed when the inferred type is non-
-            // assignable to T's constraint.
+            // identity and skip those branches.
             val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
                 argType is Type.Intrinsic ||
                 argType.flags.hasAny(
@@ -36687,16 +36709,104 @@ interface DataView {
                     TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
                 )
             if (!isNamedLike) return null
-            val constraint = tp.constraint
-            if (constraint != null) {
-                val ok = try {
-                    checkTypeRelatedTo(argType, constraint, assignableRelation)
-                } catch (_: StackOverflowError) { return null }
-                if (!ok) return null
-            }
-            return createTypeMapper(listOf(tp), listOf(argType))
+            val literal = literalTypeOfExpression(arg)
+            candidates.add(Candidate(i, argType, literal))
         }
-        return null
+        if (candidates.isEmpty()) return null
+
+        val first = candidates[0]
+        val firstWidened = first.widenedType
+
+        // Constraint check: inferred type (widened first candidate) must satisfy
+        // T's constraint. Protects 16.4i (constrained TypeParam emits TS2345 with
+        // constraint as effective param type) from being bypassed.
+        val constraint = tp.constraint
+        if (constraint != null) {
+            val ok = try {
+                checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
+            } catch (_: StackOverflowError) { return null }
+            if (!ok) return null
+        }
+
+        // 17.31b multi-arg conflict detection: scan subsequent candidates, find
+        // the first that is mutually non-assignable with the widened first
+        // candidate. Same-base-different-literal cases (e.g. ["hello", "world"])
+        // resolve via widening — both become `string` and the assignability
+        // check between widened forms passes trivially. Cross-base cases
+        // (number vs string, Giraffe vs Elephant) trigger conflict handling.
+        var conflictAt = -1
+        for (i in 1 until candidates.size) {
+            val ci = candidates[i]
+            val ok = try {
+                checkTypeRelatedTo(ci.widenedType, firstWidened, assignableRelation) ||
+                    checkTypeRelatedTo(firstWidened, ci.widenedType, assignableRelation)
+            } catch (_: StackOverflowError) { false }
+            if (!ok) {
+                conflictAt = i
+                break
+            }
+        }
+
+        if (conflictAt >= 0 && source != null && fileName != null &&
+            tparamMentionedInFunctionType(sig, tp)) {
+            // Context-sensitive sig (function-type-T param) signals TypeScript's
+            // literal-preserving inference. Emit TS2345 directly at the failing
+            // arg position with LITERAL-form display, then return null so the
+            // standard arg-check loop doesn't fire its own widened TS2345 at
+            // the same position. Bare-T params silently pass the standard check
+            // (T is unconstrained → apparent type {} → everything assignable).
+            val conflictCand = candidates[conflictAt]
+            val arg = args[conflictCand.argIdx]
+            val argDisplay = typeToString(conflictCand.literalType ?: conflictCand.widenedType)
+            val paramDisplay = typeToString(first.literalType ?: first.widenedType)
+            val start = arg.pos
+            val length = expressionTrueEnd(arg) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '$paramDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            return null
+        }
+
+        // Default path: substitute T with the widened first candidate. For
+        // multi-arg conflict without preserveLiterals, this matches 17.31a's
+        // first-arg-wins behavior (e.g. `bar(1, "")` substitutes T=number, then
+        // standard loop emits 'string' vs 'number' at arg[1]).
+        return createTypeMapper(listOf(tp), listOf(firstWidened))
+    }
+
+    /**
+     * 17.31b helper: true when [sig] has any parameter whose type is a function
+     * shape (Type.Object with call/construct signatures) that mentions [tp] in
+     * its parameter or return positions. Used to detect TypeScript's "context-
+     * sensitive call" pattern (e.g. `f<T>(a:T, c:(t:T)=>T)`) where literal-
+     * preserving inference is appropriate.
+     */
+    private fun tparamMentionedInFunctionType(sig: Signature, tp: Type.TypeParam): Boolean {
+        for (p in sig.parameters) {
+            val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { continue }
+            if (pt !is Type.Object) continue
+            val sigs = (pt.callSignatures ?: emptyList()) + (pt.constructSignatures ?: emptyList())
+            if (sigs.isEmpty()) continue
+            for (s in sigs) {
+                for (sp in s.parameters) {
+                    val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { continue }
+                    if (typeMentionsTypeParam(spt, tp)) return true
+                }
+                val rt = s.resolvedReturnType ?: continue
+                if (typeMentionsTypeParam(rt, tp)) return true
+            }
+        }
+        return false
     }
 
     /**
@@ -44209,8 +44319,10 @@ interface DataView {
         // instead of falling through the 16.4i bare-TypeParam continue. Eg.
         // `f<T>(x: T, y: T)` called with `f(1, "")` infers T=number from arg[0],
         // then arg[1]: "" vs number fires TS2345 via the standard path.
+        // 17.31b: pass source/fileName so the helper can emit literal-preserving
+        // TS2345 directly for context-sensitive sigs (function-type-T param).
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
-            val mapper = tryInferSingleTypeParamFromArgs(sigIn, args)
+            val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
         }
         val params = sig.parameters
