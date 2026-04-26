@@ -267,13 +267,13 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Execution protocol
 
-PLAN-PHASE-4.md contains the **QUEUE**. Default order is top-to-bottom, **fixing as many items per session as the budget allows** — do not stop after a single item if there is remaining context and more tractable work ahead. The outer loop:
+PLAN-PHASE-4.md contains the **live QUEUE** under the heading `## Phase 16 — Fundamental Type System Features` → `### QUEUE — prioritized by unblocking potential, then by implementation cost`. (Earlier `### QUEUE` sections in the file are archived from prior phases — do not work them.) Live session notes also live under that heading, with the most recent at the top. Default order is top-to-bottom, **fixing as many items per session as the budget allows** — do not stop after a single item if there is remaining context and more tractable work ahead. The outer loop:
 
-1. Pick the first tractable unchecked (`- [ ]`) item in the QUEUE (or next unfinished sub-step of an `IN PROGRESS` item). "Tractable" = not blocked on missing infrastructure outside the item's scope. If the top item is blocked, mark it (see autonomous-decision policy below) and move to the next.
+1. Pick the first tractable unchecked (`- [ ]`) item in the live queue (or next unfinished sub-step of an `IN PROGRESS` item). "Tractable" = not blocked on missing infrastructure outside the item's scope. If the top item is blocked, mark it (see autonomous-decision policy below) and move to the next.
 2. Implement it — the item describes the deliverable.
 3. Run the full suite (`rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "tests completed"`).
 4. Verify no regressions from the currently passing test count.
-5. Check off the item (`- [x]`), add a CLAUDE.md gotcha if applicable, **commit and push** (one commit per sub-step — keeps history bisectable and lets the next agent pick up mid-stream without re-running everything).
+5. Check off the item (`- [x]`), **bump the test count in STATUS.md** to reflect the new passing total, add a session note to PLAN-PHASE-4.md (under the live notes heading, most recent on top), add a CLAUDE.md gotcha if applicable, **commit and push** (one commit per sub-step — keeps history bisectable and lets the next agent pick up mid-stream without re-running everything). STATUS.md drift is a real failure mode — past sessions committed `(+N)` work without bumping the count, so the next agent saw a stale baseline.
 6. **Loop back to step 1** and pick up the next item. Keep going until one of these stop conditions:
    - All remaining queue items are marked blocked or skipped.
    - Context budget is running out — finish the current item cleanly, commit, then stop.
