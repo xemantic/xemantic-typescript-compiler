@@ -40211,22 +40211,26 @@ interface DataView {
                     // coverage), emit TS2339 with the union display + a chain line naming
                     // the first missing member. Mirrors TypeScript's baseline format.
                     //
-                    // Conservative gate: only emit when ALL missing members are primitives
-                    // (Type.Intrinsic / literal types). When missing members are Object/
-                    // Interface types, the union is likely a discriminated union whose
-                    // property-equality narrowing (e.g. `ab.type === 'a'` narrowing AB to
-                    // A1 | A2) isn't yet implemented — emitting would FP.
+                    // 17.7b: gate widened from "all missing are primitives" to "any missing
+                    // member" once 17.7a discriminant-property narrowing landed — the prior
+                    // restriction existed only because un-narrowed discriminated unions
+                    // (e.g. `partiallyDiscriminantedUnions_ts`'s `if (ab.type === 'a') if
+                    // (ab.subtype === 2) ab.foo`) would FP. With discriminant narrowing in
+                    // place, the union collapses to the right member and this branch is
+                    // skipped (single Type.Object, not Union). Only patterns that genuinely
+                    // shouldn't narrow (e.g. `controlFlowAliasing_ts`'s `const isFoo =
+                    // obj.kind === 'foo'; if (isFoo) obj.foo` — TypeScript doesn't track
+                    // aliased conditions for narrowing) reach this elaboration with a
+                    // partial-coverage Union.
                     if (narrowed is Type.Union && propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES) {
                         val members = narrowed.types
                         fun memberHasIt(m: Type): Boolean {
                             if (m === anyType || m === errorType || m === unknownType) return true
                             return try { typeHasOwnProperty(getApparentType(m), propName) } catch (_: StackOverflowError) { true }
                         }
-                        fun isPrimitiveLike(m: Type): Boolean = m is Type.Intrinsic ||
-                            m is Type.StringLiteral || m is Type.NumberLiteral || m is Type.BigIntLiteral
                         val missingMembers = members.filter { !memberHasIt(it) }
                         val anyHasIt = members.any { memberHasIt(it) }
-                        if (missingMembers.isNotEmpty() && anyHasIt && missingMembers.all { isPrimitiveLike(it) }) {
+                        if (missingMembers.isNotEmpty() && anyHasIt) {
                             val missingMember = missingMembers.first()
                             val unionDisplay = typeToString(narrowed)
                             val memberDisplay = typeToString(missingMember)
