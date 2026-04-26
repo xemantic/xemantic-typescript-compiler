@@ -1,13 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,410 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,411 / 10,078 tests passing (~83%).
 
-**Surgical pool is exhausted (18+ consecutive recon sessions confirmed).**
-Last surgical win was 17.27 (Function-prototype-method satisfaction in
-`propertiesRelatedTo` + TS2345 + missing-property chain emission for
-Reference-source vs named-Interface-target call args, flipping
-assignmentCompatability call/apply member-off-of-function-interface
-tests). Post-17.27 recon #2 (2026-04-26) confirmed `find_candidates.py
+**Surgical pool is exhausted (post-17.29: pool re-confirmed for 19+
+consecutive recon sessions, but spot-checking flips occasional +1).**
+Last surgical win was 17.29 (Type.Interface source vs different-symbol
+Type.Interface target arg-mismatch path in `checkArgumentsAgainstSignature`
+— extends 17.27 from Reference-source-only to also cover same-name-different-scope
+named class arg cases. New `typeToStringQualified` helper walks
+`symbol.parent` through Module/NamespaceModule symbols to render
+`m.variable` instead of `variable` for namespace-nested classes, but only
+for THIS branch's display — global typeToString unchanged so no
+regressions in unrelated tests). Flipped `differentTypesWithSameName_ts`.
+Post-17.27 recon #2 (2026-04-26) confirmed `find_candidates.py
 --fresh` returns 0/0/0 (filtered from 8/93/22). Spot-checked five
 candidates (declarationEmitExpressionInExtends4, nodeNextModuleResolution1,
 circularConstraintYieldsAppropriateError, variableDeclarationInStrictMode1,

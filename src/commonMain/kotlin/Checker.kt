@@ -36453,6 +36453,32 @@ interface DataView {
         }
     }
 
+    /**
+     * 17.29: Like [typeToString], but qualifies named class/interface types nested inside
+     * namespaces with their containing namespace path (e.g. `m.variable` instead of `variable`).
+     * Walks `symbol.parent` while the parent is a Module/NamespaceModule symbol. Falls back to
+     * [typeToString] for non-Interface types and for Interface types whose symbol has no
+     * namespace parent. Used in the 17.29 same-name-different-scope class arg-mismatch path
+     * so display matches TypeScript's qualified rendering for namespace-nested classes.
+     */
+    private fun typeToStringQualified(type: Type): String {
+        if (type !is Type.Interface) return typeToString(type)
+        val sym = type.symbol ?: return typeToString(type)
+        if (sym.parent == null) return typeToString(type)
+        val segments = mutableListOf(sym.name)
+        var cur = sym.parent
+        while (cur != null && cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
+            segments.add(0, cur.name)
+            cur = cur.parent
+        }
+        if (segments.size == 1) return typeToString(type)
+        val tps = type.typeParameters
+        val name = segments.joinToString(".")
+        return if (tps != null && tps.isNotEmpty()) {
+            "$name<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+        } else name
+    }
+
     // -----------------------------------------------------------------------
     // TS2394: Overload signature not compatible with implementation
     // -----------------------------------------------------------------------
@@ -43850,16 +43876,24 @@ interface DataView {
             // satisfaction in `propertiesRelatedTo`); collectMissingProperties already
             // filters OBJECT_PROTOTYPE and Function-prototype methods so we only emit
             // for genuinely-missing members. Squiggle covers the whole arg expression.
-            if (!isRestParam && argType is Type.Reference && paramType is Type.Interface &&
-                paramType.symbol != null) {
+            // 17.29: Extended to Type.Interface source (named class) vs Type.Interface
+            // target (named class) when symbols differ — covers same-name-different-scope
+            // class cases (e.g. namespace-nested `m.variable` vs top-level `variable`).
+            // collectMissingProperties uses resolveStructuredTypeMembers which flattens
+            // base-type members, so subclass-of-target safely returns empty (no FP).
+            val argIsRefForArgCheck = argType is Type.Reference
+            val argIsDistinctNamedClass = argType is Type.Interface && argType.symbol != null &&
+                paramType is Type.Interface && argType.symbol !== paramType.symbol
+            if (!isRestParam && (argIsRefForArgCheck || argIsDistinctNamedClass) &&
+                paramType is Type.Interface && paramType.symbol != null) {
                 try {
-                    resolveStructuredTypeMembers(argType)
+                    resolveStructuredTypeMembers(argType as Type.Object)
                     resolveStructuredTypeMembers(paramType)
-                    if (argType.callSignatures.isNullOrEmpty()) {
+                    if ((argType as Type.Object).callSignatures.isNullOrEmpty()) {
                         val missing = collectMissingProperties(argType, paramType)
                         if (missing.isNotEmpty()) {
-                            val argTypeStr = typeToString(argType)
-                            val paramTypeStr = typeToString(paramType)
+                            val argTypeStr = typeToStringQualified(argType)
+                            val paramTypeStr = typeToStringQualified(paramType)
                             val start = arg.pos
                             val length = expressionTrueEnd(arg) - start
                             if (length > 0) {
