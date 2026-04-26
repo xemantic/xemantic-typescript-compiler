@@ -38881,6 +38881,67 @@ interface DataView {
             val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
             val chain = mutableListOf<String>()
 
+            // 17.18: Namespace-vs-namespace comparison for clodule (class+namespace) merges.
+            // When both sides are ModuleDeclarations, find a base-side EXPORTED member that
+            // the derived namespace doesn't export. Emits TS2417 with the property-missing
+            // chain. First-only emission (mirrors private/type-mismatch branches below).
+            if (derivedInfo.node is ModuleDeclaration && baseInfo.node is ModuleDeclaration) {
+                val derivedNs = derivedSymbol?.exports?.get(memberName)
+                val baseNs = baseSymbol.exports?.get(memberName)
+                if (derivedNs != null && baseNs != null) {
+                    val baseNsExports = baseNs.exports
+                    if (baseNsExports != null) {
+                        for ((exportName, baseMemberSym) in baseNsExports) {
+                            if (!isNameExportedFromNamespace(baseNs, exportName)) continue
+                            if (isNameExportedFromNamespace(derivedNs, exportName)) continue
+                            chain.add("  Types of property '$memberName' are incompatible.")
+                            chain.add("    Property '$exportName' is missing in type 'typeof $rawClassName.$memberName' but required in type 'typeof $baseName.$memberName'.")
+                            val related = mutableListOf<Diagnostic>()
+                            val baseDecl = baseMemberSym.valueDeclaration ?: baseMemberSym.declarations.firstOrNull()
+                            val baseDeclNamePos = when (baseDecl) {
+                                is FunctionDeclaration -> baseDecl.name?.pos
+                                is VariableDeclaration -> (baseDecl.name as? Identifier)?.pos
+                                is ClassDeclaration -> baseDecl.name?.pos
+                                is InterfaceDeclaration -> baseDecl.name.pos
+                                is EnumDeclaration -> baseDecl.name.pos
+                                is ModuleDeclaration -> (baseDecl.name as? Identifier)?.pos
+                                else -> null
+                            }
+                            if (baseDeclNamePos != null) {
+                                val (resolvedFile, resolvedSource) = resolveDeclarationSourceFile(baseDeclNamePos)
+                                val declFile = resolvedFile ?: fileName
+                                val declSource = resolvedSource ?: source
+                                val (declLine, declChar) = getLineAndCharacterOfPosition(declSource, baseDeclNamePos)
+                                related.add(Diagnostic(
+                                    message = "'$exportName' is declared here.",
+                                    category = DiagnosticCategory.Message,
+                                    code = 2728,
+                                    fileName = declFile,
+                                    line = declLine,
+                                    character = declChar,
+                                    start = baseDeclNamePos,
+                                    length = exportName.length,
+                                ))
+                            }
+                            diagnostics.add(Diagnostic(
+                                message = "Class static side 'typeof $rawClassName' incorrectly extends base class static side 'typeof $baseName'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2417,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = classNameNode.pos,
+                                length = rawClassName.length,
+                                messageChain = chain,
+                                relatedInformation = related,
+                            ))
+                            return
+                        }
+                    }
+                }
+                continue // both ns; no missing export → skip the type-equality fallthrough
+            }
+
             // Check private conflicts
             if (derivedInfo.isPrivate || baseInfo.isPrivate) {
                 if (derivedInfo.isPrivate && baseInfo.isPrivate) {
