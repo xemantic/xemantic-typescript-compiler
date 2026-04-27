@@ -8596,13 +8596,23 @@ class Checker(
                 .map { (it.name as StringLiteralNode).text }
                 .toSet()
             val fileScope = NameScope(null)
-            for ((name, _) in result.locals) {
-                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
-            }
-            for ((name, _) in globals) {
-                // Don't include ambient external module names from globals — they come from
-                // `declare module "foo"` declarations and are not accessible as identifiers.
-                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+            // 17.32e: file-root TS2304 visibility uses [perFileScope] (lib +
+            // script-file locals + own-file locals) instead of the over-merged
+            // [globals] map. Other module files' locals are not visible without
+            // an explicit import. Defensive fallback to legacy globals iteration
+            // when [perFileScope] is unbuilt (matches 17.32b/c/d pattern).
+            val perFile = perFileScope[fileName]
+            if (perFile != null) {
+                for ((name, _) in perFile) {
+                    if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+                }
+            } else {
+                for ((name, _) in result.locals) {
+                    if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+                }
+                for ((name, _) in globals) {
+                    if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+                }
             }
             fileScope.names.addAll(KNOWN_GLOBALS)
 
