@@ -33652,7 +33652,9 @@ interface DataView {
                     }
                 } else {
                     // Object→Object: property-level elaboration (16.1)
-                    if (sourceType is Type.Object && targetType is Type.Object) {
+                    // 17.42: Intersection→Object also goes through the chain helper.
+                    if ((sourceType is Type.Object || sourceType is Type.Intersection) &&
+                        targetType is Type.Object) {
                         lastChainMissingPropSymbol = null
                         val propElab = getPropertyElaborationChain(sourceType, targetType)
                         if (propElab != null) chain.addAll(propElab)
@@ -47059,6 +47061,16 @@ interface DataView {
         target: Type,
         path: String = "",
     ): List<String>? {
+        // 17.42: handle Type.Intersection source by merging members from object-like
+        // constituents. For `Type.Intersection({fooProp: string}, Bar)` vs target
+        // `FooBar`, the merged source has `fooProp: string` and `barProp: string`,
+        // and a target prop like `fooProp: boolean` produces the standard
+        // "Types of property 'fooProp' are incompatible. Type 'string' is not
+        // assignable to type 'boolean'." chain. Pairs with 17.41's substitution
+        // (so the pre-substitution `T & Bar` source becomes `{...} & Bar`).
+        if (source is Type.Intersection && target is Type.Object) {
+            return getIntersectionPropertyElaborationChain(source, target, path)
+        }
         if (source !is Type.Object || target !is Type.Object) return null
         // Cycle detection: don't re-enter elaboration for the same type pair
         val pairKey = packRelationKey(source.id, target.id)
@@ -47295,6 +47307,88 @@ interface DataView {
                 outerLine,
                 "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
             ) + undefinedExtra + funcExtra
+        } finally {
+            state.elaborationStack.remove(pairKey)
+        }
+    }
+
+    /**
+     * 17.42: elaboration chain for `Type.Intersection` source vs `Type.Object` target.
+     * Merges members from intersection constituents (`{fooProp: string}` + `Bar` →
+     * `{fooProp: string, barProp: string}`), then walks target's properties looking
+     * for the first incompatible match. Emits the standard "Types of property '$name'
+     * are incompatible. Type '$src' is not assignable to type '$tgt'." chain — same
+     * shape as Object→Object property mismatch.
+     *
+     * Pairs with 17.41's substitution so calls returning `T & Bar` (with T inferred
+     * from anonymous Type.Object args) get the substituted intersection source and
+     * a per-property elaboration chain. Conservative: only handles direct property-
+     * level mismatches (no recursion into nested objects, no method-collapsed form,
+     * no privacy / private-brand checks — those don't apply to intersection sources
+     * in the corpus). When the chain doesn't find an incompatible property, falls
+     * through to the missing-property path.
+     */
+    private fun getIntersectionPropertyElaborationChain(
+        source: Type.Intersection,
+        target: Type.Object,
+        path: String,
+    ): List<String>? {
+        // Cycle detection: pack (source.id, target.id) like the Object→Object path
+        val pairKey = packRelationKey(source.id, target.id)
+        if (pairKey in state.elaborationStack) return null
+        state.elaborationStack.add(pairKey)
+        try {
+            // Merge object-like constituent members. Reference / Interface / anonymous
+            // Object all contribute. Later constituents override earlier on conflict
+            // (matches TS's intersection-member resolution for our scope).
+            val mergedMembers = mutableMapOf<String, Symbol>()
+            for (c in source.types) {
+                if (c is Type.Object) {
+                    resolveStructuredTypeMembers(c)
+                    c.members?.forEach { (n, s) -> mergedMembers[n] = s }
+                }
+            }
+            if (mergedMembers.isEmpty()) return null
+            resolveStructuredTypeMembers(target)
+            val targetProps = target.properties ?: return null
+            // First incompatible property emits the chain
+            for (targetProp in targetProps) {
+                val sourceProp = mergedMembers[targetProp.name] ?: continue
+                if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+                val srcType = try { getTypeOfSymbol(sourceProp) } catch (_: StackOverflowError) { continue }
+                val tgtType = try { getTypeOfSymbol(targetProp) } catch (_: StackOverflowError) { continue }
+                if (srcType === errorType || tgtType === errorType) continue
+                if (!checkTypeRelatedTo(srcType, tgtType, assignableRelation)) {
+                    val propPath = if (path.isEmpty()) targetProp.name else "$path.${targetProp.name}"
+                    val outerLine = if (path.isEmpty()) {
+                        "  Types of property '${targetProp.name}' are incompatible."
+                    } else {
+                        "  The types of '$propPath' are incompatible between these types."
+                    }
+                    val sourcePropStr = typeToString(srcType)
+                    val targetPropStr = typeToString(tgtType)
+                    return listOf(
+                        outerLine,
+                        "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
+                    )
+                }
+            }
+            // No property-type mismatch — try missing-required-property path against
+            // any constituent that's an Object-like (FIRST constituent for simplicity;
+            // matches TypeScript's behavior of attributing missing-prop to the named
+            // intersection member).
+            for (c in source.types) {
+                if (c is Type.Object) {
+                    resolveStructuredTypeMembers(c)
+                    val missing = getMissingRequiredPropertySymbol(c, target)
+                    if (missing != null) {
+                        return listOf(
+                            "  Property '${missing.name}' is missing in type '${typeToString(source)}' but required in type '${typeToString(target)}'."
+                        )
+                    }
+                }
+            }
+            return null
         } finally {
             state.elaborationStack.remove(pairKey)
         }
