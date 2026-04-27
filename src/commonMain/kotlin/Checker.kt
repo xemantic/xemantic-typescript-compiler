@@ -17579,6 +17579,7 @@ interface DataView {
             }
             is ParenthesizedExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
+                checkEnumReferenceFalsyCondition(expr.condition, source, fileName)
                 checkAlwaysTruthyInExpr(expr.whenTrue, source, fileName)
                 checkAlwaysTruthyInExpr(expr.whenFalse, source, fileName)
             }
@@ -17590,6 +17591,46 @@ interface DataView {
             is FunctionExpression -> expr.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
             else -> {}
         }
+    }
+
+    /**
+     * TS2845: "This condition will always return 'false'/'true'." for an enum
+     * member reference whose computed value is statically falsy/truthy. Fires on
+     * the condition position of `a ? b : c` when the condition is a property-
+     * access chain resolving to a const- or non-const-enum member with value
+     * 0 / "" (false branch) or any non-zero / non-empty literal (true branch).
+     * Walks alias chains so namespace-aliased forms like
+     * `Internal.WhichThing.A` (where `import Internal = My.Internal`) resolve
+     * via `resolveNamePath` + `resolveAlias`.
+     */
+    private fun checkEnumReferenceFalsyCondition(cond: Expression, source: String, fileName: String) {
+        val expr = cond as? PropertyAccessExpression ?: return
+        val enumPath = getReferencePath(expr.expression) ?: return
+        val memberName = expr.name.text
+        val result = fileResults[fileName] ?: return
+        val symbol = resolveNamePath(enumPath, result) ?: return
+        val target = resolveAlias(symbol)
+        if (!target.flags.hasAny(SymbolFlags.Enum)) return
+        val value = enumValues[target.id]?.get(memberName) ?: return
+        val isTruthy = when (value) {
+            is ConstantValue.NumberValue -> value.value != 0.0 && !value.value.isNaN()
+            is ConstantValue.StringValue -> value.value.isNotEmpty()
+        }
+        val verdict = if (isTruthy) "'true'" else "'false'"
+        val start = expr.pos
+        val length = expressionTrueEnd(expr) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This condition will always return $verdict.",
+            category = DiagnosticCategory.Error,
+            code = 2845,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     private fun checkAlwaysTruthyCondition(expr: Expression, source: String, fileName: String) {
