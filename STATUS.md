@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,429 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,434 / 10,078 tests passing (~84%).
+
+**17.46 (2026-04-27, +5)** — Top-level TS2454 flow-graph walker
+(retry of 17.45 with broader pre-installed type-guard recognition)
++ destructuring assignment FlowAssignment fix. Flips `isArray_ts` and
+4 `sourceMapValidationDestructuring*` cases. Substep series:
+17.46a pre-installed `instanceof` / lib-type-predicate (`Array.isArray`,
+`ArrayBuffer.isView`, `Number.isInteger`/`isFinite`/`isNaN`/`isSafeInteger`)
+/ `x.constructor === T` recognition in `conditionImpliesAssignedTrue`
+(net-zero); 17.46b extended `isUnresolvedGenericType` to QualifiedName
+receivers (`var b: A.B` filtered, net-zero); 17.46c added ArrayLiteral /
+ObjectLiteral as `bindAssignmentTarget` targets so destructuring
+assignment registers FlowAssignments (net-zero); 17.46d added
+`runFlowTS2454OnTopLevel` mirroring `runFlowTS2454OnFunction` for
+file-level statements, plus two Flow.kt fixes uncovered during
+verification: (i) pass the underlying Identifier as `declarationNode` at
+SpreadElement / SpreadAssignment / PropertyAssignment /
+ShorthandPropertyAssignment destructuring leaves so
+`flowAssignmentTargetsName` matches the FlowAssignment.node, (ii) new
+top-level `BinaryExpression(=)` branch in `bindAssignmentTarget` handling
+default-value forms `{a: x = 1}` / `[x = 1]` regardless of which
+destructuring path reaches them. Initial 17.46d landed -1 (broken
+destructuring FPs); after both fixes, +5 net (8429 → 8434).
 
 **17.44 (2026-04-27, +2)** — TS2532 "Object is possibly 'undefined'" for
 non-optional access on a synthetic-paren receiver produced when an
