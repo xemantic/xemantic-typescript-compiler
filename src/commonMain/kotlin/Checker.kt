@@ -7249,16 +7249,12 @@ class Checker(
      */
     private fun ctorParamShadowsRealOuterBinding(name: String, currentFileName: String): Boolean {
         if (name in KNOWN_GLOBALS) return true
-        for (result in binderResults) {
-            if (result.locals[name] == null) continue
-            // Module files contribute exports only via explicit import — skip them unless this
-            // is the file containing the class itself (where a top-level binding shadows the
-            // ctor param within the same file regardless of module-ness).
-            if (result.sourceFile.fileName != currentFileName &&
-                isModuleFile(result.sourceFile.statements)) continue
-            return true
-        }
-        return false
+        // 17.32b: consult per-file scope instead of walking binderResults with an
+        // ad-hoc module-file filter. The per-file scope already encodes the same
+        // "lib + script-file locals + own-file locals" semantics, with other-file
+        // module-file locals excluded.
+        val fileScope = perFileScope[currentFileName] ?: return false
+        return fileScope.containsKey(name)
     }
 
     /**

@@ -2,6 +2,19 @@
 
 **Phase 4 — Checker buildout.** 8,419 / 10,078 tests passing (~83%).
 
+**17.32b (2026-04-27, net-zero behavior)** — First call-site flip onto 17.32a's
+per-file scope: `ctorParamShadowsRealOuterBinding` (TS2663-vs-TS2301
+disambiguation for parameter-property shadow in class member initializers)
+now consults `perFileScope[currentFileName]` instead of walking `binderResults`
+with an ad-hoc module-file filter. The new code is semantically equivalent —
+both encode "lib + script-file locals + own-file locals, excluding other-file
+module locals" — but uses the centralized infrastructure so future identifier-
+resolution call sites can follow the same pattern. KNOWN_GLOBALS still
+checked first (companion-level data not in the binder's lib output).
+Test results unchanged from 17.31f (8419 / 1656 / 3). Foundation for
+17.32c+ flips (TS2552 spelling suggestion candidate set, default-import-
+from-export-equals visibility).
+
 **17.31f (2026-04-27, +1)** — Union-element widening for `Array<T>` inference +
 CallExpression source bypass for Union→primitive var-decls. Flips `widenToAny2_ts`.
 `tryInferSingleTypeParamFromArgs` `isArrayT` branch now widens Union constituents
