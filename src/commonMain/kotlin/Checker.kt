@@ -17212,18 +17212,33 @@ interface DataView {
         fileName: String,
     ) {
         val typeName = typeRef.typeName
-        val name = when (typeName) {
-            is Identifier -> typeName.text
-            else -> return // QualifiedName — skip
+        val name: String
+        // 17.47: also accept QualifiedName so `var b: A.B` (where `B` is a
+        // generic class missing type args) emits TS2314 at the right position.
+        // Skips scope/keyword/type-param checks for QualifiedName because
+        // the namespace-walk in `getTypeParamInfo` is the resolution path —
+        // `scope.has(name)` would only check the simple name in the current
+        // scope. Conservative: a same-named generic in any namespace can match,
+        // but worst case we emit TS2314 at a position that the baseline
+        // doesn't expect (caller test fails differently); not a wrong-name
+        // diagnostic since `info.displayName` is the resolved symbol's display.
+        when (typeName) {
+            is Identifier -> {
+                name = typeName.text
+                // Only check if the name actually resolves (skip if it would be TS2304)
+                if (name.isEmpty()) return
+                if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
+                if (name in KEYWORD_IDENTIFIERS) return
+                if (!scope.has(name)) return
+                // Type parameters cannot trigger TS2314 — they are not generic type constructors
+                if (scope.isTypeParam(name)) return
+            }
+            is QualifiedName -> {
+                name = (typeName.right as? Identifier)?.text ?: return
+                if (name.isEmpty()) return
+            }
+            else -> return
         }
-
-        // Only check if the name actually resolves (skip if it would be TS2304)
-        if (name.isEmpty()) return
-        if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
-        if (name in KEYWORD_IDENTIFIERS) return
-        if (!scope.has(name)) return
-        // Type parameters cannot trigger TS2314 — they are not generic type constructors
-        if (scope.isTypeParam(name)) return
 
         // Look up type parameter info
         val info = getTypeParamInfo(name) ?: return
@@ -17240,21 +17255,30 @@ interface DataView {
         // Compute squiggle position
         val start: Int
         val length: Int
+        // 17.47: For QualifiedName the typeName covers the full `A.B` span; the
+        // simple `name.length` (right segment only) understates the squiggle.
+        // Compute the full span by summing right.text.length + (right.pos - typeName.pos).
+        val nameSpan: Int = if (typeName is QualifiedName) {
+            val right = typeName.right
+            if (right is Identifier) right.pos + right.text.length - typeName.pos else name.length
+        } else {
+            name.length
+        }
         if (providedCount == 0 && typeRef.typeArguments == null) {
             // No type args at all — squiggle on just the name
             start = typeName.pos
-            length = name.length
+            length = nameSpan
         } else if (providedCount == 0 && typeRef.typeArguments != null) {
             // Empty type arg list `<>` — squiggle covers `Name<>`
             start = typeName.pos
             val ltIdx = source.indexOf("<>", start)
-            length = if (ltIdx >= 0) ltIdx + 2 - start else name.length
+            length = if (ltIdx >= 0) ltIdx + 2 - start else nameSpan
         } else {
             // Wrong count — squiggle on the entire type reference including <args>
             start = typeName.pos
             val lastArgEnd = typeRef.typeArguments!!.last().end
             val gtIdx = source.indexOf('>', lastArgEnd - 1)
-            length = if (gtIdx >= 0) gtIdx + 1 - start else name.length
+            length = if (gtIdx >= 0) gtIdx + 1 - start else nameSpan
         }
 
         val (line, character) = getLineAndCharacterOfPosition(source, start)
