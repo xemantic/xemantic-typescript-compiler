@@ -33419,7 +33419,8 @@ interface DataView {
             // a literal). Object/Interface/Reference targets still use the raw
             // type — narrowing into those would interact with structural-
             // comparison gaps and is deferred.
-            val sourceType = if (init is Identifier && isNarrowableTarget(targetType)) {
+            val sourceType = if ((init is Identifier || init is PropertyAccessExpression) &&
+                isNarrowableTarget(targetType)) {
                 getNarrowedTypeForReference(rawSourceType, init)
             } else rawSourceType
             lastMissingPropertyName = null // reset before comparison
@@ -35806,10 +35807,31 @@ interface DataView {
      * the helper cheap.
      */
     private fun getNarrowedTypeForReference(declaredType: Type, expr: Expression): Type {
-        if (expr !is Identifier) return declaredType
+        // 17.34: PropertyAccess narrowing for paths like `A._a`. The path is
+        // serialized as a dotted string; the narrowing helpers compare the
+        // condition expression's path against this string. Identifiers stay
+        // on the same path as before (path = name); PropertyAccess chains
+        // produce paths like "A._a" or "this.field". Returns null for shapes
+        // that aren't a pure Identifier-or-PropertyAccess chain (calls, parens,
+        // element-access, etc.) — those bail to declared type.
+        val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = mutableSetOf<Int>()
-        return narrowTypeFromFlow(declaredType, flow, expr.text, seen, depth = 0)
+        return narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
+    }
+
+    /**
+     * Serialize a reference expression as a dotted path. Returns null for
+     * shapes that can't be encoded (e.g., element access, call expressions).
+     * Used by 17.34 PropertyAccess narrowing.
+     */
+    private fun getReferencePath(expr: Expression): String? = when (expr) {
+        is Identifier -> expr.text
+        is PropertyAccessExpression -> {
+            val receiverPath = getReferencePath(expr.expression) ?: return null
+            "$receiverPath.${expr.name.text}"
+        }
+        else -> null
     }
 
     private fun narrowTypeFromFlow(
@@ -35946,6 +35968,11 @@ interface DataView {
             }
             is CallExpression -> narrowByCallPredicate(t, expr, isMatch = isTrue, name)
             is Identifier -> if (expr.text == name) narrowByTruthiness(t, truthy = isTrue) else t
+            // 17.34: PropertyAccess truthiness narrowing — `if (A._a) { ... A._a ... }`
+            // narrows `A._a` from `T | undefined | null` to `T` on the truthy side.
+            // Path comparison gates by structural identity of the dotted reference path.
+            is PropertyAccessExpression ->
+                if (getReferencePath(expr) == name) narrowByTruthiness(t, truthy = isTrue) else t
             else -> t
         }
     }
