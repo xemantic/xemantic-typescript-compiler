@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,419 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
+
+**17.33 (2026-04-27, +1)** — TS2686 "refers to a UMD global" emission
+for `export as namespace X;` references in module files. Flips
+`jsdocReferenceGlobalTypeInCommonJs_ts`. Two-piece change: (1) source-text
+regex scan during init step 1d collects `umdGlobalNames` (matches
+`^\s*export\s+as\s+namespace\s+IDENT\s*;?` in .d.ts files — the parser
+falls through to expression-statement parsing for this construct, so a
+regex on the raw source is the smallest sufficient implementation) +
+`moduleFiles` set (any file with imports/exports OR — for .js/.jsx/.mjs/.cjs
+— a top-level `require(...)` call). (2) `checkIdentifierResolved`
+TS2304-emission branch now checks `name in umdGlobalNames && fileName in
+moduleFiles` first; if so, emits TS2686 with the standard "Consider
+adding an import instead." message instead of TS2304. Conservative gates:
+the spelling-suggestion (TS2552) path still runs first, so a UMD global
+that has a near-spelling alternative would still get TS2552 (matches
+TypeScript's behavior of preferring suggestions when available).
 
 **17.32e (2026-04-27, net-zero behavior)** — TS2304 file-scope flip
 (Blocker #3 step 1 — final substep; "highest blast radius" landed clean).
