@@ -1,6 +1,29 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,421 / 10,078 tests passing (~83%).
+
+**17.36 (2026-04-27, +1)** — TS2300 "Duplicate identifier 'eval'" for
+top-level `var eval` in non-module strict mode. Flips
+`variableDeclarationInStrictMode1_ts`. Two-piece change: (1)
+`BaselineFormatter.kt` summary section (Part 1) now renders lib files
+(`lib.*.d.ts`) with `(--,--)` when `line == null` — previously the
+prefix was suppressed entirely, so lib-side primary diagnostics
+rendered as plain `error TSXXXX:` without a file column. (2)
+`diagnosticComparator` now sorts lib files AFTER user files (matches
+TypeScript's baseline ordering — user-file diagnostics precede
+lib-side ones, regardless of alphabetic order). (3) New
+`checkStrictModeReservedRedeclaration` in Checker.kt fires only for
+`var eval` (NOT `var arguments` — not lib-declared) at top level in
+non-module strict mode (`globalStrict || hasUseStrict` AND
+`!isModule`). Emits TS2300 at the user position, TS2300 at lib
+position (line=null, char=null → renders as `lib.es5.d.ts(--,--)`),
+and TS6203 related info on the user-side TS2300 ("'eval' was also
+declared here."). Conservative gates rule out the 2 regressions an
+initial broader version caused: (a) module-file `var eval` only emits
+TS1215 (`jsFileCompilationBindStrictModeErrors_ts` c.js — module
+auto-strict), (b) `var arguments` is NOT lib-declared as a global var
+so doesn't fire TS2300 (`argumentsBindsToFunctionScopeArgumentList_ts`
+alwaysstrict_true).
 
 **17.35a (2026-04-27, net-zero infra)** — Expand falsy/truthy
 narrowing to literal-truthy types. `isDefinitelyTruthyMember` now also
