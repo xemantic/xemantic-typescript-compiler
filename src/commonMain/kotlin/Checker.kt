@@ -35979,18 +35979,19 @@ interface DataView {
 
     /**
      * Narrow [t] by truthiness. On truthy positions remove members that
-     * are always falsy (undefined, null, void, false). On falsy positions
-     * remove members that are definitely truthy (object-like types:
-     * Object / Interface / Reference). Conservative: literal-truthy
-     * (non-empty StringLiteral, non-zero NumberLiteral, true) and
-     * primitive-truthy types are NOT yet dropped on the falsy side —
-     * adding those expands the regression surface.
+     * are always falsy (undefined, null, void, false, "", 0, 0n). On
+     * falsy positions remove members that are definitely truthy
+     * (object-like types: Object / Interface / Reference; literal-truthy:
+     * non-empty StringLiteral, non-zero NumberLiteral, true,
+     * non-zero BigIntLiteral). Primitive intrinsics like `string`/`number`
+     * are kept on both sides — they could be either the empty/zero
+     * variant or the non-empty/non-zero variant.
      */
     private fun narrowByTruthiness(t: Type, truthy: Boolean): Type {
         return if (truthy) {
-            when (t) {
-                undefinedType, nullType, voidType, falseType -> neverType
-                is Type.Union -> {
+            when {
+                isDefinitelyFalsyMember(t) -> neverType
+                t is Type.Union -> {
                     val kept = t.types.filter { !isDefinitelyFalsyMember(it) }
                     when {
                         kept.isEmpty() -> neverType
@@ -36001,9 +36002,9 @@ interface DataView {
                 else -> t
             }
         } else {
-            when (t) {
-                is Type.Object, is Type.Interface, is Type.Reference -> neverType
-                is Type.Union -> {
+            when {
+                isDefinitelyTruthyMember(t) -> neverType
+                t is Type.Union -> {
                     val kept = t.types.filter { !isDefinitelyTruthyMember(it) }
                     when {
                         kept.isEmpty() -> neverType
@@ -36016,11 +36017,25 @@ interface DataView {
         }
     }
 
-    private fun isDefinitelyFalsyMember(t: Type): Boolean =
-        t === undefinedType || t === nullType || t === voidType || t === falseType
+    private fun isDefinitelyFalsyMember(t: Type): Boolean = when {
+        t === undefinedType || t === nullType || t === voidType || t === falseType -> true
+        t is Type.StringLiteral -> t.value.isEmpty()
+        t is Type.NumberLiteral -> t.value == 0.0
+        t is Type.BigIntLiteral -> isZeroBigIntLiteral(t.value)
+        else -> false
+    }
 
-    private fun isDefinitelyTruthyMember(t: Type): Boolean =
-        t is Type.Object || t is Type.Interface || t is Type.Reference
+    private fun isDefinitelyTruthyMember(t: Type): Boolean = when {
+        t is Type.Object || t is Type.Interface || t is Type.Reference -> true
+        t === trueType -> true
+        t is Type.StringLiteral -> t.value.isNotEmpty()
+        t is Type.NumberLiteral -> t.value != 0.0
+        t is Type.BigIntLiteral -> !isZeroBigIntLiteral(t.value)
+        else -> false
+    }
+
+    private fun isZeroBigIntLiteral(value: String): Boolean =
+        value == "0" || value == "0n"
 
     /**
      * Narrow `t` by a `predFn(name)` call where `predFn` is declared with a type
