@@ -2,6 +2,31 @@
 
 **Phase 4 — Checker buildout.** 8,418 / 10,078 tests passing (~83%).
 
+**17.31d (2026-04-27, net-zero infra)** — Multi-typeParam inference (independent
+T, U) extended `tryInferSingleTypeParamFromArgs` from single-tp to N-tp.
+Gate replaced: was `tps.size != 1` early-return; now allows ANY tp count where
+every param is bare-some-tp_i, rest-of-tp_i[] (last param only), or fully
+concrete (mentions NONE of our tps). Per-tp candidate gathering runs
+independently — each tp_i gathers from positions where param IS exactly tp_i,
+runs 17.31a's named-like + constraint gates and 17.31b's multi-arg conflict
+detection. On any tp's gather-side bail (anyType / undefined arg / non-named
+arg), the WHOLE function returns null so the bare-TypeParam continue path in
+`checkArgumentsAgainstSignature` keeps firing (matches old behavior). Built
+multi-mapper covers every tp; `instantiateSignature` substitutes all of them.
+Net-zero on the suite: 8 failing tests have all-bare multi-tp sigs, but most
+either (a) have NO `.errors.txt` baseline so trivially pass already
+(`objectAssignLikeNonUnionResult`, `silentNeverPropagation`,
+`contextualSigInstantiationRestParams`), (b) have non-call usage like
+`tt = tuple2(...)` where the failing baselines test the var-assignment side
+not the call (`tupleTypes`), or (c) have body-internal patterns the call-site
+inference doesn't reach (`typeParametersShouldNotBeEqual2`,
+`genericCallbackInvokedInsideItsContainingFunction1`). `defaultBestCommonTypesHaveDecls`'s
+`concat2(1, "")` activates the new multi-tp path (T0=number, T1=string) but
+the failing baseline gates on UNRELATED single-tp `concat(1, "")` shape.
+Net-zero net delta — foundation for 17.31e (Reference-arg `Array<T>` inference)
+which can build on the per-tp gather loop now in place. Old `isParamShapeAllowedFor17_31a`
+helper removed (single-tp logic merged into the new gate).
+
 **17.31c (2026-04-27, +3)** — Rest-param `T[]` inference + post-loop emission
 helper for trailing rest args. Two-piece change: (1) `tryInferSingleTypeParamFromArgs`
 gate extended to allow rest param of `T[]` (new `isRestArrayOfTypeParam` helper);

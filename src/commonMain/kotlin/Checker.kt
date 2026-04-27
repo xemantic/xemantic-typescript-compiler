@@ -36668,135 +36668,150 @@ interface DataView {
         fileName: String? = null,
     ): TypeMapper? {
         val tps = sig.typeParameters ?: return null
-        if (tps.size != 1) return null
-        val tp = tps[0]
+        if (tps.isEmpty()) return null
         val params = sig.parameters
         if (params.isEmpty() || args.isEmpty()) return null
 
+        // 17.31d gate: every parameter type must be either (a) a bare reference
+        // to one of our type params, (b) the rest-of-`tp_i[]` shape (last param
+        // only), or (c) fully concrete — i.e. mentions NONE of our type params
+        // anywhere. Bails on nested-TP shapes (`Array<T>` non-rest, `(x:T)=>U`,
+        // `Map<T,U>`, unions/intersections containing TPs) — those need richer
+        // inference (17.31e+).
+        val tpsSet = tps.toSet()
         for ((idx, p) in params.withIndex()) {
             val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { return null }
             if (pt === errorType) return null
             val isRest = (p.valueDeclaration as? Parameter)?.dotDotDotToken == true
-            // 17.31c: rest param of `T[]` is treated as bare-T per call arg
-            // (each rest arg is a candidate for T inference). Only the LAST
-            // param can be rest in TypeScript syntax, so this branch fires
-            // at most once per signature.
-            if (isRest && idx == params.size - 1 && isRestArrayOfTypeParam(pt, tp)) continue
-            if (!isParamShapeAllowedFor17_31a(pt, tp)) return null
+            // (a) bare-some-tp_i
+            if (pt is Type.TypeParam && pt in tpsSet) continue
+            // (b) rest-of-tp_i[] (last param only, contributes one candidate per
+            // trailing arg via 17.31c logic)
+            if (isRest && idx == params.size - 1 &&
+                tps.any { isRestArrayOfTypeParam(pt, it) }) continue
+            // (c) fully concrete — must not mention ANY of our TPs
+            if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
 
-        // 17.31b: gather candidates from EVERY bare-T positional param (not just
-        // the first), so multi-arg conflict detection can choose between widened
-        // substitution (existing 17.31a behavior) and literal-preserving direct
-        // emission (new 17.31b behavior for context-sensitive sigs).
+        // 17.31d: per-typeParam candidate gathering. Each TP gets its own
+        // candidate list (gathered from positions where param IS exactly that TP
+        // or rest-of-that-TP[]). Conflict detection runs independently per TP.
+        // Build a multi-mapper covering every TP that can be inferred from at
+        // least one arg position; return null if any TP has no candidates
+        // (uninferable) so the bare-TypeParam continue path keeps firing.
         data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?)
-        val candidates = mutableListOf<Candidate>()
-        for (i in params.indices) {
-            if (i >= args.size) break
-            val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
-            val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
-            val isBareT = pt === tp
-            // 17.31c: a rest param of `T[]` contributes one candidate per
-            // trailing arg (i.e. args at index i, i+1, ... up to args.size).
-            val isRestT = isRest && i == params.size - 1 && isRestArrayOfTypeParam(pt, tp)
-            if (!isBareT && !isRestT) continue
-            val argRange = if (isRestT) i until args.size else i..i
-            for (ai in argRange) {
-                if (ai >= args.size) break
-                val arg = args[ai]
-                if (arg is SpreadElement) continue
-                val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
-                if (argType === anyType || argType === errorType) return null
-                if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-                // 17.31a refinement: only fire when the inferred type is a "named-like"
-                // type (Interface, Reference, Intrinsic / literal) AND, when T has a
-                // constraint, the inferred type satisfies it. Anonymous Type.Object
-                // results (object literals like `{x: null}`) go through the bare-T
-                // path so existing per-property constraint elaborations (16.4ds /
-                // 16.4dt) keep firing — substitution would erase paramType's TypeParam
-                // identity and skip those branches.
-                val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
-                    argType is Type.Intrinsic ||
-                    argType.flags.hasAny(
-                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
-                        TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
-                        TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                    )
-                if (!isNamedLike) return null
-                val literal = literalTypeOfExpression(arg)
-                candidates.add(Candidate(ai, argType, literal))
+        val mapperPairs = mutableListOf<Pair<Type.TypeParam, Type>>()
+
+        for (tp in tps) {
+            val candidates = mutableListOf<Candidate>()
+            for (i in params.indices) {
+                if (i >= args.size) break
+                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                val isBareT = pt === tp
+                val isRestT = isRest && i == params.size - 1 && isRestArrayOfTypeParam(pt, tp)
+                if (!isBareT && !isRestT) continue
+                val argRange = if (isRestT) i until args.size else i..i
+                for (ai in argRange) {
+                    if (ai >= args.size) break
+                    val arg = args[ai]
+                    if (arg is SpreadElement) continue
+                    val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                    if (argType === anyType || argType === errorType) return null
+                    if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                    // 17.31a refinement: only fire when the inferred type is a "named-like"
+                    // type (Interface, Reference, Intrinsic / literal) AND, when T has a
+                    // constraint, the inferred type satisfies it. Anonymous Type.Object
+                    // results (object literals like `{x: null}`) go through the bare-T
+                    // path so existing per-property constraint elaborations (16.4ds /
+                    // 16.4dt) keep firing — substitution would erase paramType's TypeParam
+                    // identity and skip those branches.
+                    val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
+                        argType is Type.Intrinsic ||
+                        argType.flags.hasAny(
+                            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                            TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                        )
+                    if (!isNamedLike) return null
+                    val literal = literalTypeOfExpression(arg)
+                    candidates.add(Candidate(ai, argType, literal))
+                }
             }
-        }
-        if (candidates.isEmpty()) return null
+            if (candidates.isEmpty()) return null
 
-        val first = candidates[0]
-        val firstWidened = first.widenedType
+            val first = candidates[0]
+            val firstWidened = first.widenedType
 
-        // Constraint check: inferred type (widened first candidate) must satisfy
-        // T's constraint. Protects 16.4i (constrained TypeParam emits TS2345 with
-        // constraint as effective param type) from being bypassed.
-        val constraint = tp.constraint
-        if (constraint != null) {
-            val ok = try {
-                checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
-            } catch (_: StackOverflowError) { return null }
-            if (!ok) return null
-        }
-
-        // 17.31b multi-arg conflict detection: scan subsequent candidates, find
-        // the first that is mutually non-assignable with the widened first
-        // candidate. Same-base-different-literal cases (e.g. ["hello", "world"])
-        // resolve via widening — both become `string` and the assignability
-        // check between widened forms passes trivially. Cross-base cases
-        // (number vs string, Giraffe vs Elephant) trigger conflict handling.
-        var conflictAt = -1
-        for (i in 1 until candidates.size) {
-            val ci = candidates[i]
-            val ok = try {
-                checkTypeRelatedTo(ci.widenedType, firstWidened, assignableRelation) ||
-                    checkTypeRelatedTo(firstWidened, ci.widenedType, assignableRelation)
-            } catch (_: StackOverflowError) { false }
-            if (!ok) {
-                conflictAt = i
-                break
+            // Constraint check: inferred type (widened first candidate) must satisfy
+            // tp's constraint. Protects 16.4i (constrained TypeParam emits TS2345 with
+            // constraint as effective param type) from being bypassed.
+            val constraint = tp.constraint
+            if (constraint != null) {
+                val ok = try {
+                    checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
+                } catch (_: StackOverflowError) { return null }
+                if (!ok) return null
             }
-        }
 
-        if (conflictAt >= 0 && source != null && fileName != null &&
-            tparamMentionedInFunctionType(sig, tp)) {
-            // Context-sensitive sig (function-type-T param) signals TypeScript's
-            // literal-preserving inference. Emit TS2345 directly at the failing
-            // arg position with LITERAL-form display, then return null so the
-            // standard arg-check loop doesn't fire its own widened TS2345 at
-            // the same position. Bare-T params silently pass the standard check
-            // (T is unconstrained → apparent type {} → everything assignable).
-            val conflictCand = candidates[conflictAt]
-            val arg = args[conflictCand.argIdx]
-            val argDisplay = typeToString(conflictCand.literalType ?: conflictCand.widenedType)
-            val paramDisplay = typeToString(first.literalType ?: first.widenedType)
-            val start = arg.pos
-            val length = expressionTrueEnd(arg) - start
-            if (length > 0) {
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '$paramDisplay'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2345,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
+            // 17.31b multi-arg conflict detection: scan subsequent candidates, find
+            // the first that is mutually non-assignable with the widened first
+            // candidate. Same-base-different-literal cases (e.g. ["hello", "world"])
+            // resolve via widening — both become `string` and the assignability
+            // check between widened forms passes trivially. Cross-base cases
+            // (number vs string, Giraffe vs Elephant) trigger conflict handling.
+            var conflictAt = -1
+            for (i in 1 until candidates.size) {
+                val ci = candidates[i]
+                val ok = try {
+                    checkTypeRelatedTo(ci.widenedType, firstWidened, assignableRelation) ||
+                        checkTypeRelatedTo(firstWidened, ci.widenedType, assignableRelation)
+                } catch (_: StackOverflowError) { false }
+                if (!ok) {
+                    conflictAt = i
+                    break
+                }
             }
-            return null
+
+            if (conflictAt >= 0 && source != null && fileName != null &&
+                tparamMentionedInFunctionType(sig, tp)) {
+                // Context-sensitive sig (function-type-T param) signals TypeScript's
+                // literal-preserving inference. Emit TS2345 directly at the failing
+                // arg position with LITERAL-form display, then return null so the
+                // standard arg-check loop doesn't fire its own widened TS2345 at
+                // the same position. Bare-T params silently pass the standard check
+                // (T is unconstrained → apparent type {} → everything assignable).
+                val conflictCand = candidates[conflictAt]
+                val arg = args[conflictCand.argIdx]
+                val argDisplay = typeToString(conflictCand.literalType ?: conflictCand.widenedType)
+                val paramDisplay = typeToString(first.literalType ?: first.widenedType)
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argDisplay' is not assignable to parameter of type '$paramDisplay'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                return null
+            }
+
+            // Default path: substitute tp with the widened first candidate. For
+            // multi-arg conflict without preserveLiterals, this matches 17.31a's
+            // first-arg-wins behavior (e.g. `bar(1, "")` substitutes T=number,
+            // then standard loop emits 'string' vs 'number' at arg[1]).
+            mapperPairs.add(tp to firstWidened)
         }
 
-        // Default path: substitute T with the widened first candidate. For
-        // multi-arg conflict without preserveLiterals, this matches 17.31a's
-        // first-arg-wins behavior (e.g. `bar(1, "")` substitutes T=number, then
-        // standard loop emits 'string' vs 'number' at arg[1]).
-        return createTypeMapper(listOf(tp), listOf(firstWidened))
+        if (mapperPairs.isEmpty()) return null
+        return createTypeMapper(mapperPairs.map { it.first }, mapperPairs.map { it.second })
     }
 
     /**
@@ -36822,17 +36837,6 @@ interface DataView {
             }
         }
         return false
-    }
-
-    /**
-     * 17.31a gate helper: a parameter shape is allowed when it is the bare
-     * single-TypeParam itself OR a fully-concrete type that does NOT mention
-     * the TypeParam anywhere. Bails on Type.Reference / Type.Object / unions
-     * containing the TypeParam (those need richer inference shapes).
-     */
-    private fun isParamShapeAllowedFor17_31a(type: Type, tp: Type.TypeParam): Boolean {
-        if (type === tp) return true
-        return !typeMentionsTypeParam(type, tp)
     }
 
     /**
