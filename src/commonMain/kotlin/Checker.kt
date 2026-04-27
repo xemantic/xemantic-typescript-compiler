@@ -36850,7 +36850,7 @@ interface DataView {
             // explicit type args. Substitute T into the return type so downstream
             // (e.g. `var n: number = identity("hi")`) sees the inferred result.
             if (typeArgs.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
-                val mapper = tryInferSingleTypeParamFromArgs(sig, expr.arguments)
+                val mapper = tryInferSingleTypeParamFromArgs(sig, expr.arguments, forReturnType = true)
                 if (mapper != null) {
                     val rt = sig.resolvedReturnType ?: return anyType
                     return instantiateType(rt, mapper)
@@ -36992,6 +36992,7 @@ interface DataView {
         args: List<Expression>,
         source: String? = null,
         fileName: String? = null,
+        forReturnType: Boolean = false,
     ): TypeMapper? {
         val tps = sig.typeParameters ?: return null
         if (tps.isEmpty()) return null
@@ -37138,7 +37139,13 @@ interface DataView {
                         // `Array<{a:1} | "def">`) are still rejected because `{a:1}` widens to
                         // an anonymous Type.Object that fails this check.
                         (isArrayT && argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
-                    if (!isNamedLike) return null
+                    // 17.41: at the return-type call site, allow anonymous Type.Object
+                    // arg types (substitute T into the return type for downstream display).
+                    // Arg-vs-param call site keeps the bail (forReturnType=false default) so
+                    // 16.4ds / 16.4dt per-property elaborations keep firing on object-literal
+                    // args. Net-zero on the suite alone — pairs with intersection elaboration
+                    // (follow-up substep) to flip `errorMessagesIntersectionTypes01/02_ts`.
+                    if (!isNamedLike && !forReturnType) return null
                     // 17.31e: for Array<tp> path the literal type is null (we don't have
                     // a single literal to attach to the array's element type).
                     val literal = if (isArrayT) null else literalTypeOfExpression(arg)
