@@ -2,6 +2,23 @@
 
 **Phase 4 — Checker buildout.** 8,419 / 10,078 tests passing (~83%).
 
+**17.32d (2026-04-27, net-zero behavior)** — Third call-site flip onto
+17.32a's per-file scope: `resolveExpressionToSymbol`'s Identifier branch
+(used by both `export default X` resolution at Checker.kt:2207 and
+`export = X` resolution via `resolveModuleExportAssignment` at
+Checker.kt:2303) now resolves identifiers inside the export-default /
+export-equals expression against the target file's `perFileScope` (lib +
+script-file locals + own-file locals) instead of the over-merged `globals`
+map. Other module files' locals are not visible inside the target module
+without an explicit import, so the previous `result.locals[X] ?: globals[X]`
+chain could find symbols that wouldn't actually resolve in the target's
+scope. New chain: `result.locals[X] ?: perFileScope[fileName]?.get(X)` with
+a defensive fallback to `globals[X]` if perFileScope is null (matches the
+17.32b/c pattern). Test results unchanged from 17.32c (8419 / 1656 / 3) —
+no failing test in the corpus gates on this filter (consistent with prior
+flips), but the change reduces cross-file pollution in the export-resolution
+helper. Foundation for the eventual 17.32e+ TS2304 file-scope flip.
+
 **17.32c (2026-04-27, net-zero behavior)** — Second call-site flip onto
 17.32a's per-file scope: `getSpellingSuggestion`'s value-position candidate
 pool now consults `perFileScope[fileName]` at the file-root scope instead of
