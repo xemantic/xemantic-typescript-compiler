@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,427 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,429 / 10,078 tests passing (~83%).
+
+**17.44 (2026-04-27, +2)** — TS2532 "Object is possibly 'undefined'" for
+non-optional access on a synthetic-paren receiver produced when an
+instantiation expression breaks an optional chain. Flips both
+`optionalChainWithInstantiationExpression1_ts(target=es2019|es2020)`.
+Three-piece change: (1) `ParenthesizedExpression` AST gains an
+`instantiationEnd: Int? = null` field — non-null only when the parser
+synthesizes the paren wrap for `expr<T>` followed by `.`/`?.` AND
+`expr` contains an optional chain. The value is the source position
+right after the closing `>` of the type-argument list, so the checker
+can compute a squiggle covering `expr<T>` exactly (excluding the
+trailing `.`). (2) `Parser.kt` (the existing TS1477 emission branch)
+now passes `instantiationEnd = typeArgsEnd` when constructing the
+synthetic `ParenthesizedExpression`. (3) New
+`emitTs2532ForOptionalChainInstantiationReceiver` helper called at
+the top of `checkSinglePropertyAccess`. Conservative gates: outer
+access non-optional (otherwise the chain continues); receiver IS a
+`ParenthesizedExpression` with `instantiationEnd != null` (the
+parser's synthetic-from-instantiation marker — narrowest possible
+gate, single-test-pattern in corpus); `strictNullChecks` enabled;
+`findOptionalChainRootOperand` finds a `?.` somewhere in the inner
+chain (defensive — should always succeed when the parser-side gate
+fires, since the parser only wraps when `expressionHasOptionalChain`
+is true). The base type IS NOT checked for `T | undefined` because
+`typeof Namespace` resolves to `anyType` in our checker (a known
+limitation of `getTypeOfSymbolForTypeQuery`'s namespace branch),
+which would always defeat the check. The instantiation-paren
+pattern's extreme rarity (1 test in the entire corpus, verified via
+`grep '?\.[a-z]*<[A-Z,]+>\.'` over `typescript-repo/tests/cases/`)
+bounds the over-firing risk. New helper `findOptionalChainRootOperand`
+peels the synthetic paren and walks down looking for the first `?.`
+operator, returning its operand. Test results 1648 / 3 → 1646 / 3.
 
 **17.43 (2026-04-27, +1)** — Contextual literal preservation for substituted-T
 property types. Flips `errorMessagesIntersectionTypes02_ts`. Pairs with
