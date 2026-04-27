@@ -1,6 +1,40 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,425 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,426 / 10,078 tests passing (~83%).
+
+**17.42 (2026-04-27, +1)** — Intersection-source property elaboration in
+`getPropertyElaborationChain`. Flips `errorMessagesIntersectionTypes01_ts`
+(pairs with 17.41's substitution: source displays as `{ fooProp: string; } & Bar`
+instead of `T & Bar`, and the chain `Types of property 'fooProp' are
+incompatible. Type 'string' is not assignable to type 'boolean'.` now emits).
+New `getIntersectionPropertyElaborationChain(source, target, path)` helper
+in Checker.kt — merges members from object-like intersection constituents
+(later wins on conflict), walks target.properties, emits the standard
+"Types of property" + leaf chain on the first incompatible match. Falls
+through to missing-required-property path when no type-mismatch found
+(walks each Object-like constituent via the existing
+`getMissingRequiredPropertySymbol`). Wired via `getPropertyElaborationChain`'s
+new top-level Type.Intersection branch (delegates) AND the var-decl init
+gate at Checker.kt:33655 (now accepts `sourceType is Type.Object || sourceType
+is Type.Intersection`). Conservative: only direct property-level mismatches
+(no recursion / method-collapsed form / privacy checks — those don't apply
+to the intersection sources in the corpus). Doesn't flip
+`errorMessagesIntersectionTypes02_ts` — it expects literal preservation
+(`"frizzlebizzle"` vs `"hello" | "world"`) which is a separate inference
+piece (literal-preserving when target has literal types). Test results
+1650 / 3 → 1649 / 3.
+
+**17.41 (2026-04-27, net-zero infra)** — Allow anonymous Type.Object arg
+types at the return-type call site only. New `forReturnType: Boolean = false`
+parameter on `tryInferSingleTypeParamFromArgs`; passed `true` only from
+`getReturnTypeOfCallExpression` (Checker.kt:36853) to lift the named-like
+bail at Checker.kt:37145 for return-type substitution. Arg-vs-param call
+site (`checkArgumentsAgainstSignature`, Checker.kt:44853) keeps `false` so
+16.4ds / 16.4dt per-property elaborations stay unchanged on object-literal
+args. The substitution now fires for calls like `mixBar({fooProp: ...})`:
+return type displays as `{ fooProp: string; } & Bar` instead of `T & Bar`.
+Net-zero on the suite alone (10078 / 1650 / 3 unchanged) — paired with
+17.42 to flip `errorMessagesIntersectionTypes01_ts`.
 
 **17.40 (2026-04-27, +1)** — TS2345 for null/undefined arg vs anonymous
 function-type parameter whose signature mentions sig TypeParams. Flips
