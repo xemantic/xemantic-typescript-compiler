@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,434 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,435 / 10,078 tests passing (~84%).
+
+**17.47 (2026-04-27, +1)** — `checkTypeArgCount` extended to QualifiedName.
+Mirrors 17.46b's `isUnresolvedGenericType` extension — `var b: A.B`
+where `B` is a generic class missing type args now emits TS2314 at
+the right position (squiggle covering full `A.B` span via new
+`nameSpan` computation: `right.pos + right.text.length - typeName.pos`).
+Skips `scope.has(name)` / `KEYWORD_IDENTIFIERS` / `scope.isTypeParam`
+checks for QualifiedName because resolution goes through
+`getTypeParamInfo`'s namespace-export walk, not the simple-name
+scope. Flips `genericCloduleInModule2_ts`. Pairs with 17.46b:
+together they correctly emit TS2314 (and suppress the FP TS2454
+that the bare TypeRef-without-typeName-resolution would otherwise
+provoke).
 
 **17.46 (2026-04-27, +5)** — Top-level TS2454 flow-graph walker
 (retry of 17.45 with broader pre-installed type-guard recognition)
