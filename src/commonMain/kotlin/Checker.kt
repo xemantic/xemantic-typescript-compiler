@@ -17166,6 +17166,13 @@ interface DataView {
         val typeName = type.typeName
         val name = when (typeName) {
             is Identifier -> typeName.text
+            // 17.46b: also accept QualifiedName so `var b: A.B` is filtered when
+            // `B` (last segment) resolves to a generic class/interface missing
+            // type args. Conservative — `getTypeParamInfo` walks namespace exports
+            // by simple name, so a same-named generic in any namespace can match;
+            // worst case we OVER-suppress (miss a legitimate TS2454/TS2564), never
+            // emit a wrong diagnostic.
+            is QualifiedName -> (typeName.right as? Identifier)?.text ?: return false
             else -> return false
         }
         val info = getTypeParamInfo(name) ?: return false
