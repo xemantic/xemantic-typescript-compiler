@@ -708,6 +708,8 @@ class Checker(
         checkCircularBaseClasses()
         // 64f3a. Check circular interface extends cycles (TS2310)
         checkCircularInterfaceBases()
+        // 64f3a-2. Check class base via default-type-arg indexed-access cycle (TS2310)
+        checkCircularClassBaseViaDefaultTypeArg()
         // 64f3b. Check non-constructor extends (TS2507)
         checkNonConstructorExtends()
         // 64f5. Check interface multi-base property conflicts (TS2320)
@@ -38549,6 +38551,124 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2310 (extension): class self-reference through default-type-arg
+    // indexed-access cycle.
+    //   Pattern:
+    //     class Base<C, T = C['someProp']> { ... }
+    //     class Foo extends Base<Foo> { ... }
+    //   `Foo extends Base<Foo>` substitutes C = Foo, then must evaluate the
+    //   default `T = Foo['someProp']` — which requires Foo's shape, which
+    //   depends on this base. Cycle. The existing `checkCircularInterfaceBases`
+    //   only walks name-level interface extends; this helper adds the narrow
+    //   class-default-indexed-access pattern. Gate is intentionally tight to
+    //   avoid CRTP false positives (`class Foo extends Base<Foo>` where
+    //   Base<T extends Base<T>> uses CONSTRAINTS not DEFAULTS is fine).
+    // -----------------------------------------------------------------------
+
+    private fun checkCircularClassBaseViaDefaultTypeArg() {
+        val classDecls = mutableMapOf<String, ClassDeclaration>()
+        for (result in binderResults) {
+            collectTopLevelClassDeclarations(result.sourceFile.statements, classDecls)
+        }
+        if (classDecls.isEmpty()) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkCircularClassBaseInStatements(result.sourceFile.statements, classDecls, source, fileName)
+        }
+    }
+
+    private fun collectTopLevelClassDeclarations(
+        statements: List<Statement>, out: MutableMap<String, ClassDeclaration>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.let { out.putIfAbsent(it.text, stmt) }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    collectTopLevelClassDeclarations(it.statements, out)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkCircularClassBaseInStatements(
+        statements: List<Statement>,
+        classDecls: Map<String, ClassDeclaration>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val className = stmt.name?.text ?: continue
+                    val extendsClause = stmt.heritageClauses?.firstOrNull {
+                        it.token == SyntaxKind.ExtendsKeyword
+                    } ?: continue
+                    val baseExpr = extendsClause.types.firstOrNull() ?: continue
+                    val baseName = (baseExpr.expression as? Identifier)?.text ?: continue
+                    val typeArgs = baseExpr.typeArguments ?: continue
+                    // Position(s) where the deriving class self-references in extends type args.
+                    val selfPositions = typeArgs.withIndex().filter { (_, ta) ->
+                        val tr = ta as? TypeReference ?: return@filter false
+                        (tr.typeName as? Identifier)?.text == className
+                    }.map { it.index }
+                    if (selfPositions.isEmpty()) continue
+                    val baseClass = classDecls[baseName] ?: continue
+                    val baseTps = baseClass.typeParameters ?: continue
+                    if (baseTps.isEmpty()) continue
+                    // Collect names of base type params at self-reference positions —
+                    // those are bound to the deriving class.
+                    val selfBoundTpNames = selfPositions.mapNotNull {
+                        baseTps.getOrNull(it)?.name?.text
+                    }.toSet()
+                    if (selfBoundTpNames.isEmpty()) continue
+                    // Look for a default type-arg whose body indexed-accesses any of
+                    // the self-bound type params (directly or nested).
+                    val cycle = baseTps.any { tp ->
+                        tp.default?.let {
+                            defaultIndexesIntoTypeParam(it, selfBoundTpNames)
+                        } == true
+                    }
+                    if (!cycle) continue
+                    val nameNode = stmt.name ?: continue
+                    val start = nameNode.pos
+                    val length = nameNode.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$className' recursively references itself as a base type.",
+                        category = DiagnosticCategory.Error,
+                        code = 2310,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    checkCircularClassBaseInStatements(it.statements, classDecls, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun defaultIndexesIntoTypeParam(
+        node: TypeNode, names: Set<String>,
+    ): Boolean = when (node) {
+        is IndexedAccessType -> {
+            val obj = node.objectType
+            val hit = obj is TypeReference && (obj.typeName as? Identifier)?.text in names
+            hit || defaultIndexesIntoTypeParam(node.objectType, names) ||
+                defaultIndexesIntoTypeParam(node.indexType, names)
+        }
+        is TypeReference -> node.typeArguments?.any { defaultIndexesIntoTypeParam(it, names) } == true
+        else -> false
     }
 
     // -----------------------------------------------------------------------
