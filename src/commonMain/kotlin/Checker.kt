@@ -36673,9 +36673,15 @@ interface DataView {
         val params = sig.parameters
         if (params.isEmpty() || args.isEmpty()) return null
 
-        for (p in params) {
+        for ((idx, p) in params.withIndex()) {
             val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { return null }
             if (pt === errorType) return null
+            val isRest = (p.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            // 17.31c: rest param of `T[]` is treated as bare-T per call arg
+            // (each rest arg is a candidate for T inference). Only the LAST
+            // param can be rest in TypeScript syntax, so this branch fires
+            // at most once per signature.
+            if (isRest && idx == params.size - 1 && isRestArrayOfTypeParam(pt, tp)) continue
             if (!isParamShapeAllowedFor17_31a(pt, tp)) return null
         }
 
@@ -36688,29 +36694,38 @@ interface DataView {
         for (i in params.indices) {
             if (i >= args.size) break
             val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
-            if (pt !== tp) continue
-            val arg = args[i]
-            if (arg is SpreadElement) continue
-            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
-            if (argType === anyType || argType === errorType) return null
-            if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-            // 17.31a refinement: only fire when the inferred type is a "named-like"
-            // type (Interface, Reference, Intrinsic / literal) AND, when T has a
-            // constraint, the inferred type satisfies it. Anonymous Type.Object
-            // results (object literals like `{x: null}`) go through the bare-T
-            // path so existing per-property constraint elaborations (16.4ds /
-            // 16.4dt) keep firing — substitution would erase paramType's TypeParam
-            // identity and skip those branches.
-            val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
-                argType is Type.Intrinsic ||
-                argType.flags.hasAny(
-                    TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
-                    TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
-                    TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                )
-            if (!isNamedLike) return null
-            val literal = literalTypeOfExpression(arg)
-            candidates.add(Candidate(i, argType, literal))
+            val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            val isBareT = pt === tp
+            // 17.31c: a rest param of `T[]` contributes one candidate per
+            // trailing arg (i.e. args at index i, i+1, ... up to args.size).
+            val isRestT = isRest && i == params.size - 1 && isRestArrayOfTypeParam(pt, tp)
+            if (!isBareT && !isRestT) continue
+            val argRange = if (isRestT) i until args.size else i..i
+            for (ai in argRange) {
+                if (ai >= args.size) break
+                val arg = args[ai]
+                if (arg is SpreadElement) continue
+                val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                if (argType === anyType || argType === errorType) return null
+                if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                // 17.31a refinement: only fire when the inferred type is a "named-like"
+                // type (Interface, Reference, Intrinsic / literal) AND, when T has a
+                // constraint, the inferred type satisfies it. Anonymous Type.Object
+                // results (object literals like `{x: null}`) go through the bare-T
+                // path so existing per-property constraint elaborations (16.4ds /
+                // 16.4dt) keep firing — substitution would erase paramType's TypeParam
+                // identity and skip those branches.
+                val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
+                    argType is Type.Intrinsic ||
+                    argType.flags.hasAny(
+                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                        TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                        TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                    )
+                if (!isNamedLike) return null
+                val literal = literalTypeOfExpression(arg)
+                candidates.add(Candidate(ai, argType, literal))
+            }
         }
         if (candidates.isEmpty()) return null
 
@@ -36818,6 +36833,19 @@ interface DataView {
     private fun isParamShapeAllowedFor17_31a(type: Type, tp: Type.TypeParam): Boolean {
         if (type === tp) return true
         return !typeMentionsTypeParam(type, tp)
+    }
+
+    /**
+     * 17.31c helper: true when [type] is `Array<T>` (`T[]`) — i.e. the rest-param
+     * shape that contributes one inference candidate per call arg matched at the
+     * rest position. Requires the Reference's target to be the lib `Array` symbol
+     * and its single resolved type argument to be the very TypeParam [tp].
+     */
+    private fun isRestArrayOfTypeParam(type: Type, tp: Type.TypeParam): Boolean {
+        if (type !is Type.Reference) return false
+        if (type.target?.symbol?.name != "Array") return false
+        val args0 = type.resolvedTypeArguments ?: return false
+        return args0.size == 1 && args0[0] === tp
     }
 
     /** True if [type] structurally references [tp] (recurses into Reference/Union/Intersection). */
@@ -44326,6 +44354,10 @@ interface DataView {
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
         }
         val params = sig.parameters
+        // 17.31c: track whether the standard loop emits a TS2345 so the
+        // post-loop rest-args helper doesn't double-fire (TypeScript reports
+        // only the first failing arg per call).
+        val initialDiagCount = diagnostics.size
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break // extra args handled by TS2554
             // Skip spread arguments — complex handling
@@ -44911,6 +44943,96 @@ interface DataView {
                     relatedInformation = relatedInfo,
                 ))
                 break // TypeScript reports only the first failing argument per call
+            }
+        }
+        // 17.31c: emit TS2345 for trailing args matched at a rest parameter
+        // position whose element type is a fully-resolved primitive/named type.
+        // The standard loop above only iterates `i in 0 until params.size`, so
+        // for a single rest param it processes arg[0] against the Array<X> type
+        // (which never fires TS2345 because Array isn't a simple type), then
+        // breaks — leaving every trailing rest arg silently unchecked. After
+        // either explicit type-arg substitution OR 17.31a/c inference has
+        // resolved the element type, this pass walks every arg matched at the
+        // rest position and emits at the first mismatch.
+        if (diagnostics.size == initialDiagCount) {
+            checkRestArgsAgainstArrayElementType(sig, args, source, fileName)
+        }
+    }
+
+    /**
+     * 17.31c: when [sig]'s last parameter is a rest of `Array<X>` (`...args: X[]`)
+     * with a fully-resolved element type X (i.e. X is NOT an unsubstituted
+     * TypeParam), emit TS2345 for the first trailing arg whose type is not
+     * assignable to X. Uses widened-literal display ('string' not '""') to
+     * match TypeScript's TS2345 baseline. One emission per call.
+     *
+     * Skipped when X is still a TypeParam (inference failed or not attempted),
+     * when no rest param exists, or when rest paramType isn't `Array<X>`.
+     */
+    private fun checkRestArgsAgainstArrayElementType(
+        sig: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+    ) {
+        val params = sig.parameters
+        if (params.isEmpty()) return
+        val lastIdx = params.size - 1
+        val lastParam = params[lastIdx]
+        val isRest = (lastParam.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        if (!isRest) return
+        val paramType = try { getTypeOfSymbol(lastParam) } catch (_: StackOverflowError) { return }
+        if (paramType !is Type.Reference) return
+        if (paramType.target?.symbol?.name != "Array") return
+        val tArgs = paramType.resolvedTypeArguments ?: return
+        if (tArgs.size != 1) return
+        val elementType = tArgs[0]
+        if (elementType === errorType || elementType === anyType) return
+        // Skip when element is still an unresolved TypeParam — inference either
+        // failed or wasn't attempted (e.g. anonymous Object literal arg). The
+        // standard pre-rest paths handle bare-T checks for non-rest cases.
+        if (elementType is Type.TypeParam) return
+        for (i in lastIdx until args.size) {
+            val arg = args[i]
+            if (arg is SpreadElement) continue
+            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue }
+            if (argType === anyType || argType === errorType) continue
+            if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) continue
+            // Conservative gate: only emit when argType is a simple/primitive
+            // type (string/number/boolean/literal/intrinsic union). Skipping
+            // complex args (arrays, objects, named types) avoids FPs from
+            // (a) lib methods like `Array.concat` that should have a `T[][]`
+            // overload but don't in our parsed lib (so an arg of `T[]` looks
+            // like a mismatch against `T[]` element), and (b) structural
+            // comparison gaps for nested generic shapes (`Array<{a:T;b:U}>`
+            // vs `Array<{a:number;b:string}>` after explicit-typeArg
+            // substitution). The original test motivating this helper
+            // (`genericRestArgs_ts`) has only literal/primitive args, which
+            // pass this gate. Skipping `continue`s rather than `return`s so
+            // a later simple-arg mismatch can still emit.
+            if (!isSimpleCheckableType(argType)) continue
+            val ok = try {
+                checkTypeRelatedTo(argType, elementType, assignableRelation)
+            } catch (_: StackOverflowError) { true }
+            if (!ok) {
+                val argDisplay = typeToString(getWidenedLiteralType(argType))
+                val paramDisplay = typeToString(elementType)
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argDisplay' is not assignable to parameter of type '$paramDisplay'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                return
             }
         }
     }
