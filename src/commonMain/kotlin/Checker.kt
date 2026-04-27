@@ -45116,6 +45116,51 @@ interface DataView {
                     }
                 }
             }
+            // 17.40: TS2345 for null/undefined argument vs anonymous function-type parameter
+            // (Type.Object with callSignatures, NOT Type.Reference / Type.Interface) whose
+            // signature mentions sig-side TypeParams. Example:
+            //   foo<T>(x: (a: Iterator<T>) => number)  called with  foo(null)
+            // Display substitutes each sig-side TypeParam with `unknown` so the param type
+            // renders as `(a: Iterator<unknown>) => number`, matching TypeScript's "T inferred
+            // as unknown when no information" rule. Mirror of 17.11c (Type.Reference param) but
+            // for anonymous function-type params.
+            if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+                paramType is Type.Object && paramType !is Type.Reference && paramType !is Type.Interface) {
+                val sigTps = sig.typeParameters
+                val callSigs = paramType.callSignatures
+                val ctorSigs = paramType.constructSignatures
+                val anyFnSig = !callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()
+                val mentionsSigTp = !sigTps.isNullOrEmpty() && anyFnSig && (
+                    callSigs?.any { sigMentionsAnyTp(it, sigTps) } == true ||
+                    ctorSigs?.any { sigMentionsAnyTp(it, sigTps) } == true
+                )
+                if (mentionsSigTp && !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                    val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
+                    // Build a display-only Type.Object with substituted callSigs/ctorSigs.
+                    val displayObj = Type.Object().also {
+                        it.callSignatures = callSigs?.map { s -> instantiateSignature(s, mapper) }
+                        it.constructSignatures = ctorSigs?.map { s -> instantiateSignature(s, mapper) }
+                    }
+                    val displayParam = typeToString(displayObj)
+                    val argTypeStr = typeToString(argType)
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$displayParam'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                        break
+                    }
+                }
+            }
             // 17.20: TS2345 for null/undefined argument vs unconstrained bare `Type.TypeParam`
             // parameter. Example: `super.bar<T>(null)` where the base method is `bar<U>(x: U)`
             // and explicit `<T>` substitutes U → T. The arg is null and the param is the bare
@@ -46894,6 +46939,19 @@ interface DataView {
             is Type.Intersection -> type.types.any { sourceContainsTypeParam(it, sourceTps) }
             else -> false
         }
+    }
+
+    /**
+     * 17.40: Does any of `sig`'s param types or return type mention any TypeParam in
+     * `tps`? Used to detect when an anonymous function-type parameter's signature
+     * carries sig-side TypeParams that would need `unknown` substitution for display
+     * in TS2345 messages (`(a: Iterator<T>) => number` → `(a: Iterator<unknown>) => number`
+     * when the call provides no info to infer T).
+     */
+    private fun sigMentionsAnyTp(sig: Signature, tps: List<Type.TypeParam>): Boolean {
+        val ret = sig.resolvedReturnType
+        if (ret != null && sourceContainsTypeParam(ret, tps)) return true
+        return sig.parameters.any { sourceContainsTypeParam(getTypeOfSymbol(it), tps) }
     }
 
     /**

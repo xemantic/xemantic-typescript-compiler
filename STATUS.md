@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,424 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,425 / 10,078 tests passing (~83%).
+
+**17.40 (2026-04-27, +1)** — TS2345 for null/undefined arg vs anonymous
+function-type parameter whose signature mentions sig TypeParams. Flips
+`privacyCheckAnonymousFunctionParameter2_ts`. Mirror of 17.11c
+(Type.Reference param) but for `Type.Object` with callSignatures /
+constructSignatures (excluding Reference / Interface). Pattern:
+`foo<T>(x: (a: Iterator<T>) => number)` called with `foo(null)` —
+display substitutes sig TypeParams to `unknown`, rendering param as
+`(a: Iterator<unknown>) => number`. New `sigMentionsAnyTp` helper
+recurses via existing `sourceContainsTypeParam` over signature
+params + return. Display path builds a wrapper `Type.Object` with
+`instantiateSignature(s, mapper)` applied to each call/construct sig
+(mapper substitutes sig-side TypeParams to `unknownType`), then
+calls `typeToString` on the wrapper. Test results 1651 / 3 → 1650
+/ 3.
 
 **17.39 (2026-04-27, +1)** — Function-typed property substitution + first-decl-wins
 local-type map. Flips `genericConstraintSatisfaction1_ts`. Closes the
