@@ -2348,7 +2348,18 @@ class Checker(
     private fun resolveExpressionToSymbol(expr: Expression, result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         return when (expr) {
             is Identifier -> {
-                val symbol = result.locals[expr.text] ?: globals[expr.text] ?: return null
+                // 17.32d: identifiers inside `export default X` / `export = X`
+                // resolve against the target file's per-file scope (lib +
+                // script-file locals + own-file locals) instead of the
+                // over-merged [globals] map. Other module files' locals are
+                // not visible without an explicit import. Defensive fallback
+                // to [globals] when [perFileScope] hasn't been built yet
+                // (matches 17.32b/c pattern).
+                val fileScope = perFileScope[result.sourceFile.fileName]
+                val symbol = result.locals[expr.text]
+                    ?: fileScope?.get(expr.text)
+                    ?: (if (fileScope == null) globals[expr.text] else null)
+                    ?: return null
                 resolveAlias(symbol, visited)
             }
             is PropertyAccessExpression -> {
