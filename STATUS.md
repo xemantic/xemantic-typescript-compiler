@@ -2,6 +2,27 @@
 
 **Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
 
+**17.35a (2026-04-27, net-zero infra)** — Expand falsy/truthy
+narrowing to literal-truthy types. `isDefinitelyTruthyMember` now also
+returns true for non-empty `Type.StringLiteral`, non-zero
+`Type.NumberLiteral`, `trueType` (the `Type.Intrinsic` boolean-literal
+"true"), and non-zero `Type.BigIntLiteral` (string value not "0"/"0n"
+via new `isZeroBigIntLiteral` helper). Mirror addition:
+`isDefinitelyFalsyMember` now also drops empty `Type.StringLiteral`,
+zero `Type.NumberLiteral`, and zero `Type.BigIntLiteral` from union
+on the truthy side. Both non-union and union dispatch in
+`narrowByTruthiness` were also unified — non-union dispatch now uses
+the same predicate so a bare definitely-truthy/falsy literal also
+collapses to `neverType`. Primitive intrinsics (`stringType`,
+`numberType`, `booleanType`, `bigintType`) deliberately kept on both
+sides — they could be the empty/zero variant. Test results 10078 /
+1655 / 3 (unchanged from 17.34e). Foundation net-zero — no failing
+test gates solely on literal-truthy filtering, but the path to
+`if (x) {} else { /* x: 0 | "" | undefined */ }` and similar
+literal-receiver narrowing is now in place. Closes 17.35a/b — 17.35b
+was scoped as "verify primitive case" with no expected code change;
+17.35a's primitive-on-both-sides behavior matches that intent.
+
 **17.34e (2026-04-27, net-zero infra)** — Conservative falsy-side
 narrowing in `narrowByTruthiness`. Pre-fix: `truthy=false` returned `t`
 unchanged per the 17.7e session note's regression-risk gate. Post-fix:
