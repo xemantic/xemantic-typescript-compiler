@@ -2,6 +2,24 @@
 
 **Phase 4 — Checker buildout.** 8,419 / 10,078 tests passing (~83%).
 
+**17.32e (2026-04-27, net-zero behavior)** — TS2304 file-scope flip
+(Blocker #3 step 1 — final substep; "highest blast radius" landed clean).
+`checkUnresolvedNames` (Checker.kt:8598) now builds `fileScope.names` from
+`perFileScope[fileName]` (lib + script-file locals + own-file locals)
+instead of iterating `result.locals + globals` (the over-merged map
+containing every module-file's locals). Cross-file unimported identifiers
+in module file A no longer silently resolve via `globals[X]` from unrelated
+module file B. Defensive fallback to legacy iteration when perFileScope is
+null (matches 17.32b/c/d pattern). Test results unchanged from 17.32d
+(8419 / 1656 / 3) — strict-improvement change with zero regression: tests
+don't rely on the cross-file leak. Closes the major 17.32 migration: all 4
+identifier-resolution sites identified for the series (ctorParam shadow
+disambiguation, TS2552 spelling-suggestion candidates, default-import /
+export-equals helper, TS2304 file-scope) now consume `perFileScope`.
+Remaining minor `globals[X]` sites in `resolveAmbientModuleExportEquals`
+(line 2333) intentionally left — the ambient-module-internal
+`import alias = X` pattern legitimately needs cross-file global lookup.
+
 **17.32d (2026-04-27, net-zero behavior)** — Third call-site flip onto
 17.32a's per-file scope: `resolveExpressionToSymbol`'s Identifier branch
 (used by both `export default X` resolution at Checker.kt:2207 and
