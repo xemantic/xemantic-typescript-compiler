@@ -33413,11 +33413,20 @@ interface DataView {
         val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
         if (declaredTypeStr != null) varTypes[name.text] = declaredTypeStr
 
-        // Populate local type map for Type engine identifier resolution
+        // Populate local type map for Type engine identifier resolution.
+        // First-decl wins: when multiple declarations of the same name exist
+        // (e.g. `var x: T;` followed by `declare var x: T;`), keep the FIRST
+        // resolved annotation. Matches the Binder's valueDeclaration semantics
+        // (set on first creation, never overwritten — see Binder.kt:355). Without
+        // first-wins, downstream "declared here" hints (TS6500/TS2728) point to
+        // the LATER declaration's resolved Type.Object copy instead of the source
+        // of truth.
         try {
-            val resolvedVarType = getTypeFromTypeNode(typeAnnotation)
-            if (resolvedVarType !== anyType && resolvedVarType !== errorType) {
-                currentLocalTypes[name.text] = resolvedVarType
+            if (currentLocalTypes[name.text] == null) {
+                val resolvedVarType = getTypeFromTypeNode(typeAnnotation)
+                if (resolvedVarType !== anyType && resolvedVarType !== errorType) {
+                    currentLocalTypes[name.text] = resolvedVarType
+                }
             }
         } catch (_: StackOverflowError) { /* circular type */ }
 
@@ -34448,7 +34457,19 @@ interface DataView {
                     val declType = decl.type ?: return null
                     val rawType = getTypeFromTypeNode(declType)
                     if (rawType === errorType || rawType === anyType) null
-                    else instantiateType(rawType, mapper)
+                    else if (rawType is Type.Object && rawType !is Type.Reference && rawType !is Type.Interface
+                        && (!rawType.callSignatures.isNullOrEmpty() || !rawType.constructSignatures.isNullOrEmpty())) {
+                        // 17.39: Function-typed property — substitute outer typeArgs into the
+                        // inner sig's TypeParam constraints/defaults + params + return type.
+                        // Without this, `interface I<S> { f: <T extends S>(x: T) => void }`'s
+                        // f.signature.T retains constraint `S` (un-substituted) at the call site,
+                        // blocking 16.4ds per-property elaboration of arg-vs-constraint and 16.4i
+                        // TS2345-via-constraint emission. Safe to mutate rawType in-place because
+                        // getTypeFromTypeNode bypasses its cache when currentTypeParamScope != null
+                        // (active here from the lines above), so rawType is always freshly allocated.
+                        substituteOuterTypeArgsInGenericFnObject(rawType, mapper)
+                        rawType
+                    } else instantiateType(rawType, mapper)
                 }
                 is GetAccessor -> {
                     val declType = decl.type ?: return null
@@ -47398,6 +47419,55 @@ interface DataView {
         return Signature(
             declaration = sig.declaration,
             typeParameters = null, // instantiated signature has no type parameters
+            parameters = newParams,
+            resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
+            minArgumentCount = sig.minArgumentCount,
+        )
+    }
+
+    /**
+     * 17.39: Substitute outer typeArgs into a freshly-resolved function-typed property's
+     * inner generic signatures — typeParam constraints/defaults, param types, return
+     * type. Mutates [rawType]'s callSignatures/constructSignatures lists in place; the
+     * inner Signatures' typeParameters are also mutated in place (their `constraint` /
+     * `default` fields reassigned). Caller must guarantee [rawType] is freshly allocated
+     * (e.g. resolved through `getTypeFromTypeNode` while `currentTypeParamScope != null`)
+     * — this is currently the case in `resolveGenericPropertyType`'s PropertyDeclaration
+     * branch. Preserves the inner sig's typeParameter list (T stays generic) so call-site
+     * inference + constraint check via 16.4ds / 16.4i still fires.
+     */
+    private fun substituteOuterTypeArgsInGenericFnObject(rawType: Type.Object, mapper: TypeMapper) {
+        rawType.callSignatures = rawType.callSignatures?.map { substituteOuterTypeArgsInSignature(it, mapper) }
+        rawType.constructSignatures = rawType.constructSignatures?.map { substituteOuterTypeArgsInSignature(it, mapper) }
+    }
+
+    private fun substituteOuterTypeArgsInSignature(sig: Signature, mapper: TypeMapper): Signature {
+        // Mutate sig's typeParameter constraints/defaults in place — they reference the
+        // outer interface's TypeParams (e.g. `<T extends S>` where S is the outer one),
+        // and we want substituted forms visible at the call site without erasing T's
+        // generic identity. TPs are fresh per-call (see uncached getTypeFromTypeNode).
+        sig.typeParameters?.forEach { tp ->
+            tp.constraint = tp.constraint?.let { instantiateType(it, mapper) }
+            tp.default = tp.default?.let { instantiateType(it, mapper) }
+        }
+        val newReturnType = sig.resolvedReturnType?.let { instantiateType(it, mapper) }
+        val newParams = sig.parameters.map { param ->
+            val paramType = getTypeOfSymbol(param)
+            val instantiated = instantiateType(paramType, mapper)
+            if (instantiated !== paramType) {
+                val newParam = Symbol(param.flags, param.name)
+                newParam.declarations.addAll(param.declarations)
+                newParam.valueDeclaration = param.valueDeclaration
+                symbolTypes[newParam.id] = instantiated
+                newParam
+            } else param
+        }
+        val paramsChanged = newParams.zip(sig.parameters).any { (a, b) -> a !== b }
+        val returnChanged = newReturnType !== sig.resolvedReturnType
+        if (!paramsChanged && !returnChanged) return sig
+        return Signature(
+            declaration = sig.declaration,
+            typeParameters = sig.typeParameters, // preserve — still generic at call site
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,

@@ -1,6 +1,30 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,423 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,424 / 10,078 tests passing (~83%).
+
+**17.39 (2026-04-27, +1)** — Function-typed property substitution + first-decl-wins
+local-type map. Flips `genericConstraintSatisfaction1_ts`. Closes the
+"property f: <T extends S>(x: T) => void on generic interface I<S>" gap
+in Blocker #2 — when calling `x.f({s: 1})` on `var x: I<{s: string}>`,
+T's constraint was unsubstituted (still `TypeParam(S)`) so 16.4ds
+per-property elaboration didn't fire. Two coordinated pieces in
+Checker.kt: (1) New helpers `substituteOuterTypeArgsInGenericFnObject`
++ `substituteOuterTypeArgsInSignature` invoked from
+`resolveGenericPropertyType`'s PropertyDeclaration branch when rawType
+is Type.Object (excluding Reference/Interface) with non-empty
+callSignatures or constructSignatures. Mutates the freshly-allocated
+sig's typeParam constraints/defaults in place via the outer mapper,
+then substitutes params and return. Sig's typeParameters are
+PRESERVED (T stays generic) so call-site inference + 16.4ds / 16.4i
+still fires. (2) `checkVarDeclAssignability`'s annotated-typeNode path
+now skips `currentLocalTypes[name] = ...` when already set —
+first-decl wins for the local-type map, matching Binder's
+`valueDeclaration` semantics (Binder.kt:355). Without this, line 6's
+`declare var x: I<{s: string}>` overwrites line 5's `var x: I<{s:
+string}>` in `currentLocalTypes`, so `getTypeOfIdentifier(x)` returns
+the line-6-resolved Reference whose typeArg is the line-6-TypeLiteral
+copy of `{s: string}`, and TS6500 "declared here" points to the wrong
+copy of property `s`. Test results 1652 / 3 → 1651 / 3.
 
 **17.38 (2026-04-27, +1)** — Object-literal-of-T param shape inference for
 single-arg generic calls. Flips `widenToAny1_ts`. Closes the simplest
