@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,436 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,437 / 10,078 tests passing (~84%).
+
+**17.50 (2026-04-27, +1)** — TS2416 for `implements` of TypeAlias resolving
+to `Type.Intersection`. Flips `implementsIncorrectlyNoAssertion_ts`. Single
+surgical patch in `checkClassPropertyOverrides` (Checker.kt ~40345): when
+`clause.token == ImplementsKeyword` AND the resolved heritage type is a
+`Type.Intersection` (e.g. via `type Wrapper = Foo & Bar`), build a synthetic
+`Type.Object` whose `members` are merged from each constituent's resolved
+members (last-wins on name conflicts). The synthetic stands in for
+`baseTypeRaw` so the existing TS2416 / TS2423 / TS2425 / TS2426 walk applies
+uniformly. Display name override: when this branch fires, `baseTypeName` is
+`typeToString(baseTypeRawOriginal)` ("Foo & Bar") instead of
+`typeToString(synth)` (which would print the merged shape). Implements-only
+gate is correct — TypeScript rejects intersection bases in `extends` clauses
+at parse, so the branch never fires for extends. Constituents that aren't
+`Type.Object` (e.g. `Foo & string`) are filtered out via `mapNotNull`. Net
+delta: 1639 → 1638 failed (8436 → 8437 passing).
 
 **17.49 (2026-04-27, +1)** — TS2416 chain elaboration for implements-clause
 generic method override. Three coordinated pieces in Checker.kt flip

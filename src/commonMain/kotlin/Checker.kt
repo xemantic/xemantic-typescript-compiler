@@ -40343,8 +40343,32 @@ interface DataView {
                 } ?: continue
 
                 val baseSymbol = globals[baseName] ?: continue
-                val baseTypeRaw = getDeclaredTypeOfSymbol(baseSymbol)
-                if (baseTypeRaw !is Type.Object) continue
+                val baseTypeRawOriginal = getDeclaredTypeOfSymbol(baseSymbol)
+                // 17.50: For `class C implements Wrapper` where `type Wrapper = Foo & Bar`
+                // (Type.Intersection of class/interface types), build a synthetic merged
+                // Type.Object so the existing TS2416 / TS2423 / TS2425 / TS2426 walk applies.
+                // Display the base type as the intersection ("Foo & Bar"), not the synthetic
+                // merged shape. Implements-only — `extends` accepts a single class.
+                val isIntersectionImplements = clause.token == SyntaxKind.ImplementsKeyword &&
+                    baseTypeRawOriginal is Type.Intersection
+                val baseTypeRaw: Type.Object = when {
+                    isIntersectionImplements -> {
+                        val constituents = (baseTypeRawOriginal as Type.Intersection).types
+                            .mapNotNull { it as? Type.Object }
+                        if (constituents.isEmpty()) continue
+                        val merged = symbolTable()
+                        for (c in constituents) {
+                            resolveStructuredTypeMembers(c)
+                            c.members?.forEach { (n, s) -> merged[n] = s }
+                        }
+                        Type.Object().apply {
+                            members = merged
+                            properties = merged.values.toList()
+                        }
+                    }
+                    baseTypeRawOriginal is Type.Object -> baseTypeRawOriginal
+                    else -> continue
+                }
                 // Instantiate generic base when heritage clause supplies type args
                 // (`implements IFoo<number>`, `extends List<string>`). Without this,
                 // member comparison runs against the raw generic interface and
@@ -40369,7 +40393,11 @@ interface DataView {
                 resolveStructuredTypeMembers(baseType)
                 val baseMembers = baseType.members ?: continue
 
-                val baseTypeName = typeToString(baseType)
+                val baseTypeName = if (isIntersectionImplements) {
+                    typeToString(baseTypeRawOriginal)
+                } else {
+                    typeToString(baseType)
+                }
 
                 // TS2415: Check private member conflicts (only for extends, not implements)
                 if (clause.token == SyntaxKind.ExtendsKeyword) {

@@ -2586,6 +2586,37 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-27 (17.50, 8436 → 8437, +1) — TS2416 for `implements` of TypeAlias resolving to Type.Intersection:** Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 7/82/20). Spot-checked the MISS bucket post-17.49 looking for tests that benefit from the broad TS2416 chain elaboration; identified `implementsIncorrectlyNoAssertion_ts` as the most tractable surgical candidate matching the documented skip-log entry (line 4380, "Needs intersection-of-classes member walk for the implements check"). The 17.49 chain elaboration foundation isn't directly relevant here — this case sits one level higher: TS2416 wasn't firing AT ALL because the implements-clause walk bailed on `Type.Intersection`.
+
+  **Pre-fix path:** Test pattern is
+  ```typescript
+  declare class Foo { x: string; }
+  declare class Bar { y: string; }
+  type Wrapper = Foo & Bar;
+  class Baz implements Wrapper { x: number; y: string; }
+  ```
+  For the implements-clause `Baz implements Wrapper`, `checkClassPropertyOverrides` (Checker.kt ~40308) looks up `globals["Wrapper"]` → TypeAlias symbol; `getDeclaredTypeOfSymbol` → `Type.Intersection([Foo_iface, Bar_iface])`; line 40347 `if (baseTypeRaw !is Type.Object) continue` — bails entirely, so no TS2416 emission. (TS2564 emissions for `x` and `y` having no initializer fire correctly via a separate path; only TS2416 was missing.)
+
+  **Single-piece fix:** Inserted a branch immediately after `getDeclaredTypeOfSymbol(baseSymbol)` that handles `clause.token == ImplementsKeyword && baseTypeRawOriginal is Type.Intersection`. The branch:
+  1. Filters constituents to `mapNotNull { it as? Type.Object }` — primitives in the intersection (`Foo & string`) skipped; Reference / Interface / plain Object all qualify.
+  2. Calls `resolveStructuredTypeMembers(c)` on each, then merges members with last-wins semantics (matches TS's intersection-member resolution).
+  3. Wraps in a synthetic `Type.Object` with `members` and `properties` pre-populated; this stands in as `baseTypeRaw` for the rest of the walk so `resolveStructuredTypeMembers` skips it (it sees `properties != null`).
+  4. Sets `intersectionDisplayName = typeToString(baseTypeRawOriginal)` ("Foo & Bar") and overrides `baseTypeName` after the standard `typeToString(baseType)` line so diagnostics name the intersection, not the synthetic merged shape.
+
+  **Why implements-only:** `extends` clauses in TypeScript can only take a single class expression — the parser rejects intersection types there. The gate `clause.token == SyntaxKind.ImplementsKeyword` keeps the branch from firing in any extends path, eliminating regression risk for the (large) extends-side TS2416 emissions.
+
+  **Why last-wins on duplicate names:** Matches TS's intersection semantics (later constituents narrow earlier ones). The test corpus's intersection-implements patterns don't appear to have name conflicts in the failing set (e.g. `Foo` declares `x`, `Bar` declares `y` — disjoint), so this choice has no observable consequence here. If a future test surfaces with conflicting names, semantic verification will be straightforward.
+
+  **Why the existing logic is reused as-is:**
+  - The TS2415 private-member-conflicts check is gated on `clause.token == ExtendsKeyword` — never fires for intersection.
+  - The TS2417 static-side check is similarly extends-only.
+  - The TS2416 / TS2423 / TS2425 / TS2426 walk uses `baseMembers[memberName]` to look up symbols and `getTypeOfMemberDecl(baseDecl)` to resolve types — both work uniformly on the synthetic merged map.
+  - Type-arg instantiation (line 40376+) only fires for `baseTypeRaw is Type.Interface && !is Type.Reference` with `typeExpr.typeArguments` — for our synthetic Type.Object (not Interface) and a TypeAlias TypeRef without explicit args, this is a no-op return.
+
+  Net delta: 1639 → 1638 failed (8436 → 8437 passing). No regressions across 10078-test suite.
+
+  Anti-loop check: pool empty pre-flip (`find_candidates.py --fresh` 0/0/0 filtered from 7/82/20); this session lands real code per protocol option (a). Skip-log entry at line 4380 marked strikethrough. Foundation: the synthetic-merged-members pattern could be extended to other intersection-implements test gaps if any surface; current corpus has just this one.
+
   **Session 2026-04-27 (17.49, 8435 → 8436, +1) — TS2416 chain elaboration for implements-clause generic method override:** Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 8/82/20). Per the autonomous-decision policy with no actionable Blocker substep in queue (17.30c BLOCKED-PENDING-USER on lib.dom.d.ts; 17.46 series complete), spot-checked the EXTRA bucket and identified `genericTypeWithNonGenericBaseMisMatch_ts` as the most tractable surgical candidate: skip-log entry (line 3576+) characterized it as a 3-piece test (FP TS2425 + 2 missing chain lines) where TypeScript only emits TS2425 for class-extends-class. All three pieces fit in `addSignatureElaboration` / `getFunctionMismatchElaboration` / `classMemberShapeMismatchDiagnostic` — surgical scope.
 
   **Pre-fix path:** Test pattern is `interface I { f: (a: { a: number }) => void } class X<T extends { a: string }> implements I { f(a: T): void {} }`. We were emitting (1) FP TS2425 "Class 'I' defines instance member property 'f', but extended class 'X<T>' defines it as instance member function." — wrong because `class implements interface` has no prototype-vs-field runtime conflict. (2) Missing chain line `'T' could be instantiated with an arbitrary type which could be unrelated to '{ a: number; }'.` under TS2416 — TypeScript's standard hint when derived's TypeParam param can't be safely substituted for the base's concrete param. (3) Missing inner property elaboration `Types of property 'a' are incompatible. Type 'number' is not assignable to type 'string'.` under the TS2322 fn-vs-fn chain — when comparing `{a: number}` vs `{a: string}` after the param-type comparison, the inner property mismatch should surface.
@@ -4377,7 +4408,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `optionalPropertiesTest_ts` → MISS TS2322 `Type 'i2' is not assignable to type 'i1'` with elaboration `Types of property 'M' are incompatible. Type '(() => void) | undefined' is not assignable to type '() => void'.`. Optional-property → required-property structural assignability + elaboration chain. Blocker-adjacent.
 - ~~`optionalChainWithInstantiationExpression1_ts` (es2019/es2020) → MISS TS2532 "Object is possibly 'undefined'" for `a?.b<c>.d` where the trailing `.d` chains off the optional result without optional chain. Narrowing/optional-chain flow analysis needed.~~ Flipped 17.44 — synthetic-paren marker `ParenthesizedExpression.instantiationEnd` set by parser, consumed by new `emitTs2532ForOptionalChainInstantiationReceiver` in `checkSinglePropertyAccess`.
 - `importHelpersWithLocalCollisions_ts__module_amd/system__` → MISS TS2354 "module 'tslib' cannot be found" for `@dec export class A` under module=AMD/System even though `node_modules/tslib/index.d.ts` exists. AMD/System-specific tslib resolution path; not a surgical fix.
-- `implementsIncorrectlyNoAssertion_ts` → MISS TS2416 for `class Baz implements Wrapper` where `Wrapper = Foo & Bar` (intersection of two declare-classes). Needs intersection-of-classes member walk for the implements check.
+- ~~`implementsIncorrectlyNoAssertion_ts` → MISS TS2416 for `class Baz implements Wrapper` where `Wrapper = Foo & Bar` (intersection of two declare-classes). Needs intersection-of-classes member walk for the implements check.~~ **Flipped 17.50 (2026-04-27)** — `checkClassPropertyOverrides` now detects `clause.token == ImplementsKeyword && baseTypeRaw is Type.Intersection`, builds a synthetic merged Type.Object from constituent members, runs the existing TS2416 walk against it, and displays the base type as the intersection form ("Foo & Bar").
 - `importAliasFromNamespace_ts` → MISS TS2845 "This condition will always return 'false'." for `Internal.WhichThing.A ? "foo" : "bar"` where `Internal.WhichThing.A` resolves through an alias chain to const enum value `0`. New TS2845 diagnostic + namespace-alias chain + const enum value resolution.
 - ~~`lambdaArgCrash_ts`~~ → flipped 17.24. Two-part fix: (a) `checkArgumentsAgainstSignature` now allows fn-vs-fn arg comparison when source's `minArgumentCount > target.parameters.size` even if `sigHasOnlySimpleTypes` fails (arity gap is definitive regardless of param/return type complexity — handles `errorType`/`anyType` cases); (b) `formatParameter` falls back to `formatTypeForDisplay(decl.type)` when the resolved type is `errorType`, preserving the AST name (`ItemSet`) instead of rendering `error`.
 - `recursiveTypeRelations_ts` → MISS TS2345 for `(obj, key: keyof S) => obj` callback. Generic function-to-function with `keyof S` parameter-type substitution.
