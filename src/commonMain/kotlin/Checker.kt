@@ -42392,9 +42392,6 @@ interface DataView {
                 tryEmitEnumMemberAccessTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
                 return
             }
-            if (objectExpr !is Identifier) return
-            val identName = objectExpr.text
-
             // Phase 17 / Blocker #1 step 2c: narrowed-to-never on receiver emits
             // TS2339 with 'never' display. Walks the flow graph from the receiver
             // expression's recorded flow node; when narrowing collapses a Union
@@ -42404,6 +42401,17 @@ interface DataView {
             // just file-level globals. Gate: only when raw type is a Union (most
             // common narrow-to-never shape; single-type contradictions are rarer
             // and the existing identSymbol-resolution path already handles them).
+            //
+            // 17.34c: extended to also accept `objectExpr is PropertyAccessExpression`
+            // (gated via `getReferencePath(objectExpr) != null` so only pure
+            // Identifier-or-PropertyAccess chains qualify; calls/parens/element-access
+            // still bail early). The narrowing helpers from 17.34a/b consume
+            // dotted-path strings so PropertyAccess receivers narrow uniformly with
+            // bare Identifiers. After the narrowing block, the identifier-symbol
+            // lookup paths (globals[identName]) only apply to Identifier shapes.
+            val narrowingEligible = objectExpr is Identifier ||
+                (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null)
+            if (!narrowingEligible) return
             try {
                 val rawForNarrowing = getTypeOfExpression(objectExpr)
                 if (rawForNarrowing is Type.Union) {
@@ -42500,6 +42508,14 @@ interface DataView {
                 }
             } catch (_: StackOverflowError) { /* fall through to normal check */ }
 
+            // 17.34c: paths beyond this point assume an Identifier receiver (look up
+            // the bare name in globals to drive namespace/typeof/wrapper-type emissions).
+            // PropertyAccess receivers exit here — the narrowing block above already
+            // covered the narrowed-to-never / single-Object / Union-with-missing cases;
+            // the remaining identifier-symbol lookup paths don't generalize to
+            // dotted-path receivers (no `globals["A._a"]` lookup makes sense).
+            if (objectExpr !is Identifier) return
+            val identName = objectExpr.text
             val identSymbol = globals[identName]
 
             if (identSymbol != null) {

@@ -2,6 +2,26 @@
 
 **Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
 
+**17.34c (2026-04-27, net-zero infra)** — Wire PropertyAccess narrowing
+into TS2339 union-receiver narrowed-to-never branch. Restructured the
+gate at Checker.kt:42395: was `if (objectExpr !is Identifier) return`
+unconditionally, now first allows PropertyAccess receivers (gated via
+`getReferencePath(objectExpr) != null`) to reach the narrowing block
+(narrowed-to-never / single-Object / Union-with-missing emissions),
+then bails to identifier-only paths after the narrowing block — the
+identifier-symbol lookup paths beyond (`globals[identName]`-driven
+namespace/typeof/wrapper emissions) don't generalize to dotted-path
+receivers. Test results unchanged 10078 / 1655 / 3 — no failing test
+gates solely on TS2339 narrowed-to-never on PropertyAccess receivers.
+The narrowing block now covers `if (typeof A._a === "string") {} else
+{ A._a.length }` (A._a narrowed to never in else branch via
+exhaustive typeof guard) and `if (A._a.kind === "a") { A._a.aProp }`
+(discriminant-property narrowing on PropertyAccess via 17.34b's
+`isDiscriminantAccessOf` extension). Remaining 17.34 substep is 17.34d
+(PropertyAccess narrowing in `getTypeOfPropertyAccess` for non-var-decl
+read positions — broad change, deserves its own session for careful
+testing).
+
 **17.34b (2026-04-27, net-zero infra)** — Extend narrowing operators
 to compare PropertyAccess paths. Six call-site flips replacing
 `expr is Identifier && expr.text == name`-pattern checks with
