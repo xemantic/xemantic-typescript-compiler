@@ -17081,11 +17081,11 @@ interface DataView {
     /**
      * Get type parameter info for a named type. Returns null if the type is not generic.
      */
-    private fun getTypeParamInfo(name: String): TypeParamInfo? {
+    private fun getTypeParamInfo(name: String, forTypePosition: Boolean = false): TypeParamInfo? {
         // Check binder symbols first (user-declared types)
         for (result in binderResults) {
             val symbol = result.locals[name] ?: continue
-            val info = getTypeParamInfoFromSymbol(symbol)
+            val info = getTypeParamInfoFromSymbol(symbol, forTypePosition)
             if (info != null) return info
             // 16.4: resolve import aliases to the underlying generic class/interface.
             // `import a = require("./C")` where `C` is `class C<T>` should report TS2314
@@ -17093,7 +17093,7 @@ interface DataView {
             if (symbol.flags.hasAny(SymbolFlags.Alias)) {
                 val resolved = try { resolveAlias(symbol) } catch (_: StackOverflowError) { null }
                 if (resolved != null && resolved !== symbol) {
-                    val aliasInfo = getTypeParamInfoFromSymbol(resolved)
+                    val aliasInfo = getTypeParamInfoFromSymbol(resolved, forTypePosition)
                     if (aliasInfo != null) return aliasInfo
                 }
             }
@@ -17104,7 +17104,7 @@ interface DataView {
                 if (sym.flags.hasAny(SymbolFlags.Module)) {
                     val exported = sym.exports?.get(name)
                     if (exported != null) {
-                        val info = getTypeParamInfoFromSymbol(exported)
+                        val info = getTypeParamInfoFromSymbol(exported, forTypePosition)
                         if (info != null) return info
                     }
                 }
@@ -17112,7 +17112,7 @@ interface DataView {
         }
         val globalSymbol = globals[name]
         if (globalSymbol != null) {
-            val info = getTypeParamInfoFromSymbol(globalSymbol)
+            val info = getTypeParamInfoFromSymbol(globalSymbol, forTypePosition)
             if (info != null) return info
         }
         // Check known built-in generics (all required, no defaults)
@@ -17123,8 +17123,16 @@ interface DataView {
     /**
      * Extract type parameter info from a symbol's declarations.
      * Prioritizes class/interface/type-alias over function declarations for type position checks.
+     *
+     * When [forTypePosition] is true (callers: 17.47's QualifiedName branch in
+     * `checkTypeArgCount` and the [isUnresolvedGenericType] filter), the function-
+     * declaration fall-through is skipped so a generic function symbol does NOT
+     * produce a TypeParamInfo. Type-position TypeRefs to a value-only symbol
+     * should resolve to TS2749 ("refers to a value"), not TS2314 ("requires N
+     * type arguments"). Without this gate, `var b: A.B` where `A.B` is a
+     * generic function would incorrectly emit TS2314.
      */
-    private fun getTypeParamInfoFromSymbol(symbol: Symbol): TypeParamInfo? {
+    private fun getTypeParamInfoFromSymbol(symbol: Symbol, forTypePosition: Boolean = false): TypeParamInfo? {
         var foundClassLike = false
         // First pass: check class/interface/type-alias declarations (higher priority for type position)
         for (decl in symbol.declarations) {
@@ -17162,6 +17170,7 @@ interface DataView {
         // it shadows any global builtin with the same name — return (0, 0) to suppress TS2314.
         if (foundClassLike) return TypeParamInfo(0, 0, symbol.name)
         // Second pass: check function declarations (lower priority — only for value-position checks)
+        if (forTypePosition) return null
         for (decl in symbol.declarations) {
             if (decl is FunctionDeclaration) {
                 val typeParams = decl.typeParameters
@@ -17181,18 +17190,28 @@ interface DataView {
     private fun isUnresolvedGenericType(type: TypeNode?): Boolean {
         if (type !is TypeReference) return false
         val typeName = type.typeName
-        val name = when (typeName) {
-            is Identifier -> typeName.text
+        val name: String
+        val forTypePosition: Boolean
+        when (typeName) {
+            is Identifier -> {
+                name = typeName.text
+                forTypePosition = false  // legacy behavior preserved for Identifier branch
+            }
             // 17.46b: also accept QualifiedName so `var b: A.B` is filtered when
             // `B` (last segment) resolves to a generic class/interface missing
             // type args. Conservative — `getTypeParamInfo` walks namespace exports
             // by simple name, so a same-named generic in any namespace can match;
             // worst case we OVER-suppress (miss a legitimate TS2454/TS2564), never
             // emit a wrong diagnostic.
-            is QualifiedName -> (typeName.right as? Identifier)?.text ?: return false
+            // 17.47-fix: `forTypePosition = true` so generic FUNCTIONS aren't matched
+            // (those should resolve to TS2749, not TS2314 — see `genericFunduleInModule`).
+            is QualifiedName -> {
+                name = (typeName.right as? Identifier)?.text ?: return false
+                forTypePosition = true
+            }
             else -> return false
         }
-        val info = getTypeParamInfo(name) ?: return false
+        val info = getTypeParamInfo(name, forTypePosition) ?: return false
         if (info.maxTotal == 0) return false // non-generic local type → TS2315, not TS2314
         if (info.minRequired != info.maxTotal) return false
         val providedCount = type.typeArguments?.size ?: 0
@@ -17213,6 +17232,7 @@ interface DataView {
     ) {
         val typeName = typeRef.typeName
         val name: String
+        val forTypePosition: Boolean
         // 17.47: also accept QualifiedName so `var b: A.B` (where `B` is a
         // generic class missing type args) emits TS2314 at the right position.
         // Skips scope/keyword/type-param checks for QualifiedName because
@@ -17222,9 +17242,13 @@ interface DataView {
         // but worst case we emit TS2314 at a position that the baseline
         // doesn't expect (caller test fails differently); not a wrong-name
         // diagnostic since `info.displayName` is the resolved symbol's display.
+        // 17.47-fix: `forTypePosition = true` for QualifiedName so generic
+        // FUNCTIONS aren't matched (those resolve to TS2749 in TypeScript —
+        // see `genericFunduleInModule_ts`).
         when (typeName) {
             is Identifier -> {
                 name = typeName.text
+                forTypePosition = false  // legacy behavior preserved for Identifier branch
                 // Only check if the name actually resolves (skip if it would be TS2304)
                 if (name.isEmpty()) return
                 if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
@@ -17235,13 +17259,14 @@ interface DataView {
             }
             is QualifiedName -> {
                 name = (typeName.right as? Identifier)?.text ?: return
+                forTypePosition = true
                 if (name.isEmpty()) return
             }
             else -> return
         }
 
         // Look up type parameter info
-        val info = getTypeParamInfo(name) ?: return
+        val info = getTypeParamInfo(name, forTypePosition) ?: return
 
         // Non-generic local types (0 type params) used with type args → TS2315, not TS2314
         if (info.maxTotal == 0) return
