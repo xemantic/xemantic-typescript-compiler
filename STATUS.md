@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,426 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,427 / 10,078 tests passing (~83%).
+
+**17.43 (2026-04-27, +1)** — Contextual literal preservation for substituted-T
+property types. Flips `errorMessagesIntersectionTypes02_ts`. Pairs with
+17.41/17.42 to close the `errorMessagesIntersectionTypes01/02_ts` cluster.
+New `applyContextualLiteralPreservation(sourceType, targetType, init)` helper
+in Checker.kt, called from `checkVarDeclAssignability` after computing the raw
+source type. When (a) `init` is a `CallExpression` whose substituted return
+type produced an anonymous Type.Object property typed as a widened intrinsic
+(string/number/etc.) AND (b) the target type has a literal-typed property
+at the same name, recovers the literal type from the original arg AST via
+`literalTypeOfExpression`. Walks Type.Intersection / Type.Object source
+constituents; only modifies anonymous Object constituents (skips named
+Interface/Reference). For each property whose name matches a literal in
+the call's first ObjectLiteralExpression arg AND whose target counterpart
+contains literal members AND whose current source type is the widened
+base of the recovered literal — replace with the literal-typed Symbol.
+Two new helpers `propTypeContainsLiteral` (literal direct, or any literal
+in a Union; handles Type.Intrinsic with TypeFlags.{String,Number,Boolean,
+BigInt}Literal) and `literalWidensTo` (StringLiteral→stringType etc.).
+Net result for `mixBar({fooProp: "frizzlebizzle"})` against
+`FooBar { fooProp: "hello" | "world" }`: source displays as
+`{ fooProp: "frizzlebizzle"; } & Bar` instead of `{ fooProp: string; } & Bar`,
+chain emits `Type '"frizzlebizzle"' is not assignable to type '"hello" |
+"world"'.`. Test 01 unchanged because target's `fooProp: boolean` doesn't
+contain literal members → no replacement applied. Test results 1649 / 3 →
+1648 / 3.
 
 **17.42 (2026-04-27, +1)** — Intersection-source property elaboration in
 `getPropertyElaborationChain`. Flips `errorMessagesIntersectionTypes01_ts`
