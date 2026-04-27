@@ -4144,7 +4144,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `moduleAugmentationImportsAndExports1/4/5/6_ts` → MISS TS2322 for `A.prototype.foo = function(){return undefined;}` where a module augmentation declares `foo(): B`. Needs prototype-augmentation-aware assignment checking. Blocker-adjacent. **Fixed by 16.4dr on 2026-04-19.**
 
 **Session 2026-04-18 (16.4da) additional explored-but-skipped:**
-- `widenToAny1_ts` / `widenToAny2_ts` → MISS TS2322 `Type 'string | undefined' is not assignable to type 'number'` for `var z: number = foo({x: undefined, y: "def"})` where `foo<T>` infers T = string|undefined. Blocker #1 — generic type inference (best-common-type from arg literals).
+- ~~`widenToAny1_ts` / `widenToAny2_ts` → MISS TS2322 `Type 'string | undefined' is not assignable to type 'number'` for `var z: number = foo({x: undefined, y: "def"})` where `foo<T>` infers T = string|undefined. Blocker #1 — generic type inference (best-common-type from arg literals).~~ **STALE 2026-04-27: widenToAny2 flipped 17.31f, widenToAny1 flipped 17.38.**
 - `jsFileCompilationLetDeclarationOrder2_ts` → MISS TS2448 across files: `a.ts` references `a` declared as `let a` in `b.js`. Blocker #5 — cross-file block-scoped resolution and use-before-declaration tracking.
 - `jsFileCompilationDuplicateVariableErrorReported_ts` → MISS TS2403 across files: `var x = "hello"` in `b.js` + `var x = 10` in `a.ts`. Blocker #5 — cross-file `var` merge with type incompatibility check.
 - `jsExportMemberMergedWithModuleAugmentation_ts` → MISS TS2564 for `class Abcde { /** @type {string} */ x; }` in `.js`. Blocker #2 — JSDoc `@type` annotation parsing required to give the property a type for TS2564 to fire.
