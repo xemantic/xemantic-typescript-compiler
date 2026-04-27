@@ -10131,6 +10131,40 @@ class Checker(
         } else if (!isMemberAccessible(member, symbol!!)) {
             // Member exists but is not exported from a non-declare namespace
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
+        } else {
+            // 17.48: TS2749 — `var b: A.B` where `A.B` resolves to a value-only
+            // symbol (e.g. `export function B<T>` inside namespace `A`). Mirrors
+            // the Identifier-branch TS2749 in checkIdentifierResolved (16.4ct).
+            // Conservative gate: member has Value but no Type/Module/Alias flags.
+            // `checkQualifiedNameExports` is only called from type-name positions
+            // (`checkTypeNameResolved`'s QualifiedName branch), so no inTypePosition
+            // parameter needed.
+            val resolved = resolveAlias(member)
+            // Enum members (`Kind.A` where Kind is enum) are valid as literal types.
+            // Module-flag symbols include namespaces — even if the namespace itself has
+            // no type members, conservatively skip TS2749 (TypeScript distinguishes
+            // namespace-with-only-values from true types via deeper analysis we don't
+            // replicate here; the genericFundule tests would need that — out of scope).
+            val isValueOnly = resolved.flags.hasAny(SymbolFlags.Value) &&
+                !resolved.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.EnumMember)
+            if (isValueOnly) {
+                // Build the full source-level qualified name "A.B" for the message.
+                val fullPath = (segments + rightId.text).joinToString(".")
+                val start = qn.pos
+                // Squiggle covers the entire QualifiedName: start of leftmost to end of rightId.
+                val length = rightId.pos + rightId.text.length - start
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'$fullPath' refers to a value, but is being used as a type here. Did you mean 'typeof $fullPath'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2749,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
         }
     }
 
