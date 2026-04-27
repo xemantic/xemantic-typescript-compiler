@@ -2,6 +2,25 @@
 
 **Phase 4 — Checker buildout.** 8,418 / 10,078 tests passing (~83%).
 
+**17.31e (2026-04-27, net-zero infra)** — Reference-arg `Array<T>` inference
+for non-rest params. Gate clause (d) added: non-rest param of `Array<tp_i>`
+(any tp). Per-tp gather grew an `isArrayT` branch — for non-rest `Array<tp>`
+params, extracts the element type X from the call arg's same-target
+`Array<X>` reference (bails when arg isn't a `Type.Reference Array`),
+applies `widenType` to widen literal element types, and contributes the
+widened X as the candidate (no literal type — array element doesn't have a
+single literal value). 17.31a's `isNamedLike` check still applies on the
+extracted/widened X — Union element types (`Array<undefined | "def">`,
+`Array<1 | 2>`) bail. Renamed `isRestArrayOfTypeParam` → `isArrayOfTypeParam`
+(same body; helper now used for both rest and non-rest contexts).
+Net-zero on the suite: `widenToAny2` (`foo3<T>(x: T[])` called with
+`[undefined, "def"]`) bails because `Array<undefined | "def">`'s element
+is a Union; `inferentiallyTypingAnEmptyArray` (`foo([])`) bails because
+empty array literal returns `anyType`; `subtypeReductionWithAnyFunctionType`
+needs context-sensitive arrow inference (`compact<T>(arr: T[])` with arg
+inside an arrow callback). Foundation for 17.31f-style follow-ups
+(Union-element handling, contextual typing through Array<T> params).
+
 **17.31d (2026-04-27, net-zero infra)** — Multi-typeParam inference (independent
 T, U) extended `tryInferSingleTypeParamFromArgs` from single-tp to N-tp.
 Gate replaced: was `tps.size != 1` early-return; now allows ANY tp count where

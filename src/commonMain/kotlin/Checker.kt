@@ -36672,12 +36672,12 @@ interface DataView {
         val params = sig.parameters
         if (params.isEmpty() || args.isEmpty()) return null
 
-        // 17.31d gate: every parameter type must be either (a) a bare reference
-        // to one of our type params, (b) the rest-of-`tp_i[]` shape (last param
-        // only), or (c) fully concrete — i.e. mentions NONE of our type params
-        // anywhere. Bails on nested-TP shapes (`Array<T>` non-rest, `(x:T)=>U`,
-        // `Map<T,U>`, unions/intersections containing TPs) — those need richer
-        // inference (17.31e+).
+        // 17.31d/e gate: every parameter type must be either (a) a bare
+        // reference to one of our type params, (b) the rest-of-`tp_i[]` shape
+        // (last param only), (d) [17.31e] non-rest `Array<tp_i>`, or (c) fully
+        // concrete — i.e. mentions NONE of our type params anywhere. Bails on
+        // other nested-TP shapes (`(x:T)=>U`, `Map<T,U>`, unions/intersections
+        // containing TPs) — those need richer inference.
         val tpsSet = tps.toSet()
         for ((idx, p) in params.withIndex()) {
             val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { return null }
@@ -36688,7 +36688,9 @@ interface DataView {
             // (b) rest-of-tp_i[] (last param only, contributes one candidate per
             // trailing arg via 17.31c logic)
             if (isRest && idx == params.size - 1 &&
-                tps.any { isRestArrayOfTypeParam(pt, it) }) continue
+                tps.any { isArrayOfTypeParam(pt, it) }) continue
+            // (d) 17.31e: non-rest `Array<tp_i>`
+            if (!isRest && tps.any { isArrayOfTypeParam(pt, it) }) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -36709,14 +36711,31 @@ interface DataView {
                 val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
                 val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
                 val isBareT = pt === tp
-                val isRestT = isRest && i == params.size - 1 && isRestArrayOfTypeParam(pt, tp)
-                if (!isBareT && !isRestT) continue
+                val isRestT = isRest && i == params.size - 1 && isArrayOfTypeParam(pt, tp)
+                // 17.31e: non-rest `Array<tp>` — extract element type from same-target
+                // Array Reference call arg (no per-rest-arg fan-out).
+                val isArrayT = !isRest && isArrayOfTypeParam(pt, tp)
+                if (!isBareT && !isRestT && !isArrayT) continue
                 val argRange = if (isRestT) i until args.size else i..i
                 for (ai in argRange) {
                     if (ai >= args.size) break
                     val arg = args[ai]
                     if (arg is SpreadElement) continue
-                    val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                    val rawArgType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                    if (rawArgType === anyType || rawArgType === errorType) return null
+                    if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                    // 17.31e: for `Array<tp>` param, the inference candidate is the
+                    // arg's element type (extracted from same-target `Array<X>` ref).
+                    // Bail when arg isn't a same-target Array Reference (e.g. plain
+                    // `Type.Object` or `Type.Reference Set<X>`) — too many edge cases
+                    // for this conservative substep.
+                    val argType = if (isArrayT) {
+                        if (rawArgType !is Type.Reference) return null
+                        if (rawArgType.target?.symbol?.name != "Array") return null
+                        val refArgs = rawArgType.resolvedTypeArguments ?: return null
+                        if (refArgs.size != 1) return null
+                        widenType(refArgs[0])
+                    } else rawArgType
                     if (argType === anyType || argType === errorType) return null
                     if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
                     // 17.31a refinement: only fire when the inferred type is a "named-like"
@@ -36734,7 +36753,9 @@ interface DataView {
                             TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
                         )
                     if (!isNamedLike) return null
-                    val literal = literalTypeOfExpression(arg)
+                    // 17.31e: for Array<tp> path the literal type is null (we don't have
+                    // a single literal to attach to the array's element type).
+                    val literal = if (isArrayT) null else literalTypeOfExpression(arg)
                     candidates.add(Candidate(ai, argType, literal))
                 }
             }
@@ -36840,12 +36861,12 @@ interface DataView {
     }
 
     /**
-     * 17.31c helper: true when [type] is `Array<T>` (`T[]`) — i.e. the rest-param
-     * shape that contributes one inference candidate per call arg matched at the
-     * rest position. Requires the Reference's target to be the lib `Array` symbol
-     * and its single resolved type argument to be the very TypeParam [tp].
+     * 17.31c/e helper: true when [type] is `Array<T>` (`T[]`) — used for both
+     * rest-of-`T[]` (17.31c) and non-rest `T[]` (17.31e) inference shapes.
+     * Requires the Reference's target to be the lib `Array` symbol and its
+     * single resolved type argument to be the very TypeParam [tp].
      */
-    private fun isRestArrayOfTypeParam(type: Type, tp: Type.TypeParam): Boolean {
+    private fun isArrayOfTypeParam(type: Type, tp: Type.TypeParam): Boolean {
         if (type !is Type.Reference) return false
         if (type.target?.symbol?.name != "Array") return false
         val args0 = type.resolvedTypeArguments ?: return false
