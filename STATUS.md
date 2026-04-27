@@ -2,6 +2,28 @@
 
 **Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
 
+**17.34e (2026-04-27, net-zero infra)** — Conservative falsy-side
+narrowing in `narrowByTruthiness`. Pre-fix: `truthy=false` returned `t`
+unchanged per the 17.7e session note's regression-risk gate. Post-fix:
+on the falsy branch, drop union members that are definitely truthy —
+`Type.Object` / `Type.Interface` / `Type.Reference` (object types are
+always truthy in JS). New helpers: `isDefinitelyFalsyMember` (recasts
+the existing truthy-side filter as a named predicate) and
+`isDefinitelyTruthyMember` (the new falsy-side filter). Non-union
+object-likes also collapse to `neverType`. Conservative scope: literal-
+truthy types (non-empty StringLiteral, non-zero NumberLiteral,
+trueType, non-zero BigIntLiteral) and primitive-truthy (`stringType`,
+`numberType`, etc. — they could be the empty/zero variant) NOT yet
+dropped — adding those expands the regression surface and warrants a
+follow-up substep. Test results 10078 / 1655 / 3 (unchanged from
+17.34d). No new flips — corpus's failing tests don't gate solely on
+object-type-only falsy narrowing. Foundation: `if (foo) {} else { /*
+foo: Foo | null */ }` patterns where Foo is Object/Interface/Reference
+now narrow `foo` to `null` on the else side. PropertyAccess version
+inherited via the existing path comparison from 17.34a. Closes the
+17.34 substep series — 17.34a/b/c/d/e together implement PropertyAccess
+narrowing across the narrowing infrastructure.
+
 **17.34d (2026-04-27, net-zero infra)** — PropertyAccess narrowing in
 `getTypeOfPropertyAccess` for non-var-decl read positions. The function
 was returning the raw declared type without consulting the flow graph;
