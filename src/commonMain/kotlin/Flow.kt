@@ -725,6 +725,41 @@ class FlowGraphBuilder {
                     currentFlow = newAssignment(declarationNode, currentFlow)
                 }
             }
+            // 17.46c: array/object literal as assignment target. Used for destructuring
+            // assignment (`[, x] = arr` / `({a, b} = obj)`) — distinct from
+            // Array/ObjectBindingPattern which appear only in declaration positions.
+            // Without this, the LHS falls into the else branch and no FlowAssignment
+            // is registered for the binding, so the future top-level TS2454 walker
+            // would FP-emit on subsequent reads.
+            is ArrayLiteralExpression -> {
+                for (element in target.elements) {
+                    when (element) {
+                        is OmittedExpression -> { /* `[, x]` — skip elision */ }
+                        is SpreadElement -> bindAssignmentTarget(element.expression, element)
+                        is BinaryExpression -> if (element.operator == SyntaxKind.Equals) {
+                            // `[a = 1, ...]` — default value reads (RHS), then `a` is the target
+                            bindExpression(element.right)
+                            bindAssignmentTarget(element.left, element)
+                        } else {
+                            bindAssignmentTarget(element, element)
+                        }
+                        else -> bindAssignmentTarget(element, element)
+                    }
+                }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in target.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> bindAssignmentTarget(prop.initializer, prop)
+                        is ShorthandPropertyAssignment -> {
+                            prop.objectAssignmentInitializer?.let { bindExpression(it) }
+                            bindAssignmentTarget(prop.name, prop)
+                        }
+                        is SpreadAssignment -> bindAssignmentTarget(prop.expression, prop)
+                        else -> { /* computed names, methods, accessors — not assignment targets */ }
+                    }
+                }
+            }
             else -> { /* computed / complex — skip */ }
         }
     }
