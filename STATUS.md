@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,415 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,418 / 10,078 tests passing (~83%).
+
+**17.31c (2026-04-27, +3)** — Rest-param `T[]` inference + post-loop emission
+helper for trailing rest args. Two-piece change: (1) `tryInferSingleTypeParamFromArgs`
+gate extended to allow rest param of `T[]` (new `isRestArrayOfTypeParam` helper);
+candidate-gathering loop walks every trailing arg at the rest position so each
+contributes a T candidate (uses 17.31b's existing widened-vs-literal candidate
+shape and conflict-detection). (2) New `checkRestArgsAgainstArrayElementType`
+runs at the end of `checkArgumentsAgainstSignature` (gated on
+`diagnostics.size == initialDiagCount` so it doesn't double-fire when the
+standard loop already emitted) — extracts the rest's `Array<X>` element type
+and emits TS2345 at the first trailing arg whose type is not assignable to X.
+Conservative gate: `isSimpleCheckableType(argType)` (continues past complex
+args) — needed to avoid FPs in `concatError_ts` (`fa.concat([0])` — our lib
+lacks the `Array.concat(...items: T[][])` overload TypeScript ships) and
+`typeArgInference_ts` (`x.g<number,string>([o], [o])` — structural compare on
+nested `Array<{a:T;b:U}>` is incomplete). Element-type guard skips when X is
+still a `Type.TypeParam` (inference failed or two-typeParam case).
+Flips `genericRestArgs_ts` (3 missing diagnostics: inference path
+`makeArrayG(1,"")` arg[1]; explicit `makeArrayG<number>(1,"")` arg[1];
+explicit `makeArrayG<any[]>(1,"")` arg[0]) plus +2 incidental flips from
+adjacent rest-T inference patterns elsewhere in the corpus. Foundation for
+17.31d (`Array<T>` arg-shape inference for non-rest cases).
 
 **17.31b (2026-04-26, +1)** — Multi-arg same-typeParam conflict detection
 with literal-preserving display for context-sensitive sigs. Refactored
