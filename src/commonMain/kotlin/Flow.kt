@@ -701,6 +701,18 @@ class FlowGraphBuilder {
                     currentFlow = newAssignment(declarationNode, currentFlow)
                 }
             }
+            // Destructuring default-value form `{a: x = 1}` or `[x = 1]` — the
+            // PropertyAssignment.initializer / ArrayLiteralExpression element is
+            // a BinaryExpression(=) where left is the actual target and right
+            // is the default. Bind the default as a read, then recurse on the
+            // target. Pure-pattern targets like `[a, b]` never reach this branch
+            // (existing callers only pass BinaryExpression here when our
+            // 17.46c destructuring recursion bottoms out on a default-value
+            // shape inside a PropertyAssignment.initializer).
+            is BinaryExpression -> if (target.operator == SyntaxKind.Equals) {
+                bindExpression(target.right)
+                bindAssignmentTarget(target.left, target.left)
+            }
             is ObjectBindingPattern -> {
                 for (element in target.elements) {
                     bindAssignmentTarget(element.name, element)
@@ -731,11 +743,21 @@ class FlowGraphBuilder {
             // Without this, the LHS falls into the else branch and no FlowAssignment
             // is registered for the binding, so the future top-level TS2454 walker
             // would FP-emit on subsequent reads.
+            //
+            // For each leaf, we recurse with the leaf's underlying target as BOTH
+            // arguments — i.e. the `declarationNode` we ultimately attach to the
+            // FlowAssignment is the leaf Identifier (or nested destructuring root),
+            // not a wrapper like SpreadElement / PropertyAssignment /
+            // ShorthandPropertyAssignment / SpreadAssignment. The walker's
+            // `flowAssignmentTargetsName` only recognizes a small set of node
+            // kinds (Identifier / VariableDeclaration / Parameter / BindingElement /
+            // BinaryExpression); routing wrappers through it would silently miss
+            // every destructuring assignment.
             is ArrayLiteralExpression -> {
                 for (element in target.elements) {
                     when (element) {
                         is OmittedExpression -> { /* `[, x]` — skip elision */ }
-                        is SpreadElement -> bindAssignmentTarget(element.expression, element)
+                        is SpreadElement -> bindAssignmentTarget(element.expression, element.expression)
                         is BinaryExpression -> if (element.operator == SyntaxKind.Equals) {
                             // `[a = 1, ...]` — default value reads (RHS), then `a` is the target
                             bindExpression(element.right)
@@ -750,12 +772,12 @@ class FlowGraphBuilder {
             is ObjectLiteralExpression -> {
                 for (prop in target.properties) {
                     when (prop) {
-                        is PropertyAssignment -> bindAssignmentTarget(prop.initializer, prop)
+                        is PropertyAssignment -> bindAssignmentTarget(prop.initializer, prop.initializer)
                         is ShorthandPropertyAssignment -> {
                             prop.objectAssignmentInitializer?.let { bindExpression(it) }
-                            bindAssignmentTarget(prop.name, prop)
+                            bindAssignmentTarget(prop.name, prop.name)
                         }
-                        is SpreadAssignment -> bindAssignmentTarget(prop.expression, prop)
+                        is SpreadAssignment -> bindAssignmentTarget(prop.expression, prop.expression)
                         else -> { /* computed names, methods, accessors — not assignment targets */ }
                     }
                 }

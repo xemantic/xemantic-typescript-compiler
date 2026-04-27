@@ -6165,9 +6165,26 @@ class Checker(
                 for (stmt in result.sourceFile.statements) {
                     walkTopForFlowTS2454(stmt, source, fileName, emittedTs2454Positions, result.locals)
                 }
+                // 17.46d: also walk top-level statements as a unit so file-level
+                // uninitialized vars (`var x: T;` outside any function) are
+                // checked for unsafe reads inside if/while/for/switch/try
+                // bodies. Mirrors `runFlowTS2454OnFunction` without parameters.
+                runFlowTS2454OnTopLevel(result.sourceFile.statements, source, fileName, emittedTs2454Positions, result.locals)
             } finally {
                 currentFlowGraph = null
             }
+        }
+    }
+
+    private fun runFlowTS2454OnTopLevel(
+        statements: List<Statement>, source: String, fileName: String,
+        emitted: MutableSet<Int>, fileLocals: SymbolTable?,
+    ) {
+        val uninitialized = mutableSetOf<String>()
+        collectAllUninitVarsInFunction(statements, uninitialized, emptySet(), fileLocals)
+        if (uninitialized.isEmpty()) return
+        for (s in statements) {
+            walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
         }
     }
 
