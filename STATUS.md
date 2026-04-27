@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,437 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,438 / 10,078 tests passing (~84%).
+
+**17.51 (2026-04-27, +1)** — TS2310 "recursively references itself as a base type"
+for class-extends-generic-default-indexed-access cycles. Flips
+`circularConstraintYieldsAppropriateError_ts`. New `checkCircularClassBaseViaDefaultTypeArg`
+helper in Checker.kt (called from init step 64f3a-2, after the existing
+interface-bases TS2310 walker). Walks all `ClassDeclaration`s; for each
+`class C extends Base<...>` where C self-references in extends type args at
+position(s) `i`, finds Base's declaration via a top-level class-decl map,
+then checks whether ANY of Base's type-param defaults uses an
+`IndexedAccessType` whose `objectType` is a `TypeReference` to the type
+param at position `i`. If so, emits TS2310 at C's name span (line/character
+via `getLineAndCharacterOfPosition`). Two-helper structure: `defaultIndexesIntoTypeParam`
+recurses through `IndexedAccessType` (object + index) and `TypeReference`
+(typeArguments) so nested forms like `T = U<C['k']>` also detect. Conservative
+gate avoids CRTP-pattern false positives — `class Foo extends Base<Foo>`
+where `Base<T extends Base<T>>` uses CONSTRAINTS not DEFAULTS does NOT
+trigger because `tp.default == null`. Pattern's narrowness (default-arg
+indexed-access into a self-bound position) verified by full-suite zero
+regressions across 10078-test run. Net delta: 1638 → 1637 failed
+(8437 → 8438 passing).
 
 **17.50 (2026-04-27, +1)** — TS2416 for `implements` of TypeAlias resolving
 to `Type.Intersection`. Flips `implementsIncorrectlyNoAssertion_ts`. Single
