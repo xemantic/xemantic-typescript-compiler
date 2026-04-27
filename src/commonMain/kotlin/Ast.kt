@@ -777,6 +777,13 @@ data class ParenthesizedExpression(
     /** Comments immediately after `)` on the same line (e.g. `/*4*/` in `(expr)/*4*/`).
      *  Stored separately from [trailingComments] to avoid double-emit by outer context emitters. */
     val afterCloseParenComments: List<Comment>? = null,
+    /** When non-null, this is a synthetic paren wrap around `expr<T>` produced by the
+     *  parser when an instantiation expression is followed by `.` or `?.` and the inner
+     *  expression contains an optional chain. The value is the source position right
+     *  after the closing `>` of the type-argument list. Consumed by the checker for
+     *  TS2532 squiggle position computation (covers `expr<T>` from `expr.pos` to
+     *  `instantiationEnd`). */
+    val instantiationEnd: Int? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

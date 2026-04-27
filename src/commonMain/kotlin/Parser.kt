@@ -3693,7 +3693,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                                             overrideLength = typeArgsEnd - typeArgsStart,
                                         )
                                         if (expressionHasOptionalChain(result))
-                                            ParenthesizedExpression(expression = result, pos = result.pos, end = getEnd())
+                                            // 17.44: tag synthetic-from-instantiation paren with the type-args
+                                            // end position so the checker can emit TS2532 with the correct
+                                            // squiggle covering `expr<T>` (not including the trailing `.`).
+                                            ParenthesizedExpression(
+                                                expression = result,
+                                                instantiationEnd = typeArgsEnd,
+                                                pos = result.pos,
+                                                end = getEnd(),
+                                            )
                                         else result
                                     }
                                     else -> ParenthesizedExpression(
