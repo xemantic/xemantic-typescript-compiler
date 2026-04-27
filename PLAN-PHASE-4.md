@@ -2575,6 +2575,31 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-27 (17.43, 8426 → 8427, +1) — Contextual literal preservation for substituted-T property types:** Flips `errorMessagesIntersectionTypes02_ts` (the natural follow-up flagged in 17.42's session note). Pool empty pre-flip per `find_candidates.py --fresh` (0/0/0 filtered from 8/85/21). Picked from the 17.42 session note's "Concrete next test for follow-up" residual.
+
+  Pre-fix path: `getTypeOfObjectLiteral` (Checker.kt:36573) builds a Type.Object whose property types come from `getTypeOfExpression(prop.initializer)`. For `StringLiteralNode`, that returns `stringType` (line 35679 — Type.Intrinsic widened immediately, no Type.StringLiteral preservation). So for `mixBar({fooProp: "frizzlebizzle"})` arg, the resulting Type.Object's `fooProp` is already `string` (widened), not `Type.StringLiteral("frizzlebizzle")`. After 17.41's substitution, T → that Type.Object, return type T & Bar → Type.Intersection(Type.Object{fooProp: string}, Bar). For `errorMessagesIntersectionTypes01_ts` (target `Foo.fooProp: boolean`), this is correct — TypeScript widens the literal because no contextual literal type is present. For `errorMessagesIntersectionTypes02_ts` (target `Foo.fooProp: "hello" | "world"`), TypeScript preserves the literal because the contextual type contains literal members.
+
+  Post-fix path: new `applyContextualLiteralPreservation(sourceType, targetType, init)` helper (~Checker.kt:37306) runs after `getTypeOfExpression(init)` in `checkVarDeclAssignability` (Checker.kt:33486). Conditions:
+
+  1. `init` is `CallExpression` (only generic-call return-type substitutions are interesting — bare ObjectLiteralExpression inits don't go through inference).
+  2. `sourceType is Type.Object || sourceType is Type.Intersection` (the substituted-T shape).
+  3. `targetType is Type.Object` (also covers Type.Interface / Type.Reference since they extend Object).
+  4. The first `ObjectLiteralExpression` arg in `init.arguments` has at least one property with a literal-expression initializer (via `literalTypeOfExpression`).
+
+  Per-property recovery: walk source's Object constituents (skip named Interface/Reference and named anonymous Objects with `symbol != null`). For each member:
+  - Look up the literal at the same name from `literalsByName[name]`.
+  - Look up the target's matching property type via `getPropertyOfType(targetType, name)` + `getTypeOfSymbol`.
+  - If target's prop type contains any literal members (via `propTypeContainsLiteral` — checks Type.StringLiteral/NumberLiteral/BigIntLiteral directly, plus Type.Intrinsic with `TypeFlags.{String,Number,Boolean,BigInt}Literal` for `trueType`/`falseType`/etc., plus Union recursion) AND the current source prop type is the widened base of the recovered literal (via `literalWidensTo` — StringLiteral→stringType, NumberLiteral→numberType, BigIntLiteral→bigintType, true/false→booleanType), build a fresh Symbol with the literal type (preserves declarations + parent + flags).
+  - When at least one member changed, build a fresh Type.Object with the new members map; preserve callSignatures/constructSignatures/index info.
+
+  For Intersection sources, walk constituents and rebuild via `getIntersectionType` only when at least one constituent changed.
+
+  Verified flips: `errorMessagesIntersectionTypes02_ts` (full chain emits cleanly: source `{ fooProp: "frizzlebizzle"; } & Bar`, leaf `Type '"frizzlebizzle"' is not assignable to type '"hello" | "world"'.`). Verified preservation of test 01: target's `Foo.fooProp: boolean` is `Type.Intrinsic(TypeFlags.Boolean)` — does NOT match `propTypeContainsLiteral` (only `BooleanLiteral` flag matches) — so no replacement applied; source still displays `{ fooProp: string; } & Bar` matching the existing baseline.
+
+  Test results: 10078 / 1648 / 3 (was 10078 / 1649 / 3) → 8427 passing (+1). Diff verified — exactly +1 / -0.
+
+  Anti-loop check: pool empty pre-fix; this session lands real code per protocol option (a) "feature commit landing real code." Closes the `errorMessagesIntersectionTypes01/02_ts` cluster. Foundation: any future generic call whose substituted return type's property is a widened intrinsic, when paired with a literal-typed contextual target at the same name, now sees the literal preserved. Concrete next tests for follow-up: `errorMessageOnIntersectionsWithDiscriminants01_ts` (similar shape with discriminant property) and `inferFromNestedSameShapeTuple_ts` (tuple-position literal preservation, more complex — needs tuple/Reference handling) — both still architectural per current skip-log entries.
+
   **Session 2026-04-27 (17.42, 8425 → 8426, +1) — Intersection-source property elaboration in `getPropertyElaborationChain`:** Pairs with 17.41 to flip `errorMessagesIntersectionTypes01_ts`. Pool empty pre-flip per `find_candidates.py --fresh`; this substep was promoted naturally as the follow-up to 17.41 (whose session note explicitly named it).
 
   Pre-fix path: `getPropertyElaborationChain` early-returned null for Type.Intersection sources at Checker.kt:47062 (`if (source !is Type.Object || target !is Type.Object) return null`). For `mixBar<T>(obj: T): T & Bar` called with `mixBar({fooProp: "frizzlebizzle"})`, even after 17.41's substitution producing `Type.Intersection({fooProp: string}, Bar)`, the chain helper bailed → no per-property elaboration → expected chain `Types of property 'fooProp' are incompatible. Type 'string' is not assignable to type 'boolean'.` was missing.
@@ -4183,7 +4208,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - ~~`assignmentCompatability44_ts` / `assignmentCompatability45_ts`~~ → source-side `typeof X` display for class-as-value + construct-sig mismatch elaboration. **Flipped 17.8a (2026-04-26).**
 - `mutuallyRecursiveCallbacks_ts` → generic signature display + recursive-type cycle (renders `Bar<{ ; }>`).
 - `contextualTyping24_ts` → signature with `this` parameter (`(this: void, ...)`) in display.
-- `errorMessagesIntersectionTypes01/02_ts` → intersection elaboration; generic inference.
+- ~~`errorMessagesIntersectionTypes01/02_ts`~~ → intersection elaboration; generic inference. **Both flipped 2026-04-27**: 01 via 17.41/17.42 (split-call-site forReturnType + intersection-source property elaboration); 02 via 17.43 (contextual literal preservation for substituted-T property types).
 - `errorMessageOnIntersectionsWithDiscriminants01_ts` → intersection display `A` vs full unfolded form.
 - `genericArrayExtenstions_ts` → TS2420 needs class generic name `ObservableArray<T>` and `T[]` display for the `Array<T>` target (the class implements an `Array<T>` with type-param `T[]` flattening for array-ref display).
 - `namespaceDisambiguationInUnion_ts` → `Foo.Yep | Bar.Yep` needs namespace-qualified display; otherwise both render as `Yep`.

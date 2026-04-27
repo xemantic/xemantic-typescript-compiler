@@ -33478,8 +33478,16 @@ interface DataView {
             if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
                 contextualType = targetType
             }
-            val rawSourceType = getTypeOfExpression(init)
+            val rawSourceTypeRaw = getTypeOfExpression(init)
             contextualType = savedContextual
+            // 17.43: contextual literal preservation — when init is a generic
+            // call whose substituted return type contains a widened-string/
+            // number/bigint property and the var-decl's annotation has a
+            // literal-typed property at the same name, recover the literal
+            // type from the original arg AST. Mirrors TypeScript's contextual-
+            // type-aware widening rule. No-op for non-CallExpression inits or
+            // non-matching shapes.
+            val rawSourceType = applyContextualLiteralPreservation(rawSourceTypeRaw, targetType, init)
             // Phase 17 / Blocker #1 step 2: narrow the source type via flow graph
             // when the target is a primitive-shaped type (never, intrinsic, or
             // a literal). Object/Interface/Reference targets still use the raw
@@ -37301,6 +37309,115 @@ interface DataView {
             val mt = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { return false }
             mt is Type.TypeParam && mt in tps
         }
+    }
+
+    /**
+     * 17.43: Apply contextual literal preservation when `init` is a generic
+     * call whose substituted return type produced an anonymous Type.Object
+     * whose property types were widened (e.g. `string` from
+     * `getTypeOfObjectLiteral` on `{fooProp: "frizzlebizzle"}`). When the
+     * var-decl's [targetType] has a literal-typed property at the same
+     * name, replace the source's widened property with the literal type
+     * recovered from the original arg AST via [literalTypeOfExpression].
+     *
+     * Mirrors TypeScript's contextual-type-aware literal preservation rule:
+     * a fresh string/number literal stays as a literal type when the
+     * contextually-typed location has any literal members of the same
+     * base, otherwise it widens. Operates on the substituted source so
+     * existing chain elaboration + display picks up the preserved literal.
+     *
+     * Returns [sourceType] unchanged when the pattern doesn't apply.
+     */
+    private fun applyContextualLiteralPreservation(
+        sourceType: Type,
+        targetType: Type,
+        init: Expression,
+    ): Type {
+        if (init !is CallExpression) return sourceType
+        if (sourceType !is Type.Object && sourceType !is Type.Intersection) return sourceType
+        if (targetType !is Type.Object) return sourceType
+        // Find the first ObjectLiteralExpression arg.
+        val objLitArg = init.arguments.firstOrNull { it is ObjectLiteralExpression }
+            as? ObjectLiteralExpression ?: return sourceType
+        val literalsByName = mutableMapOf<String, Type>()
+        for (prop in objLitArg.properties) {
+            if (prop !is PropertyAssignment) continue
+            val name = getPropertyKeyName(prop.name) ?: continue
+            val lit = literalTypeOfExpression(prop.initializer) ?: continue
+            literalsByName[name] = lit
+        }
+        if (literalsByName.isEmpty()) return sourceType
+        val constituents = if (sourceType is Type.Intersection) sourceType.types else listOf(sourceType)
+        var changed = false
+        val newConstituents = constituents.map { c ->
+            // Skip named types (Interface/Reference) — only anonymous Object
+            // constituents come from a fresh substituted-T inference.
+            if (c !is Type.Object || c is Type.Interface || c is Type.Reference) return@map c
+            if (c.symbol != null) return@map c
+            val members = c.members ?: return@map c
+            var memberChanged = false
+            val newMembers = mutableMapOf<String, Symbol>()
+            for ((name, sym) in members) {
+                val literal = literalsByName[name]
+                if (literal != null) {
+                    val targetProp = try { getPropertyOfType(targetType, name) }
+                        catch (_: StackOverflowError) { null }
+                    val targetPropType = targetProp?.let {
+                        try { getTypeOfSymbol(it) } catch (_: StackOverflowError) { null }
+                    }
+                    val srcType = symbolTypes[sym.id] ?: try { getTypeOfSymbol(sym) }
+                        catch (_: StackOverflowError) { null }
+                    if (targetPropType != null && srcType != null &&
+                        propTypeContainsLiteral(targetPropType) &&
+                        literalWidensTo(literal, srcType)
+                    ) {
+                        val newSym = Symbol(sym.flags, sym.name)
+                        sym.declarations.forEach { newSym.declarations.add(it) }
+                        newSym.valueDeclaration = sym.valueDeclaration
+                        newSym.parent = sym.parent
+                        symbolTypes[newSym.id] = literal
+                        newMembers[name] = newSym
+                        memberChanged = true
+                        continue
+                    }
+                }
+                newMembers[name] = sym
+            }
+            if (!memberChanged) return@map c
+            changed = true
+            val newObj = Type.Object()
+            newObj.members = newMembers
+            newObj.properties = newMembers.values.toList()
+            newObj.callSignatures = c.callSignatures
+            newObj.constructSignatures = c.constructSignatures
+            newObj.stringIndexInfo = c.stringIndexInfo
+            newObj.numberIndexInfo = c.numberIndexInfo
+            newObj
+        }
+        if (!changed) return sourceType
+        return if (sourceType is Type.Intersection) getIntersectionType(newConstituents) else newConstituents[0]
+    }
+
+    /** 17.43 helper: true if [propType] is a literal type or contains literal members. */
+    private fun propTypeContainsLiteral(propType: Type): Boolean = when {
+        propType is Type.StringLiteral -> true
+        propType is Type.NumberLiteral -> true
+        propType is Type.BigIntLiteral -> true
+        propType is Type.Intrinsic && propType.flags.hasAny(
+            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral
+        ) -> true
+        propType is Type.Union -> propType.types.any { propTypeContainsLiteral(it) }
+        else -> false
+    }
+
+    /** 17.43 helper: true if [literal] widens to [base] (e.g. StringLiteral → stringType). */
+    private fun literalWidensTo(literal: Type, base: Type): Boolean = when {
+        literal is Type.StringLiteral -> base === stringType
+        literal is Type.NumberLiteral -> base === numberType
+        literal is Type.BigIntLiteral -> base === bigintType
+        literal === trueType || literal === falseType -> base === booleanType
+        else -> false
     }
 
     /** True if [type] structurally references [tp] (recurses into Reference/Union/Intersection). */
