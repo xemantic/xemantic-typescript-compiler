@@ -362,6 +362,24 @@ class Checker(
     /** Retained lib-globals snapshot for [perFileScope] construction. */
     private val libGlobals: SymbolTable = parseBuiltinLib()
 
+    /**
+     * 17.33: UMD global names registered via `export as namespace X;` in
+     * .d.ts files. Used to upgrade TS2304 → TS2686 when an identifier
+     * resolution fails AND the name is a UMD global AND the current file
+     * is a module — TypeScript's "Consider adding an import" hint.
+     * Populated via a source-text scan in init step 1d (the parser
+     * doesn't have first-class support for the `export as namespace`
+     * construct; it falls through to expression-statement parsing).
+     */
+    private val umdGlobalNames: MutableSet<String> = mutableSetOf()
+
+    /**
+     * 17.33: file names that are modules (have imports/exports OR — for
+     * JS files — a top-level `require(...)` call). Used as the second
+     * gate for TS2686 emission. Populated alongside [umdGlobalNames].
+     */
+    private val moduleFiles: MutableSet<String> = mutableSetOf()
+
     init {
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
@@ -381,6 +399,9 @@ class Checker(
         // 1c. 17.32a: build per-file scope tables (NOT YET CONSUMED — pure infra
         // foundation for future Blocker #3 substeps).
         buildPerFileScopes()
+        // 1d. 17.33: collect UMD globals from `export as namespace X;` in .d.ts
+        // files + module-file set for TS2304 → TS2686 upgrade.
+        collectUmdGlobalsAndModuleFiles()
         // 2. Compute all enum member values
         computeAllEnumValues()
         // 3. Track import references across all files
@@ -1635,6 +1656,33 @@ class Checker(
             // shadows-global semantics for the file's own declarations).
             for ((name, sym) in result.locals) fileScope[name] = sym
             perFileScope[result.sourceFile.fileName] = fileScope
+        }
+    }
+
+    /**
+     * 17.33: scan all parsed files to populate [umdGlobalNames] (from
+     * `export as namespace X;` in .d.ts files) and [moduleFiles] (any file
+     * with imports/exports OR — for .js/.jsx — a top-level `require(...)`
+     * call). The parser does not produce a dedicated AST node for the
+     * `export as namespace` construct, so a regex on the source text is
+     * the smallest sufficient implementation.
+     */
+    private fun collectUmdGlobalsAndModuleFiles() {
+        val umdRegex = Regex("""(?m)^\s*export\s+as\s+namespace\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;?""")
+        val requireRegex = Regex("""\brequire\s*\(""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            if (isDtsFile(fileName)) {
+                for (m in umdRegex.findAll(source)) {
+                    umdGlobalNames.add(m.groupValues[1])
+                }
+            }
+            val isJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+            val isModule = isModuleFile(result.sourceFile.statements) ||
+                (isJs && requireRegex.containsMatchIn(source))
+            if (isModule) moduleFiles.add(fileName)
         }
     }
 
@@ -10511,6 +10559,23 @@ class Checker(
                 ))
                 return
             }
+        }
+
+        // 17.33: TS2686 — name is a UMD global (declared via `export as
+        // namespace X;` in some .d.ts file) and the current file is a
+        // module, so the global form is not visible without an import.
+        if (name in umdGlobalNames && fileName in moduleFiles) {
+            diagnostics.add(Diagnostic(
+                message = "'$name' refers to a UMD global, but the current file is a module. Consider adding an import instead.",
+                category = DiagnosticCategory.Error,
+                code = 2686,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            return
         }
 
         diagnostics.add(Diagnostic(
