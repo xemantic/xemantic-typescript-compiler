@@ -2,6 +2,25 @@
 
 **Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
 
+**17.34b (2026-04-27, net-zero infra)** — Extend narrowing operators
+to compare PropertyAccess paths. Six call-site flips replacing
+`expr is Identifier && expr.text == name`-pattern checks with
+`getReferencePath(expr) == name` (the helper introduced in 17.34a):
+(1) `narrowByEquality` left/right operand check — direct-equality
+narrowing now matches `A._a === literal`; (2) `isTypeOfRef` — `typeof
+A._a === "string"` matches when name="A._a"; (3) `narrowByCallPredicate`
+arg check — `predFn(A._a)` matches; (4) `narrowByInstanceOf` left
+operand — `A._a instanceof Class` matches; (5) `narrowByInOperator`
+right operand — `'k' in A._a` matches; (6) `isConstructorAccessOf` and
+`isDiscriminantAccessOf` receiver checks — `A._a.constructor === C` and
+`A._a.kind === 'foo'` patterns. Path-comparison preserves prior
+Identifier-only behavior (Identifier path = `expr.text`); same
+identity-based comparison for both. Test results unchanged 10078 / 1655
+/ 3 — no failing test gates solely on these operators applied to
+PropertyAccess sources. Foundation for 17.34c (TS2339 narrowed-to-never
+on PropertyAccess receivers) and 17.34d (PropertyAccess narrowing in
+read positions via getTypeOfPropertyAccess).
+
 **17.34a (2026-04-27, net-zero infra)** — PropertyAccess narrowing
 infrastructure for class statics. New `getReferencePath` helper in
 Checker.kt serializes any `Identifier`-or-`PropertyAccessExpression`
