@@ -4075,7 +4075,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 **Blocker #1 — structural comparison of generic refs (architectural, see below):**
 - ~~`genericCloneReturnTypes_ts`, `genericCloneReturnTypes2_ts`~~: passing since 16.4dc (same-target ref arg comparison) + 16.4dg (single-stmt `return new X<...>()` body inference). Stale entry — verified passing by 2026-04-26 (post-16.4gl) recon.
 - ~~`generics4_ts`~~: passing since 16.4gm (same-target arg-pair header + "types returned by" collapsed form for method-property return-only mismatch).
-- `genericConstraintSatisfaction1_ts`: generic parameter type `T` not specialized when comparing arg.
+- ~~`genericConstraintSatisfaction1_ts`~~: flipped 17.39 (function-typed property substitution + first-decl-wins local-type map).
 - ~~`genericDerivedTypeWithSpecializedBase_ts`~~: `class B<T> extends A<T>` structural gap.
 - ~~`genericPrototypeProperty3_ts`~~: passing pre-16.4gr (was stale).
 - ~~`genericSpecializations3_ts`~~: passing since 16.4gr (heritage-clause type-arg instantiation in TS2416 + parameter-mismatch chain in `addSignatureElaboration`).
