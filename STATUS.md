@@ -2,6 +2,20 @@
 
 **Phase 4 — Checker buildout.** 8,419 / 10,078 tests passing (~83%).
 
+**17.32c (2026-04-27, net-zero behavior)** — Second call-site flip onto
+17.32a's per-file scope: `getSpellingSuggestion`'s value-position candidate
+pool now consults `perFileScope[fileName]` at the file-root scope instead of
+the over-merged `globals`-derived `s.names` set. Inner (function/block)
+scopes still contribute their `names` unchanged — those are this file's own
+lexical bindings. KNOWN_GLOBALS continues to be added at the start. Removes
+other-file MODULE locals from TS2552 spelling-suggestion candidates without
+touching TS2304 visibility (which still consults the legacy file-root
+scope — highest blast radius, deferred). Test results unchanged from 17.32b
+(8419 / 1656 / 3) — no failing test in the corpus gates on this filter, but
+the change reduces cross-file pollution in the suggestion pool which is
+foundation for 17.32d+ flips. Type-position branch unchanged (uses scope
+chain `typeParamNames` / `typeNames` which are file-local only).
+
 **17.32b (2026-04-27, net-zero behavior)** — First call-site flip onto 17.32a's
 per-file scope: `ctorParamShadowsRealOuterBinding` (TS2663-vs-TS2301
 disambiguation for parameter-property shadow in class member initializers)
