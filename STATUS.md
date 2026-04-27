@@ -2,6 +2,25 @@
 
 **Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
 
+**17.34d (2026-04-27, net-zero infra)** — PropertyAccess narrowing in
+`getTypeOfPropertyAccess` for non-var-decl read positions. The function
+was returning the raw declared type without consulting the flow graph;
+wired through a new wrapper that calls `getNarrowedTypeForReference`
+when the raw type is a Union AND `getReferencePath(expr) != null` (pure
+Identifier-or-PropertyAccess chain). Implementation: extracted the
+existing body to `computeRawTypeOfPropertyAccess` (private helper),
+made the public `getTypeOfPropertyAccess` a thin wrapper. Conservative
+gate keeps performance impact minimal: non-Union types skip the flow
+lookup entirely; outside expression-checking phases `currentFlowGraph`
+is null so `getFlowAt` returns null and `getNarrowedTypeForReference`
+returns the raw type unchanged. Test results 10078 / 1655 / 3 (no
+change from 17.34c) — no failing test gates solely on PropertyAccess
+narrowing being visible in expression-context reads. Foundation:
+chained accesses like `A._a.length` now see narrowed `A._a` type when
+inside `if (A._a) { ... }`. Remaining 17.34 substep is 17.34e
+(falsy-side narrowing — needs general infrastructure beyond just
+PropertyAccess).
+
 **17.34c (2026-04-27, net-zero infra)** — Wire PropertyAccess narrowing
 into TS2339 union-receiver narrowed-to-never branch. Restructured the
 gate at Checker.kt:42395: was `if (objectExpr !is Identifier) return`

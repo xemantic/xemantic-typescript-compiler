@@ -37177,6 +37177,22 @@ interface DataView {
 
     /** Get the type of a property access expression (e.g., `obj.prop`). */
     private fun getTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
+        val raw = computeRawTypeOfPropertyAccess(expr)
+        // 17.34d: Apply flow-graph narrowing for expression-context property
+        // reads (e.g. `A._a.length` after `if (A._a)` narrows `A._a` to `string`).
+        // Conservative gate: only narrow Union types — narrowing a non-Union
+        // can't refine. Path gate via [getReferencePath] avoids non-pure chains
+        // (calls/parens/element-access). When [currentFlowGraph] is null
+        // (outside expression-checking phases) [getNarrowedTypeForReference]
+        // returns [raw] unchanged, so this is a no-op for symbol-type
+        // resolution paths.
+        if (raw is Type.Union && getReferencePath(expr) != null) {
+            return getNarrowedTypeForReference(raw, expr)
+        }
+        return raw
+    }
+
+    private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         val objectType = getTypeOfExpression(expr.expression)
         val propName = expr.name.text
         // If object resolved, check its apparent type for the property
