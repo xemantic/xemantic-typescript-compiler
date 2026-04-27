@@ -6592,11 +6592,19 @@ class Checker(
                 SyntaxKind.AmpersandAmpersand -> {
                     conditionImpliesAssignedTrue(e.left, varName) || conditionImpliesAssignedTrue(e.right, varName)
                 }
+                SyntaxKind.InstanceOfKeyword -> {
+                    // x instanceof Class — body executes only if x's read produced a defined value,
+                    // so x is treated as definitely-assigned in the body.
+                    isVarRef(e.left, varName)
+                }
                 SyntaxKind.EqualsEqualsEquals, SyntaxKind.EqualsEquals -> {
                     if (isTypeofOf(e.left, varName) && isStringLiteralNotUndefined(e.right)) return true
                     if (isTypeofOf(e.right, varName) && isStringLiteralNotUndefined(e.left)) return true
                     if (isVarRef(e.left, varName) && isNotNullOrUndefinedRef(e.right)) return true
                     if (isVarRef(e.right, varName) && isNotNullOrUndefinedRef(e.left)) return true
+                    // x.constructor === Class / Class === x.constructor — body implies x assigned.
+                    if (isConstructorAccessOf(e.left, varName)) return true
+                    if (isConstructorAccessOf(e.right, varName)) return true
                     false
                 }
                 SyntaxKind.ExclamationEqualsEquals -> {
@@ -6616,8 +6624,28 @@ class Checker(
                 }
                 else -> false
             }
+            // Lib type-predicate calls: Array.isArray(x), ArrayBuffer.isView(x),
+            // Number.isInteger(x), etc. — body implies x is assigned.
+            is CallExpression -> isLibTypeGuardOf(e, varName)
             else -> false
         }
+    }
+
+    /**
+     * Recognizes calls of the form `Class.method(varRef, ...)` where the
+     * `Class.method` pair is a known lib-defined type-predicate. Used by
+     * `conditionImpliesAssignedTrue` so that `if (Array.isArray(x)) { x.length }`
+     * inside an unchecked body doesn't FP-emit TS2454 from the flow walker.
+     */
+    private fun isLibTypeGuardOf(call: CallExpression, varName: String): Boolean {
+        val firstArg = call.arguments.firstOrNull() ?: return false
+        if (!isVarRef(firstArg, varName)) return false
+        val callee = unwrapParensExpr(call.expression)
+        if (callee !is PropertyAccessExpression) return false
+        val obj = callee.expression as? Identifier ?: return false
+        val method = (callee.name as? Identifier)?.text ?: return false
+        val key = "${obj.text}.$method"
+        return key in LIB_TYPE_GUARDS
     }
 
     private fun conditionImpliesAssignedFalse(expr: Expression, varName: String): Boolean {
@@ -16033,6 +16061,21 @@ class Checker(
         /** Access modifier keywords — skip in class member duplicate checking (error recovery artifacts).
          *  Excludes "static" because `static static foo` legitimately gets TS2300. */
         private val MODIFIER_KEYWORDS_SET = setOf("public", "private", "protected", "readonly", "abstract", "override")
+
+        /** Lib-defined type-predicate calls of the form `Class.method(x, ...)` whose
+         *  truthy result implies `x` was read successfully and is therefore
+         *  definitely-assigned in the body (used by `conditionImpliesAssignedTrue`
+         *  in 17.30a's flow-graph TS2454 walker). Limited to predicates whose first
+         *  argument is the value being tested; `Object.is(a, b)` is excluded because
+         *  it's an equality predicate, not a single-arg type guard. */
+        private val LIB_TYPE_GUARDS = setOf(
+            "Array.isArray",
+            "ArrayBuffer.isView",
+            "Number.isInteger",
+            "Number.isFinite",
+            "Number.isNaN",
+            "Number.isSafeInteger",
+        )
 
         /** Runtime properties that exist on all objects/functions but aren't declared in types.
          *  Skip these in TS2339 checks to avoid false positives. */
