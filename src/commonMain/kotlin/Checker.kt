@@ -347,9 +347,24 @@ class Checker(
         return Binder(options).bind(ast).locals
     }
 
+    /**
+     * 17.32a: per-file scope tables — "true visible scope" for each file =
+     * lib + script-file locals (across all files) + this file's own locals.
+     * Built but NOT YET CONSUMED — keyed by `sourceFile.fileName`. Future
+     * substeps will flip individual identifier-resolution call sites to
+     * consult this map instead of the merged [globals] (which conflates
+     * module-file exports across files). KNOWN_GLOBALS is companion-level
+     * data and stays consulted directly at lookup sites; storing it per-file
+     * would just duplicate ~400 strings without any visibility refinement.
+     */
+    private val perFileScope: MutableMap<String, SymbolTable> = mutableMapOf()
+
+    /** Retained lib-globals snapshot for [perFileScope] construction. */
+    private val libGlobals: SymbolTable = parseBuiltinLib()
+
     init {
         // 0. Merge built-in type declarations into globals (before user files)
-        mergeSymbolTable(globals, parseBuiltinLib())
+        mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
         globals["Array"]?.let { arraySym ->
             if (arraySym.flags.hasAny(SymbolFlags.Interface)) {
@@ -363,6 +378,9 @@ class Checker(
         }
         // 1b. Merge module augmentation exports into target module symbols
         mergeModuleAugmentations()
+        // 1c. 17.32a: build per-file scope tables (NOT YET CONSUMED — pure infra
+        // foundation for future Blocker #3 substeps).
+        buildPerFileScopes()
         // 2. Compute all enum member values
         computeAllEnumValues()
         // 3. Track import references across all files
@@ -1566,6 +1584,57 @@ class Checker(
     private fun trackAllImportReferences() {
         for (result in binderResults) {
             trackReferencesInStatements(result.sourceFile.statements, result)
+        }
+    }
+
+    /**
+     * 17.32a: Build per-file scope tables (Blocker #3 step 1, infrastructure-only).
+     *
+     * For each file, compute "true visible scope" = lib (built-in stubs) +
+     * script-file locals from ALL files + this file's own locals. Module-file
+     * locals from OTHER files are deliberately excluded — those should require
+     * an explicit import to be visible. Result is stored in [perFileScope]
+     * keyed by `sourceFile.fileName`.
+     *
+     * NOT YET CONSUMED. Future substeps (17.32b+) will flip individual
+     * identifier-resolution call sites to consult this map instead of the
+     * over-merged [globals]. KNOWN_GLOBALS stays at the call site (companion
+     * data, no visibility refinement to add per file).
+     *
+     * IMPORTANT: this MUST NOT call [mergeSymbolTable] across binderResults —
+     * that helper mutates the existing target symbol's `declarations` list via
+     * `addAll`, and the existing init-block merge into [globals] has already
+     * done that mutation once. Re-merging here would duplicate declarations on
+     * the shared symbol object (e.g. `class C<T>` in a.ts + `interface C<T>` in
+     * b.ts ends up with the interface declaration appearing twice on `a.ts.C`,
+     * which masks unused-type-parameter checks). Use direct map assignment
+     * with first-write-wins semantics so the underlying symbols stay clean.
+     */
+    private fun buildPerFileScopes() {
+        // Collect first-occurrence symbol per name across all script files.
+        val scriptFileNames: MutableMap<String, Symbol> = mutableMapOf()
+        for (result in binderResults) {
+            if (!isModuleFile(result.sourceFile.statements)) {
+                for ((name, sym) in result.locals) {
+                    if (name !in scriptFileNames) scriptFileNames[name] = sym
+                }
+            }
+        }
+        for (result in binderResults) {
+            val fileScope: SymbolTable = symbolTable()
+            // Lib globals — visible from every file.
+            for ((name, sym) in libGlobals) fileScope[name] = sym
+            // Script-file locals — visible across all files (TypeScript treats
+            // any file without imports/exports as contributing to the global
+            // namespace).
+            for ((name, sym) in scriptFileNames) {
+                if (name !in fileScope) fileScope[name] = sym
+            }
+            // Own-file locals — visible to ourselves. Module files override
+            // any same-name lib/script entries (matches TypeScript's local-
+            // shadows-global semantics for the file's own declarations).
+            for ((name, sym) in result.locals) fileScope[name] = sym
+            perFileScope[result.sourceFile.fileName] = fileScope
         }
     }
 
