@@ -36041,7 +36041,8 @@ interface DataView {
         val paramIdx = params.indexOfFirst { (it.name as? Identifier)?.text == predicateParamName }
         if (paramIdx < 0) return t
         val arg = expr.arguments.getOrNull(paramIdx) ?: return t
-        if (arg !is Identifier || arg.text != name) return t
+        // 17.34b: path-based comparison so `predFn(A._a)` matches when name="A._a".
+        if (getReferencePath(arg) != name) return t
         val targetType = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
         if (targetType === errorType || targetType === anyType) return t
         if (t is Type.Union) {
@@ -36070,8 +36071,8 @@ interface DataView {
     private fun narrowByInstanceOf(
         t: Type, expr: BinaryExpression, isMatch: Boolean, name: String,
     ): Type {
-        val left = expr.left
-        if (left !is Identifier || left.text != name) return t
+        // 17.34b: path-based comparison so `A._a instanceof Class` matches when name="A._a".
+        if (getReferencePath(expr.left) != name) return t
         val classType = resolveInstanceOfRhsType(expr.right) ?: return t
         if (t is Type.Union) {
             val filtered = if (isMatch) {
@@ -36125,9 +36126,9 @@ interface DataView {
     private fun narrowByInOperator(
         t: Type, expr: BinaryExpression, hasProp: Boolean, name: String,
     ): Type {
-        // RHS (right of `in`) must be the identifier we're narrowing.
-        val right = expr.right
-        if (right !is Identifier || right.text != name) return t
+        // RHS (right of `in`) must be the path we're narrowing.
+        // 17.34b: path-based comparison so `'k' in A._a` matches when name="A._a".
+        if (getReferencePath(expr.right) != name) return t
         // LHS (left of `in`) must be a literal property name we can statically resolve.
         val propName: String = when (val left = expr.left) {
             is StringLiteralNode -> left.text
@@ -36199,8 +36200,12 @@ interface DataView {
         narrowByConstructorEquals(t, expr, equal, name)?.let { return it }
         narrowByDiscriminantProperty(t, expr, equal, name)?.let { return it }
 
-        val leftIsRef = expr.left is Identifier && (expr.left as Identifier).text == name
-        val rightIsRef = expr.right is Identifier && (expr.right as Identifier).text == name
+        // 17.34b: path-based comparison so PropertyAccess sources (`A._a`) match
+        // alongside bare Identifiers. `getReferencePath` returns null for shapes
+        // that aren't pure Identifier-or-PropertyAccess chains, so calls/parens/
+        // element-access on either side of `===` won't accidentally match.
+        val leftIsRef = getReferencePath(expr.left) == name
+        val rightIsRef = getReferencePath(expr.right) == name
         val other = when {
             leftIsRef && !rightIsRef -> expr.right
             rightIsRef && !leftIsRef -> expr.left
@@ -36264,8 +36269,8 @@ interface DataView {
 
     private fun isDiscriminantAccessOf(expr: Expression, name: String): Boolean {
         if (expr !is PropertyAccessExpression) return false
-        val obj = expr.expression
-        return obj is Identifier && obj.text == name && expr.name is Identifier
+        // 17.34b: path-based comparison so `A._a.kind === ...` matches when name="A._a".
+        return getReferencePath(expr.expression) == name && expr.name is Identifier
     }
 
     private fun isLiteralKindForDiscriminant(t: Type): Boolean =
@@ -36336,7 +36341,8 @@ interface DataView {
             else -> return false
         }
         if (!isProp) return false
-        return obj is Identifier && obj.text == name
+        // 17.34b: path-based comparison so `(A._a).constructor` matches when name="A._a".
+        return getReferencePath(obj) == name
     }
 
     private fun hasExactClassSymbol(t: Type, classSymbol: Symbol): Boolean {
@@ -36365,8 +36371,8 @@ interface DataView {
 
     private fun isTypeOfRef(expr: Expression, name: String): Boolean {
         if (expr !is TypeOfExpression) return false
-        val inner = expr.expression
-        return inner is Identifier && inner.text == name
+        // 17.34b: path-based comparison so `typeof A._a` matches when name="A._a".
+        return getReferencePath(expr.expression) == name
     }
 
     /**
