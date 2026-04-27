@@ -35978,29 +35978,49 @@ interface DataView {
     }
 
     /**
-     * Narrow [t] by truthiness. Conservative: on truthy positions remove
-     * intrinsics that are always falsy (undefined, null, void, false). On
-     * falsy positions return [t] unchanged — narrowing to "definitely
-     * falsy" requires removing all definitely-truthy union members which
-     * is more aggressive and risks regressions.
+     * Narrow [t] by truthiness. On truthy positions remove members that
+     * are always falsy (undefined, null, void, false). On falsy positions
+     * remove members that are definitely truthy (object-like types:
+     * Object / Interface / Reference). Conservative: literal-truthy
+     * (non-empty StringLiteral, non-zero NumberLiteral, true) and
+     * primitive-truthy types are NOT yet dropped on the falsy side —
+     * adding those expands the regression surface.
      */
     private fun narrowByTruthiness(t: Type, truthy: Boolean): Type {
-        if (!truthy) return t
-        return when (t) {
-            undefinedType, nullType, voidType, falseType -> neverType
-            is Type.Union -> {
-                val kept = t.types.filter {
-                    it !== undefinedType && it !== nullType && it !== voidType && it !== falseType
+        return if (truthy) {
+            when (t) {
+                undefinedType, nullType, voidType, falseType -> neverType
+                is Type.Union -> {
+                    val kept = t.types.filter { !isDefinitelyFalsyMember(it) }
+                    when {
+                        kept.isEmpty() -> neverType
+                        kept.size == t.types.size -> t
+                        else -> getUnionType(kept)
+                    }
                 }
-                when {
-                    kept.isEmpty() -> neverType
-                    kept.size == t.types.size -> t
-                    else -> getUnionType(kept)
-                }
+                else -> t
             }
-            else -> t
+        } else {
+            when (t) {
+                is Type.Object, is Type.Interface, is Type.Reference -> neverType
+                is Type.Union -> {
+                    val kept = t.types.filter { !isDefinitelyTruthyMember(it) }
+                    when {
+                        kept.isEmpty() -> neverType
+                        kept.size == t.types.size -> t
+                        else -> getUnionType(kept)
+                    }
+                }
+                else -> t
+            }
         }
     }
+
+    private fun isDefinitelyFalsyMember(t: Type): Boolean =
+        t === undefinedType || t === nullType || t === voidType || t === falseType
+
+    private fun isDefinitelyTruthyMember(t: Type): Boolean =
+        t is Type.Object || t is Type.Interface || t is Type.Reference
 
     /**
      * Narrow `t` by a `predFn(name)` call where `predFn` is declared with a type
