@@ -36996,6 +36996,8 @@ interface DataView {
                 tps.any { isArrayOfTypeParam(pt, it) }) continue
             // (d) 17.31e: non-rest `Array<tp_i>`
             if (!isRest && tps.any { isArrayOfTypeParam(pt, it) }) continue
+            // (e) 17.38: anonymous Type.Object with all members typed as some tp_i
+            if (!isRest && isAnonymousObjectWithTypeParamMembers(pt, tpsSet)) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -37020,12 +37022,56 @@ interface DataView {
                 // 17.31e: non-rest `Array<tp>` — extract element type from same-target
                 // Array Reference call arg (no per-rest-arg fan-out).
                 val isArrayT = !isRest && isArrayOfTypeParam(pt, tp)
-                if (!isBareT && !isRestT && !isArrayT) continue
+                // 17.38: anonymous Object literal with all-TypeParam members — gather
+                // candidates from the arg ObjectLiteralExpression's same-named property
+                // values for members typed as the current `tp`.
+                val isObjLitOfT = !isRest && !isBareT && !isRestT && !isArrayT &&
+                    isAnonymousObjectWithTypeParamMembers(pt, tpsSet)
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT) continue
+                fun isNamedLikeAtom(t: Type): Boolean =
+                    t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
+                        t.flags.hasAny(
+                            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                            TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                        )
                 val argRange = if (isRestT) i until args.size else i..i
                 for (ai in argRange) {
                     if (ai >= args.size) break
                     val arg = args[ai]
                     if (arg is SpreadElement) continue
+                    // 17.38: object-literal-of-T inference — walk arg's properties matching
+                    // pt's tp-typed members; LUB-as-Union over collected widened types.
+                    // Branches BEFORE the standard rawArgType bail because the arg as a whole
+                    // is a Type.Object, but its property values may include `undefined` /
+                    // string-literal / etc. that the standard bail would reject.
+                    if (isObjLitOfT) {
+                        if (arg !is ObjectLiteralExpression) continue
+                        val ptObj = pt as? Type.Object ?: continue
+                        val ptMembers = ptObj.members ?: continue
+                        val collectedTypes = mutableListOf<Type>()
+                        for ((memberName, memberSym) in ptMembers) {
+                            val mt = try { getTypeOfSymbol(memberSym) } catch (_: StackOverflowError) { return null }
+                            if (mt !== tp) continue
+                            val propAssign = arg.properties.firstOrNull { p ->
+                                p is PropertyAssignment && getPropertyKeyName(p.name) == memberName
+                            } as? PropertyAssignment
+                            if (propAssign == null) continue
+                            val rawValue = try { getTypeOfExpression(propAssign.initializer) }
+                                catch (_: StackOverflowError) { return null }
+                            if (rawValue === anyType || rawValue === errorType) return null
+                            collectedTypes.add(widenType(rawValue))
+                        }
+                        if (collectedTypes.isEmpty()) continue
+                        val argType = if (collectedTypes.size == 1) collectedTypes[0]
+                                      else getUnionType(collectedTypes)
+                        if (argType === anyType || argType === errorType) return null
+                        val isNamedLike = isNamedLikeAtom(argType) ||
+                            (argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
+                        if (!isNamedLike) return null
+                        candidates.add(Candidate(ai, argType, null))
+                        continue
+                    }
                     // 17.37: empty array literal `[]` arg for `Array<tp>` param infers tp = `never`.
                     // `getTypeOfArrayLiteral` returns anyType for empty arrays (can't infer element
                     // type), but TypeScript's spec-mandated behavior here is to fall back to never
@@ -37065,13 +37111,6 @@ interface DataView {
                     // path so existing per-property constraint elaborations (16.4ds /
                     // 16.4dt) keep firing — substitution would erase paramType's TypeParam
                     // identity and skip those branches.
-                    fun isNamedLikeAtom(t: Type): Boolean =
-                        t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
-                            t.flags.hasAny(
-                                TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
-                                TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
-                                TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                            )
                     val isNamedLike = isNamedLikeAtom(argType) ||
                         // 17.31f: Union-of-named-likes from the isArrayT path. Anonymous-Object
                         // members in heterogeneous-array elements (e.g. `[{a:1}, "def"]` →
@@ -37208,6 +37247,30 @@ interface DataView {
         if (type.target?.symbol?.name != "Array") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
+    }
+
+    /**
+     * 17.38 helper: true when [type] is an anonymous Type.Object whose every
+     * member is a bare reference to some TypeParam in [tps]. Used to gate
+     * `foo<T>(f: { x: T; y: T })` style inference where T is gathered from the
+     * matching arg's property values via [tryInferSingleTypeParamFromArgs]'s
+     * isObjLitOfT branch. Excludes Type.Interface / Type.Reference (named
+     * types) and Type.Object with call/construct sigs (function-shaped).
+     */
+    private fun isAnonymousObjectWithTypeParamMembers(type: Type, tps: Set<Type.TypeParam>): Boolean {
+        if (type !is Type.Object) return false
+        if (type is Type.Interface) return false
+        if (type is Type.Reference) return false
+        if (type.symbol != null) return false
+        if (type.callSignatures?.isNotEmpty() == true) return false
+        if (type.constructSignatures?.isNotEmpty() == true) return false
+        if (type.stringIndexInfo != null || type.numberIndexInfo != null) return false
+        val members = type.members ?: return false
+        if (members.isEmpty()) return false
+        return members.values.all { sym ->
+            val mt = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { return false }
+            mt is Type.TypeParam && mt in tps
+        }
     }
 
     /** True if [type] structurally references [tp] (recurses into Reference/Union/Intersection). */
