@@ -33254,7 +33254,18 @@ interface DataView {
                 getNarrowedTypeForReference(rawSourceType, init)
             } else rawSourceType
             lastMissingPropertyName = null // reset before comparison
-            val canUse = canUseTypeEngine(sourceType, targetType)
+            // 17.31f: bypass `canUseTypeEngine`'s nullish-Union gate when the init is a
+            // CallExpression — its return type came from a generic-arg-inference pipeline
+            // (17.31a–e), not a narrowable identifier/property-access, so the relation
+            // engine's strictNullChecks-aware nullish→primitive rejection is appropriate.
+            // PropertyAccess/Identifier sources still take the gated path so missing
+            // narrowing on `obj.prop` doesn't FP under the same shape.
+            val canUseRaw = canUseTypeEngine(sourceType, targetType)
+            val callBypass = !canUseRaw && init is CallExpression && sourceType is Type.Union &&
+                strictNullChecks &&
+                (targetType is Type.Intrinsic || targetType is Type.StringLiteral ||
+                    targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
+            val canUse = canUseRaw || callBypass
             val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
             // Excess property check for fresh object literals (TS2353).
             // Fires even when assignability passes (e.g., {b: 0, a: 0} → {b: number}).
@@ -36734,7 +36745,13 @@ interface DataView {
                         if (rawArgType.target?.symbol?.name != "Array") return null
                         val refArgs = rawArgType.resolvedTypeArguments ?: return null
                         if (refArgs.size != 1) return null
-                        widenType(refArgs[0])
+                        val element = refArgs[0]
+                        // 17.31f: widen Union constituents (`widenType` falls through on Union),
+                        // so `Array<undefined | "def">` infers T = `string | undefined` rather
+                        // than bailing at the named-like gate below. Single-type elements still
+                        // go through the existing widenType path.
+                        if (element is Type.Union) getUnionType(element.types.map { widenType(it) })
+                        else widenType(element)
                     } else rawArgType
                     if (argType === anyType || argType === errorType) return null
                     if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
@@ -36745,13 +36762,19 @@ interface DataView {
                     // path so existing per-property constraint elaborations (16.4ds /
                     // 16.4dt) keep firing — substitution would erase paramType's TypeParam
                     // identity and skip those branches.
-                    val isNamedLike = argType is Type.Interface || argType is Type.Reference ||
-                        argType is Type.Intrinsic ||
-                        argType.flags.hasAny(
-                            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
-                            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
-                            TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                        )
+                    fun isNamedLikeAtom(t: Type): Boolean =
+                        t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
+                            t.flags.hasAny(
+                                TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                                TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                                TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                            )
+                    val isNamedLike = isNamedLikeAtom(argType) ||
+                        // 17.31f: Union-of-named-likes from the isArrayT path. Anonymous-Object
+                        // members in heterogeneous-array elements (e.g. `[{a:1}, "def"]` →
+                        // `Array<{a:1} | "def">`) are still rejected because `{a:1}` widens to
+                        // an anonymous Type.Object that fails this check.
+                        (isArrayT && argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
                     if (!isNamedLike) return null
                     // 17.31e: for Array<tp> path the literal type is null (we don't have
                     // a single literal to attach to the array's element type).

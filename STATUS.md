@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,418 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,419 / 10,078 tests passing (~83%).
+
+**17.31f (2026-04-27, +1)** — Union-element widening for `Array<T>` inference +
+CallExpression source bypass for Union→primitive var-decls. Flips `widenToAny2_ts`.
+`tryInferSingleTypeParamFromArgs` `isArrayT` branch now widens Union constituents
+(`widenType` skips `Type.Union`; explicit `getUnionType(types.map(widenType))`
+recurses) so `Array<undefined | "def">` infers T = `undefined | string`. The
+`isNamedLike` check is now a local `isNamedLikeAtom` helper applied either
+directly OR (for `isArrayT` only) to every Union constituent — anonymous-Object
+members in heterogeneous arrays (e.g. `[{a:1}, "def"]`) still bail because the
+widened anonymous Object fails `isNamedLikeAtom`. Wired pair: `checkVarDeclAssignability`
+adds a `callBypass` of `canUseTypeEngine`'s nullish-Union gate when `init is
+CallExpression` AND `sourceType is Type.Union` AND target is primitive-shape AND
+`strictNullChecks` is on — CallExpression results aren't narrowable so the
+gate's control-flow narrowing safety rationale doesn't apply. Initial broader
+version (lift the gate inside `canUseTypeEngine`) regressed
+`classStaticPropertyTypeGuard_ts__target_es5__` (`return A._a` after `if (A._a)`
+needs PropertyAccess narrowing on class statics that we don't have); narrowed
+to `init is CallExpression` keeps that latent gap masked.
 
 **17.31e (2026-04-27, net-zero infra)** — Reference-arg `Array<T>` inference
 for non-rest params. Gate clause (d) added: non-rest param of `Array<tp_i>`
