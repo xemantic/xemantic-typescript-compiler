@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,435 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,436 / 10,078 tests passing (~84%).
+
+**17.49 (2026-04-27, +1)** — TS2416 chain elaboration for implements-clause
+generic method override. Three coordinated pieces in Checker.kt flip
+`genericTypeWithNonGenericBaseMisMatch_ts`. (1) `classMemberShapeMismatchDiagnostic`
+gains an `isImplements: Boolean` parameter; passed `true` when
+`clause.token == SyntaxKind.ImplementsKeyword`. When `isImplements` and
+the would-be-emitted code is TS2425 (property → function shape mismatch),
+the helper returns null. Rationale: TS2425 fires on class-property-vs-
+class-method conflict because the instance field would shadow the
+prototype method at runtime. Interfaces have no prototype semantics —
+function-typed properties (`f: (a) => void`) are structurally
+compatible with method declarations (`f(a) {}`) under `implements`.
+TS2423/TS2426 retained for both `extends`/`implements` (no test
+demands the relaxation). (2) `addSignatureElaboration` (TS2416 path)
+adds a chain line `'T' could be instantiated with an arbitrary type
+which could be unrelated to '<type>'.` when the derived param is a
+`Type.TypeParam` and the base param is a concrete type. Mirrors
+`getFunctionMismatchElaboration`'s 17.11a return-type version (line
+47283); contravariance reversed. The hint signals that the override
+is unsound — T's caller-chosen instantiation may not be compatible
+with the base's concrete param. (3) `getFunctionMismatchElaboration`
+(TS2322 path) recurses via `getPropertyElaborationChain` when both
+inner param types are non-function `Type.Object`. Adds inner property
+mismatch chain (`{a: number}` vs `{a: string}` → "Types of property
+'a' are incompatible. Type 'number' is not assignable to type
+'string'."). Indented by 4 extra spaces so the inner chain stacks
+correctly under the param-mismatch chain line. Argument order
+mirrors contravariance: `targetParamType` is the "from" displayed
+type, `sourceParamType` is the "to". Net delta: 1640 → 1639 failed
+(+1 test). No regressions across 10078-test suite — the chain
+elaboration paths are gated to only fire on existing failure
+positions (no FP risk).
 
 **17.47 (2026-04-27, +1)** — `checkTypeArgCount` extended to QualifiedName.
 Mirrors 17.46b's `isUnresolvedGenericType` extension — `var b: A.B`

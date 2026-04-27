@@ -40429,7 +40429,8 @@ interface DataView {
                         else -> null
                     } ?: continue
                     val shapeDiag = classMemberShapeMismatchDiagnostic(
-                        baseDecl, member, memberName, baseTypeName, className
+                        baseDecl, member, memberName, baseTypeName, className,
+                        isImplements = clause.token == SyntaxKind.ImplementsKeyword,
                     )
                     // Only emit shape diagnostic ONCE per method (skip for the paired setter when
                     // the getter already emitted — baseline expects one TS2423 per accessor override).
@@ -40538,6 +40539,7 @@ interface DataView {
         memberName: String,
         baseTypeName: String,
         derivedClassName: String,
+        isImplements: Boolean = false,
     ): Pair<Int, String>? {
         val baseKind = when (baseDecl) {
             // Property with function-type annotation counts as "property", not "function"
@@ -40564,6 +40566,10 @@ interface DataView {
             baseKind == "accessor" && derivedKind == "function" -> 2426
             else -> return null
         }
+        // TS2425 is class-property-vs-class-method runtime conflict (instance field shadows
+        // prototype method). Interfaces don't have prototype semantics — function-typed
+        // properties are structurally compatible with method declarations under `implements`.
+        if (code == 2425 && isImplements) return null
         val baseWord = "instance member $baseKind"
         val derivedWord = "instance member $derivedKind"
         val msg = "Class '$baseTypeName' defines $baseWord '$memberName', " +
@@ -41167,6 +41173,14 @@ interface DataView {
             if (!checkTypeRelatedTo(baseParamType, derivedParamType, assignableRelation)) {
                 chain.add("    Types of parameters '${derivedParam.name}' and '${baseParam.name}' are incompatible.")
                 chain.add("      Type '${typeToString(baseParamType)}' is not assignable to type '${typeToString(derivedParamType)}'.")
+                // When derived's param is a TypeParam (e.g. `f(a: T)` on a generic
+                // class) and base's param is a concrete type, the override is unsound
+                // because T can be instantiated to any subtype of its constraint —
+                // the caller's concrete value may not be compatible with T's
+                // chosen instantiation. TypeScript adds this hint in the chain.
+                if (derivedParamType is Type.TypeParam && baseParamType !is Type.TypeParam) {
+                    chain.add("        '${typeToString(derivedParamType)}' could be instantiated with an arbitrary type which could be unrelated to '${typeToString(baseParamType)}'.")
+                }
                 // TS2208 related info: when the BASE method has a method-level
                 // TypeParam in this position and the derived overrides with a
                 // concrete type, TypeScript hints that the base TypeParam might
@@ -47236,6 +47250,24 @@ interface DataView {
                         return listOf(
                             "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
                         ) + nested.map { "  $it" }
+                    }
+                }
+                // When both inner param types are non-function Type.Object, recurse via
+                // property elaboration so the chain shows the inner property mismatch
+                // (e.g. `{a: number}` vs `{a: string}` → "Types of property 'a' are
+                // incompatible. Type 'number' is not assignable to type 'string'.").
+                // Argument order mirrors the contravariance: targetParam is the "from"
+                // and sourceParam is the "to" in the displayed chain line.
+                if (targetParamType is Type.Object && sourceParamType is Type.Object &&
+                    targetParamType.callSignatures.isNullOrEmpty() &&
+                    sourceParamType.callSignatures.isNullOrEmpty()
+                ) {
+                    val propChain = getPropertyElaborationChain(targetParamType, sourceParamType)
+                    if (!propChain.isNullOrEmpty()) {
+                        return listOf(
+                            "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                            "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(sourceParamType)}'.",
+                        ) + propChain.map { "    $it" }
                     }
                 }
                 return listOf(
