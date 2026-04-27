@@ -10549,9 +10549,27 @@ class Checker(
                 s = s.parent
             }
         } else {
+            // 17.32c: at the file-root scope (parent == null), the legacy
+            // `s.names` set was seeded from the over-merged [globals] map and
+            // therefore included other-file MODULE locals that aren't actually
+            // visible from this file (they require an explicit import). Replace
+            // the root-scope contribution with [perFileScope]'s file-specific
+            // view (lib + script-file locals + own-file locals). Inner
+            // (function/block) scopes still contribute their `names` set
+            // unchanged — those are this file's own lexical bindings.
+            // KNOWN_GLOBALS is already added above.
             var s: NameScope? = scope
             while (s != null) {
-                candidates.addAll(s.names)
+                if (s.parent != null) {
+                    candidates.addAll(s.names)
+                } else {
+                    val fileScope = perFileScope[fileName]
+                    if (fileScope != null) {
+                        candidates.addAll(fileScope.keys)
+                    } else {
+                        candidates.addAll(s.names)
+                    }
+                }
                 s = s.parent
             }
         }
