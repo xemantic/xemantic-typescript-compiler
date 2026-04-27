@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,438 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,439 / 10,078 tests passing (~84%).
+
+**17.52 (2026-04-27, +1)** — TS2845 "This condition will always return 'false'/'true'."
+for enum-member references in conditional-expression conditions. Flips
+`importAliasFromNamespace_ts`. New `checkEnumReferenceFalsyCondition` helper
+in Checker.kt called from `checkAlwaysTruthyInExpr`'s ConditionalExpression
+branch (before walking whenTrue/whenFalse). When the condition is a
+`PropertyAccessExpression` whose dotted path resolves through `resolveNamePath`
++ `resolveAlias` to a const- or non-const-enum member with a computed
+ConstantValue, classifies the value as truthy (non-zero number / non-empty
+string) or falsy (0 / "") and emits TS2845 with the appropriate verdict.
+Squiggle covers the full property-access span via `expressionTrueEnd(expr) -
+expr.pos`. Reuses existing `getReferencePath` helper for path serialization.
+Path resolution handles nested-namespace import aliases via `resolveNamePath`'s
+fallback to `findSymbolInAllNamespaceScopes` — works for the test's
+`import Internal = My.Internal` inside `namespace SomeOther.Thing { ... }`
+where `Internal.WhichThing.A` resolves to const enum member A = 0. Conservative
+gate: only fires from ConditionalExpression conditions (not IfStatement /
+WhileStatement / etc.), only when the path resolves to an enum symbol with a
+populated `enumValues` entry. Net delta: 1637 → 1636 failed (8438 → 8439
+passing). Zero regressions across 10078-test suite — `errorOnEnumReferenceInCondition_ts`
+errors-baseline isn't generated (per CLAUDE.md gotcha: .errors.txt baselines
+commented out for this file), so no new emissions affect existing tests.
 
 **17.51 (2026-04-27, +1)** — TS2310 "recursively references itself as a base type"
 for class-extends-generic-default-indexed-access cycles. Flips
