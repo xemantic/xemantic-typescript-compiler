@@ -1,6 +1,34 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,422 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,423 / 10,078 tests passing (~83%).
+
+**17.38 (2026-04-27, +1)** — Object-literal-of-T param shape inference for
+single-arg generic calls. Flips `widenToAny1_ts`. Closes the simplest
+"needs full generic argument inference" Blocker #2 case for object-
+literal param shapes: `foo<T>(f: { x: T; y: T })` called with
+`{ x: undefined, y: "def" }` now infers T = `string | undefined` (LUB-
+as-Union over collected widened property values), substitutes through
+return type T, and triggers TS2322 at the var-decl site
+`var z1: number = ...`. Three pieces in `tryInferSingleTypeParamFromArgs`:
+(1) new `isAnonymousObjectWithTypeParamMembers` helper — Type.Object
+(excluding Type.Interface / Type.Reference / sym-non-null / call-or-
+construct-sigs / index-sigs) whose every member is a bare TypeParam in
+`tps`. Conservative — mixed shapes like `{x: T; y: number}` bail.
+(2) Outer gate (Checker.kt:36996) adds clause (e): `!isRest &&
+isAnonymousObjectWithTypeParamMembers(pt, tpsSet)`. (3) Per-tp gather
+adds `isObjLitOfT` branch BEFORE the standard rawArgType pipeline.
+Walks pt's members, finds ones typed exactly as tp, looks up arg's
+same-named property via `getPropertyKeyName`, widens each value type,
+LUBs as Union when multiple. Handles `undefined` values via the LUB
+path (the standard undefined-arg bail doesn't fire because the arg as
+a whole is a Type.Object, not undefined). Named-like check accepts
+Union-of-named-likes (matches the isArrayT extension from 17.31f).
+Lifted `isNamedLikeAtom` to outer `for (tp in tps)` block so both
+isObjLitOfT and isArrayT/isBareT paths share the predicate. Test
+results 1653 → 1652 failed (8422 → 8423 passing). Foundation:
+`widenToAny1_ts`'s `{x: T; y: T}` shape, plus the 17.31f-installed
+callBypass in `checkVarDeclAssignability`, produces TS2322 with chain
+"Type 'undefined' is not assignable to type 'number'." at (4,5).
 
 **17.37 (2026-04-27, +1)** — Empty-array `[]` arg → `T = never` inference for
 `Array<T>` params + CallExpression-receiver TS2339 'never' emission. Flips
