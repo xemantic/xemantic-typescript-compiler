@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,421 / 10,078 tests passing (~83%).
+**Phase 4 — Checker buildout.** 8,422 / 10,078 tests passing (~83%).
+
+**17.37 (2026-04-27, +1)** — Empty-array `[]` arg → `T = never` inference for
+`Array<T>` params + CallExpression-receiver TS2339 'never' emission. Flips
+`inferentiallyTypingAnEmptyArray_ts`. Three coordinated pieces in Checker.kt:
+(1) `tryInferSingleTypeParamFromArgs` now special-cases empty
+`ArrayLiteralExpression` arg for `Array<tp>` params: contributes a `neverType`
+candidate instead of bailing on `rawArgType === anyType`. (2)
+"Never-wildcard" rule: when gathering candidates for a typeParam, an empty-
+array `never` candidate is treated as a wildcard — the helper builds
+`effectiveCandidates = candidates.filter { it.widenedType !== neverType }`
+(falling back to the full list only if every candidate is never), and uses
+that for both first-candidate selection AND multi-arg conflict detection.
+Without this, `f<T>(arr: T[], elemnt: T)` called with `f([], 3)` would anchor
+T = never (from the empty array) and then fire spurious TS2345 at arg `3`
+(checked against substituted `never` param) — TypeScript correctly anchors
+T = number from the second arg. (3) New CallExpression branch in
+`checkMemberAccessMissing` emits TS2339 'never' when the call's resolved
+return type IS exactly `neverType`. Narrow gate: only fires for receivers
+that ARE CallExpressions and whose return is exactly never; doesn't extend
+to other receiver shapes (full call-result property checking against arbitrary
+return types stays out of scope).
 
 **17.36 (2026-04-27, +1)** — TS2300 "Duplicate identifier 'eval'" for
 top-level `var eval` in non-module strict mode. Flips

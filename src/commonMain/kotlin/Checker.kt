@@ -37026,6 +37026,15 @@ interface DataView {
                     if (ai >= args.size) break
                     val arg = args[ai]
                     if (arg is SpreadElement) continue
+                    // 17.37: empty array literal `[]` arg for `Array<tp>` param infers tp = `never`.
+                    // `getTypeOfArrayLiteral` returns anyType for empty arrays (can't infer element
+                    // type), but TypeScript's spec-mandated behavior here is to fall back to never
+                    // for inference — the array contains no elements that could constrain the
+                    // element type. Skip the standard rawArgType anyType bail in this narrow case.
+                    if (isArrayT && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
+                        candidates.add(Candidate(ai, neverType, null))
+                        continue
+                    }
                     val rawArgType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
                     if (rawArgType === anyType || rawArgType === errorType) return null
                     if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
@@ -37078,7 +37087,18 @@ interface DataView {
             }
             if (candidates.isEmpty()) return null
 
-            val first = candidates[0]
+            // 17.37: an empty-array literal's `never` candidate is a "wildcard" —
+            // it conveys no element-type information, so ignore it in inference
+            // when at least one concrete candidate is available. Without this,
+            // `f<T>(arr: T[], elemnt: T)` called with `f([], 3)` would infer
+            // T=never (anchor on `[]`), then check arg[1]=`3` against never and
+            // fire spurious TS2345 — but TypeScript correctly infers T=number
+            // from the second arg. Only when EVERY candidate is never (e.g.
+            // `foo([])` single-arg) does the never substitution apply.
+            val effectiveCandidates = candidates.filter { it.widenedType !== neverType }
+                .ifEmpty { candidates }
+
+            val first = effectiveCandidates[0]
             val firstWidened = first.widenedType
 
             // Constraint check: inferred type (widened first candidate) must satisfy
@@ -37099,8 +37119,8 @@ interface DataView {
             // check between widened forms passes trivially. Cross-base cases
             // (number vs string, Giraffe vs Elephant) trigger conflict handling.
             var conflictAt = -1
-            for (i in 1 until candidates.size) {
-                val ci = candidates[i]
+            for (i in 1 until effectiveCandidates.size) {
+                val ci = effectiveCandidates[i]
                 val ok = try {
                     checkTypeRelatedTo(ci.widenedType, firstWidened, assignableRelation) ||
                         checkTypeRelatedTo(firstWidened, ci.widenedType, assignableRelation)
@@ -37119,7 +37139,7 @@ interface DataView {
                 // standard arg-check loop doesn't fire its own widened TS2345 at
                 // the same position. Bare-T params silently pass the standard check
                 // (T is unconstrained → apparent type {} → everything assignable).
-                val conflictCand = candidates[conflictAt]
+                val conflictCand = effectiveCandidates[conflictAt]
                 val arg = args[conflictCand.argIdx]
                 val argDisplay = typeToString(conflictCand.literalType ?: conflictCand.widenedType)
                 val paramDisplay = typeToString(first.literalType ?: first.widenedType)
@@ -42437,6 +42457,28 @@ interface DataView {
                         }
                     }
                 }
+            }
+            return
+        }
+
+        // 17.37: CallExpression receiver returning `never` — emit TS2339 'never'.
+        // Covers `foo([]).bar` where `foo<T>(x: T[]): T` infers T = never from the
+        // empty array literal arg, then `.bar` accesses a property on never.
+        // Narrow gate: only fires when the call's resolved return type IS exactly
+        // neverType. Calls returning Object/Reference/anyType/etc. still skip — full
+        // call-result property checking is out of scope here (no access to the
+        // return type's apparent-type member table at this site without broader
+        // refactoring).
+        if (objectExpr is CallExpression) {
+            val callType = try { getReturnTypeOfCallExpression(objectExpr) } catch (_: StackOverflowError) { return }
+            if (callType === neverType) {
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type 'never'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
             }
             return
         }
