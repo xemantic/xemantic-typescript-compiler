@@ -2,6 +2,33 @@
 
 **Phase 4 — Checker buildout.** 8,420 / 10,078 tests passing (~83%).
 
+**17.34a (2026-04-27, net-zero infra)** — PropertyAccess narrowing
+infrastructure for class statics. New `getReferencePath` helper in
+Checker.kt serializes any `Identifier`-or-`PropertyAccessExpression`
+chain as a dotted path (`"A._a"`, `"this.field"`, `"a.b.c"`); returns
+null for shapes with calls, parens, or element access. Three call-site
+extensions: (1) `getNarrowedTypeForReference` consumes the path string
+instead of an Identifier-only `expr.text`, so it now narrows
+PropertyAccess sources too; (2) `applyConditionNarrowing` adds a
+`PropertyAccessExpression` branch parallel to its `Identifier`
+truthiness branch — `if (A._a) { ... A._a ... }` narrows from
+`T | undefined | null` to `T` on the truthy side via the existing
+`narrowByTruthiness` helper; (3) `checkVarDeclAssignability`'s
+narrowing call-site widens its gate from `init is Identifier` to
+`init is Identifier || init is PropertyAccessExpression` (still
+gated by `isNarrowableTarget`). Test results unchanged 10078 / 1655 / 3
+— `classStaticPropertyTypeGuard_ts` (the test 17.31f's gate masks)
+continues to pass; no failing test in the corpus gates SOLELY on this
+narrowing path. Foundation for follow-on substeps: (a) extend
+`narrowByEquality`/`narrowByInstanceOf`/`narrowByInOperator`/
+`narrowByCallPredicate`/`narrowByConstructorEquals` to compare
+PropertyAccess paths (currently still only Identifier); (b) wire
+PropertyAccess narrowing into the TS2339 union-receiver
+narrowed-to-never branch (Checker.kt:42376 still gated on
+`objectExpr is Identifier`); (c) wire into `getTypeOfPropertyAccess`
+so identifier-of-property-access sources see narrowed types in
+non-var-decl positions. Foundation only — not a regressing change.
+
 **17.33 (2026-04-27, +1)** — TS2686 "refers to a UMD global" emission
 for `export as namespace X;` references in module files. Flips
 `jsdocReferenceGlobalTypeInCommonJs_ts`. Two-piece change: (1) source-text
