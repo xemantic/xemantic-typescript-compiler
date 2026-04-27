@@ -488,13 +488,20 @@ fun formatErrorBaseline(
         // When pretty is on, the pretty header replaces this section
         if (!pretty) {
         for (diag in sorted) {
-            if (diag.fileName != null && diag.line != null && diag.character != null) {
-                +diag.fileName!!
+            val df = diag.fileName
+            if (df != null && diag.line != null && diag.character != null) {
+                +df
                 +"("
                 +diag.line.toString()
                 +","
                 +diag.character.toString()
                 +"): "
+            } else if (df != null && diag.line == null) {
+                val base = df.substringAfterLast('/').substringAfterLast('\\')
+                if (base.startsWith("lib.") && base.endsWith(".d.ts")) {
+                    +df
+                    +"(--,--): "
+                }
             }
             +diag.category.name.lowercase()
             +" TS"
@@ -685,6 +692,16 @@ private val diagnosticComparator = Comparator<Diagnostic> { a, b ->
             val bIsTsconfig = fileB.endsWith("tsconfig.json")
             if (aIsTsconfig && !bIsTsconfig) return@Comparator -1
             if (!aIsTsconfig && bIsTsconfig) return@Comparator 1
+            // Lib files (lib.*.d.ts) sort AFTER user files, matching TypeScript's baseline
+            // ordering where user-file diagnostics precede lib-side ones.
+            fun isLib(f: String): Boolean {
+                val base = f.substringAfterLast('/').substringAfterLast('\\')
+                return base.startsWith("lib.") && base.endsWith(".d.ts")
+            }
+            val aIsLib = isLib(fileA)
+            val bIsLib = isLib(fileB)
+            if (!aIsLib && bIsLib) return@Comparator -1
+            if (aIsLib && !bIsLib) return@Comparator 1
             val c = fileA.compareTo(fileB)
             if (c != 0) return@Comparator c
         }

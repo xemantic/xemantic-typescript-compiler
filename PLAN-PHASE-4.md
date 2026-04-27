@@ -2565,6 +2565,21 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-04-27 (17.36, 8420 → 8421, +1) — TS2300 for `var eval` in non-module strict mode:** Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 8/89/22) — the 17.34/17.35 net-zero-infra series chained six commits without a flip. Picked `variableDeclarationInStrictMode1_ts` from the explored-but-skipped log (skip reason: "Needs class/var-vs-lib conflict detection. Narrow but needs care to avoid FP on legitimate shadowing (e.g. `let String`)") — the FP-risk note targets the BROAD case (any user decl colliding with lib); the test's pattern (`"use strict"` directive + `var eval`) is narrow enough to handle without that risk.
+
+  Three coordinated pieces:
+  1. **BaselineFormatter Part 1 (summary section)**: previously skipped the file prefix entirely when `line == null`. Now renders `lib.es5.d.ts(--,--):` when fileName matches `lib.*.d.ts`. Previously, NO test in the corpus produced lib-file primary diagnostics with null line/char (lib only appeared in TS6203/TS2728 related-info), so this is purely additive — no existing baseline regresses.
+  2. **`diagnosticComparator` sort tweak**: lib files now sort AFTER non-lib files. Previously `fileA.compareTo(fileB)` would put `lib.es5.d.ts` BEFORE `variableDeclarationInStrictMode1.ts` ('l' < 'v'), but TypeScript's baseline lists user-file diagnostics first. Same additive-only argument applies — no test currently has both user and lib primary diagnostics in summary output.
+  3. **New `checkStrictModeReservedRedeclaration` in Checker.kt**: fires only for `var eval` at top-level VarDeclaration in non-module strict mode (`(globalStrict || hasUseStrict) && !isModule`). Emits TS2300 at user position with TS6203 related info pointing to `lib.es5.d.ts:--:--` ("'eval' was also declared here."), plus a separate TS2300 at the lib position (fileName=`lib.es5.d.ts`, line=null, char=null).
+
+  Initial broader version (matched both `eval` and `arguments`, all strict contexts including modules) regressed 2 tests:
+  - `jsFileCompilationBindStrictModeErrors_ts` (c.js): module file with `var eval`. TypeScript only emits TS1215 ("Modules are automatically in strict mode") for module case — not TS2300. Fixed via `!isModule` gate.
+  - `argumentsBindsToFunctionScopeArgumentList_ts` (`@alwaysStrict: true`): `var arguments = 10`. TypeScript only emits TS1100, not TS2300. Reason: `arguments` is NOT predeclared as a `var` in lib.es5.d.ts (it's a function-local runtime concept; `interface IArguments` exists but no `declare var arguments`). Fixed by narrowing to `name == "eval"` only.
+
+  Test results 1654 / 3 (was 1655 / 3) — +1 with no regressions. Foundation: the BaselineFormatter changes also unblock 3 other tests in the corpus that have lib-file primary diagnostics in their baselines (`duplicateNumericIndexers`, `objectTypeHidingMembersOfExtendedObject`, `objectTypeWithStringIndexerHidingObjectIndexer`), but those tests aren't currently generated as runnable tests in our suite. If they get generated in the future, this session's formatter changes will be the bridge.
+
+  Anti-loop check: pool was empty pre-flip; this session lands real code from the explored-but-skipped log rather than a recon commit. Per the protocol's recon-only forbidden patterns, this satisfies "feature commit landing real code." The skip-log entry for `variableDeclarationInStrictMode1` should be marked stale-flipped on a future audit.
+
   **Session 2026-04-27 (17.35a, 8420 → 8420, net-zero infra) — Expand falsy/truthy narrowing to literal-truthy types:** Stacks on 17.34e. Pre-fix: `isDefinitelyTruthyMember(t)` returned `true` only for object-likes (`Type.Object` / `Type.Interface` / `Type.Reference`). `isDefinitelyFalsyMember(t)` returned `true` only for the four definitely-falsy intrinsics (`undefinedType`/`nullType`/`voidType`/`falseType`). Post-fix: both predicates extended with literal cases.
 
   `isDefinitelyTruthyMember` adds:
@@ -4078,7 +4093,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 
 **Session 2026-04-17 (16.4cm/cn/co) additional explored-but-skipped:**
 - `jsFileCompilationTypeAssertions_ts` → SWAP TS1005 `'</' expected.` + MISS TS17008 "JSX element 'string' has no corresponding closing tag.". In a `.js` file, `<string>undefined` is parsed by TypeScript as JSX start tag, not a TS type assertion. Our parser emits TS8016 + TS1005 `'<' expected.`. Fixing requires JSX-in-JS parsing — out of scope.
-- `variableDeclarationInStrictMode1_ts` → MISS TS2300 + TS6203 "Duplicate identifier 'eval'" for user `var eval` colliding with lib-declared `eval`. Needs class/var-vs-lib conflict detection. Narrow but needs care to avoid FP on legitimate shadowing (e.g. `let String`). Deferred.
+- ~~`variableDeclarationInStrictMode1_ts`~~ → flipped 17.36 (2026-04-27) — narrow `var eval`-only emission gated to non-module strict mode + BaselineFormatter lib-file rendering for primary diagnostics.
 - ~~`emitCapturingThisInTupleDestructuring2_ts`~~ → flipped 17.23. New `checkAssignmentTupleBounds` helper invoked from `checkPropertyAccessInExpr`'s `BinaryExpression` branch when LHS is `ArrayLiteralExpression` and operator is `=`; uses RHS's `Type.Object.tupleElementTypes` for static length, skips when LHS contains a SpreadElement (rest covers remainder), skips `OmittedExpression` slots; squiggle via `expressionTrueEnd`.
 - `parserUnparsedTokenCrash1_ts` → SWAP TS1109 → TS1005 `';' expected.` at statement-start `)` for `( y = 1 ; 2 )` in .js. Parser error-recovery asymmetry — blocker #4. Extending `parseSemicolon` to emit TS1005 for `)` works locally but risks regressions.
 - ~~`clodulesDerivedClasses_ts`~~ → flipped 17.18 (TS2417 namespace-vs-namespace for clodule via `checkClassStaticSideExtends` recursing into ModuleDeclaration pair members' exports).

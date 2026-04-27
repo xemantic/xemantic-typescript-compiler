@@ -15051,6 +15051,63 @@ class Checker(
                 // "use strict" prologue directives are locally strict and must be checked.
                 checkFunctionLocalStrictMode(result.sourceFile.statements, source, fileName, restricted)
             }
+            // `var eval` at top level in non-module strict mode also triggers TS2300
+            // "Duplicate identifier" because lib.es5.d.ts predeclares `var eval`. Module
+            // files (auto-strict) only emit TS1215 per TypeScript's baseline. `arguments`
+            // is NOT lib-declared as a var so doesn't fire TS2300 either.
+            if (!isModule && (globalStrict || hasUseStrict)) {
+                checkStrictModeReservedRedeclaration(result.sourceFile.statements, source, fileName)
+            }
+        }
+    }
+
+    /**
+     * Emit TS2300 + TS6203 for top-level `var eval` in non-module strict mode.
+     * `eval` is predeclared as `declare var eval` in lib.es5.d.ts, so a user `var eval`
+     * collides. `let eval` / `const eval` are block-scoped and don't merge — only `var`
+     * matches the lib's declaration kind.
+     */
+    private fun checkStrictModeReservedRedeclaration(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            if (stmt !is VariableStatement) continue
+            if (stmt.declarationList.flags != SyntaxKind.VarKeyword) continue
+            for (decl in stmt.declarationList.declarations) {
+                val name = decl.name as? Identifier ?: continue
+                if (name.text != "eval") continue
+                val start = name.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                val libRelated = Diagnostic(
+                    message = "'${name.text}' was also declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 6203,
+                    fileName = "lib.es5.d.ts",
+                    line = null,
+                    character = null,
+                )
+                diagnostics.add(Diagnostic(
+                    message = "Duplicate identifier '${name.text}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2300,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = name.text.length,
+                    relatedInformation = listOf(libRelated),
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Duplicate identifier '${name.text}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2300,
+                    fileName = "lib.es5.d.ts",
+                    line = null,
+                    character = null,
+                ))
+            }
         }
     }
 
