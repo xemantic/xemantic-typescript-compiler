@@ -34,6 +34,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
     private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
 
+    /** True if the file is JS-like (`.js`/`.jsx`/`.cjs`/`.mjs`) — gates JSDoc `@type` interpretation. */
+    private val isJsLikeFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+        fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+
     /** Pre-computed line start positions for fast line/character lookup. */
     private val lineStarts: IntArray = computeLineStarts(source)
 
@@ -1671,14 +1675,25 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             )
         } else {
             // Property
-            val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            var type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
             parseSemicolon()
             val trailing = trailingComments()
+            // 17.58b: in JS-like files, a missing type annotation on a class property
+            // can be supplied by a leading `/** @type {T} */` JSDoc comment.
+            var typeFromJSDoc = false
+            if (type == null && isJsLikeFile) {
+                val jsdocType = parsePropertyTypeFromJSDoc(comments)
+                if (jsdocType != null) {
+                    type = jsdocType
+                    typeFromJSDoc = true
+                }
+            }
             PropertyDeclaration(
                 name = name, type = type, initializer = init, modifiers = modifiers,
                 questionToken = question, exclamationToken = excl, decorators = decorators,
-                pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing
+                pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing,
+                typeFromJSDoc = typeFromJSDoc,
             )
         }
     }
@@ -4844,6 +4859,76 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             if (token != SyntaxKind.GreaterThan) return@tryScan null
             nextToken()
             args
+        }
+    }
+
+    // 17.58b: in JS-like files, a class property without an explicit type
+    // annotation may carry a leading JSDoc `@type { T }` comment that supplies
+    // the type. Inner T is parsed via a sub-Parser; resulting positions point
+    // into the JSDoc text rather than the original source, which is fine for
+    // TS2564-style structural consumers.
+    private fun parsePropertyTypeFromJSDoc(comments: List<Comment>?): TypeNode? {
+        if (comments.isNullOrEmpty()) return null
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            val typeText = extractAtTypeBraceContent(ct) ?: continue
+            return parseTypeFromText(typeText, fileName)
+        }
+        return null
+    }
+
+    // Locates `@type { ... }` inside a JSDoc block comment and returns the
+    // brace-balanced content (trimmed). Skips line-prefix `*` between the tag
+    // and the opening brace so multi-line forms still resolve.
+    private fun extractAtTypeBraceContent(commentText: String): String? {
+        val typeIdx = commentText.indexOf("@type")
+        if (typeIdx < 0) return null
+        var i = typeIdx + 5
+        // Skip whitespace, line breaks and JSDoc line-prefix `*` between the
+        // tag and the opening brace.
+        while (i < commentText.length) {
+            val ch = commentText[i]
+            if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '*') i++
+            else break
+        }
+        if (i >= commentText.length || commentText[i] != '{') return null
+        val start = i + 1
+        var j = start
+        var depth = 1
+        while (j < commentText.length) {
+            when (commentText[j]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        return commentText.substring(start, j).trim().ifEmpty { null }
+                    }
+                }
+            }
+            j++
+        }
+        return null
+    }
+
+    /** Parses [text] as a standalone type expression. Returns null on parse failure. */
+    private fun parseTypeFromText(text: String, fileName: String): TypeNode? {
+        return try {
+            val sub = Parser(text, fileName)
+            sub.runParseTypeFromExternal()
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    private fun runParseTypeFromExternal(): TypeNode? {
+        return try {
+            nextToken()
+            val parsed = parseType()
+            if (token != SyntaxKind.EndOfFile) null else parsed
+        } catch (e: Throwable) {
+            null
         }
     }
 

@@ -52515,7 +52515,9 @@ interface DataView {
                         emitTs8xxxQuestionToken(qIdx, source, fileName)
                     }
                 }
-                if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
+                // 17.58b: types synthesized from a leading `@type {...}` JSDoc comment
+                // are valid in JS files — skip the TS8010 emission for that case.
+                if (member.type != null && !member.typeFromJSDoc) emitTs8xxxForType(member.type!!, source, fileName)
                 // Check declare modifier (TS8009)
                 if (ModifierFlag.Declare in member.modifiers) {
                     emitTs8xxxDeclare(member.pos, source, fileName)
