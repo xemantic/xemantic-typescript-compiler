@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,439 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,440 / 10,078 tests passing (~84%).
+
+**17.53 (2026-05-01, +1)** — `typeToString` for `Type.Union` now follows TypeScript's
+display convention: nullish members (`null`/`undefined`/`void`) are sorted to the
+END of the union, and function/constructor-typed members (anonymous `Type.Object`
+with exactly one call or construct signature, no properties, no tuple) get
+parenthesized so the `|` is unambiguous. Flips `optionalPropertiesTest_ts` —
+chain line `Type '(() => void) | undefined' is not assignable to type '() => void'.`
+now matches the baseline (was emitting `'undefined | () => void'`). Single-spot
+edit at the existing `Type.Union` branch in `typeToString` (Checker.kt ~38100):
+`fun nullishRank(t)` returns 1/2/3 for `null`/`undefined`/`void` Intrinsics and 0
+otherwise; `sortedBy { nullishRank(it) }` is stable so non-nullish members keep
+their original relative order. Function-paren gate matches the typeToString
+arrow-format branch (`m is Type.Object && tupleElementTypes == null && properties
+nullOrEmpty && totalSigs == 1`) so multi-sig overload-shape Objects render as
+`{ ... }` and don't get an extra wrap. Cross-corpus baseline check before
+implementation: 1778 occurrences of `<X> | undefined` vs only 64 of `undefined |
+<X>` — the convention is overwhelmingly the new behavior. Zero regressions
+across the 10078-test suite. Net delta: 1636 → 1635 failed (8439 → 8440 passing).
 
 **17.52 (2026-04-27, +1)** — TS2845 "This condition will always return 'false'/'true'."
 for enum-member references in conditional-expression conditions. Flips

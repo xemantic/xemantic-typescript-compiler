@@ -38097,7 +38097,25 @@ interface DataView {
                     }
                 }
             }
-            is Type.Union -> type.types.joinToString(" | ") { typeToString(it) }
+            is Type.Union -> {
+                // TypeScript convention: nullish (null/undefined/void) members render LAST,
+                // function/constructor-typed members render parenthesized so the `|` is unambiguous.
+                fun nullishRank(t: Type): Int = when {
+                    t is Type.Intrinsic && t.intrinsicName == "null" -> 1
+                    t is Type.Intrinsic && t.intrinsicName == "undefined" -> 2
+                    t is Type.Intrinsic && t.intrinsicName == "void" -> 3
+                    else -> 0
+                }
+                val ordered = type.types.sortedBy { nullishRank(it) }
+                ordered.joinToString(" | ") { m ->
+                    val s = typeToString(m)
+                    val needsParen = m is Type.Object &&
+                        m.tupleElementTypes == null &&
+                        m.properties.isNullOrEmpty() &&
+                        ((m.callSignatures?.size ?: 0) + (m.constructSignatures?.size ?: 0)) == 1
+                    if (needsParen) "($s)" else s
+                }
+            }
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
