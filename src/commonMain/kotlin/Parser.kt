@@ -629,7 +629,23 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     ): VariableStatement {
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
-        val declList = parseVariableDeclarationList()
+        var declList = parseVariableDeclarationList()
+        // 17.62: in JS-like files, a single-declarator VariableStatement with no
+        // explicit type and a leading JSDoc `@type {<primitive>}` comment supplies
+        // the primitive type as the declaration's type. Restricted to primitives
+        // (string/number/boolean/etc.) — non-primitive type references would
+        // otherwise leak sub-Parser-derived positions into name-resolution
+        // diagnostics; see 17.61's revert note in PLAN-PHASE-4.md.
+        if (isJsLikeFile && declList.declarations.size == 1) {
+            val decl = declList.declarations[0]
+            if (decl.type == null && decl.name is Identifier) {
+                val jsdocType = parsePrimitiveTypeFromJSDoc(comments)
+                if (jsdocType != null) {
+                    val newDecl = decl.copy(type = jsdocType, typeFromJSDoc = true)
+                    declList = declList.copy(declarations = listOf(newDecl))
+                }
+            }
+        }
         // Capture same-line trailing comments between last declaration and `;`
         // (e.g. `/*number*/` in `var z = x.then() /*number*/; // comment`)
         val semiInline = if (!scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments() else null
@@ -4877,6 +4893,43 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             return parseTypeFromText(typeText, fileName)
         }
         return null
+    }
+
+    // 17.62: primitive-only variant of parsePropertyTypeFromJSDoc for use on
+    // VariableDeclaration. The full sub-Parser approach (17.61 attempt) regressed
+    // jsdocReferenceGlobalTypeInCommonJs_ts because TypeNode positions point into
+    // the JSDoc-internal substring (offset 0), and downstream `getTypeFromTypeReference`
+    // for unresolvable namespace paths (e.g. Puppeteer.Keyboard) emits TS2503 with
+    // start position 0 — which maps to wrong source location. Restricting the
+    // bridge to primitives produces a synthetic KeywordTypeNode that no
+    // name-resolution path consumes positions for.
+    private fun parsePrimitiveTypeFromJSDoc(comments: List<Comment>?): TypeNode? {
+        if (comments.isNullOrEmpty()) return null
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            val typeText = extractAtTypeBraceContent(ct)?.trim() ?: continue
+            val kind = primitiveKeywordKindFor(typeText) ?: continue
+            return KeywordTypeNode(kind = kind, pos = -1, end = -1)
+        }
+        return null
+    }
+
+    private fun primitiveKeywordKindFor(typeText: String): SyntaxKind? = when (typeText) {
+        "string" -> SyntaxKind.StringKeyword
+        "number" -> SyntaxKind.NumberKeyword
+        "boolean" -> SyntaxKind.BooleanKeyword
+        "any" -> SyntaxKind.AnyKeyword
+        "unknown" -> SyntaxKind.UnknownKeyword
+        "never" -> SyntaxKind.NeverKeyword
+        "void" -> SyntaxKind.VoidKeyword
+        "undefined" -> SyntaxKind.UndefinedKeyword
+        "null" -> SyntaxKind.NullKeyword
+        "bigint" -> SyntaxKind.BigIntKeyword
+        "symbol" -> SyntaxKind.SymbolKeyword
+        "object" -> SyntaxKind.ObjectKeyword
+        else -> null
     }
 
     // Locates `@type { ... }` inside a JSDoc block comment and returns the

@@ -536,6 +536,8 @@ data class VariableDeclaration(
     override val trailingComments: List<Comment>? = null,
     /** Same-line comments between the name (or type annotation) and the `=` initializer. */
     val nameTrailingComments: List<Comment>? = null,
+    /** True when [type] was synthesized from a leading primitive JSDoc `@type {...}` comment in a JS file. */
+    val typeFromJSDoc: Boolean = false,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.VariableDeclaration
 }

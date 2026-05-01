@@ -52448,7 +52448,9 @@ interface DataView {
                 }
                 // Check variable type annotations and initializer expressions
                 for (decl in stmt.declarationList.declarations) {
-                    if (decl.type != null) {
+                    // 17.62: types synthesized from a leading primitive `@type {...}` JSDoc
+                    // comment are valid in JS files — skip TS8010 for that case.
+                    if (decl.type != null && !decl.typeFromJSDoc) {
                         emitTs8xxxForType(decl.type!!, source, fileName)
                     }
                     // Walk into initializer to find ClassExpression type params etc.
