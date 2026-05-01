@@ -43414,6 +43414,36 @@ interface DataView {
      * TS2341 is checked first (private member accessibility).
      */
     /** Populate currentLocalTypes with resolved parameter types for TS2339/TS2345 checking. */
+    /**
+     * 17.73: Push a function-like's type parameters into [currentTypeParamScope]
+     * so subsequent `getTypeFromTypeNode("T")` calls resolve to Type.TypeParam.
+     * Returns the previous scope so the caller can restore it via finally.
+     * Constraints are resolved AFTER all type params are inserted (so `<T, U extends T>`
+     * works). When [typeParameters] is null/empty, no scope change is made.
+     */
+    private fun pushFunctionTypeParamsScope(typeParameters: List<TypeParameter>?): Map<String, Type.TypeParam>? {
+        val saved = currentTypeParamScope
+        if (typeParameters.isNullOrEmpty()) return saved
+        val scope = (saved?.toMutableMap() ?: mutableMapOf())
+        for (tpDecl in typeParameters) {
+            val tp = Type.TypeParam()
+            tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+            scope[tpDecl.name.text] = tp
+        }
+        currentTypeParamScope = scope
+        // Resolve constraints AFTER all type params are in scope (so siblings can refer to each other).
+        for (tpDecl in typeParameters) {
+            val tp = scope[tpDecl.name.text] ?: continue
+            tpDecl.constraint?.let {
+                try { tp.constraint = getTypeFromTypeNode(it) } catch (_: StackOverflowError) {}
+            }
+            tpDecl.default?.let {
+                try { tp.default = getTypeFromTypeNode(it) } catch (_: StackOverflowError) {}
+            }
+        }
+        return saved
+    }
+
     private fun populateParameterLocalTypes(parameters: List<Parameter>) {
         for (param in parameters) {
             val paramName = param.name
@@ -47620,6 +47650,14 @@ interface DataView {
             if (leftType === unknownType || rightType === unknownType) return
             if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
             if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            // 17.73: TypeParam-with-literal-union-constraint vs literal — when one
+            // side is a TypeParam whose apparent type is a union of all literals
+            // (e.g. `T extends "a" | "b"`) and the other side is a literal, use
+            // the literal-subtype-aware intersection helper to detect empty
+            // overlap. If empty (never), emit TS2367 with the TypeParam's NAME
+            // (not its constraint) so the message reads `... types 'T' and '"x"'
+            // have no overlap.` matching TypeScript's display.
+            checkTypeParamLiteralNoOverlap(expr, leftType, rightType, source, fileName)?.let { return }
             if (leftType !is Type.Reference || rightType !is Type.Reference) return
             if (leftType.target !== rightType.target) return
             val leftArgs = leftType.resolvedTypeArguments ?: return
@@ -47645,6 +47683,88 @@ interface DataView {
                 length = length,
             ))
         } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
+     * 17.73: TS2367 narrow extension — TypeParam-with-literal-union-constraint
+     * vs literal. Returns Unit (non-null) if a TS2367 diagnostic was emitted,
+     * null if the pattern didn't apply. Uses the 17.72 [intersectTwoTypesForWrite]
+     * helper to compute the apparent-type intersection with full union
+     * distribution + literal subtype reduction.
+     *
+     * Pattern: `t === "x"` where `t: T` and `T extends "a" | "b"` — apparent
+     * type of T is `"a" | "b"`; intersection with `"x"` distributes to
+     * `"a" & "x" | "b" & "x"` = `never`. When the apparent type is NOT a
+     * union of all literals (e.g. `T extends string`), bail — that case is
+     * a primitive vs literal pair which would still overlap (`string & "x"`
+     * = `"x"`).
+     */
+    private fun checkTypeParamLiteralNoOverlap(
+        expr: BinaryExpression,
+        leftType: Type,
+        rightType: Type,
+        source: String,
+        fileName: String,
+    ): Unit? {
+        val literalFlags = TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral
+
+        fun apparentLiteralUnion(t: Type): Type? {
+            if (t !is Type.TypeParam) return null
+            val apparent = t.constraint?.let { getApparentType(it) } ?: return null
+            return when (apparent) {
+                is Type.Union -> if (apparent.types.all { it.flags.hasAny(literalFlags) }) apparent else null
+                else -> if (apparent.flags.hasAny(literalFlags)) apparent else null
+            }
+        }
+
+        // Recover the literal-typed view of an expression that getTypeOfExpression
+        // widened to its primitive (e.g. StringLiteralNode → stringType). When the
+        // expression IS a literal node, [literalTypeOfExpression] returns the
+        // narrow literal type — exactly what TS2367 needs to compare against the
+        // TypeParam's apparent literal-union constraint.
+        val leftLit = literalTypeOfExpression(expr.left)
+        val rightLit = literalTypeOfExpression(expr.right)
+        val leftEffective = leftLit ?: leftType
+        val rightEffective = rightLit ?: rightType
+
+        val leftIsTP = leftEffective is Type.TypeParam
+        val rightIsTP = rightEffective is Type.TypeParam
+        val leftIsLit = leftEffective.flags.hasAny(literalFlags)
+        val rightIsLit = rightEffective.flags.hasAny(literalFlags)
+
+        val intersected: Type? = when {
+            leftIsTP && rightIsLit -> {
+                val app = apparentLiteralUnion(leftEffective) ?: return null
+                intersectTwoTypesForWrite(app, rightEffective)
+            }
+            rightIsTP && leftIsLit -> {
+                val app = apparentLiteralUnion(rightEffective) ?: return null
+                intersectTwoTypesForWrite(leftEffective, app)
+            }
+            else -> return null
+        }
+        if (intersected == null || !intersected.flags.hasAny(TypeFlags.Never)) return null
+
+        // Display the un-widened TypeParam name (typeToString of leftType / rightType)
+        // and the literal form of the other side — matches TypeScript's TS2367 message.
+        val leftDisp = if (leftLit != null) typeToString(leftLit) else typeToString(leftType)
+        val rightDisp = if (rightLit != null) typeToString(rightLit) else typeToString(rightType)
+        val start = expr.pos
+        val length = expressionTrueEnd(expr.right) - start
+        if (length <= 0) return null
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This comparison appears to be unintentional because the types '$leftDisp' and '$rightDisp' have no overlap.",
+            category = DiagnosticCategory.Error,
+            code = 2367,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        return Unit
     }
 
     /**
@@ -50484,7 +50604,18 @@ interface DataView {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     currentLocalTypes = currentLocalTypes.toMutableMap()
-                    populateParameterLocalTypes(stmt.parameters)
+                    // 17.73: Push function type parameters during param-annotation
+                    // resolution so refs like `t: T` resolve to Type.TypeParam(T)
+                    // instead of errorType. Required for TS2367 narrow extension
+                    // to detect TypeParam-vs-literal no-overlap. Scope is restored
+                    // before walking the body — currentLocalTypes carries the
+                    // resolved Type.TypeParam forward.
+                    val savedScope = pushFunctionTypeParamsScope(stmt.typeParameters)
+                    try {
+                        populateParameterLocalTypes(stmt.parameters)
+                    } finally {
+                        currentTypeParamScope = savedScope
+                    }
                     checkArithmeticInStatements(body.statements, source, fileName)
                     currentLocalTypes = savedLocalTypes
                 }
@@ -50495,7 +50626,12 @@ interface DataView {
                         is MethodDeclaration -> member.body?.let { body ->
                             val savedLocalTypes = currentLocalTypes
                             currentLocalTypes = currentLocalTypes.toMutableMap()
-                            populateParameterLocalTypes(member.parameters)
+                            val savedScope = pushFunctionTypeParamsScope(member.typeParameters)
+                            try {
+                                populateParameterLocalTypes(member.parameters)
+                            } finally {
+                                currentTypeParamScope = savedScope
+                            }
                             checkArithmeticInStatements(body.statements, source, fileName)
                             currentLocalTypes = savedLocalTypes
                         }
@@ -50719,6 +50855,13 @@ interface DataView {
         if (type.flags.hasAny(TypeFlags.EnumLiteral)) return true
         // Unions: all constituents must be valid
         if (type is Type.Union) return type.types.all { isValidArithmeticOperand(it, allowString) }
+        // 17.73: TypeParam — recurse on constraint (apparent type). Treat
+        // unconstrained as anyType-equivalent here to avoid regressing tests
+        // that previously saw `t: T` as anyType (no constraint resolved).
+        if (type is Type.TypeParam) {
+            val c = type.constraint ?: return true
+            return isValidArithmeticOperand(c, allowString)
+        }
         if (allowString && isStringLikeType(type)) return true
         return false
     }
