@@ -35207,6 +35207,16 @@ interface DataView {
             if (propType == null) {
                 val objType = getTypeOfExpression(target.expression)
                 if (objType === anyType || objType === errorType) return
+                // 17.72: Intersection-typed receiver — compute write type as the
+                // intersection of per-constituent write types (setter param types
+                // OR regular property types), distribute over unions, and reduce
+                // literal-vs-primitive subtype pairs. Gate on at least one
+                // constituent contributing via SetAccessor — preserves existing
+                // behavior for plain property intersections.
+                if (objType is Type.Intersection) {
+                    if (checkIntersectionPropertyAssignment(target, value, objType, propName, source, fileName)) return
+                    return
+                }
                 if (objType !is Type.Object) return
                 resolveStructuredTypeMembers(objType)
                 val propSym = objType.members?.get(propName) ?: return
@@ -35298,6 +35308,218 @@ interface DataView {
                 messageChain = chain.toList(),
             ))
         } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
+     * 17.72: Handle property assignment on an intersection-typed receiver.
+     * Walks the intersection's constituents (each a Type.Object), looks up the
+     * property's WRITE type on each (SetAccessor's param type for getter/setter
+     * pairs, or the property type for regular properties), then reduces the
+     * intersection of write types via [reduceIntersectionForWriteType] (which
+     * distributes over unions and applies literal/primitive subtype reduction).
+     *
+     * Gated on at least one constituent contributing via SetAccessor — without
+     * this gate, plain property intersections like `{x: number} & {x: string}`
+     * would emit new diagnostics, regressing existing tests.
+     *
+     * Returns `true` if a TS2322 was emitted (caller should return), `false` if
+     * the path didn't apply (caller may continue but typically returns since
+     * we've already handled the intersection case).
+     */
+    private fun checkIntersectionPropertyAssignment(
+        target: PropertyAccessExpression,
+        value: Expression,
+        intersection: Type.Intersection,
+        propName: String,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val writeTypes = mutableListOf<Type>()
+        var hasSetterContribution = false
+        var hasReadOnlyConstituent = false
+        for (constituent in intersection.types) {
+            if (constituent !is Type.Object) continue
+            try { resolveStructuredTypeMembers(constituent) } catch (_: StackOverflowError) { continue }
+            // Symbol with declarations (Class/Interface) — walk class members
+            // directly to find SetAccessor / GetAccessor / PropertyDeclaration.
+            val constSym = constituent.symbol ?: continue
+            var setterDecl: SetAccessor? = null
+            var getterDecl: GetAccessor? = null
+            var propertyDecl: PropertyDeclaration? = null
+            for (decl in constSym.declarations) {
+                val classMembers = when (decl) {
+                    is ClassDeclaration -> decl.members
+                    is InterfaceDeclaration -> decl.members
+                    else -> continue
+                }
+                for (m in classMembers) {
+                    when (m) {
+                        is SetAccessor -> if (getMemberName(m.name) == propName) setterDecl = m
+                        is GetAccessor -> if (getMemberName(m.name) == propName) getterDecl = m
+                        is PropertyDeclaration -> if (getMemberName(m.name) == propName) propertyDecl = m
+                        else -> {}
+                    }
+                }
+            }
+            // Also inspect type-literal members when the constituent is an
+            // anonymous object type (e.g. `type T = { get x(): string; set x(v: ...): void }`).
+            // These don't have a Class/InterfaceDeclaration but do have a
+            // TypeLiteral whose members were processed by resolveAnonymousTypeMembers.
+            val writeType: Type? = when {
+                setterDecl != null -> {
+                    hasSetterContribution = true
+                    val firstParam = setterDecl.parameters.firstOrNull()
+                    firstParam?.type?.let { getTypeFromTypeNode(it) }
+                }
+                getterDecl != null && propertyDecl == null -> {
+                    // Read-only — track but contribute null so intersection skips this constituent.
+                    // Writing to a read-only property fires TS2540 elsewhere.
+                    hasReadOnlyConstituent = true
+                    null
+                }
+                propertyDecl != null -> {
+                    val propSym = constituent.members?.get(propName)
+                    if (propSym == null) null
+                    else {
+                        val resolved = resolveGenericPropertyType(constituent, propSym)
+                            ?: getTypeOfSymbol(propSym)
+                        if (resolved !== anyType && resolved !== errorType) resolved else null
+                    }
+                }
+                else -> null
+            }
+            if (writeType != null && writeType !== errorType && writeType !== anyType) {
+                writeTypes.add(writeType)
+            }
+        }
+        // Gate: only emit when at least one setter contributed. This preserves
+        // existing behavior for plain property intersections.
+        if (!hasSetterContribution) return false
+        if (hasReadOnlyConstituent) return false  // Skip — read-only intersection emits TS2540
+        if (writeTypes.isEmpty()) return false
+
+        val reducedTarget = reduceIntersectionForWriteType(writeTypes)
+        if (reducedTarget === anyType || reducedTarget === errorType) return false
+        if (reducedTarget.flags.hasAny(TypeFlags.Never)) return false  // Can't write anything; defer to TS2540
+
+        // 17.72: When target contains literal types, preserve the value's literal
+        // type instead of widening to the primitive — same pattern as 17.66/17.67
+        // for var-decl init / assignment RHS / call arg sites. Required so
+        // `i.prop2 = 42` where reducedTarget==`42` succeeds (42 ≡ 42), and so
+        // failing assignments display the literal source (e.g. `'"hello"'` not
+        // `'string'`).
+        val valueType = if (propTypeContainsLiteral(reducedTarget)) {
+            literalTypeOfExpression(value) ?: getTypeOfExpression(value)
+        } else {
+            getTypeOfExpression(value)
+        }
+        if (valueType === anyType || valueType === errorType) return false
+        if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return false
+
+        if (checkTypeRelatedTo(valueType, reducedTarget, assignableRelation)) return false
+
+        val displaySource = typeToString(valueType)
+        val displayTarget = typeToString(reducedTarget)
+        val start = target.expression.pos
+        val length = target.name.pos + target.name.text.length - start
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+            category = DiagnosticCategory.Error,
+            code = 2322,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        return true
+    }
+
+    /**
+     * Reduce an intersection of types by pairwise distribution over unions and
+     * primitive/literal subtype reduction. Used by [checkIntersectionPropertyAssignment].
+     *
+     * - `(A | B) & C` → `(A & C) | (B & C)` (distribute)
+     * - `42 & number` → `42` (literal subtype of primitive)
+     * - `string & number` → `never` (incompatible primitive flags)
+     * - `"a" & "b"` → `never` (different literal values, same kind)
+     */
+    private fun reduceIntersectionForWriteType(types: List<Type>): Type {
+        if (types.isEmpty()) return unknownType
+        var current: Type = types[0]
+        for (i in 1 until types.size) {
+            current = intersectTwoTypesForWrite(current, types[i])
+            if (current.flags.hasAny(TypeFlags.Never)) return neverType
+        }
+        return current
+    }
+
+    private fun intersectTwoTypesForWrite(a: Type, b: Type): Type {
+        if (a === b) return a
+        if (a.flags.hasAny(TypeFlags.Never) || b.flags.hasAny(TypeFlags.Never)) return neverType
+        if (a.flags.hasAny(TypeFlags.Any)) return b
+        if (b.flags.hasAny(TypeFlags.Any)) return a
+        if (a.flags.hasAny(TypeFlags.Unknown)) return b
+        if (b.flags.hasAny(TypeFlags.Unknown)) return a
+
+        // Distribute over Union: (X | Y) & Z = (X & Z) | (Y & Z)
+        if (a is Type.Union) {
+            val mapped = a.types.map { intersectTwoTypesForWrite(it, b) }
+            return getUnionType(mapped)
+        }
+        if (b is Type.Union) {
+            val mapped = b.types.map { intersectTwoTypesForWrite(a, it) }
+            return getUnionType(mapped)
+        }
+
+        // Both non-union, non-special — apply primitive / literal pairwise reduction.
+        val literalFlags = TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral
+        val primFlags = TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or
+            TypeFlags.BigInt or TypeFlags.ESSymbol
+        val aIsLit = a.flags.hasAny(literalFlags)
+        val bIsLit = b.flags.hasAny(literalFlags)
+        val aIsPrim = a.flags.hasAny(primFlags)
+        val bIsPrim = b.flags.hasAny(primFlags)
+
+        if (aIsLit && bIsPrim) return if (literalMatchesPrimitive(a, b)) a else neverType
+        if (bIsLit && aIsPrim) return if (literalMatchesPrimitive(b, a)) b else neverType
+        if (aIsLit && bIsLit) {
+            // Same kind?
+            if (a is Type.StringLiteral && b is Type.StringLiteral) {
+                return if (a.value == b.value) a else neverType
+            }
+            if (a is Type.NumberLiteral && b is Type.NumberLiteral) {
+                return if (a.value == b.value) a else neverType
+            }
+            if (a is Type.BigIntLiteral && b is Type.BigIntLiteral) {
+                return if (a.value == b.value) a else neverType
+            }
+            if (a is Type.Intrinsic && b is Type.Intrinsic &&
+                a.flags.hasAny(TypeFlags.BooleanLiteral) && b.flags.hasAny(TypeFlags.BooleanLiteral)) {
+                return if (a.intrinsicName == b.intrinsicName) a else neverType
+            }
+            // Different literal kinds → incompatible
+            return neverType
+        }
+        if (aIsPrim && bIsPrim) {
+            // Same primitive flag → take one; different → never.
+            val af = a.flags.value and primFlags.value
+            val bf = b.flags.value and primFlags.value
+            return if (af == bf) a else neverType
+        }
+
+        // General case (object types, etc.) — fall back to plain intersection.
+        return getIntersectionType(listOf(a, b))
+    }
+
+    private fun literalMatchesPrimitive(literal: Type, primitive: Type): Boolean = when {
+        literal.flags.hasAny(TypeFlags.StringLiteral) && primitive.flags.hasAny(TypeFlags.String) -> true
+        literal.flags.hasAny(TypeFlags.NumberLiteral) && primitive.flags.hasAny(TypeFlags.Number) -> true
+        literal.flags.hasAny(TypeFlags.BooleanLiteral) && primitive.flags.hasAny(TypeFlags.Boolean) -> true
+        literal.flags.hasAny(TypeFlags.BigIntLiteral) && primitive.flags.hasAny(TypeFlags.BigInt) -> true
+        else -> false
     }
 
     /**
