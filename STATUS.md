@@ -2,6 +2,16 @@
 
 **Phase 4 — Checker buildout.** 8,447 / 10,078 tests passing (~84%).
 
+**17.70 (2026-05-01, net-zero infra)** — Extend contextual literal preservation
+to return-statement source. Mirror of 17.66/17.67 for `checkReturnAssignability`
+(Checker.kt ~34274). When `propTypeContainsLiteral(targetType)` is true, source
+type is computed via `literalTypeOfExpression(expr) ?: widened`. Same gate, same
+fallback. The literal-preservation pattern is now consistent across all four
+source-type computation sites: var-decl init (17.66), assignment RHS (17.66),
+call arg (17.67), return statement (17.70). Net delta: 1628 → 1628 failed
+(8447 unchanged). Foundation completion — future tests with literal-typed return
+annotations will produce correct source displays without further infrastructure.
+
 **17.67 (2026-05-01, net-zero infra)** — Symmetric extension of 17.66's
 contextual literal preservation to function-call args.
 `checkArgumentsAgainstSignature` (Checker.kt ~45774) now uses

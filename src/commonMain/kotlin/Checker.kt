@@ -34271,8 +34271,17 @@ interface DataView {
                 val savedContextual = contextualType
                 val useCtx = targetType is Type.Object && (expr is ArrowFunction || expr is FunctionExpression)
                 if (useCtx) contextualType = targetType
+                // 17.70: contextual literal preservation for return-statement source —
+                // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
+                // contains literal types and the return expression is a literal,
+                // preserve the literal instead of widening to the primitive.
                 val sourceType = try {
-                    if (expr != null) getTypeOfExpression(expr) else undefinedType
+                    if (expr != null) {
+                        val widened = getTypeOfExpression(expr)
+                        if (propTypeContainsLiteral(targetType)) {
+                            literalTypeOfExpression(expr) ?: widened
+                        } else widened
+                    } else undefinedType
                 } finally {
                     if (useCtx) contextualType = savedContextual
                 }
