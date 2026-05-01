@@ -33829,7 +33829,18 @@ interface DataView {
             if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
                 contextualType = targetType
             }
-            val rawSourceTypeRaw = getTypeOfExpression(init)
+            // 17.66: contextual literal preservation. When the target type contains
+            // literal types (e.g. `"x" | "y"`, `keyof typeof obj`), and the init is
+            // a literal-typed expression (string/number/bigint/template literal,
+            // true/false, or unary-minus on a numeric), preserve the literal type
+            // instead of widening to the primitive. This mirrors TypeScript's
+            // bidirectional contextual-typing rule and produces the correct source
+            // display for TS2322 (`Type '"z"'` vs `Type 'string'`).
+            val rawSourceTypeRaw = if (propTypeContainsLiteral(targetType)) {
+                literalTypeOfExpression(init) ?: getTypeOfExpression(init)
+            } else {
+                getTypeOfExpression(init)
+            }
             contextualType = savedContextual
             // 17.43: contextual literal preservation — when init is a generic
             // call whose substituted return type contains a widened-string/
@@ -34555,7 +34566,15 @@ interface DataView {
                         if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression)) {
                             contextualType = tt
                         }
-                        val sourceType = getTypeOfExpression(expr.right)
+                        // 17.66: contextual literal preservation for assignment RHS — when
+                        // target is a literal-containing type and RHS is a literal expression,
+                        // preserve the literal instead of widening to the primitive (matches
+                        // TypeScript's bidirectional contextual-typing rule).
+                        val sourceType = if (propTypeContainsLiteral(tt)) {
+                            literalTypeOfExpression(expr.right) ?: getTypeOfExpression(expr.right)
+                        } else {
+                            getTypeOfExpression(expr.right)
+                        }
                         contextualType = savedContextual
                         lastMissingPropertyName = null
                         lastMissingIndexSigKind = null

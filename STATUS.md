@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,445 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,447 / 10,078 tests passing (~84%).
+
+**17.66 (2026-05-01, +2)** — Contextual literal preservation for var-decl init
+and assignment-expression RHS. Flips `checkJsObjectLiteralHasCheckedKeyof_ts`
+plus one additional test. Mirrors TypeScript's bidirectional contextual-typing
+rule: when target type contains literal types (literal Union, single literal,
+keyof producing literals), source/RHS literal expressions keep their literal
+type (`"x"`, `"z"`) instead of widening to the primitive (`string`). Two-spot
+edit in Checker.kt: `checkVarDeclAssignability` and `checkAssignmentExpression`.
+Each gated on `propTypeContainsLiteral(targetType)` (existing 17.43 helper) —
+non-literal-containing targets fall through to the existing widened path. Uses
+existing `literalTypeOfExpression(expr)` helper. Surfaced by 17.65's broader
+JSDoc `@type` bridge for var-decls — pre-17.65 the test produced ZERO
+diagnostics, post-17.65 produced wrong-display, post-17.66 produces correct
+diagnostics matching TypeScript baseline. Net delta: 1630 → 1628 failed (8445 →
+8447 passing). Zero regressions across 10078-test suite.
 
 **17.65 (2026-05-01, net-zero infra)** — Widen JSDoc `@type {T}` bridge for
 VariableDeclaration to non-primitive types via name-resolution gate. Implements
