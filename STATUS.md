@@ -2,6 +2,23 @@
 
 **Phase 4 — Checker buildout.** 8,441 / 10,078 tests passing (~84%).
 
+**17.55 (2026-05-01, net-zero infra)** — Display improvements for TS2420
+implements clause: (1) class name includes type parameters
+(`ObservableArray<T>` not `ObservableArray`) via new `classNameRaw`/`className`
+split — squiggle uses raw length so it doesn't extend into the type-param
+list; (2) `Array<T>` / `ReadonlyArray<T>` rendered as `T[]` / `readonly T[]`
+shorthand; (3) `OBJECT_PROTOTYPE_PROPERTIES` filter (toString, valueOf, etc.)
+applied to the missing-property walk — mirrors `propertiesRelatedTo` /
+`collectMissingProperties`. Net-zero on 10078-test suite (no flips, no
+regressions). Two TS2420 baselines that name a generic class
+(`bluebirdStaticThis`, `genericArrayExtenstions`) now produce correct
+display; neither flips because of unrelated gaps (`bluebirdStaticThis` has
+many other diagnostic mismatches; `genericArrayExtenstions` still has a
+property-count mismatch — 4 extras over TS's es2015 baseline because our
+embedded `Array<T>` includes ES2016+ methods like `includes`/`flat`/`at`/
+`findLast`/`findLastIndex` that the test target lacks). Test count
+unchanged 8441 / 1634 / 3.
+
 **17.54 (2026-05-01, +1)** — TS2420 "incorrectly implements interface" for
 inherited-private property mismatches. Flips `interfaceImplementation8_ts`.
 The existing privacy check at `checkImplementsClauses` (Checker.kt ~39915)
