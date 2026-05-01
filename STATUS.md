@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,448 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,452 / 10,078 tests passing (~84%).
+
+**17.72 (2026-05-01, +4)** — Intersection write-type for property assignment
+on accessor-divergent classes. Flips `divergentAccessorsTypes4_ts` and
+`divergentAccessorsTypes5_ts` in both `target=es5` and `target=es2015`
+variants (4 test cases). New `checkIntersectionPropertyAssignment` branch in
+`checkPropertyAccessAssignment` (Checker.kt ~35210): when receiver type is
+`Type.Intersection`, walks each constituent's class/interface declarations
+to find the property's WRITE type per constituent (SetAccessor's first param
+type for getter/setter pairs, or the property type for regular properties),
+then reduces via the new `reduceIntersectionForWriteType`. Reduction
+distributes intersection over union (`(A | B) & C` → `(A & C) | (B & C)`)
+and applies primitive/literal subtype reduction (`42 & number` → `42`,
+`string & 42` → `never`, `"a" & "b"` → `never`). Gated on at least one
+constituent contributing via SetAccessor — preserves existing behavior for
+plain property intersections. Read-only intersections (only-getter case)
+are skipped — TS2540 fires elsewhere. Value-side literal preservation
+mirrors the 17.66/17.67/17.70 pattern: when `propTypeContainsLiteral` of
+the reduced target is true, source uses `literalTypeOfExpression(value)`
+fallback to widened. Net delta: 1627 → 1623 failed (8448 → 8452 passing).
+Zero regressions across 10078-test suite.
 
 **17.71 (2026-05-01, +1)** — TS8024 — JSDoc `@param` tag with non-matching name
 in JS files. Flips `jsdocParamTagInvalid_ts`. New `checkJSDocParamTags()` walker

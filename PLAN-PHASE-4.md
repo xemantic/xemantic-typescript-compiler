@@ -2619,6 +2619,32 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.72, 8448 → 8452, +4) — Intersection write-type for property assignment on accessor-divergent classes:** Continuation /loop after 17.71. `find_candidates.py --fresh` returned a fresh batch this session: 4/77 MISS candidates not previously skipped — `divergentAccessorsTypes4_ts` and `divergentAccessorsTypes5_ts` in both `target=es5` and `target=es2015` variants. All four expect TS2322 with target display `'42'` or `'"hello"'` for assignments through intersection-typed receivers (e.g. `i: One & Two; i.prop2 = "hello"`).
+
+  **Implementation:** new `checkIntersectionPropertyAssignment` branch in `checkPropertyAccessAssignment` (Checker.kt ~35210), reached when `objType is Type.Intersection`:
+  - Walk each constituent's class/interface declarations to find SetAccessor / GetAccessor / PropertyDeclaration with the matching property name (uses raw AST traversal, not the symbol's `declarations` list — `members.getOrPut` only runs the lambda once, so SetAccessor declarations registered after a GetAccessor for the same name don't appear in the symbol).
+  - Per-constituent WRITE type: SetAccessor's first param type if present; PropertyDeclaration's type if no setter; null/skip if only GetAccessor (read-only, defers to TS2540 elsewhere).
+  - Two new helpers `reduceIntersectionForWriteType` + `intersectTwoTypesForWrite`: pairwise reduce list of types; distribute intersection over union (`(A | B) & C` → `(A & C) | (B & C)` via `getUnionType` filter); apply primitive/literal subtype reduction (`42 & number` → `42`, `string & 42` → `never`, `"a" & "b"` → `never`); fall back to `getIntersectionType` for general object cases.
+  - Gate: only fires when at least one constituent contributed via SetAccessor (`hasSetterContribution`). Prevents regressions from plain property intersections like `{x: number} & {x: string}` which would now compute `never` write type and emit spurious TS2322 for every value.
+  - Read-only intersection (`hasReadOnlyConstituent`) skipped — TS2540 fires elsewhere; mixing setter + getter-only would compute write-type from setters but writing should still error per TS2540.
+  - Value-side literal preservation: when `propTypeContainsLiteral(reducedTarget)` is true, source uses `literalTypeOfExpression(value) ?: getTypeOfExpression(value)` — same pattern as 17.66/17.67/17.70. Required so `i.prop2 = 42` succeeds (42 ≡ 42 reduced from `number & (string | 42)`) and so failing assignments display the literal source.
+
+  **Worked example (test 4, line 31 `i.prop2 = "hello"`):**
+  - `i: One & Two`. `Type.Intersection([One, Two])`.
+  - `One.prop2` is `prop2: number;` — write type `number`.
+  - `Two.prop2` has `set prop2(s: string | 42)` — write type `string | 42`.
+  - Reduce: `intersectTwoTypesForWrite(number, string | 42)`: distribute over union → `[intersect(number, string), intersect(number, 42)]` = `[never, 42]`, filtered/union → `42`.
+  - `reducedTarget = NumberLiteral(42)`. `propTypeContainsLiteral(42) = true`.
+  - `valueType = literalTypeOfExpression("hello") = StringLiteral("hello")`.
+  - `checkTypeRelatedTo("hello", 42, assignableRelation) = false`.
+  - Emit `Type '"hello"' is not assignable to type '42'.` with squiggle on `i.prop2`.
+
+  **Test results:** All 4 target tests pass. Full-suite re-run: 1627 → 1623 failed (8448 → 8452 passing). Zero regressions.
+
+  **Foundation:** the `reduceIntersectionForWriteType` / `intersectTwoTypesForWrite` helpers (with full distribution + literal subtype reduction) are also applicable to: contextual typing (where intersection types appear as expected types), TS2367 comparison checks for intersection-typed expressions, narrowing of intersection types under control flow, and structural comparison of intersection literals. The pattern is contained per-call-site for now to avoid regression risk; future sessions can extend usage opportunistically.
+
+  **Anti-loop check:** Fresh candidate appeared post-17.71 — `find_candidates.py --fresh` returned 4 MISS entries. Lands real code per protocol option (a) — small new-diagnostic-correctness fix. Pool was non-empty (4 fresh candidates); all 4 closed by this single commit. The fix uses the divergent-accessor pattern's narrow shape (intersection of classes with setter/getter pairs) — it's not a general "intersection property write-type" infrastructure piece since the gate requires at least one SetAccessor contribution, intentionally narrower than TypeScript's full semantics.
+
   **Session 2026-05-01 (17.71, 8447 → 8448, +1) — TS8024 JSDoc @param non-matching name in JS files:** Continuation /loop after 17.70. Found `jsdocParamTagInvalid_ts` (single-test +1) by sweeping failing tests with primitive `@param` patterns: `/** @param {string} colour */ function f(color) {}` should fire TS8024 ("JSDoc '@param' tag has name 'colour', but there is no parameter with that name.") with squiggle on `colour` at column 21.
 
   **Implementation:** new `checkJSDocParamTags()` walker (Checker.kt ~7959):
