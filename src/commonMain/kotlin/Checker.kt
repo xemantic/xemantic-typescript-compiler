@@ -41386,7 +41386,7 @@ interface DataView {
                         // Add signature elaboration for function types
                         // (also populates `relatedInfo` with TS2208 when base has a
                         // method-level TypeParam that derived overrides with a concrete type).
-                        addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source)
+                        addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source, classTypeParams)
                         if (derivedType is Type.TypeParam && derivedType.constraint == null &&
                             classTypeParams != null) {
                             val tpName = derivedType.symbol?.name
@@ -42071,6 +42071,7 @@ interface DataView {
         relatedInfo: MutableList<Diagnostic>? = null,
         fileName: String? = null,
         source: String? = null,
+        classTypeParams: List<TypeParameter>? = null,
     ) {
         if (derivedType !is Type.Object || basePropType !is Type.Object) return
         val derivedSigs = derivedType.callSignatures
@@ -42111,14 +42112,29 @@ interface DataView {
                 // concrete type, TypeScript hints that the base TypeParam might
                 // need an `extends <derivedType>` constraint to allow the override.
                 // Only emit when relatedInfo collector is present (TS2416 path).
+                // 17.78: Also fall back to the TypeParam's symbol declarations for
+                // INTERFACE-level / class-level TypeParams (not just method-level) —
+                // e.g. `interface IFoo<T>` where `T` appears in `foo(x:T):T` is an
+                // interface-level TypeParam, not a method-level one.
                 if (relatedInfo != null && fileName != null && source != null &&
                     baseParamType is Type.TypeParam && derivedParamType !is Type.TypeParam) {
                     val baseDecl = baseSig.declaration
                     val baseTpName = baseParamType.symbol?.name
                     val baseTpDecls = (baseDecl as? MethodDeclaration)?.typeParameters
-                    val baseTpDecl = baseTpDecls?.firstOrNull { it.name.text == baseTpName }
-                    if (baseTpDecl != null) {
-                        val tpPos = baseTpDecl.name.pos
+                    val methodLevelDecl = baseTpDecls?.firstOrNull { it.name.text == baseTpName }
+                    // 17.78: Fall back to the derived class's typeParameters by NAME —
+                    // when base's param TypeParam is substituted via heritage clause
+                    // type arg into the derived class's own T, the symbol.declarations
+                    // chain doesn't carry through (instantiation creates fresh Symbols).
+                    // Looking up by name in `classTypeParams` recovers the correct
+                    // declaration position. Cf. implementGenericWithMismatchedTypes_ts
+                    // where C<T> implements IFoo<T> — IFoo's T gets substituted to C's
+                    // T, and the TS2208 hint should point to C<T>'s T at line 7:9.
+                    val classLevelDecl = classTypeParams?.firstOrNull { it.name.text == baseTpName }
+                    val tpDecl = methodLevelDecl ?: classLevelDecl
+                        ?: baseParamType.symbol?.declarations?.firstOrNull() as? TypeParameter
+                    if (tpDecl != null) {
+                        val tpPos = tpDecl.name.pos
                         val (tpLine, tpChar) = getLineAndCharacterOfPosition(source, tpPos)
                         relatedInfo.add(Diagnostic(
                             message = "This type parameter might need an `extends ${typeToString(derivedParamType)}` constraint.",
@@ -42128,7 +42144,7 @@ interface DataView {
                             line = tpLine,
                             character = tpChar,
                             start = tpPos,
-                            length = baseTpDecl.name.text.length,
+                            length = tpDecl.name.text.length,
                         ))
                     }
                 }
@@ -42141,6 +42157,23 @@ interface DataView {
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
             chain.add("    Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
+            // 17.78: When base's return is a TypeParam and derived's return is a
+            // concrete type, the override is unsound — T can be instantiated to any
+            // type unrelated to the concrete return. Add the "could be instantiated"
+            // advisory chain line + TS2208 related info pointing to the TypeParam's
+            // declaration site (mirror of the param-mismatch branch above for the
+            // return-type case). Cf. implementGenericWithMismatchedTypes_ts where
+            // `class C2<T> implements IFoo2<T> { foo<Tstring>(x: Tstring): number }`
+            // mismatches `(x: T) => T`'s return — the `T` in the BASE interface's
+            // declaration carries the TS2208 hint.
+            // 17.78: TS2208 hint is NOT emitted for return-type mismatches —
+            // adding `T extends number` constraint wouldn't fix `number → T` (the
+            // assignability is in the wrong direction). TypeScript adds only the
+            // "could be instantiated" chain line in this case.
+            if (targetReturn is Type.TypeParam && sourceReturn !is Type.TypeParam) {
+                val tpName = typeToString(targetReturn)
+                chain.add("      '$tpName' could be instantiated with an arbitrary type which could be unrelated to '${typeToString(sourceReturn)}'.")
+            }
         }
     }
 

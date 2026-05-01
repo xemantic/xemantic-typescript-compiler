@@ -2619,6 +2619,22 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.78, 8459 → 8460, +1) — TS2208 + "could be instantiated" for TS2416 method-override class-TypeParam mismatches:** Continuation /loop after 17.77. Pool stayed at 0/0/0 fresh. The small-diff scan surfaced `implementGenericWithMismatchedTypes_ts` (3 lines) — missing the param-mismatch TS2208 hint for `class C<T> implements IFoo<T> { foo(x: string): number }` and missing the return-mismatch "could be instantiated" advisory for `class C2<T> implements IFoo2<T> { foo<Tstring>(x: Tstring): number }`.
+
+  **Root cause:** `addSignatureElaboration`'s PARAM-mismatch branch (Checker.kt ~42114) only looked up the TS2208 target via `(baseDecl as? MethodDeclaration)?.typeParameters` — method-level TypeParams. For interface-level TypeParams (`interface IFoo<T>`'s `T` appearing in a method's signature), this returns null. The TypeParam in `baseParamType` after instantiation is C's T (substituted via heritage clause type arg), but its `symbol.declarations` chain is empty because instantiation creates fresh Symbols. Result: TS2208 never fired for the most common pattern (class implements generic interface with shared T).
+
+  **Implementation:**
+  - **Param-mismatch branch (PARAM):** add a `classTypeParams: List<TypeParameter>?` parameter to `addSignatureElaboration` and thread it from the call site (`checkClassPropertyOverrides` already has `classDecl.typeParameters` in scope at line 41189). Look up `tpDecl` by name in `classTypeParams` as a fallback when method-level decl is null. Falls through to `baseParamType.symbol?.declarations?.firstOrNull()` only if neither is found.
+  - **Return-mismatch branch (RETURN):** add the chain advisory `'T' could be instantiated with an arbitrary type which could be unrelated to 'X'.` when target return is `Type.TypeParam` and source return is concrete. Critically, do NOT emit TS2208 here — TypeScript's `extends X` constraint hint doesn't fix wrong-direction return assignability (an `extends number` constraint on T wouldn't make `number → T` work because T could still be widened to e.g. `string | number`).
+
+  **Initial attempt regressed:** my first version emitted TS2208 in the return-mismatch branch too. Targeted test re-run showed C2's case adding a spurious TS2208 line. Fixed by removing the TS2208 emission from the return-mismatch branch — it's chain-advisory only.
+
+  **Test results:** 1616 → 1615 failed (8459 → 8460 passing). Zero regressions across 10078-test suite.
+
+  **Foundation:** The `classTypeParams` threading through `addSignatureElaboration` makes the TS2208 hint robust to instantiation-via-heritage-clause patterns. Future TS2416 elaboration extensions (e.g., property mismatches on indexed types, additional return-related elaboration) can reuse the same `classLevelDecl` fallback.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). Found via the small-diff scan that surfaced 17.74-17.77 — fifth feature commit this iteration.
+
   **Session 2026-05-01 (17.77, 8458 → 8459, +1) — Refine 17.15b TS2769 callee-position rule:** Continuation /loop after 17.76. Pool stayed at 0/0/0 fresh. The small-diff candidate scan surfaced `signatureLengthMismatchInOverload_ts` (4 lines) — squiggle at column 1 width 1 (the callee `f`) instead of expected column 3 width 33 (the arrow-fn arg). Test pattern: `f(callback: (string, string) => void)` overload 1 + `f(callback: (number) => void)` overload 2, called with `f((arg: number, arg2: number) => {})` — both overloads fail at arg[0], differing only in *why* (param-type mismatch vs arity).
 
   **Root cause:** 17.15b changed `checkArgumentsAgainstOverloads` (Checker.kt ~45759) to point the squiggle at the callee whenever ANY overload had a fn-vs-fn arg mismatch. Motivated by `specializedSignatureAsCallbackParameter1_ts` where overloads fail at DIFFERENT positions (arg[0] number-vs-string for one; arg[1] fn-vs-fn for the other) — TypeScript squiggles the callee in that case. But when all overloads fail at the SAME argument position, TypeScript squiggles that argument.
