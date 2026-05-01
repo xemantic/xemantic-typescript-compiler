@@ -21297,11 +21297,16 @@ interface DataView {
             }
             is FunctionExpression -> {
                 val hasThisParam = hasThisParameter(expr.parameters)
-                val newThisIsTyped = hasThisParam
-                val newShadowPos = if (!hasThisParam && thisIsTyped) {
+                // 17.63: in JS-like files, a leading JSDoc `@this {Type}` annotation
+                // on a function expression types `this` and suppresses TS2683 inside
+                // the body — same effect as a `this:` parameter. The exact type
+                // doesn't matter for the diagnostic; we only check tag presence.
+                val hasJSDocThis = hasJSDocThisTag(expr.leadingComments, fileName)
+                val newThisIsTyped = hasThisParam || hasJSDocThis
+                val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
                     // This function expression shadows a typed this context
                     expr.name?.pos ?: expr.pos
-                } else if (!hasThisParam && !thisIsTyped) {
+                } else if (!newThisIsTyped && !thisIsTyped) {
                     shadowFunctionPos
                 } else -1
                 expr.body.let {
@@ -21480,6 +21485,32 @@ interface DataView {
         val first = parameters.firstOrNull() ?: return false
         val name = first.name
         return name is Identifier && name.text == "this"
+    }
+
+    // 17.63: detect a leading JSDoc `@this {Type}` annotation on a function
+    // expression in a JS-like file. Returns true if any leading MultiLineComment
+    // contains the `@this` tag (followed by whitespace/newline/`{` so we don't
+    // match `@thisIsNotATag`). The actual type isn't parsed — only tag presence
+    // matters for TS2683 suppression.
+    private fun hasJSDocThisTag(comments: List<Comment>?, fileName: String): Boolean {
+        if (comments.isNullOrEmpty()) return false
+        val isJsLike = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+            fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+        if (!isJsLike) return false
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (true) {
+                val found = ct.indexOf("@this", idx)
+                if (found < 0) break
+                val after = if (found + 5 < ct.length) ct[found + 5] else ' '
+                if (!(after.isLetterOrDigit() || after == '_')) return true
+                idx = found + 5
+            }
+        }
+        return false
     }
 
     private fun emitTS2683(
