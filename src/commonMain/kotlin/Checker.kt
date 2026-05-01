@@ -39930,9 +39930,18 @@ interface DataView {
                         }
                         // 17.54: When the property is inherited (no own member), walk the extends
                         // chain to find where it's declared and whether that declaration is private.
+                        val rawInheritedPrivate: String? = if (!isPrivate && classMember == null) {
+                            findInheritedPrivateProperty(classDecl, propName)
+                        } else null
+                        // Suppress when the interface ALSO inherits from the same base — the
+                        // private declaration is shared, not "separate".
+                        val inheritedPrivate: String? = if (rawInheritedPrivate != null &&
+                                !symbolTransitivelyExtends(ifaceSymbol, rawInheritedPrivate)) {
+                            rawInheritedPrivate
+                        } else null
                         val privateInTypeName: String? = when {
                             isPrivate -> className
-                            classMember == null -> findInheritedPrivateProperty(classDecl, propName)
+                            inheritedPrivate != null -> inheritedPrivate
                             else -> null
                         }
                         if (privateInTypeName != null) {
@@ -40048,6 +40057,37 @@ interface DataView {
             if (recursive != null) return recursive
         }
         return null
+    }
+
+    // 17.54: Walk the extends chain of a class- or interface-symbol to determine
+    // whether `targetBaseName` appears anywhere in the transitive chain. Used to
+    // suppress TS2420 when both class and interface inherit the same private
+    // declaration from a shared base — the property's declaration is the SAME, not
+    // "separate", so TypeScript does not emit a privacy mismatch.
+    private fun symbolTransitivelyExtends(sym: Symbol, targetBaseName: String, visited: MutableSet<Int> = mutableSetOf()): Boolean {
+        if (sym.id in visited) return false
+        visited.add(sym.id)
+        for (decl in sym.declarations) {
+            val heritage = when (decl) {
+                is InterfaceDeclaration -> decl.heritageClauses
+                is ClassDeclaration -> decl.heritageClauses
+                else -> null
+            } ?: continue
+            for (clause in heritage) {
+                if (clause.token != SyntaxKind.ExtendsKeyword) continue
+                for (typeExpr in clause.types) {
+                    val name = when (val tn = typeExpr.expression) {
+                        is Identifier -> tn.text
+                        is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                        else -> null
+                    } ?: continue
+                    if (name == targetBaseName) return true
+                    val parentSym = globals[name] ?: continue
+                    if (symbolTransitivelyExtends(parentSym, targetBaseName, visited)) return true
+                }
+            }
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
