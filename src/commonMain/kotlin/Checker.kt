@@ -45334,16 +45334,23 @@ interface DataView {
         for (stmt in stmts) {
             when (stmt) {
                 is ClassDeclaration -> {
+                    // 17.76: Require at least one body-less overload-sig declaration AND
+                    // a separate body-having implementation. A single method with a body
+                    // is NOT an overload pair — without this gate, a bare `bar(x: T) {}`
+                    // emits TS2793 "implementation would have succeeded" pointing to
+                    // itself (cf. genericOfACloduleType1/2_ts).
                     var foundOverload = false
+                    var hasBodylessOverload = false
                     var impl: MethodDeclaration? = null
                     for (member in stmt.members) {
                         if (member !is MethodDeclaration) continue
                         val name = (member.name as? Identifier)?.text ?: continue
                         if (name != methodName) continue
                         if (member === overloadDecl) foundOverload = true
+                        if (member.body == null) hasBodylessOverload = true
                         if (member.body != null) impl = member
                     }
-                    if (foundOverload && impl != null) return impl
+                    if (foundOverload && hasBodylessOverload && impl != null) return impl
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
