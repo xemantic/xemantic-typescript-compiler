@@ -2619,6 +2619,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.75, 8455 → 8456, +1) — Skip "provides no match" chain for primitive sources:** Continuation /loop after 17.74. Pool stayed at 0/0/0 fresh. Spot-checked the small-diff candidates list and identified `assignToFn_ts` as a 2-line over-fire: we emit a chain `Type 'string' provides no match for the signature '(n: number): boolean'.` for `x.f = "hello"` where `x.f: (n:number)=>boolean`, but TypeScript's baseline has only the bare TS2322. The chain is correct for object-shaped sources lacking a call sig (e.g. interface→callable), wrong for primitives.
+
+  **Implementation:** `getCallableMismatchElaboration` (Checker.kt ~35541) early-returns null when source is a primitive type (`Type.Intrinsic` / `Type.StringLiteral` / `Type.NumberLiteral` / `Type.BigIntLiteral`). Pairs with the existing object-source non-callable check. Single-spot edit.
+
+  **Test results:** 1620 → 1619 failed (8455 → 8456 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a) — small over-fire suppression that aligns with TypeScript's elaboration semantics. Found via the small-diff failing-test scan that surfaced 17.74 in the same /loop iteration.
+
   **Session 2026-05-01 (17.74, 8453 → 8455, +2) — Function-shaped source vs ArrayLike-shape target chain elaboration:** Continuation /loop after the post-17.73 maint commit. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/77/19) — pool empty. Spot-checked failing tests with very small diff sizes (1-4 lines) and identified `functionAssignabilityWithArrayLike01_ts` (both strict=false and strict=true variants) as a 2-line diff: expected chain `Index signature for type 'number' is missing in type '() => void'.` after the outer TS2322, we emit only the bare TS2322. Two test variants → +2 if flipped.
 
   **Implementation:** three coordinated pieces in Checker.kt:

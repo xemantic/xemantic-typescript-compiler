@@ -35543,6 +35543,13 @@ interface DataView {
         try { resolveStructuredTypeMembers(target) } catch (_: StackOverflowError) { return null }
         val targetSigs = target.callSignatures
         if (targetSigs.isNullOrEmpty()) return null
+        // 17.74: Skip primitive sources — TypeScript emits the "provides no match
+        // for the signature" chain only for object-shaped sources lacking a call
+        // signature, not for primitives like `string`, `number`, etc. (cf.
+        // assignToFn.ts where `x.f = "hello"` against `f: (n:number)=>boolean`
+        // expects the bare TS2322 with no chain).
+        if (source is Type.Intrinsic || source is Type.StringLiteral ||
+            source is Type.NumberLiteral || source is Type.BigIntLiteral) return null
         // Source must be non-callable (no own call sigs)
         val sourceObj = source as? Type.Object
         if (sourceObj != null) {

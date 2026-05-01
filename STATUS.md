@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,455 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,456 / 10,078 tests passing (~84%).
+
+**17.75 (2026-05-01, +1)** — Skip "provides no match for the signature" chain
+for primitive sources. Flips `assignToFn_ts`. Pre-fix: `x.f = "hello"` where
+`x.f: (n:number) => boolean` emitted the over-firing chain
+"  Type 'string' provides no match for the signature '(n: number): boolean'."
+TypeScript's baseline expects only the bare TS2322 for primitive→callable
+mismatches; the "provides no match" chain is reserved for object-shaped sources
+without call signatures. Fix: `getCallableMismatchElaboration` (Checker.kt
+~35541) early-returns null when `source is Type.Intrinsic` /
+`Type.StringLiteral` / `Type.NumberLiteral` / `Type.BigIntLiteral`. Net delta:
+1620 → 1619 failed (8455 → 8456 passing). Zero regressions.
 
 **17.74 (2026-05-01, +2)** — Function-shaped source vs ArrayLike-shape target:
 chain elaboration "Index signature for type 'number' is missing in type
