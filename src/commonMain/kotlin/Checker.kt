@@ -39928,7 +39928,14 @@ interface DataView {
                             is MethodDeclaration -> ModifierFlag.Private in classMember.modifiers
                             else -> false
                         }
-                        if (isPrivate) {
+                        // 17.54: When the property is inherited (no own member), walk the extends
+                        // chain to find where it's declared and whether that declaration is private.
+                        val privateInTypeName: String? = when {
+                            isPrivate -> className
+                            classMember == null -> findInheritedPrivateProperty(classDecl, propName)
+                            else -> null
+                        }
+                        if (privateInTypeName != null) {
                             val classNameNode = classDecl.name ?: continue
                             val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
                             val message = if (isClassTarget) {
@@ -39942,7 +39949,7 @@ interface DataView {
                             val chain = if (ifacePropIsPrivate) {
                                 mutableListOf("  Types have separate declarations of a private property '$propName'.")
                             } else {
-                                mutableListOf("  Property '$propName' is private in type '$className' but not in type '$ifaceName'.")
+                                mutableListOf("  Property '$propName' is private in type '$privateInTypeName' but not in type '$ifaceName'.")
                             }
                             diagnostics.add(Diagnostic(
                                 message = message,
@@ -40004,6 +40011,43 @@ interface DataView {
                 }
             }
         }
+    }
+
+    // 17.54: Walks the extends chain from `classDecl` to find a base class that
+    // declares `propName` as `private`. Returns the base class name if found, else
+    // null. Returns null also when the first base class declaring the property
+    // declares it as public (later derivations would shadow further bases).
+    private fun findInheritedPrivateProperty(classDecl: ClassDeclaration, propName: String): String? {
+        val extClause = classDecl.heritageClauses?.firstOrNull {
+            it.token == SyntaxKind.ExtendsKeyword
+        } ?: return null
+        for (baseExpr in extClause.types) {
+            val baseName = when (val bn = baseExpr.expression) {
+                is Identifier -> bn.text
+                is PropertyAccessExpression -> (bn.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+            val baseSym = globals[baseName] ?: continue
+            val baseClassDecl = baseSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: continue
+            val baseMember = baseClassDecl.members.firstOrNull { m ->
+                when (m) {
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text == propName
+                    is MethodDeclaration -> (m.name as? Identifier)?.text == propName
+                    else -> false
+                }
+            }
+            if (baseMember != null) {
+                val isPrivate = when (baseMember) {
+                    is PropertyDeclaration -> ModifierFlag.Private in baseMember.modifiers
+                    is MethodDeclaration -> ModifierFlag.Private in baseMember.modifiers
+                    else -> false
+                }
+                return if (isPrivate) baseName else null
+            }
+            val recursive = findInheritedPrivateProperty(baseClassDecl, propName)
+            if (recursive != null) return recursive
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------

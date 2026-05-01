@@ -1,6 +1,30 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,440 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,441 / 10,078 tests passing (~84%).
+
+**17.54 (2026-05-01, +1)** — TS2420 "incorrectly implements interface" for
+inherited-private property mismatches. Flips `interfaceImplementation8_ts`.
+The existing privacy check at `checkImplementsClauses` (Checker.kt ~39915)
+walks `classDecl.members` to find the property declaration and inspect
+`ModifierFlag.Private`, but for `class C5 extends C2 implements i1 { }`
+where C5 has no own `name` member and inherits `private name: string` from
+C2, the lookup returned null and the check silently passed. New helper
+`findInheritedPrivateProperty(classDecl, propName)` (Checker.kt ~40010)
+walks the `extends` chain via `ClassDeclaration.heritageClauses` looking
+for the first base class that declares `propName`; returns the base class
+name when the inherited declaration carries `ModifierFlag.Private`, else
+null (public override or property not found in the chain). Wired into the
+existing emission branch via a unified `privateInTypeName` variable: own
+private uses `className`, inherited private uses the base class name from
+the helper. Diagnostic chain becomes `Property 'name' is private in type
+'C2' but not in type 'i1'.` matching baseline (note "type 'C2'", not
+"type 'C5'"). Test source has C4 extends C1 (public) → no emission, C5
+extends C2 (private) → emit, C6 extends C3 (private) → emit. The recursive
+helper handles deeper chains by recursing past base classes that don't
+declare the property. Conservative: returns null when first declaration
+found is public (covers the case where a derived shadows a base's private
+with a public member). Net delta: 1635 → 1634 failed (8440 → 8441 passing).
+Zero regressions across 10078-test suite.
 
 **17.53 (2026-05-01, +1)** — `typeToString` for `Type.Union` now follows TypeScript's
 display convention: nullish members (`null`/`undefined`/`void`) are sorted to the
