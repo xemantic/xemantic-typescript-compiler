@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,459 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,460 / 10,078 tests passing (~84%).
+
+**17.78 (2026-05-01, +1)** — TS2208 / "could be instantiated" advisory for
+TS2416 method-override mismatches involving class-level TypeParams. Flips
+`implementGenericWithMismatchedTypes_ts`. Two coordinated pieces in
+`addSignatureElaboration` (Checker.kt ~42066): (1) PARAM-mismatch branch
+extended to fall back to the derived class's `classTypeParams` (looked up
+by name) when the base TypeParam isn't a method-level decl — covers the
+common case of `class C<T> implements IFoo<T>` where `IFoo<T>`'s `T` gets
+substituted to `C<T>`'s `T` and the symbol-declarations chain doesn't
+carry through (instantiation creates fresh Symbols). (2) RETURN-mismatch
+branch adds the `'T' could be instantiated with an arbitrary type which
+could be unrelated to 'X'.` chain advisory when target return is TypeParam
+and source return is concrete — but does NOT emit TS2208 for return-type
+mismatches (TypeScript only emits TS2208 for param mismatches because the
+hint `extends X` doesn't fix the wrong-direction return assignability).
+Wired `classTypeParams` through `addSignatureElaboration`'s call site.
+Net delta: 1616 → 1615 failed (8459 → 8460 passing). Zero regressions.
 
 **17.77 (2026-05-01, +1)** — Refine 17.15b's TS2769 callee-position rule:
 only switch squiggle to callee when overloads fail at DIFFERENT argument
