@@ -2501,6 +2501,8 @@ rationale, yield estimates, and risk notes — those long-form descriptions are
 the source of truth; the queue items below are pointers + smallest-substep
 decompositions.
 
+- [x] **17.71. TS8024 — JSDoc `@param` tag with non-matching name in JS files (+1 — flips `jsdocParamTagInvalid_ts`).** **DONE 2026-05-01.** New `checkJSDocParamTags()` walker (Checker.kt ~7959) emits TS8024 ("JSDoc '@param' tag has name 'X', but there is no parameter with that name.") when a `/** @param {T} name */` comment names an identifier that's not in the function's parameter list. Walks all FunctionDeclaration / FunctionExpression / ArrowFunction / MethodDeclaration / Constructor in JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`). Per-tag parsing handles whitespace/`*`/line breaks between `@param`, the optional `{Type}` brace expression, optional `[name]` brackets, and the identifier name. Squiggle position computed via `comment.pos + nameStartInCommentText`. Skips nested-name cases (`@param obj.foo`) since those don't add to the param-name set being checked. Net delta: 1628 → 1627 failed (8447 → 8448 passing). Zero regressions across 10078-test suite. Foundation: the same `walkJSDocParamTagsInStmts` infrastructure is reusable for future JSDoc walkers (`@returns`, `@type` extraction for parameters, etc.).
+
 - [x] **17.70. Extend contextual literal preservation to return-statement source (net-zero infra).** **DONE 2026-05-01.** Mirror of 17.66/17.67 for `checkReturnAssignability`. Wraps `getTypeOfExpression(expr)` in `if (propTypeContainsLiteral(targetType)) literalTypeOfExpression(expr) ?: widened else widened`. Same gate, same fallback. Net delta: 1628 → 1628 failed (8447 unchanged). Closes the literal-preservation pattern across all source-type computation sites: var-decl init (17.66), assignment RHS (17.66), call arg (17.67), return statement (17.70). No currently-failing test gates SOLELY on this; foundation for future tests with literal-typed return annotations.
 
 - [x] **17.69. Push function typeParameters into currentTypeParamScope during body checking — ATTEMPTED + REVERTED 2026-05-01 (-25 regressions).** Follow-up to 17.68's finding that `checkFunctionBody` doesn't push the function's `typeParameters` onto `currentTypeParamScope`, so type references like `t: T` inside the body resolve to `errorType`. Implementation pushed `funcTypeParams` (with constraints/defaults resolved against the OUTER scope first) onto `currentTypeParamScope` for the duration of body checking, with proper save/restore in finally. Single-spot edit at `checkFunctionBody`'s entry. Full-suite re-run: 1628 → 1653 failed (-25 regressions). Reverted. **Why it regressed:** existing body type-checking gracefully degrades when type params resolve to `errorType` — many checks short-circuit on `errorType`/`anyType` to avoid asserting through unresolved type-param constraints. Once we push the scope, those checks now see `Type.TypeParam` (with potentially mismatched constraint info) and emit FP diagnostics: TS2322 / TS2345 / TS2367 / TS2531 etc. across various tests where the previous "anyType passthrough" behavior was load-bearing. A real fix would need per-call-site rollout: identify each check that gracefully degrades on errorType/anyType, decide if it should now run on TypeParam, fix the comparison logic to handle TypeParam correctly, then enable scope push. That's similar in shape to 17.32's per-file-scope migration (which also rolled out across multiple call sites). Logged for future agents.
@@ -2616,6 +2618,23 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-01 (17.71, 8447 → 8448, +1) — TS8024 JSDoc @param non-matching name in JS files:** Continuation /loop after 17.70. Found `jsdocParamTagInvalid_ts` (single-test +1) by sweeping failing tests with primitive `@param` patterns: `/** @param {string} colour */ function f(color) {}` should fire TS8024 ("JSDoc '@param' tag has name 'colour', but there is no parameter with that name.") with squiggle on `colour` at column 21.
+
+  **Implementation:** new `checkJSDocParamTags()` walker (Checker.kt ~7959):
+  - Iterates all `binderResults`, gates on JS-like file (`.js`/`.jsx`/`.cjs`/`.mjs`).
+  - `walkJSDocParamTagsInStmts` recurses through FunctionDeclaration / ClassDeclaration members / VariableStatement / ExpressionStatement / Block / IfStatement / ReturnStatement / ModuleDeclaration body. `walkJSDocParamTagsInExpr` covers FunctionExpression / ArrowFunction / BinaryExpression / CallExpression / ParenthesizedExpression.
+  - For each function-like, calls `checkJSDocParamTagsForFunction(comments, parameters, ...)` which iterates `@param` matches in each `/** ... */` MultiLineComment.
+  - Per-tag parsing: skip `@paramX` (non-tag), skip whitespace + `*` + line breaks, optional `{Type}` brace expression (depth-counted), optional `[name]` brackets, then identifier name. Squiggle position = `comment.pos + nameStartInCommentText`.
+  - Skips nested-name cases (`@param obj.foo`) — those don't add to the param-name set being checked.
+
+  Wired in via a single-line addition to the `check()` entry point's diagnostic order (after `checkInvalidGlobalAugmentations()`).
+
+  **Test results:** Single-test verification on `jsdocParamTagInvalid_ts` passed. Full-suite re-run: 1628 → 1627 failed (8447 → 8448 passing). Zero regressions.
+
+  **Foundation note:** `walkJSDocParamTagsInStmts` infrastructure is reusable for future JSDoc walkers — `@returns`, `@type` extraction at parameter positions, `@template` (generic param declaration), etc. Each substep would add a new pass over the same walker scaffold.
+
+  **Anti-loop check:** Pool empty pre-attempt (find_candidates --fresh: 0/0/0 filtered from 6/76/20). Prior 17.68/17.69 reverts left the JSDoc work direction open; this session lands a real +1 in that direction. Cadence resumed: net-zero foundations from 17.62-17.67, then +2 at 17.66, +1 here at 17.71.
 
   **Session 2026-05-01 (17.70, 8447 unchanged — net-zero infra) — Extend contextual literal preservation to return-statement source:** Continuation /loop after 17.68/17.69 reverts. Pool empty (find_candidates --fresh: 0/0/0 filtered from 6/76/20). After two consecutive revert-only sessions, decided to land a small but concrete extension of the 17.66/17.67 literal-preservation pattern to the return-statement source-type computation site.
 

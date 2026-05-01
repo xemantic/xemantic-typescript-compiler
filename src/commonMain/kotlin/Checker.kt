@@ -462,6 +462,9 @@ class Checker(
         checkAccessorModifierTarget()
         // 7b'''. TS2669: `declare global { ... }` nested inside a regular namespace.
         checkInvalidGlobalAugmentations()
+        // 7b''''. TS8024: JSDoc `@param` tag with name not matching any function parameter.
+        // JS-like files only (`.js`/`.jsx`/`.cjs`/`.mjs`).
+        checkJSDocParamTags()
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
@@ -8016,6 +8019,158 @@ class Checker(
             SyntaxKind.NullKeyword -> "null"
             SyntaxKind.UndefinedKeyword -> "undefined"
             else -> null
+        }
+    }
+
+    // 17.71: TS8024 — JSDoc `@param` tag with name not matching any function
+    // parameter. JS-like files only. Walks all function-like declarations and
+    // their leading JSDoc comments; for each `@param ... <name>` tag, checks
+    // that <name> matches one of the function's parameters.
+    private fun checkJSDocParamTags() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val isJsLike = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+            if (!isJsLike) continue
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkJSDocParamTagsInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkJSDocParamTagsInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkJSDocParamTagsInStmt(stmt, source, fileName)
+    }
+
+    private fun walkJSDocParamTagsInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                checkJSDocParamTagsForFunction(stmt.leadingComments, stmt.parameters, source, fileName)
+                stmt.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> {
+                for (member in stmt.members) when (member) {
+                    is MethodDeclaration -> {
+                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
+                        member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+                    }
+                    is Constructor -> {
+                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
+                        member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+                    }
+                    is PropertyDeclaration -> member.initializer?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> walkJSDocParamTagsInExpr(stmt.expression, source, fileName)
+            is Block -> walkJSDocParamTagsInStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkJSDocParamTagsInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkJSDocParamTagsInStmt(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+            is ModuleDeclaration -> {
+                when (val body = stmt.body) {
+                    is ModuleBlock -> walkJSDocParamTagsInStmts(body.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkJSDocParamTagsInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is FunctionExpression -> {
+                checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, source, fileName)
+                walkJSDocParamTagsInStmts(expr.body.statements, source, fileName)
+            }
+            is ArrowFunction -> {
+                checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, source, fileName)
+                (expr.body as? Block)?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+            }
+            is BinaryExpression -> {
+                walkJSDocParamTagsInExpr(expr.left, source, fileName)
+                walkJSDocParamTagsInExpr(expr.right, source, fileName)
+            }
+            is CallExpression -> {
+                walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { walkJSDocParamTagsInExpr(it, source, fileName) }
+            }
+            is ParenthesizedExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkJSDocParamTagsForFunction(
+        comments: List<Comment>?,
+        parameters: List<Parameter>,
+        source: String,
+        fileName: String,
+    ) {
+        if (comments.isNullOrEmpty()) return
+        val paramNames = parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (idx < ct.length) {
+                val tagIdx = ct.indexOf("@param", idx)
+                if (tagIdx < 0) break
+                val afterTag = if (tagIdx + 6 < ct.length) ct[tagIdx + 6] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') {
+                    idx = tagIdx + 6
+                    continue
+                }
+                var i = tagIdx + 6
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '\n' || ct[i] == '\r' || ct[i] == '*')) i++
+                if (i < ct.length && ct[i] == '{') {
+                    var depth = 1; i++
+                    while (i < ct.length && depth > 0) {
+                        when (ct[i]) {
+                            '{' -> depth++
+                            '}' -> depth--
+                        }
+                        i++
+                    }
+                }
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                // Optional `[name]` brackets — strip them and treat the inner text as the name.
+                val hasBrackets = i < ct.length && ct[i] == '['
+                if (hasBrackets) i++
+                val nameStart = i
+                while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                val name = ct.substring(nameStart, i)
+                if (name.isEmpty()) {
+                    idx = tagIdx + 6
+                    continue
+                }
+                // Skip nested name (`@param obj.foo`) — out of scope; only flag the
+                // top-level identifier when it's missing from the param list.
+                val isNested = i < ct.length && ct[i] == '.'
+                if (!isNested && name !in paramNames) {
+                    val pos = comment.pos + nameStart
+                    val length = name.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "JSDoc '@param' tag has name '$name', but there is no parameter with that name.",
+                        category = DiagnosticCategory.Error,
+                        code = 8024,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = pos,
+                        length = length,
+                    ))
+                }
+                idx = i
+            }
         }
     }
 

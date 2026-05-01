@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,447 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,448 / 10,078 tests passing (~84%).
+
+**17.71 (2026-05-01, +1)** — TS8024 — JSDoc `@param` tag with non-matching name
+in JS files. Flips `jsdocParamTagInvalid_ts`. New `checkJSDocParamTags()` walker
+in Checker.kt (~7959) emits TS8024 ("JSDoc '@param' tag has name 'X', but there
+is no parameter with that name.") when a `/** @param {T} name */` comment names
+an identifier that's not in the function's parameter list. Walks
+FunctionDeclaration / FunctionExpression / ArrowFunction / MethodDeclaration /
+Constructor in JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`). Per-tag parsing handles
+whitespace/`*`/line breaks between `@param`, optional `{Type}` brace expression,
+optional `[name]` brackets, and the identifier name. Squiggle position computed
+via `comment.pos + nameStartInCommentText`. Skips nested-name cases
+(`@param obj.foo`). Wired into the `check()` entry point right after
+`checkInvalidGlobalAugmentations()`. Net delta: 1628 → 1627 failed (8447 →
+8448 passing). Zero regressions across 10078-test suite. The walker
+infrastructure is reusable for future JSDoc walkers (`@returns`, `@type` at
+parameter positions, `@template`, etc.).
 
 **17.70 (2026-05-01, net-zero infra)** — Extend contextual literal preservation
 to return-statement source. Mirror of 17.66/17.67 for `checkReturnAssignability`
