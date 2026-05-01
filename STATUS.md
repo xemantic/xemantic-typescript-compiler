@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,441 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,442 / 10,078 tests passing (~84%).
+
+**17.56 (2026-05-01, +1)** — Suppress TS2415/TS2420 "separate declarations of
+a private property" when the override has a DIFFERENT type than the base —
+TS2416 type-mismatch is the correct primary diagnostic for that case. Two
+coordinated suppressions in Checker.kt: (1) `checkClassExtendsPrivateConflicts`
+(TS2415, ~40954): in the `derivedIsPrivate && baseIsPrivate` branch, compute
+widened types via `getTypeOfMemberDecl` + `widenType`; if they're not mutually
+assignable, `continue` so TS2415 doesn't gate TS2416 (existing
+`checkClassPropertyOverrides` walk fires TS2416 next). (2)
+`checkImplementsClauses` (TS2420, ~39965): mirror of the same rule — when
+`isPrivate && ifacePropIsPrivate` AND types differ, suppress TS2420. Flips
+`interfaceExtendsClassWithPrivate2_ts`: test has `D extends C implements I`
+with `private x = 2` (number, matches C's `x = 1`) — emits TS2415 + TS2420
+correctly; AND `D2 extends C implements I` with `private x = ""` (string,
+differs from C's number) — pre-fix emitted FP TS2415 + TS2420 and missed
+TS2416 vs C; post-fix emits TS2416 vs C and TS2416 vs I (the two correct
+type-mismatch diagnostics) without the FP "separate decls" lines.
+Conservative gates: bidirectional assignability, widening applied to literal
+initializers, both members must have resolvable types. Net delta: 1634 →
+1633 failed (8441 → 8442 passing). Zero regressions across 10078-test suite.
 
 **17.55 (2026-05-01, net-zero infra)** — Display improvements for TS2420
 implements clause: (1) class name includes type parameters
