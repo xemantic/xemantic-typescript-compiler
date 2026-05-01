@@ -8924,7 +8924,15 @@ class Checker(
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
-                    decl.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                    // 17.65: skip unresolved-name checks for JSDoc-derived types — the
+                    // sub-Parser positions don't reference the original source, so
+                    // TS2503/TS2304 emitted here would land on wrong source locations
+                    // (the regression that 17.61 hit on `jsdocReferenceGlobalTypeInCommonJs_ts`).
+                    // The JSDoc bridge is best-effort; unresolvable refs silently resolve
+                    // to errorType downstream.
+                    if (!decl.typeFromJSDoc) {
+                        decl.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                    }
                 }
             }
             is ExpressionStatement -> {

@@ -2,6 +2,23 @@
 
 **Phase 4 — Checker buildout.** 8,445 / 10,078 tests passing (~84%).
 
+**17.65 (2026-05-01, net-zero infra)** — Widen JSDoc `@type {T}` bridge for
+VariableDeclaration to non-primitive types via name-resolution gate. Implements
+option (a) from 17.61's revert note. Two-line change: (1) `parseVariableStatement`
+now calls `parsePropertyTypeFromJSDoc` (sub-Parser, full type-syntax) instead of
+`parsePrimitiveTypeFromJSDoc` (primitive-only); (2) `checkUnresolvedInStatement`'s
+`is VariableStatement` branch wraps `decl.type?.let { checkUnresolvedInType(...) }`
+in `if (!decl.typeFromJSDoc)` — JSDoc-derived TypeNodes skip TS2503/TS2304
+emission so sub-Parser positions don't land on wrong source. Dodges 17.61's
+regression on `jsdocReferenceGlobalTypeInCommonJs_ts` because no positional
+diagnostic is emitted. Downstream type resolution silently returns errorType for
+unresolvable refs, so the var behaves as if untyped when the JSDoc type can't
+resolve. Net delta: 1630 → 1630 failed (8445 unchanged); both
+`jsdocReferenceGlobalTypeInCommonJs_ts` and `jsExportMemberMergedWithModuleAugmentation_ts`
+verified passing post-change. Foundation for extending the gate to
+PropertyDeclaration / FunctionDeclaration return type / Parameter — each a small
+substep mirroring this commit's pattern.
+
 **17.64 (2026-05-01, net-zero infra)** — Extend 17.63's `@this` JSDoc detection
 from FunctionExpression to FunctionDeclaration. Single-spot edit in
 `checkThisInStatement`'s FunctionDeclaration branch — `newThisIsTyped =

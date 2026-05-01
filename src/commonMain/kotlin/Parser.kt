@@ -630,16 +630,18 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
         var declList = parseVariableDeclarationList()
-        // 17.62: in JS-like files, a single-declarator VariableStatement with no
-        // explicit type and a leading JSDoc `@type {<primitive>}` comment supplies
-        // the primitive type as the declaration's type. Restricted to primitives
-        // (string/number/boolean/etc.) — non-primitive type references would
-        // otherwise leak sub-Parser-derived positions into name-resolution
-        // diagnostics; see 17.61's revert note in PLAN-PHASE-4.md.
+        // 17.62 / 17.65: in JS-like files, a single-declarator VariableStatement
+        // with no explicit type and a leading JSDoc `@type {T}` comment supplies
+        // T as the declaration's type. 17.65 widens beyond 17.62's primitive-only
+        // allowlist by routing through the full sub-Parser (`parsePropertyTypeFromJSDoc`)
+        // — name-resolution diagnostics on the resulting sub-Parser-derived
+        // TypeNode are suppressed via the `decl.typeFromJSDoc` gate in the
+        // checker's `checkUnresolvedInStatement` VariableStatement branch (avoiding
+        // 17.61's spurious-TS2503-with-garbled-squiggle regression).
         if (isJsLikeFile && declList.declarations.size == 1) {
             val decl = declList.declarations[0]
             if (decl.type == null && decl.name is Identifier) {
-                val jsdocType = parsePrimitiveTypeFromJSDoc(comments)
+                val jsdocType = parsePropertyTypeFromJSDoc(comments)
                 if (jsdocType != null) {
                     val newDecl = decl.copy(type = jsdocType, typeFromJSDoc = true)
                     declList = declList.copy(declarations = listOf(newDecl))
