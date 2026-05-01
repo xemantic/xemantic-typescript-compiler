@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,444 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,445 / 10,078 tests passing (~84%).
+
+**17.63 (2026-05-01, +1)** — JSDoc `@this {Type}` suppresses TS2683 in JS-like
+files. Flips `thisInFunctionCallJs_ts`. New `hasJSDocThisTag(comments, fileName)`
+helper in Checker.kt scans `MultiLineComment` entries starting with `/**` for the
+`@this` tag (with a char-after-tag guard against partial-identifier matches like
+`@thisIsNotATag`). Wired into `checkThisInExpr`'s `is FunctionExpression` branch:
+`newThisIsTyped = hasThisParam || hasJSDocThis`. The shadow-pos calculation also
+uses the combined `newThisIsTyped` so JSDoc-typed `this` doesn't FP-fire TS2738
+("outer value of `this` is shadowed"). Type extraction is intentionally skipped —
+only tag presence matters for TS2683 suppression (mirrors TypeScript). Conservative
+gates: JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`) only; only `MultiLineComment`
+starting with `/**`. Net delta: 1631 → 1630 failed (8444 → 8445 passing). Zero
+regressions across 10078-test suite. Pattern reusable for other tag-presence-only
+JSDoc bridges.
 
 **17.62 (2026-05-01, net-zero infra)** — Primitive-only JSDoc `@type {T}` bridge
 for VariableDeclaration. Follow-up to 17.61 revert per its own session note

@@ -2501,6 +2501,8 @@ rationale, yield estimates, and risk notes — those long-form descriptions are
 the source of truth; the queue items below are pointers + smallest-substep
 decompositions.
 
+- [x] **17.63. JSDoc `@this {Type}` suppresses TS2683 in JS-like files (+1 — flips `thisInFunctionCallJs_ts`).** **DONE 2026-05-01.** Mirror of 17.58/17.62 JSDoc bridges for the `@this` tag. New `hasJSDocThisTag(comments, fileName)` helper in Checker.kt scans `MultiLineComment` entries starting with `/**` for the `@this` tag (with a guard against partial-identifier match like `@thisIsNotATag`). Wired into `checkThisInExpr`'s `is FunctionExpression` branch: `newThisIsTyped = hasThisParam || hasJSDocThis`. Conservative scope: gated to JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`) so TS files are unaffected. Type extraction is intentionally skipped — only tag presence matters for TS2683 suppression (mirrors TypeScript's behavior). The `newShadowPos` calculation also uses the combined `newThisIsTyped` so JSDoc-typed `this` doesn't get reported as shadowing an outer typed-this. Net delta: 1631 → 1630 failed (8444 → 8445 passing). Zero regressions across 10078-test suite.
+
 - [x] **17.62. Primitive-only JSDoc `@type {T}` bridge for VariableDeclaration (net-zero infra).** **DONE 2026-05-01.** Follow-up to 17.61's revert per its own session note (option c — allowlist primitive-only `@type` extraction). New `parsePrimitiveTypeFromJSDoc(comments)` helper in Parser.kt extracts `@type {T}` from leading comments and returns a synthetic `KeywordTypeNode(kind, pos=-1, end=-1)` ONLY when T is one of `string`/`number`/`boolean`/`any`/`unknown`/`never`/`void`/`undefined`/`null`/`bigint`/`symbol`/`object`. Wired into `parseVariableStatement` for single-declarator + Identifier-name + null-type + JS-like file. New `typeFromJSDoc: Boolean` flag on `VariableDeclaration`; TS8010 walker skips when set. Synthetic-position TypeNode is harmless because (a) `KeywordTypeNode` has no name to resolve (no TS2503 / TS2304 risk that bit 17.61), (b) TS8010 walker's `length <= 0` guard skips emission for pos=-1/end=-1, (c) `getTypeFromTypeNode` for keyword types returns the corresponding intrinsic without consuming positions. Net delta: 1631 → 1631 failed (8444 unchanged). Zero regressions across 10078-test suite. Foundation for follow-on substep (option a: thread `typeFromJSDoc` into `getTypeFromTypeReference` to suppress diagnostics for unresolvable JSDoc-derived names — would unlock the broader 17.61 case).
 
 - [x] **17.61. JSDoc `@type {T}` bridge extension to VariableDeclaration — ATTEMPTED + REVERTED 2026-05-01 (-1 regression).** Substep of Blocker #5 follow-on (mirrors 17.58's PropertyDeclaration work). Implementation parsed `@type {T}` from VariableStatement leadingComments, attached to the (single, Identifier-named) declaration's `type` via `data class .copy(typeFromJSDoc = true)`, and skipped TS8010 in the var-decl walker. Regressed `jsdocReferenceGlobalTypeInCommonJs_ts` because the sub-Parser-derived TypeNode positions reference the JSDoc-internal substring (offset 0), and downstream `getTypeFromTypeReference` for unresolvable namespace paths (`Puppeteer.Keyboard`) emits TS2503 with start position 0 — which maps to the original source's offset 0 (`const other`), producing a spurious diagnostic with garbled squiggle. The PropertyDeclaration case (17.58) doesn't bite this because primitive types (`string`/`number`) don't trigger name-resolution paths that consume positions. Future attempt should either (a) thread `typeFromJSDoc` into `getTypeFromTypeReference` to suppress unresolved-name diagnostics, (b) reparent positions into the original source via `comment.pos + offset_within_comment` (invasive — every TypeNode field), or (c) allowlist primitive-only `@type` extraction (small scope; skips the regressing test cleanly). Reverted same session.
@@ -2600,6 +2602,32 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-01 (17.63, 8444 → 8445, +1) — JSDoc `@this {Type}` suppresses TS2683 in JS-like files:** Continuation /loop iteration after 17.62. Investigated the EXTRA bucket from `find_candidates.py` looking for narrow over-fire fixes; found `thisInFunctionCallJs_ts +2` — two TS2683 emissions on `function (d) { ... this.data.length ... }` patterns where the function expression has a leading `/** @this {Test} */` JSDoc comment. TypeScript suppresses TS2683 when `@this` JSDoc is present; we didn't.
+
+  **Pattern detection:** Surgical fix — extend the existing TS2683 walker's `FunctionExpression` branch to treat a leading `@this` JSDoc tag as equivalent to a `this:` parameter for diagnostic-suppression purposes.
+
+  **Implementation (1 file):**
+
+  - **Checker.kt** — new `hasJSDocThisTag(comments: List<Comment>?, fileName: String): Boolean` helper (line ~21490, just before `emitTS2683`). Iterates `MultiLineComment` entries starting with `/**`, searches for `@this` tag with a guard: char after `@this` must NOT be alphanumeric / underscore (so `@thisIsNotATag` doesn't match). Gated to JS-like files only (`.js`/`.jsx`/`.cjs`/`.mjs`). Wired into `checkThisInExpr`'s `is FunctionExpression` branch:
+    ```
+    val hasJSDocThis = hasJSDocThisTag(expr.leadingComments, fileName)
+    val newThisIsTyped = hasThisParam || hasJSDocThis
+    val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
+        expr.name?.pos ?: expr.pos
+    } else if (!newThisIsTyped && !thisIsTyped) {
+        shadowFunctionPos
+    } else -1
+    ```
+    The shadow calculation uses the combined `newThisIsTyped` so JSDoc-typed `this` doesn't FP-fire TS2738 ("outer value of `this` is shadowed").
+
+  **Why type extraction is skipped:** Only tag presence matters for TS2683 suppression. The actual `@this {Type}` annotation specifies the type of `this` inside the body, but TS2683 only cares "is `this` annotated at all". Mirrors TypeScript's behavior; deliberately simpler than 17.58/17.62 (which DO need to extract the type for TS2564 / type-checking).
+
+  **Conservative gates verified:** (a) JS-like files only — TS files are unaffected; (b) `@thisIsNotATag` doesn't match (char-after-tag guard); (c) only `MultiLineComment` starting with `/**` (standard JSDoc) — single-line `//` comments and `/* ... */` non-JSDoc blocks ignored; (d) shadow-pos calculation also uses the JSDoc-aware `newThisIsTyped` so TS2738 "shadowed" related-info doesn't FP fire on JSDoc-annotated functions inside class methods.
+
+  **Test results:** Single-test verification on `thisInFunctionCallJs_ts` confirmed flip. Full-suite re-run: 1631 → 1630 failed (8444 → 8445 passing). Zero regressions.
+
+  **Anti-loop check:** Pool empty pre-flip per `find_candidates.py --fresh` (0/0/0 filtered from 7/76/19). The `[SKIP]` marker on `thisInFunctionCallJs_ts` was stale — once 17.58/17.62 JSDoc bridges landed, the `@this` follow-up became tractable. Foundation: the `hasJSDocThisTag` pattern (text-scan with guard, no type extraction) is reusable for other JSDoc tags that affect diagnostic suppression without needing type info (e.g. `@override`, `@readonly`, `@const`).
 
   **Session 2026-05-01 (17.62, 8444 unchanged — net-zero infra) — Primitive-only JSDoc `@type {T}` bridge for VariableDeclaration:** Continuation /loop iteration after 17.61 revert. Per 17.61's own session note ("option c — allowlist primitive-only `@type` extraction; smallest scope; would skip the regressing test cleanly"), implemented the narrowest viable bridge: only `string`/`number`/`boolean`/`any`/`unknown`/`never`/`void`/`undefined`/`null`/`bigint`/`symbol`/`object` accepted; non-primitive types (TypeReference, QualifiedName, function types, etc.) fall through.
 
