@@ -2619,6 +2619,34 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.74, 8453 → 8455, +2) — Function-shaped source vs ArrayLike-shape target chain elaboration:** Continuation /loop after the post-17.73 maint commit. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/77/19) — pool empty. Spot-checked failing tests with very small diff sizes (1-4 lines) and identified `functionAssignabilityWithArrayLike01_ts` (both strict=false and strict=true variants) as a 2-line diff: expected chain `Index signature for type 'number' is missing in type '() => void'.` after the outer TS2322, we emit only the bare TS2322. Two test variants → +2 if flipped.
+
+  **Implementation:** three coordinated pieces in Checker.kt:
+  - **Piece 1 (`propertiesRelatedTo`, ~47349):** when source has callSignatures and target prop is `length` or `name`, attempt to satisfy via Function.prototype's intrinsic types (`numberType` for `length`, `stringType` for `name`). Skip the prop if `checkTypeRelatedTo(protoType, targetPropType, relation)` succeeds. This clears the FP "Property 'length' missing" path so the next-level index-sig check can fire.
+  - **Piece 2 (`objectTypeRelatedTo` index-sig gate, ~47313):** extend the nominal-source-only gate to also accept function-shaped sources (callSignatures non-empty, members null/empty). For function sources, drop the `any`/`unknown` index-type skip — a function type doesn't implicitly satisfy `[n:number]:any` (unlike a nominal class where the 16.4cn FP rationale justified the skip).
+  - **Piece 3 (var-decl chain elaboration, ~34186):** after `getPropertyElaborationChain` returns, if chain is empty AND `lastMissingIndexSigKind != null`, add `"  Index signature for type '$kind' is missing in type '$displaySource'."` — mirrors the assignment-expression path at ~34861 and property-access path at ~35285. Also reset `lastMissingIndexSigKind = null` before the var-decl `checkTypeRelatedTo` call (line 34017) to avoid stale leakage from prior comparisons.
+
+  **Worked example (test, line 2 `const array: ArrayLike<any> = func;`):**
+  - source = `Type.Object` with callSignatures=`[() => void]`, members=null, properties=null
+  - target = `Type.Reference(ArrayLike, [any])` with members={length} + numberIndexInfo of `any`
+  - `propertiesRelatedTo`:
+    - sourceHasCallSigs=true; sourceMembers=emptyMap()
+    - target prop `length`: piece 1 fires, `checkTypeRelatedTo(numberType, numberType)`=true → continue
+    - no other props
+    - returns true
+  - `objectTypeRelatedTo` index-sig check:
+    - isNominalSource=false; isFunctionShaped=true
+    - target.numberIndexInfo != null, source.numberIndexInfo == null
+    - For function-shaped sources, skip the `any`-flag bail-out → `lastMissingIndexSigKind = "number"`, returns false
+  - Var-decl path: `checkTypeRelatedTo` returns false. `allMissing` empty (collectMissingProperties returns [] for null-members source). Enter chain block. `getPropertyElaborationChain` returns null (source.members null). Piece 3 fires: `chain = ["  Index signature for type 'number' is missing in type '() => void'."]`
+  - Emit TS2322 with the chain. Matches baseline.
+
+  **Test results:** 1622 → 1620 failed (8453 → 8455 passing). Zero regressions across 10078-test suite.
+
+  **Foundation:** `isFunctionShaped` source detection in `objectTypeRelatedTo` is a building block for any future case where a function type is compared structurally against a non-function target. The `length`/`name` Function.prototype satisfaction in `propertiesRelatedTo` mirrors the existing FUNCTION_PROTOTYPE_METHODS skip (call/apply/bind from 17.27) but uses an assignability check rather than a name set, since `length`/`name` have specific types (number/string) that must be satisfiable by the target's prop type.
+
+  **Anti-loop check:** Pool was empty pre-fix (find_candidates --fresh: 0/0/0); spot-checked 1-4-line diffs and found this test with a contained 2-line elaboration gap. Lands real code per protocol option (a) — small new-elaboration fix that composes infrastructure across three call sites. The post-17.73 maint commit was the prior session's clean stop; this is a fresh /loop attempt that found work.
+
   **Session 2026-05-01 (post-17.73 maint, 8453 unchanged) — Stale skip-log audit:** Continuation /loop after 17.73. Full-suite confirms 8453 / 1622 / 3 unchanged from 17.73 baseline. `find_candidates.py --fresh` returns 0/0/0 (filtered from 6/77/19) — pool genuinely empty; spot-checked SKIP candidates against recent infrastructure (17.72/17.73 intersection-of-literals reduction) and found no narrow gates that would compose into a +1 win without multi-piece work. Last `chore(maint)` was 30 commits ago (well past the ≤5-session limit), so a focused stale-skip-log audit is warranted. Verified three confirmed stale entries via XML parse against current pass/fail set: (a) `thisInFunctionCallJs_ts` (line 4759, listed under "Blocker #2 — JSDoc") — flipped 17.63 via `hasJSDocThisTag` helper; (b) `jsExportMemberMergedWithModuleAugmentation_ts` (line 4836) — flipped 17.58 via JSDoc `@type {T}` bridge; (c) `errorMessagesIntersectionTypes01/02_ts` duplicate entry (line 5063 in "Session 2026-04-23 additional" block — the line-4789 entry was already strikethrough'd) — both flipped 17.41/17.42/17.43. Other passing-but-listed names from the audit script were either session-note descriptions (not skip-log entries proper) or already-strikethrough'd entries with the test name appearing in the description. Anti-loop check: no actionable Blocker substep available in queue (all 17.30/17.31/17.32/17.34/17.35/17.46/17.58/17.71/17.72/17.73 substeps closed; 17.45/17.61/17.68/17.69 attempted+reverted with regression analysis recorded). Per protocol option (c) "stale-skip-log audit when genuinely warranted (≤ once per ~5 sessions)" — this is the first maint commit since 30 commits ago. STATUS.md unchanged. Net delta: 0 tests, 3 skip-log entries strikethrough'd.
 
   **Session 2026-05-01 (17.73, 8452 → 8453, +1) — TS2367 narrow extension for TypeParam-with-literal-union-constraint vs literal:** Continuation /loop after 17.72. `find_candidates.py --fresh` returned 0/0/0; spot-checked the 17.67 session note's mention of `compareTypeParameterConstrainedByLiteralToLiteral_ts` being blocked on "intersection-of-literals reduction" — exactly what 17.72 just landed. Confirmed test was still failing pre-this-commit; the literal-subtype-aware intersection helper from 17.72 became the missing piece.

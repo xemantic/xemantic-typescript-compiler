@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,453 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,455 / 10,078 tests passing (~84%).
+
+**17.74 (2026-05-01, +2)** — Function-shaped source vs ArrayLike-shape target:
+chain elaboration "Index signature for type 'number' is missing in type
+'() => void'." now fires for `func: () => void; const a: ArrayLike<any> = func;`.
+Flips `functionAssignabilityWithArrayLike01_ts` (strict=false and strict=true
+variants). Three coordinated pieces in Checker.kt: (1) `propertiesRelatedTo`
+treats target props `length: number` and `name: string` as implicitly satisfied
+by Function.prototype when source has callSignatures (skipped via
+assignability check on the prototype's intrinsic type); (2) `objectTypeRelatedTo`'s
+missing-index-sig gate extended from nominal-only to also accept
+function-shaped sources (callSignatures only, no nominal members) — for
+function sources, the `any`/`unknown` index-type skip is also dropped, since
+a function type doesn't implicitly satisfy `[n:number]:any` (unlike a nominal
+class where the FP risk justified the skip in 16.4cn); (3) var-decl init's
+chain elaboration block (Checker.kt ~34186) now consults
+`lastMissingIndexSigKind` after `getPropertyElaborationChain`, mirroring the
+assignment-expression path at ~34861 and property-access path at ~35285.
+Also resets `lastMissingIndexSigKind = null` before the var-decl comparison
+to avoid stale leakage from prior comparisons. Net delta: 1622 → 1620 failed
+(8453 → 8455 passing). Zero regressions across 10078-test suite.
 
 **17.73 (2026-05-01, +1)** — TS2367 narrow extension: TypeParam-with-literal-
 union-constraint vs literal. Flips `compareTypeParameterConstrainedByLiteralToLiteral_ts`.
