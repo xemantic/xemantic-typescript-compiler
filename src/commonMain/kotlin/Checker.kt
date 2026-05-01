@@ -39748,7 +39748,14 @@ interface DataView {
         } ?: return
         if (implementsClauses.isEmpty()) return
 
-        val className = classDecl.name?.text ?: return
+        val classNameRaw = classDecl.name?.text ?: return
+        // 17.55: Include class type parameters in display name (e.g. `ObservableArray<T>`)
+        // to match TypeScript's TS2420/TS2720 message format for generic classes.
+        val classTypeParamSuffix = classDecl.typeParameters?.takeIf { it.isNotEmpty() }
+            ?.mapNotNull { tp -> (tp.name as? Identifier)?.text }
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { "<${it.joinToString(", ")}>" } ?: ""
+        val className = classNameRaw + classTypeParamSuffix
 
         // Collect class's OWN declared member names (not inherited from interfaces)
         val classMemberNames = mutableSetOf<String>()
@@ -39818,9 +39825,15 @@ interface DataView {
                 resolveStructuredTypeMembers(ifaceType)
                 // 16.4k: Include type arguments in the displayed interface name
                 // (e.g. `Comparable<string>` not just `Comparable`).
+                // 17.55: Use array shorthand `T[]` / `readonly T[]` for `Array<T>` /
+                // `ReadonlyArray<T>` to match TypeScript's display convention.
                 val ifaceName = typeExpr.typeArguments?.takeIf { it.isNotEmpty() }?.let { args ->
                     val argStrs = args.map { formatTypeForDisplay(it) ?: return@let null }
-                    "$baseIfaceName<${argStrs.joinToString(", ")}>"
+                    when {
+                        baseIfaceName == "Array" && argStrs.size == 1 -> "${argStrs[0]}[]"
+                        baseIfaceName == "ReadonlyArray" && argStrs.size == 1 -> "readonly ${argStrs[0]}[]"
+                        else -> "$baseIfaceName<${argStrs.joinToString(", ")}>"
+                    }
                 } ?: baseIfaceName
                 val diagCode = if (isClassTarget) 2720 else 2420
                 val targetKindWord = if (isClassTarget) "class" else "interface"
@@ -39848,6 +39861,11 @@ interface DataView {
                 val missingProps = mutableListOf<Symbol>()
                 for (ifaceProp in ifaceProps) {
                     val propName = ifaceProp.name
+                    // 17.55: Skip Object.prototype members (toString, valueOf, etc.) — every
+                    // JS object inherits them via the prototype chain, so they're never
+                    // truly "missing". Mirrors the filter in `propertiesRelatedTo` /
+                    // `collectMissingProperties`.
+                    if (propName in OBJECT_PROTOTYPE_PROPERTIES) continue
                     if (propName !in classMemberNames &&
                         !isOptionalProperty(ifaceProp) &&
                         !isStaticOnlyProperty(ifaceProp)) {
@@ -39905,7 +39923,7 @@ interface DataView {
                         line = line,
                         character = character,
                         start = classNameNode.pos,
-                        length = className.length,
+                        length = classNameRaw.length,
                         messageChain = chain,
                         relatedInformation = relatedInfo,
                     ))
@@ -39968,7 +39986,7 @@ interface DataView {
                                 line = line,
                                 character = character,
                                 start = classNameNode.pos,
-                                length = className.length,
+                                length = classNameRaw.length,
                                 messageChain = chain,
                             ))
                             return
@@ -39996,7 +40014,7 @@ interface DataView {
                         line = line,
                         character = character,
                         start = classNameNode.pos,
-                        length = className.length,
+                        length = classNameRaw.length,
                         messageChain = chain,
                     ))
                     return
@@ -40013,7 +40031,7 @@ interface DataView {
                         line = line,
                         character = character,
                         start = classNameNode.pos,
-                        length = className.length,
+                        length = classNameRaw.length,
                         messageChain = chain,
                     ))
                     return
