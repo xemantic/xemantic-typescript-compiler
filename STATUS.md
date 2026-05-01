@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,443 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,444 / 10,078 tests passing (~84%).
+
+**17.59 (2026-05-01, +1)** — TS2774 asymmetric in-test-position rule. Flips
+`truthinessCallExpressionCoercion2_ts`. Closes the FP that 17.57 surfaced when
+Window/Performance started resolving past `anyType`: `walkUncalledChain` walked
+both LHS and RHS of `&&`/`||`/`??` unconditionally, but TypeScript's
+`bothHelper`/`helper` pair only treats the LHS as always-tested — RHS inherits
+the parent context's test-position status. Implementation: added
+`inTestPosition: Boolean = true` parameter to `checkUncalledInCondition` and
+`walkUncalledChain`; LHS always passes `true` (short-circuit truthiness check is
+intrinsic to the operator), RHS passes the inherited value. Leaf emission gated
+on `inTestPosition`. Two call sites switched to `inTestPosition = false`:
+ExpressionStatement-rooted truthiness chains (statement discards the value) and
+expression-bodied arrow bodies (body produces a value, not a tested condition).
+All other call sites (IfStatement, WhileStatement, DoWhileStatement,
+ForStatement, ConditionalExpression conditions) inherit the default `true` — no
+behavior change for genuinely-tested chains. Net delta: 1632 → 1631 failed
+(8443 → 8444 passing). Zero regressions across 10078-test suite. 17.30c's
+original-spec narrowing piece (`&&`-chain narrowing for `perf && perf.measure
+&& ...`) still pending — 17.59 addresses a discrete sub-bug from 17.57's lib
+addition, separate from the queued narrowing work.
 
 **17.58 (2026-05-01, +1)** — JSDoc `@type {T}` bridge for PropertyDeclaration in
 JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`). Flips

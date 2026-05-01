@@ -17982,8 +17982,12 @@ interface DataView {
             is ExpressionStatement -> {
                 // Treat top-level `&&`/`||`/`??` BinaryExpression as a truthiness-test
                 // site (mirrors TypeScript's check on every BE with these operators).
+                // ExpressionStatement discards the expression's value, so the
+                // statement itself is NOT a test position — only LHS operands of
+                // short-circuit operators inherit "tested" status from the operator
+                // semantics; RHS operands do not. Pass inTestPosition = false.
                 if (isTruthinessChain(stmt.expression)) {
-                    checkUncalledInCondition(stmt.expression, null, source, fileName)
+                    checkUncalledInCondition(stmt.expression, null, source, fileName, inTestPosition = false)
                 }
                 walkUncalledChecksInExpression(stmt.expression, source, fileName)
             }
@@ -18080,9 +18084,12 @@ interface DataView {
                 withUncalledScope(expr.parameters, body as? Block) {
                     if (body is Block) walkUncalledChecksInStatements(body.statements, source, fileName)
                     else if (body is Expression) {
-                        // Expression-bodied arrow: treat top-level `&&`/`||`/`??` as a check site.
+                        // Expression-bodied arrow: treat top-level `&&`/`||`/`??` as a
+                        // check site. The arrow's body produces a value rather than
+                        // being a tested condition; same in-test-position rule as
+                        // ExpressionStatement above.
                         if (isTruthinessChain(body)) {
-                            checkUncalledInCondition(body, null, source, fileName)
+                            checkUncalledInCondition(body, null, source, fileName, inTestPosition = false)
                         }
                         walkUncalledChecksInExpression(body, source, fileName)
                     }
@@ -18132,8 +18139,15 @@ interface DataView {
      * to suppression sources (`isFoo || isFoo()` still emits on `isFoo`).
      * Mirrors TypeScript's `bothHelper`/`helper` truthiness-walker pair.
      */
-    private fun checkUncalledInCondition(cond: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression> = emptyList()) {
-        walkUncalledChain(cond, body, source, fileName, extraBodies, andSiblings = emptyList())
+    private fun checkUncalledInCondition(
+        cond: Expression,
+        body: Statement?,
+        source: String,
+        fileName: String,
+        extraBodies: List<Expression> = emptyList(),
+        inTestPosition: Boolean = true,
+    ) {
+        walkUncalledChain(cond, body, source, fileName, extraBodies, andSiblings = emptyList(), inTestPosition = inTestPosition)
     }
 
     private fun walkUncalledChain(
@@ -18143,29 +18157,35 @@ interface DataView {
         fileName: String,
         extraBodies: List<Expression>,
         andSiblings: List<Expression>,
+        inTestPosition: Boolean,
     ) {
         var cur: Expression = expr
         while (cur is ParenthesizedExpression) cur = cur.expression
         if (cur is BinaryExpression) {
             when (cur.operator) {
                 SyntaxKind.AmpersandAmpersand -> {
-                    // `&&`: each operand sees the OTHER as a suppression source.
-                    walkUncalledChain(cur.left, body, source, fileName, extraBodies, andSiblings + cur.right)
-                    walkUncalledChain(cur.right, body, source, fileName, extraBodies, andSiblings + cur.left)
+                    // `&&`: LHS truthiness is always tested for short-circuit; RHS
+                    // truthiness becomes the operator's result and is "tested" only
+                    // when the parent context is itself a test (mirrors TypeScript's
+                    // bothHelper/helper asymmetry — see `truthinessCallExpressionCoercion2`
+                    // where RHS of `&&` inside an ExpressionStatement does NOT fire).
+                    walkUncalledChain(cur.left, body, source, fileName, extraBodies, andSiblings + cur.right, inTestPosition = true)
+                    walkUncalledChain(cur.right, body, source, fileName, extraBodies, andSiblings + cur.left, inTestPosition = inTestPosition)
                     return
                 }
                 SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
                     // `||`/`??`: walk both operands; siblings are NOT suppression sources
                     // (because the right side may not execute when left is truthy).
-                    // But the parent's andSiblings still apply.
-                    walkUncalledChain(cur.left, body, source, fileName, extraBodies, andSiblings)
-                    walkUncalledChain(cur.right, body, source, fileName, extraBodies, andSiblings)
+                    // Same asymmetric in-test-position propagation as `&&`.
+                    walkUncalledChain(cur.left, body, source, fileName, extraBodies, andSiblings, inTestPosition = true)
+                    walkUncalledChain(cur.right, body, source, fileName, extraBodies, andSiblings, inTestPosition = inTestPosition)
                     return
                 }
                 else -> {}
             }
         }
-        // Leaf: emit if applicable, with sibling-aware suppression.
+        // Leaf: emit only when the operand's truthiness is actually being tested.
+        if (!inTestPosition) return
         emitUncalledHelper(cur, body, source, fileName, extraBodies + andSiblings)
     }
 
