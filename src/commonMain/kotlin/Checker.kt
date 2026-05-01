@@ -17949,6 +17949,30 @@ interface DataView {
         }
     }
 
+    // 17.30c.i: typed-locals scope for a free-standing Block (top-level or
+    // inside an if/while/for body). Without this, declarations like
+    // `{ const perf = window.performance; if (perf && perf.measure) ... }`
+    // resolve to anyType through the file-level fallback in
+    // `getTypeOfIdentifier` because block-scoped consts/lets are not in
+    // `currentLocalTypes` / `currentFileLocals`. Function bodies don't go
+    // through this branch — they walk via `withUncalledScope` against the
+    // statements directly, so no double-push.
+    private inline fun withUncalledBlockScope(block: Block, doBody: () -> Unit) {
+        val shadowed = mutableSetOf<String>()
+        val typed = mutableMapOf<String, Type>()
+        collectUncalledTypedLocalsFromBody(block, typed, shadowed)
+        if (typed.isEmpty() && shadowed.isEmpty()) {
+            doBody()
+            return
+        }
+        uncalledShadowedScopes.addLast(shadowed)
+        uncalledTypedLocalsStack.addLast(typed)
+        try { doBody() } finally {
+            uncalledShadowedScopes.removeLast()
+            uncalledTypedLocalsStack.removeLast()
+        }
+    }
+
     private fun walkUncalledChecksInStatements(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) walkUncalledChecksInStatement(stmt, source, fileName)
     }
@@ -17978,7 +18002,9 @@ interface DataView {
                 }
                 walkUncalledChecksInStatement(stmt.statement, source, fileName)
             }
-            is Block -> walkUncalledChecksInStatements(stmt.statements, source, fileName)
+            is Block -> withUncalledBlockScope(stmt) {
+                walkUncalledChecksInStatements(stmt.statements, source, fileName)
+            }
             is ExpressionStatement -> {
                 // Treat top-level `&&`/`||`/`??` BinaryExpression as a truthiness-test
                 // site (mirrors TypeScript's check on every BE with these operators).

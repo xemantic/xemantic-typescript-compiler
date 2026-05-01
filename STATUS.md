@@ -2,6 +2,26 @@
 
 **Phase 4 — Checker buildout.** 8,444 / 10,078 tests passing (~84%).
 
+**17.60 (2026-05-01, net-zero infra)** — Block-scope typed-locals tracking for
+TS2774 (Blocker #1 step 2h substep, smallest 17.30c decomposition). New
+`withUncalledBlockScope(block, doBody)` helper in Checker.kt populates and
+pushes typed/shadowed maps for free-standing Blocks (top-level `{...}` and
+if/while/for bodies). Wired into `walkUncalledChecksInStatement`'s `is Block`
+branch so block-scoped declarations like `{ const perf = window.performance; if
+(perf && perf.measure) ... }` resolve via `lookupUncalledTypedLocal` instead of
+falling through to `getTypeOfIdentifier`'s file-level fallbacks (which would
+return `anyType` since block-scoped consts aren't in `currentLocalTypes` /
+`currentFileLocals` / `globals`). Function bodies already walk `body.statements`
+directly via `withUncalledScope` — no double-push. Skip-push optimization when
+both typed and shadowed maps are empty. Verifies on
+`uncalledFunctionChecksInConditional2_ts`: 3 of 7 expected diagnostics now fire
+(all 3 TS2774s for `perf.measure` / `perf.clearMeasures`); the 4 missing TS7006s
+are for arrow-fn parameters and need `noImplicitAny` enabled (not default in our
+checker for `@strictNullChecks: true` only). Net-zero on 10078-test suite (1631
+→ 1631 failed). Zero regressions. Foundation for the next 17.30c substep
+(`&&`-chain narrowing for `perf: boolean | Performance` to narrow into
+`Performance` before accessing `perf.clearMeasures`).
+
 **17.59 (2026-05-01, +1)** — TS2774 asymmetric in-test-position rule. Flips
 `truthinessCallExpressionCoercion2_ts`. Closes the FP that 17.57 surfaced when
 Window/Performance started resolving past `anyType`: `walkUncalledChain` walked
