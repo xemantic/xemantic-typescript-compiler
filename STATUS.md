@@ -2,6 +2,28 @@
 
 **Phase 4 — Checker buildout.** 8,444 / 10,078 tests passing (~84%).
 
+**17.61 (2026-05-01, ATTEMPTED + REVERTED, no code change)** — JSDoc `@type {T}`
+bridge extension from PropertyDeclaration (17.58) to VariableDeclaration.
+Attempted to mirror the 17.58 implementation: new `typeFromJSDoc: Boolean` on
+`VariableDeclaration`, parser hook in `parseVariableStatement` for single-decl
++ Identifier-name + JS-like file + null annotated type, TS8010 skip in
+`checkTsSyntaxInStatement`'s var-decl branch. Regressed
+`jsdocReferenceGlobalTypeInCommonJs_ts` (-1) because the sub-Parser-derived
+TypeNode positions reference the JSDoc-internal substring (offset 0), so
+`getTypeFromTypeReference` for unresolvable namespace paths
+(`Puppeteer.Keyboard` in the test) emits TS2503 with start position 0 — which
+maps to the original source's offset 0 (`const other`), producing a spurious
+diagnostic with garbled squiggle. The PropertyDeclaration case (17.58) doesn't
+bite this because primitive types don't trigger name-resolution paths that
+consume positions. Reverted per protocol's "Time budget per attempt" rule.
+Skip-log entry on PLAN-PHASE-4.md item 17.61 documents the gotcha for future
+attempts: option (a) thread typeFromJSDoc into name-resolution paths to
+suppress diagnostics, (b) reparent sub-Parser positions into original source
+(invasive), or (c) allowlist primitive-only `@type` extraction (smallest
+scope). 17.30 / 17.30c also marked done in the same commit — 17.30c's
+`&&`-chain narrowing intent is achieved differently via 17.60 + simpler
+`&&`-RHS semantics in `getTypeOfBinaryExpression`. No test count delta.
+
 **17.60 (2026-05-01, net-zero infra)** — Block-scope typed-locals tracking for
 TS2774 (Blocker #1 step 2h substep, smallest 17.30c decomposition). New
 `withUncalledBlockScope(block, doBody)` helper in Checker.kt populates and
