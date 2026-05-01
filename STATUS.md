@@ -2,6 +2,25 @@
 
 **Phase 4 — Checker buildout.** 8,442 / 10,078 tests passing (~84%).
 
+**17.57 (2026-05-01, net-zero infra)** — Hand-rolled Window / Performance /
+MediaQueryList interfaces added to `BUILTIN_LIB_SOURCE` per user authorization.
+Members chosen to cover the failing TS2774 candidates: Window has `console`,
+`performance`, `matchMedia`, plus standard browser globals; Performance has
+`measure`/`mark`/`clearMarks`/`clearMeasures`/`now`; MediaQueryList has
+`matches`/`media`/`onchange`/`addEventListener`. Plus `declare var window:
+Window;` and `declare var performance: Performance;`. Companion guard in
+`checkMemberAccessMissing`: skip TS2339 when `propName` is empty (parser
+error-recovery placeholder for incomplete syntax like `var p = window.` —
+TS1003 already fires for the missing identifier). Net delta: 0 tests (1633
+→ 1633 failed). Window typing alone doesn't flip the originally-targeted
+TS2774 tests: `truthinessCallExpressionCoercion2_ts` adds the missing
+emission at (116,46) but ALSO over-fires at (116,70) — TypeScript's TS2774
+walker has an asymmetric rule for `&&` RHS leaves we don't replicate;
+`uncalledFunctionChecksInConditional2_ts` needs TS2774 to track typed
+locals inside file-level `{ }` Blocks (currently only function bodies
+trigger `withUncalledScope`). Foundation for those follow-on substeps;
+17.30c is now unblocked.
+
 **17.56 (2026-05-01, +1)** — Suppress TS2415/TS2420 "separate declarations of
 a private property" when the override has a DIFFERENT type than the base —
 TS2416 type-mismatch is the correct primary diagnostic for that case. Two
