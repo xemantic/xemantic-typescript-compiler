@@ -2,6 +2,24 @@
 
 **Phase 4 — Checker buildout.** 8,444 / 10,078 tests passing (~84%).
 
+**17.62 (2026-05-01, net-zero infra)** — Primitive-only JSDoc `@type {T}` bridge
+for VariableDeclaration. Follow-up to 17.61 revert per its own session note
+(option c — allowlist primitive-only). New `parsePrimitiveTypeFromJSDoc` helper
+in Parser.kt extracts brace content via existing `extractAtTypeBraceContent`,
+dispatches via new `primitiveKeywordKindFor` allowlist
+(string/number/boolean/any/unknown/never/void/undefined/null/bigint/symbol/object),
+returns synthetic `KeywordTypeNode(kind, pos=-1, end=-1)`. Wired into
+`parseVariableStatement` for single-declarator + Identifier-name + null-type +
+JS-like file. New `typeFromJSDoc: Boolean` flag on `VariableDeclaration`; TS8010
+walker skips when set. Synthetic-position TypeNode is harmless: keyword types
+have no name to resolve (no TS2503/TS2304 path that bit 17.61), TS8010's
+`length <= 0` guard skips emission for synthetic positions, and
+`getTypeFromTypeNode` for keyword types returns the corresponding intrinsic
+without consuming positions. Net delta: 1631 → 1631 failed (8444 unchanged).
+Zero regressions across 10078-test suite. Foundation for follow-on (option a:
+thread `typeFromJSDoc` into `getTypeFromTypeReference` to suppress diagnostics
+for unresolvable JSDoc-derived names — would unlock broader 17.61 case).
+
 **17.61 (2026-05-01, ATTEMPTED + REVERTED, no code change)** — JSDoc `@type {T}`
 bridge extension from PropertyDeclaration (17.58) to VariableDeclaration.
 Attempted to mirror the 17.58 implementation: new `typeFromJSDoc: Boolean` on

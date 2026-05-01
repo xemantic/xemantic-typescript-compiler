@@ -2501,6 +2501,8 @@ rationale, yield estimates, and risk notes — those long-form descriptions are
 the source of truth; the queue items below are pointers + smallest-substep
 decompositions.
 
+- [x] **17.62. Primitive-only JSDoc `@type {T}` bridge for VariableDeclaration (net-zero infra).** **DONE 2026-05-01.** Follow-up to 17.61's revert per its own session note (option c — allowlist primitive-only `@type` extraction). New `parsePrimitiveTypeFromJSDoc(comments)` helper in Parser.kt extracts `@type {T}` from leading comments and returns a synthetic `KeywordTypeNode(kind, pos=-1, end=-1)` ONLY when T is one of `string`/`number`/`boolean`/`any`/`unknown`/`never`/`void`/`undefined`/`null`/`bigint`/`symbol`/`object`. Wired into `parseVariableStatement` for single-declarator + Identifier-name + null-type + JS-like file. New `typeFromJSDoc: Boolean` flag on `VariableDeclaration`; TS8010 walker skips when set. Synthetic-position TypeNode is harmless because (a) `KeywordTypeNode` has no name to resolve (no TS2503 / TS2304 risk that bit 17.61), (b) TS8010 walker's `length <= 0` guard skips emission for pos=-1/end=-1, (c) `getTypeFromTypeNode` for keyword types returns the corresponding intrinsic without consuming positions. Net delta: 1631 → 1631 failed (8444 unchanged). Zero regressions across 10078-test suite. Foundation for follow-on substep (option a: thread `typeFromJSDoc` into `getTypeFromTypeReference` to suppress diagnostics for unresolvable JSDoc-derived names — would unlock the broader 17.61 case).
+
 - [x] **17.61. JSDoc `@type {T}` bridge extension to VariableDeclaration — ATTEMPTED + REVERTED 2026-05-01 (-1 regression).** Substep of Blocker #5 follow-on (mirrors 17.58's PropertyDeclaration work). Implementation parsed `@type {T}` from VariableStatement leadingComments, attached to the (single, Identifier-named) declaration's `type` via `data class .copy(typeFromJSDoc = true)`, and skipped TS8010 in the var-decl walker. Regressed `jsdocReferenceGlobalTypeInCommonJs_ts` because the sub-Parser-derived TypeNode positions reference the JSDoc-internal substring (offset 0), and downstream `getTypeFromTypeReference` for unresolvable namespace paths (`Puppeteer.Keyboard`) emits TS2503 with start position 0 — which maps to the original source's offset 0 (`const other`), producing a spurious diagnostic with garbled squiggle. The PropertyDeclaration case (17.58) doesn't bite this because primitive types (`string`/`number`) don't trigger name-resolution paths that consume positions. Future attempt should either (a) thread `typeFromJSDoc` into `getTypeFromTypeReference` to suppress unresolved-name diagnostics, (b) reparent positions into the original source via `comment.pos + offset_within_comment` (invasive — every TypeNode field), or (c) allowlist primitive-only `@type` extraction (small scope; skips the regressing test cleanly). Reverted same session.
 
 - [x] **17.60. Block-scope typed-locals tracking for TS2774 (net-zero infra).** **DONE 2026-05-01.** Substep of 17.30c. The TS2774 walker's typed-locals stack (`uncalledTypedLocalsStack` + `uncalledShadowedScopes`) is pushed by `withUncalledScope` for function/method/arrow bodies but not for free-standing Blocks (top-level `{ ... }` or if/while/for bodies). Without the Block push, declarations like `{ const perf = window.performance; if (perf && perf.measure) ... }` fall through `lookupUncalledTypedLocal` to `getTypeOfIdentifier` → file-level fallbacks (`currentLocalTypes` / `currentFileLocals` / `globals`) → `anyType` (because block-scoped consts/lets are NOT in any file-level table). The walker then bails on the head-type-anyType check. Implementation: new `withUncalledBlockScope(block, doBody)` helper that runs `collectUncalledTypedLocalsFromBody` over the block's own statements and pushes the resulting typed/shadowed maps when non-empty (skip-push when both are empty avoids pointless stack churn). Wired into `walkUncalledChecksInStatement`'s `is Block` branch. Function bodies already walk `body.statements` directly (not the Block wrapper) via `withUncalledScope`, so no double-push. Net-zero on the 10078-test suite (1631 / 1631 unchanged). Verifies on `uncalledFunctionChecksInConditional2_ts`: 3 of 7 expected diagnostics now fire (all 3 TS2774s for `perf.measure` / `perf.clearMeasures`); 4 expected TS7006s for arrow-fn parameters still missing — `noImplicitAny` not enabled by `// @strictNullChecks: true` in our checker (TypeScript's test framework defaults to noImplicitAny=true under conditions our defaults don't replicate). Foundation for follow-on substeps: (i) `&&`-chain narrowing wired into TS2774 emission for the second block (where `perf: boolean | Performance` needs narrowing to `Performance` for `perf.clearMeasures` to resolve), and (ii) TS7006 default-on policy reconciliation if other tests benefit.
@@ -2598,6 +2600,39 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-01 (17.62, 8444 unchanged — net-zero infra) — Primitive-only JSDoc `@type {T}` bridge for VariableDeclaration:** Continuation /loop iteration after 17.61 revert. Per 17.61's own session note ("option c — allowlist primitive-only `@type` extraction; smallest scope; would skip the regressing test cleanly"), implemented the narrowest viable bridge: only `string`/`number`/`boolean`/`any`/`unknown`/`never`/`void`/`undefined`/`null`/`bigint`/`symbol`/`object` accepted; non-primitive types (TypeReference, QualifiedName, function types, etc.) fall through.
+
+  **Why this dodges 17.61's regression:** The 17.61 attempt regressed `jsdocReferenceGlobalTypeInCommonJs_ts` because `@type {Puppeteer.Keyboard}` parsed via sub-Parser produced a `TypeReference` with sub-Parser positions (offset 0 = JSDoc-internal). Downstream `getTypeFromTypeReference` for `Puppeteer` failed to resolve and emitted TS2503 with start=0 → mapped to original source's offset 0 (`const other` start) → spurious diagnostic with garbled squiggle. With primitive-only allowlist, non-primitive cases like `Puppeteer.Keyboard` are rejected by `primitiveKeywordKindFor`'s `else -> null` branch, and the bridge is never applied. Synthetic-position `KeywordTypeNode(pos=-1, end=-1)` is harmless because (a) keyword types have no name to resolve (no TS2503/TS2304 path that consumes positions), (b) TS8010's `length <= 0` guard skips emission for synthetic positions, (c) `getTypeFromTypeNode` for keyword types returns the corresponding intrinsic (`stringType`/etc.) without consulting positions.
+
+  **Implementation:**
+
+  1. **Ast.kt** — added `typeFromJSDoc: Boolean = false` on `VariableDeclaration`. Default false preserves binary compatibility.
+
+  2. **Parser.kt** — new `parsePrimitiveTypeFromJSDoc(comments)` helper that calls existing `extractAtTypeBraceContent` and dispatches via new `primitiveKeywordKindFor(typeText)`:
+     ```
+     "string" -> StringKeyword
+     "number" -> NumberKeyword
+     "boolean" -> BooleanKeyword
+     "any" -> AnyKeyword
+     "unknown" -> UnknownKeyword
+     "never" -> NeverKeyword
+     "void" -> VoidKeyword
+     "undefined" -> UndefinedKeyword
+     "null" -> NullKeyword
+     "bigint" -> BigIntKeyword
+     "symbol" -> SymbolKeyword
+     "object" -> ObjectKeyword
+     ```
+     Wired into `parseVariableStatement`: when `isJsLikeFile && declList.declarations.size == 1 && decl.type == null && decl.name is Identifier`, call helper, patch decl via `data class .copy(type=jsdocType, typeFromJSDoc=true)`.
+
+  3. **Checker.kt** — `checkTsSyntaxInStatement`'s `is VariableStatement` branch now skips `emitTs8xxxForType` when `decl.typeFromJSDoc == true` (mirrors 17.58's PropertyDeclaration TS8010 skip).
+
+  **Test results:** Single-test verification: no failing test gates SOLELY on primitive `@type` for var-decls (verified by grep across `typescript-repo/tests/cases/compiler/` for the pattern; the only matches were `declarationEmitLateBoundJSAssignments` which already passes, and a few tests using more complex JSDoc forms not covered by primitive-only). Full-suite re-run: 1631 → 1631 failed (8444 unchanged). Zero regressions.
+
+  **Foundation for follow-on:** Option (a) from 17.61's session note — thread `typeFromJSDoc` into `getTypeFromTypeReference` / `getTypeFromTypeNode` to suppress diagnostics for unresolvable JSDoc-derived names — would unlock the broader 17.61 case (non-primitive types like `Foo` or `Namespace.Type`). The current 17.62 work proves the AST + parser + TS8010-skip plumbing is correct; the remaining piece is making name-resolution paths aware of the JSDoc origin so they can suppress diagnostics on unresolvable references.
+
+  **Anti-loop check:** Pool empty pre-implementation (find_candidates --fresh: 0/0/0). Phase 17 queue had no unchecked Blocker substeps (17.30/17.30c closed last commit). This commit is category (a) — landing real code per protocol option (b) "take on architectural blocker". Foundation work without test flips is acceptable since the surgical pool is genuinely exhausted at this point.
 
   **Session 2026-05-01 (17.61 ATTEMPTED + REVERTED, 8444 unchanged) — JSDoc `@type {T}` bridge extension to VariableDeclaration:** Continuation /loop iteration after 17.60. Attempted to extend the 17.58 JSDoc bridge from PropertyDeclaration to VariableDeclaration by:
   - Adding `typeFromJSDoc: Boolean = false` to `VariableDeclaration` AST.
