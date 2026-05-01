@@ -2619,6 +2619,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.79, 8460 → 8461, +1) — Synthetic TS2728 pointing to lib.dom.d.ts for DOM globals:** Fresh /loop iteration after 17.78. Pool stayed at 0/0/0 fresh. The small-diff scan surfaced `baseCheck_ts` (1 line) — missing `!!! related TS2728 lib.dom.d.ts:--:--: 'Lock' is declared here.` for the TS2552 spelling suggestion of `Lock` (Web Locks API DOM global) when user typed `loc`.
+
+  **Root cause:** `findDeclarationRelatedInfo` (Checker.kt ~10968) returns null when the suggested name has no real symbol with declarations. Since `Lock` is only in KNOWN_GLOBALS as a NAME (no real declaration in our embedded BUILTIN_LIB_SOURCE which is a subset of lib.es5.d.ts), the lookup fails and TS2728 is silently dropped.
+
+  **Implementation:** New `DOM_GLOBAL_NAMES` companion-object set (subset of KNOWN_GLOBALS covering names declared in lib.dom.d.ts — DOM common types, Web Locks API, DOM interface maps, etc.). `findDeclarationRelatedInfo` falls back to emit a synthetic TS2728 diagnostic with `fileName="lib.dom.d.ts"`, `line=null, character=null` when the name lookup fails AND name is in DOM_GLOBAL_NAMES. Existing `BaselineFormatter` masks `null` line/char as `--:--`, matching TypeScript's convention for lib-file references.
+
+  **Test results:** 1615 → 1614 failed (8460 → 8461 passing). Zero regressions.
+
+  **Other tests with this pattern that DON'T flip yet:** `intersectionsOfLargeUnions2_ts` / `extendArray_ts` / `jsxFactoryQualifiedNameResolutionError_ts` / `jsxFactoryIdentifierWithAbsentParameter_ts` all have 0 diff lines (pure "Expected diagnostics ... but none produced") — they need additional missing emissions beyond the TS2728 fix. The DOM_GLOBAL_NAMES infrastructure is in place for any future surgical fix that lands a missing primary diagnostic for these tests.
+
+  **Foundation:** The synthetic-TS2728 pattern can be extended for other lib stubs (e.g. lib.es2015.iterable.d.ts, lib.webworker.d.ts) by adding additional name sets and corresponding lib filenames.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). Sixth feature commit in this /loop run after the previous productive session (17.74-17.78); this iteration started after a fresh wakeup with the small-diff candidates list.
+
   **Session 2026-05-01 (17.78, 8459 → 8460, +1) — TS2208 + "could be instantiated" for TS2416 method-override class-TypeParam mismatches:** Continuation /loop after 17.77. Pool stayed at 0/0/0 fresh. The small-diff scan surfaced `implementGenericWithMismatchedTypes_ts` (3 lines) — missing the param-mismatch TS2208 hint for `class C<T> implements IFoo<T> { foo(x: string): number }` and missing the return-mismatch "could be instantiated" advisory for `class C2<T> implements IFoo2<T> { foo<Tstring>(x: Tstring): number }`.
 
   **Root cause:** `addSignatureElaboration`'s PARAM-mismatch branch (Checker.kt ~42114) only looked up the TS2208 target via `(baseDecl as? MethodDeclaration)?.typeParameters` — method-level TypeParams. For interface-level TypeParams (`interface IFoo<T>`'s `T` appearing in a method's signature), this returns null. The TypeParam in `baseParamType` after instantiation is C's T (substituted via heritage clause type arg), but its `symbol.declarations` chain is empty because instantiation creates fresh Symbols. Result: TS2208 never fired for the most common pattern (class implements generic interface with shared T).

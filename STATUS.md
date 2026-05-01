@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,460 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,461 / 10,078 tests passing (~84%).
+
+**17.79 (2026-05-01, +1)** — Synthetic TS2728 "declared here" pointing to
+`lib.dom.d.ts:--:--` for KNOWN_GLOBALS without a real symbol declaration.
+Flips `baseCheck_ts`. Pre-fix: TS2552 spelling suggestion suggested `Lock`
+(a Web Locks API DOM global) for misspelled `loc`, but we couldn't emit the
+TS2728 related info because `Lock` isn't backed by a real symbol in our
+embedded BUILTIN_LIB_SOURCE (only present in KNOWN_GLOBALS as a name).
+Fix: `findDeclarationRelatedInfo` (Checker.kt ~10968) now emits a synthetic
+TS2728 with `fileName="lib.dom.d.ts"` and `line=null, character=null`
+(rendered as `lib.dom.d.ts:--:--` by BaselineFormatter) when the looked-up
+name isn't in any user/lib symbol table but IS in the new `DOM_GLOBAL_NAMES`
+companion-object set (subset of KNOWN_GLOBALS covering the DOM types
+documented in the lib.dom.d.ts section). Net delta: 1615 → 1614 failed
+(8460 → 8461 passing). Zero regressions.
 
 **17.78 (2026-05-01, +1)** — TS2208 / "could be instantiated" advisory for
 TS2416 method-override mismatches involving class-level TypeParams. Flips

@@ -10989,6 +10989,25 @@ class Checker(
                 else -> decl.pos
             }
         } else {
+            // 17.79: KNOWN_GLOBALS without a real symbol/declaration — emit
+            // synthetic TS2728 pointing to the appropriate lib stub when the
+            // name is a recognized DOM global. TypeScript's baseline format
+            // is `lib.dom.d.ts:--:--` (line/char masked because lib content
+            // shifts between TS versions). Cf. baseCheck_ts where TS2552
+            // suggests `Lock` for misspelled `loc` and the related TS2728
+            // points to lib.dom.d.ts.
+            if (name in DOM_GLOBAL_NAMES) {
+                return Diagnostic(
+                    message = "'$name' is declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 2728,
+                    fileName = "lib.dom.d.ts",
+                    line = null,
+                    character = null,
+                    start = -1,
+                    length = name.length,
+                )
+            }
             // Not in file-level locals — search AST for block-scoped let/const declaration
             if (result == null) return null
             findBlockScopedDeclPos(name, result.sourceFile.statements) ?: return null
@@ -16513,6 +16532,84 @@ class Checker(
             "AddEventListenerOptions", "EventListenerOptions",
             "PromiseSettledResult", "PromiseFulfilledResult", "PromiseRejectedResult",
             "BufferSource", "BlobPart",
+        )
+
+        /**
+         * 17.79: Subset of [KNOWN_GLOBALS] that are declared in lib.dom.d.ts.
+         * Used to emit synthetic TS2728 "declared here" related info for spelling
+         * suggestions naming a DOM global — TypeScript's baseline format renders
+         * the position as `lib.dom.d.ts:--:--` (line/char masked).
+         */
+        private val DOM_GLOBAL_NAMES: Set<String> = setOf(
+            // DOM — common types
+            "document", "window", "navigator", "location", "history", "screen",
+            "self", "top", "parent", "frames", "opener",
+            "alert", "confirm", "prompt", "open", "close", "print",
+            "requestAnimationFrame", "cancelAnimationFrame",
+            "requestIdleCallback", "cancelIdleCallback",
+            "fetch", "Headers", "Request", "Response",
+            "URL", "URLSearchParams",
+            "FormData", "Blob", "File", "FileReader", "FileList",
+            "AbortController", "AbortSignal",
+            "TextEncoder", "TextDecoder",
+            "atob", "btoa",
+            "Event", "CustomEvent", "ErrorEvent",
+            "MouseEvent", "KeyboardEvent", "TouchEvent", "FocusEvent",
+            "InputEvent", "WheelEvent", "PointerEvent", "DragEvent",
+            "AnimationEvent", "TransitionEvent", "UIEvent", "ClipboardEvent",
+            "CompositionEvent", "ProgressEvent", "PageTransitionEvent",
+            "PopStateEvent", "HashChangeEvent", "StorageEvent",
+            "MessageEvent", "BeforeUnloadEvent",
+            "EventTarget", "EventListener",
+            "Element", "HTMLElement", "SVGElement",
+            "Node", "NodeList", "HTMLCollection", "NamedNodeMap",
+            "Document", "DocumentFragment", "DocumentType",
+            "Window", "Navigator",
+            "HTMLDivElement", "HTMLSpanElement", "HTMLInputElement",
+            "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement",
+            "HTMLImageElement", "HTMLVideoElement", "HTMLAudioElement",
+            "HTMLCanvasElement", "HTMLTextAreaElement", "HTMLSelectElement",
+            "HTMLOptionElement", "HTMLTableElement", "HTMLTableRowElement",
+            "HTMLTableCellElement", "HTMLIFrameElement", "HTMLScriptElement",
+            "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
+            "HTMLHeadElement", "HTMLBodyElement", "HTMLHtmlElement",
+            "Text", "Comment",
+            "DOMRect", "DOMRectReadOnly", "DOMPoint", "DOMPointReadOnly",
+            "DOMMatrix", "DOMMatrixReadOnly", "DOMQuad",
+            "Range", "Selection", "TreeWalker", "NodeIterator",
+            "MutationObserver", "MutationRecord",
+            "IntersectionObserver", "IntersectionObserverEntry",
+            "ResizeObserver", "ResizeObserverEntry",
+            "PerformanceObserver", "PerformanceEntry",
+            "CSSStyleDeclaration", "CSSStyleSheet", "CSSRule", "CSSStyleRule",
+            "MediaQueryList", "MediaQueryListEvent",
+            "Storage", "localStorage", "sessionStorage",
+            "XMLHttpRequest", "XMLSerializer", "DOMParser",
+            "WebSocket", "EventSource", "BroadcastChannel",
+            "MessageChannel", "MessagePort",
+            "Worker", "SharedWorker", "ServiceWorker",
+            "ServiceWorkerRegistration", "ServiceWorkerContainer",
+            "Notification", "PushManager", "PushSubscription",
+            "Cache", "CacheStorage",
+            "Crypto", "CryptoKey", "SubtleCrypto", "crypto",
+            "performance", "Performance",
+            "ReadableStream", "WritableStream", "TransformStream",
+            "Image", "ImageData", "ImageBitmap",
+            "OffscreenCanvas",
+            "AudioContext", "AudioBuffer", "AudioNode",
+            "MediaStream", "MediaRecorder",
+            "RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate",
+            "Geolocation", "GeolocationPosition",
+            "Clipboard", "ClipboardItem",
+            "VisualViewport",
+            // Web Locks API
+            "Lock", "LockManager", "LockOptions",
+            // Frame element
+            "frameElement",
+            // DOM interface maps
+            "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
+            "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
+            "GlobalEventHandlers", "WindowOrWorkerGlobalScope",
         )
 
         /**
