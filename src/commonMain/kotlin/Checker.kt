@@ -45771,7 +45771,17 @@ interface DataView {
             val savedContextual = contextualType
             val useCtx = paramType is Type.Object && (arg is ArrowFunction || arg is FunctionExpression)
             if (useCtx) contextualType = paramType
-            val argType = try { getTypeOfExpression(arg) } finally {
+            // 17.67: contextual literal preservation for call args (extends 17.66's
+            // var-decl init / assignment-RHS pattern). When the param's type contains
+            // literal types and the arg is a literal expression, preserve the literal
+            // type instead of widening to the primitive — matches TypeScript's
+            // bidirectional contextual-typing rule for TS2345 source display.
+            val argType = try {
+                val widened = getTypeOfExpression(arg)
+                if (propTypeContainsLiteral(paramType)) {
+                    literalTypeOfExpression(arg) ?: widened
+                } else widened
+            } finally {
                 if (useCtx) contextualType = savedContextual
             }
             if (argType === anyType || argType === errorType) continue
