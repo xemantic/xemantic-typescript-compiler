@@ -39973,6 +39973,24 @@ interface DataView {
                             // Check if the interface property is also private (inherited from a class)
                             val ifacePropDecl = ifaceProp.valueDeclaration ?: ifaceProp.declarations.firstOrNull()
                             val ifacePropIsPrivate = ifacePropDecl != null && isMemberPrivate(ifacePropDecl)
+                            // 17.56: Mirror of the TS2415 type-mismatch suppression — when the
+                            // class's own private and the interface's inherited private have
+                            // DIFFERENT types, suppress TS2420 (TS2416 type-mismatch fires
+                            // separately and is the correct primary diagnostic).
+                            if (isPrivate && ifacePropIsPrivate && classMember != null && ifacePropDecl != null) {
+                                val derivedT = getTypeOfMemberDecl(classMember)
+                                val baseT = getTypeOfMemberDecl(ifacePropDecl)
+                                if (derivedT != null && baseT != null &&
+                                    derivedT !== anyType && baseT !== anyType) {
+                                    val widenedDerived = widenType(derivedT)
+                                    val widenedBase = widenType(baseT)
+                                    if (widenedDerived !== anyType && widenedBase !== anyType &&
+                                        (!checkTypeRelatedTo(widenedDerived, widenedBase, assignableRelation) ||
+                                            !checkTypeRelatedTo(widenedBase, widenedDerived, assignableRelation))) {
+                                        continue
+                                    }
+                                }
+                            }
                             val chain = if (ifacePropIsPrivate) {
                                 mutableListOf("  Types have separate declarations of a private property '$propName'.")
                             } else {
@@ -40952,6 +40970,25 @@ interface DataView {
             val chain = mutableListOf<String>()
 
             if (derivedIsPrivate && baseIsPrivate) {
+                // 17.56: Suppress TS2415 "separate declarations" when the override has a
+                // DIFFERENT type than the base — TS2416 type-mismatch is the correct
+                // primary diagnostic for that case (TypeScript's behavior for
+                // `interfaceExtendsClassWithPrivate2`'s `D2` whose `private x = ""` shadows
+                // `C`'s `private x = 1`). When types match, TS2415 still fires (e.g. `D`'s
+                // `private x = 2` shadowing `private x = 1` — same type, separate decl).
+                val derivedT = getTypeOfMemberDecl(dm.node)
+                val baseT = getTypeOfMemberDecl(baseDecl)
+                if (derivedT != null && baseT != null &&
+                    derivedT !== anyType && baseT !== anyType) {
+                    val widenedDerived = widenType(derivedT)
+                    val widenedBase = widenType(baseT)
+                    if (widenedDerived !== anyType && widenedBase !== anyType &&
+                        (!checkTypeRelatedTo(widenedDerived, widenedBase, assignableRelation) ||
+                            !checkTypeRelatedTo(widenedBase, widenedDerived, assignableRelation))) {
+                        // Types differ — skip TS2415 emission; TS2416 walk will fire.
+                        continue
+                    }
+                }
                 // Both private from different classes → separate declarations
                 chain.add("  Types have separate declarations of a private property '$memberName'.")
             } else {
