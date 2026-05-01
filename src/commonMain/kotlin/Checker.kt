@@ -21084,11 +21084,14 @@ interface DataView {
             is FunctionDeclaration -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 val hasThisParam = hasThisParameter(stmt.parameters)
-                val newThisIsTyped = hasThisParam
-                val newShadowPos = if (!hasThisParam && thisIsTyped) {
+                // 17.64: extend 17.63's @this JSDoc detection from FunctionExpression
+                // to FunctionDeclaration. JS-like files only.
+                val hasJSDocThis = hasJSDocThisTag(stmt.leadingComments, fileName)
+                val newThisIsTyped = hasThisParam || hasJSDocThis
+                val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
                     // This function shadows a typed this context
                     stmt.name?.pos ?: stmt.pos
-                } else if (!hasThisParam && !thisIsTyped) {
+                } else if (!newThisIsTyped && !thisIsTyped) {
                     shadowFunctionPos // keep existing shadow info
                 } else -1
                 stmt.body?.let {

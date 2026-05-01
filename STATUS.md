@@ -2,6 +2,18 @@
 
 **Phase 4 — Checker buildout.** 8,445 / 10,078 tests passing (~84%).
 
+**17.64 (2026-05-01, net-zero infra)** — Extend 17.63's `@this` JSDoc detection
+from FunctionExpression to FunctionDeclaration. Single-spot edit in
+`checkThisInStatement`'s FunctionDeclaration branch — `newThisIsTyped =
+hasThisParam || hasJSDocThis`, with shadow-pos calculation flipped from
+`hasThisParam`-only to `newThisIsTyped`-aware. JSDoc-typed `this` on a top-level
+`function foo() {}` now correctly suppresses TS2683 (and the related TS2738
+"shadowed" hint). Net-zero on 10078-test suite (no currently-failing test gates
+solely on this — the existing `thisInFunctionCallJs_ts` test 17.63 flipped used
+only the FunctionExpression form). Symmetric completeness fix; closes the
+inconsistency where FunctionExpression handled `@this` but FunctionDeclaration
+didn't.
+
 **17.63 (2026-05-01, +1)** — JSDoc `@this {Type}` suppresses TS2683 in JS-like
 files. Flips `thisInFunctionCallJs_ts`. New `hasJSDocThisTag(comments, fileName)`
 helper in Checker.kt scans `MultiLineComment` entries starting with `/**` for the
