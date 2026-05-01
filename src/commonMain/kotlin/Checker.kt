@@ -34015,6 +34015,7 @@ interface DataView {
                 getNarrowedTypeForReference(rawSourceType, init)
             } else rawSourceType
             lastMissingPropertyName = null // reset before comparison
+            lastMissingIndexSigKind = null // reset before comparison (17.74)
             // 17.31f: bypass `canUseTypeEngine`'s nullish-Union gate when the init is a
             // CallExpression — its return type came from a generic-arg-inference pipeline
             // (17.31a–e), not a narrowable identifier/property-access, so the relation
@@ -34183,6 +34184,14 @@ interface DataView {
                         lastChainMissingPropSymbol = null
                         val propElab = getPropertyElaborationChain(sourceType, targetType)
                         if (propElab != null) chain.addAll(propElab)
+                    }
+                    // 17.74: Missing index signature elaboration (mirrors the
+                    // assignment-expression path at ~34861 and the property-access
+                    // path at ~35285). Fires for function-vs-ArrayLike-shape:
+                    // `func: () => void` → `ArrayLike<any>` produces
+                    // "  Index signature for type 'number' is missing in type '() => void'."
+                    if (chain.isEmpty() && lastMissingIndexSigKind != null) {
+                        chain.add("  Index signature for type '$lastMissingIndexSigKind' is missing in type '$displaySource'.")
                     }
                     // For non-literal, non-call expressions, TypeScript duplicates the message as elaboration
                     if (chain.isEmpty()) {
@@ -47310,16 +47319,26 @@ interface DataView {
         val srcNominalSym = source.symbol ?: (source as? Type.Reference)?.target?.symbol
         val isNominalSource = srcNominalSym != null &&
             srcNominalSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
-        if (isNominalSource) {
+        // 17.74: Function-shaped sources (callSignatures only, no nominal members)
+        // also trigger the missing-index-sig check — mirrors TypeScript's "Index
+        // signature for type 'number' is missing in type '() => void'." for
+        // `func: () => void; const a: ArrayLike<any> = func;`. Note: for function
+        // sources we DON'T skip when target's index type is `any`/`unknown` — a
+        // function type doesn't implicitly satisfy `[n:number]:any` (unlike a
+        // nominal class which can be subclassed/extended), so the diagnostic IS
+        // appropriate. The `any`-skip remains for nominal sources to avoid FPs
+        // (cf. `assignmentCompatability36_ts`).
+        val isFunctionShaped = !source.callSignatures.isNullOrEmpty() && source.members.isNullOrEmpty()
+        if (isNominalSource || isFunctionShaped) {
             val tgtStr = target.stringIndexInfo
             if (tgtStr != null && source.stringIndexInfo == null &&
-                !tgtStr.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
+                (isFunctionShaped || !tgtStr.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown))) {
                 lastMissingIndexSigKind = "string"
                 return false
             }
             val tgtNum = target.numberIndexInfo
             if (tgtNum != null && source.numberIndexInfo == null &&
-                !tgtNum.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
+                (isFunctionShaped || !tgtNum.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown))) {
                 lastMissingIndexSigKind = "number"
                 return false
             }
@@ -47350,6 +47369,17 @@ interface DataView {
             // methods (call/apply/bind) are implicitly available through the apparent type.
             // Lets `() => void` satisfy `interface Callable { call(blah: any) }` etc.
             if (sourceHasCallSigs && targetName in FUNCTION_PROTOTYPE_METHODS) continue
+            // 17.74: Function.prototype's `length: number` and `name: string` implicitly
+            // satisfy the corresponding target property when source has callSignatures.
+            // Lets `() => void` satisfy `interface ArrayLike<T> { length: number }` —
+            // clears the way for the index-signature-missing check to fire (matching
+            // TypeScript's elaboration which prefers "Index signature missing" over
+            // "Property 'length' missing" for function-vs-ArrayLike-shape comparisons).
+            if (sourceHasCallSigs && (targetName == "length" || targetName == "name")) {
+                val targetPropType = getPropertyTypeForRelation(target, targetProp)
+                val protoType = if (targetName == "length") numberType else stringType
+                if (checkTypeRelatedTo(protoType, targetPropType, relation)) continue
+            }
             // Check if property is optional (question mark in declaration)
             val isOptional = isOptionalProperty(targetProp)
             val sourceProp = sourceMembers[targetName]
