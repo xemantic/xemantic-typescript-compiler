@@ -2501,6 +2501,8 @@ rationale, yield estimates, and risk notes — those long-form descriptions are
 the source of truth; the queue items below are pointers + smallest-substep
 decompositions.
 
+- [x] **17.66. Contextual literal preservation for var-decl init and assignment-expression RHS (+2 — flips `checkJsObjectLiteralHasCheckedKeyof_ts` and one other).** **DONE 2026-05-01.** Mirrors TypeScript's bidirectional contextual-typing rule: when the target type contains literal types (e.g. `"x" | "y"`, `keyof typeof obj` resolved to a literal union), and the source/RHS is a literal expression (string/number/bigint/template literal, true/false, unary-minus on numeric, or `null`/`undefined`), preserve the literal type instead of widening to the primitive. Two-spot edit in Checker.kt: (1) `checkVarDeclAssignability`'s `rawSourceTypeRaw` computation (Checker.kt ~33832); (2) `checkAssignmentExpression`'s `sourceType` computation (Checker.kt ~34569). Each gated on `propTypeContainsLiteral(targetType)` (existing helper) — for non-literal-containing targets (most cases), falls through to the existing `getTypeOfExpression(init)` path. Uses existing `literalTypeOfExpression(expr)` helper which returns null for non-literal expressions, so the fallback always runs. Net delta: 1630 → 1628 failed (8445 → 8447 passing). Zero regressions across 10078-test suite. Surfaced by 17.65's broader JSDoc `@type` bridge for var-decls — pre-17.65 tests like `checkJsObjectLiteralHasCheckedKeyof_ts` produced ZERO diagnostics (no JSDoc-derived target type), post-17.65 produced wrong-display diagnostics, post-17.66 produces correct diagnostics with literal display matching TypeScript's baseline.
+
 - [x] **17.65. Widen JSDoc `@type {T}` bridge for VariableDeclaration to non-primitive types via name-resolution gate (net-zero infra).** **DONE 2026-05-01.** Implements option (a) from 17.61's revert note. Switches `parseVariableStatement`'s JSDoc bridge from `parsePrimitiveTypeFromJSDoc` (allowlist of `string`/`number`/`boolean`/etc.) to the broader `parsePropertyTypeFromJSDoc` (sub-Parser via `parseTypeFromText`) — the same helper 17.58 uses for PropertyDeclaration. To dodge 17.61's regression on `jsdocReferenceGlobalTypeInCommonJs_ts` (sub-Parser TypeNode positions land on wrong source for unresolvable namespace paths), added `if (!decl.typeFromJSDoc)` gate in `checkUnresolvedInStatement`'s `is VariableStatement` branch — TS2503/TS2304 emission via `checkUnresolvedInType` is now skipped for JSDoc-derived types. The JSDoc bridge becomes best-effort: unresolvable refs silently resolve to errorType downstream (where positional diagnostics aren't emitted). Net delta: 1630 → 1630 failed (8445 unchanged); both `jsdocReferenceGlobalTypeInCommonJs_ts` and `jsExportMemberMergedWithModuleAugmentation_ts` verified passing post-change. Foundation for follow-on: extending the same gate to PropertyDeclaration would unlock class-property `@type {NamedType}` cases; extending to FunctionDeclaration return type / Parameter would unlock `@returns {T}` / `@param {T}` JSDoc cases. Each requires the same minimal pattern (sub-Parser type extraction + typeFromJSDoc flag + walker gate).
 
 - [x] **17.64. Extend `@this` JSDoc to FunctionDeclaration (net-zero infra).** **DONE 2026-05-01.** Mirror of 17.63 for the `function name() {}` form. The `checkThisInStatement`'s `is FunctionDeclaration` branch now also checks `hasJSDocThisTag(stmt.leadingComments, fileName)` and combines with `hasThisParam` to compute `newThisIsTyped`. Same shadow-pos calculation as 17.63 so JSDoc-typed `this` in a FunctionDeclaration doesn't FP-fire TS2738. Net-zero on the 10078-test suite — no currently-failing test gates SOLELY on `@this` annotation on a top-level FunctionDeclaration (the `thisInFunctionCallJs_ts` test 17.63 flipped only used FunctionExpression form). Foundation for completeness — JS files with `function foo() { /** @this {T} */ ... }` patterns are now correctly handled.
@@ -2606,6 +2608,38 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-01 (17.66, 8445 → 8447, +2) — Contextual literal preservation for var-decl init + assignment-expression RHS:** Continuation /loop after 17.65. The candidate finder showed a NEW SWAP entry for `checkJsObjectLiteralHasCheckedKeyof_ts` post-17.65 — pre-17.65 the test produced 0 diagnostics ("Expected diagnostics ... but none produced"), post-17.65 it produced 2 diagnostics with display `'string'` (vs expected `'"z"'`/`'"x"'`). 17.65 enabled the JSDoc `@type {keyof typeof obj}` annotation to flow into checking but the literal preservation was missing.
+
+  **Pattern detection:** When a var-decl annotation OR assignment LHS has a type containing literal types (literal Union, single literal, or keyof producing literals), the source/RHS literal expression should keep its literal type (`"x"`, `"z"`) instead of being widened to the primitive (`string`).
+
+  **Implementation (2 spots in Checker.kt):**
+
+  1. `checkVarDeclAssignability` (Checker.kt ~33832): `rawSourceTypeRaw` was unconditionally `getTypeOfExpression(init)` which widens string/number/bigint literals to their primitive intrinsic. Wrapped in:
+     ```
+     val rawSourceTypeRaw = if (propTypeContainsLiteral(targetType)) {
+         literalTypeOfExpression(init) ?: getTypeOfExpression(init)
+     } else {
+         getTypeOfExpression(init)
+     }
+     ```
+     For literal-containing targets (e.g. `"x" | "y"`), use `literalTypeOfExpression(init)` (returns `Type.StringLiteral("x")` for `StringLiteralNode`) when available; fall through to widened path for non-literal expressions.
+
+  2. `checkAssignmentExpression` (Checker.kt ~34569): same pattern applied to RHS-type computation when LHS resolves to a literal-containing type.
+
+  **Existing helpers used:**
+  - `propTypeContainsLiteral(t)` — recurses into Type.Union members, accepts Type.StringLiteral / NumberLiteral / BigIntLiteral and Type.Intrinsic with TypeFlags.{StringLiteral,NumberLiteral,BooleanLiteral,BigIntLiteral} flags. Already in Checker.kt for 17.43 contextual-literal-preservation in CallExpression results.
+  - `literalTypeOfExpression(expr)` — handles StringLiteralNode / NumericLiteralNode / NoSubstitutionTemplateLiteralNode / BigIntLiteralNode / `true`/`false`/`null`/`undefined` Identifier / unary-minus on numeric. Returns null for everything else.
+
+  **Conservative gates verified:** For most failing tests, target is NOT literal-containing (it's `string` / `number` / interface types / etc.), so `propTypeContainsLiteral` returns false and the change is a no-op. Only literal-containing target types get the new behavior — the standard contextual typing rule TypeScript applies.
+
+  **Test results:**
+  - `checkJsObjectLiteralHasCheckedKeyof_ts`: passes (var-decl init produces no error since `"x"` matches `"x" | "y"` exactly; assignment displays `"z"` correctly).
+  - One additional test flipped (full-suite count went from 1630 to 1628 failed; +2 passing). Likely a similar pattern with literal-typed annotations.
+
+  Full-suite re-run: 1630 → 1628 failed (8445 → 8447 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool produced a new SWAP candidate post-17.65 (the foundation work surfaced this). Lands real code per protocol option (a) — small new-diagnostic-correctness fix grouped with the JSDoc work. Foundation: same `propTypeContainsLiteral`-gated literal-preservation pattern can extend to other source-type computation sites (e.g. function-call arg checking, return-type checking) if other failing tests benefit.
 
   **Session 2026-05-01 (17.65, 8445 unchanged — net-zero infra) — Widen JSDoc `@type` bridge to non-primitive types via name-resolution gate:** Continuation /loop iteration after 17.64. Implements option (a) from 17.61's revert note: thread `typeFromJSDoc` awareness into the unresolved-name walker so the broader sub-Parser-based bridge can land without regressing on garbled-position diagnostics.
 
