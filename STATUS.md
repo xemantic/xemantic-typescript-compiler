@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,442 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,443 / 10,078 tests passing (~84%).
+
+**17.58 (2026-05-01, +1)** — JSDoc `@type {T}` bridge for PropertyDeclaration in
+JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`). Flips
+`jsExportMemberMergedWithModuleAugmentation_ts`. Three coordinated changes:
+(1) Parser.kt — new `isJsLikeFile` field, new helpers `parsePropertyTypeFromJSDoc`,
+`extractAtTypeBraceContent` (brace-balanced extraction skipping line-prefix `*`),
+and `runParseTypeFromExternal()` (sub-Parser entry point that bootstraps via
+`nextToken()` + `parseType()`). Wired into `parseClassMember`'s PropertyDeclaration
+branch. (2) Ast.kt — new `typeFromJSDoc: Boolean = false` on `PropertyDeclaration`,
+default preserves binary compatibility. (3) Checker.kt —
+`checkTsSyntaxInClassMember`'s PropertyDeclaration branch skips the TS8010 "Type
+annotations can only be used in TypeScript files" emission when `typeFromJSDoc ==
+true`. Sub-Parser TypeNode positions reference the JSDoc-internal text rather
+than the original source — fine for TS2564 (only inspects structural shape) but
+any future consumer using positions for diagnostics must guard via
+`typeFromJSDoc`. 17.58a (scanner-level JSDoc capture) verified pre-existing —
+Scanner.kt:531 already attaches block comments via `leadingComments`. Net delta:
+1633 → 1632 failed (8442 → 8443 passing). Zero regressions across 10078-test
+suite. Foundation for future substeps (Parameter/VariableDeclaration/
+FunctionDeclaration return type) — each can leverage the same JSDoc bridge.
 
 **17.57 (2026-05-01, net-zero infra)** — Hand-rolled Window / Performance /
 MediaQueryList interfaces added to `BUILTIN_LIB_SOURCE` per user authorization.

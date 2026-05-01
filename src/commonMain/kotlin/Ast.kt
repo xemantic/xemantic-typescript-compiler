@@ -1139,6 +1139,8 @@ data class PropertyDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** True when [type] was synthesized from a leading JSDoc `@type {...}` comment in a JS file. */
+    val typeFromJSDoc: Boolean = false,
 ) : ClassElement {
     override val kind: SyntaxKind = SyntaxKind.PropertyDeclaration
 }
