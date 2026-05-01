@@ -2619,6 +2619,28 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.73, 8452 → 8453, +1) — TS2367 narrow extension for TypeParam-with-literal-union-constraint vs literal:** Continuation /loop after 17.72. `find_candidates.py --fresh` returned 0/0/0; spot-checked the 17.67 session note's mention of `compareTypeParameterConstrainedByLiteralToLiteral_ts` being blocked on "intersection-of-literals reduction" — exactly what 17.72 just landed. Confirmed test was still failing pre-this-commit; the literal-subtype-aware intersection helper from 17.72 became the missing piece.
+
+  **Implementation:** new `checkTypeParamLiteralNoOverlap(expr, leftType, rightType, ...)` helper called from `checkEqualityComparisonNoOverlap` BEFORE the existing `Type.Reference`-only path:
+  - Detects pattern: `t === "x"` (or `===`/`!==`/`==`/`!=`) where one side is a `Type.TypeParam` whose apparent type (via `getApparentType` on `t.constraint`) is a union of all literals (`"a" | "b"`), and the other side is a literal.
+  - Uses `literalTypeOfExpression(expr.left/right)` to RECOVER the literal type for `StringLiteralNode` / `NumericLiteralNode` etc. — `getTypeOfExpression` widens these to `stringType` / `numberType`, so a direct check would see `string` not `"x"`.
+  - Computes intersection via 17.72's `intersectTwoTypesForWrite(typeParamApparent, literalType)`. Distribute over the apparent union: `("a" & "x") | ("b" & "x")` = `never | never` = `never`.
+  - When intersection is `never`, emit TS2367 displaying `typeToString(leftType)` (the TypeParam's NAME, not its constraint — `'T'` not `'"a" | "b"'`) and the literal form of the other side (`'"x"'`).
+  - Returns `Unit?` — non-null indicates emission, caller bails before the existing Type.Reference path runs.
+
+  **Required infrastructure (single-spot edits in arithmetic walker):**
+  - New helper `pushFunctionTypeParamsScope(typeParameters)` that creates fresh `Type.TypeParam` symbols for each declared type parameter, inserts into `currentTypeParamScope`, then resolves constraints/defaults AFTER all type params are in scope (so `<T, U extends T>` works). Returns the previous scope so the caller can restore via finally.
+  - `checkArithmeticInStatement`'s `FunctionDeclaration` and `MethodDeclaration` branches now wrap `populateParameterLocalTypes` in this push/restore. Required because `populateParameterLocalTypes` calls `getTypeFromTypeNode` on each param annotation; without the scope push, `T` resolves to `errorType` and `currentLocalTypes["t"]` is never populated, leaving `getTypeOfIdentifier("t") = anyType` at the comparison site. Scope is restored before walking the body — `currentLocalTypes` carries the resolved `Type.TypeParam` forward, so body-level `getTypeOfIdentifier` sees it directly without needing scope.
+  - `isValidArithmeticOperand` extended with a new `Type.TypeParam` branch that recurses on the constraint. Unconstrained TypeParam returns `true` (treated as anyType-equivalent) to avoid regressing tests that previously saw `t: T` as `anyType` — TypeScript's stricter "no arithmetic on unconstrained T" check is deferred.
+
+  **Why 17.72's helper was the unblocker:** Pre-17.72 we had `getIntersectionType` (basic primitive incompatibility reduction) but no distribution-over-union. For this test case, the intersection `("a" | "b") & "x"` would either stay as a Type.Intersection (no reduction) or partially reduce. Post-17.72, `intersectTwoTypesForWrite` handles distribution + literal-subtype reduction in one pass, naturally producing `never` for our case.
+
+  **Test results:** Single-test verification: passes. Full-suite re-run: 1623 → 1622 failed (8452 → 8453 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool was empty pre-attempt (find_candidates --fresh: 0/0/0), but the 17.67 session note explicitly named this test as needing intersection-of-literals reduction — the 17.72 commit just landed that. Lands real code per protocol option (a) — small new-diagnostic-correctness fix that composes 17.72's infrastructure with TS2367's existing emission site. The `pushFunctionTypeParamsScope` helper + `isValidArithmeticOperand` TypeParam branch are reusable foundations for future work that needs function-scope TypeParams in the arithmetic-walker context.
+
+  **Foundation:** `pushFunctionTypeParamsScope` is reusable for any walker that needs function/method type parameters in scope during expression traversal. Future sessions could extend the arithmetic walker's FunctionExpression / ArrowFunction / Constructor / GetAccessor / SetAccessor branches similarly if tests require it (currently only FunctionDeclaration + MethodDeclaration push, mirroring populateParameterLocalTypes' usage points).
+
   **Session 2026-05-01 (17.72, 8448 → 8452, +4) — Intersection write-type for property assignment on accessor-divergent classes:** Continuation /loop after 17.71. `find_candidates.py --fresh` returned a fresh batch this session: 4/77 MISS candidates not previously skipped — `divergentAccessorsTypes4_ts` and `divergentAccessorsTypes5_ts` in both `target=es5` and `target=es2015` variants. All four expect TS2322 with target display `'42'` or `'"hello"'` for assignments through intersection-typed receivers (e.g. `i: One & Two; i.prop2 = "hello"`).
 
   **Implementation:** new `checkIntersectionPropertyAssignment` branch in `checkPropertyAccessAssignment` (Checker.kt ~35210), reached when `objType is Type.Intersection`:

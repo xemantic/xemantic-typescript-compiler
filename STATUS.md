@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,452 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,453 / 10,078 tests passing (~84%).
+
+**17.73 (2026-05-01, +1)** — TS2367 narrow extension: TypeParam-with-literal-
+union-constraint vs literal. Flips `compareTypeParameterConstrainedByLiteralToLiteral_ts`.
+New `checkTypeParamLiteralNoOverlap` helper called from
+`checkEqualityComparisonNoOverlap` (Checker.kt ~47650): detects pattern
+`t === "x"` where `t: T` and `T extends "a" | "b"` — reuses 17.72's
+`intersectTwoTypesForWrite` to compute apparent-type intersection
+(`("a" | "b") & "x"` → distribute → `never | never` → `never`); when result
+is `never`, emit TS2367 with the TypeParam's NAME (not its constraint) so
+the message reads `... types 'T' and '"x"' have no overlap.` matching
+TypeScript's display. Required infrastructure: `pushFunctionTypeParamsScope`
+helper now invoked from arithmetic walker's FunctionDeclaration / Method
+branches before `populateParameterLocalTypes` so that param annotations
+referencing T resolve to `Type.TypeParam(T)` instead of errorType.
+`isValidArithmeticOperand` extended to recurse on TypeParam constraint
+(unconstrained TypeParam treated as anyType-equivalent to avoid
+regressing tests that previously saw `t: T` as anyType). Value side uses
+`literalTypeOfExpression` to recover the literal type from
+`StringLiteralNode` / `NumericLiteralNode` (since `getTypeOfExpression`
+widens them). Net delta: 1623 → 1622 failed (8452 → 8453 passing). Zero
+regressions across 10078-test suite.
 
 **17.72 (2026-05-01, +4)** — Intersection write-type for property assignment
 on accessor-divergent classes. Flips `divergentAccessorsTypes4_ts` and
