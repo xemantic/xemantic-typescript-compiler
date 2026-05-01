@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.76, 8456 → 8458, +2) — Suppress TS2793 for non-overloaded methods:** Continuation /loop after 17.75. Pool stayed at 0/0/0 fresh. The small-diff candidate scan surfaced `genericOfACloduleType1_ts` and `genericOfACloduleType2_ts` (1 line each) — both were over-firing TS2793 "implementation would have succeeded against this implementation" related info on `g1.bar(null)` where `bar(x: T)` is a single non-overloaded class method.
+
+  **Root cause:** `findImplementationInStatements` (Checker.kt ~45333) returned the matched method whenever `foundOverload && impl != null` was true. But for a single body-having method these conditions trivially both hold — `member === overloadDecl` AND `member.body != null`. So the method gets returned as its own implementation, generating a spurious TS2793 self-pointer.
+
+  **Implementation:** Add a `hasBodylessOverload` tracker. Real overload pairs require at least one body-less overload-sig declaration AND a separate body-having implementation. Single-spot edit replacing the gate condition.
+
+  **Test results:** 1619 → 1617 failed (8456 → 8458 passing). Zero regressions across 10078-test suite.
+
+  **Foundation:** The `findImplementationInStatements` gate now correctly distinguishes "single method with body" (no overload pair) from "overload signature(s) + body" (real pair). The companion path `getImplRelatedFromDecls` (~45361) already had this gate via `hasOverload = decls.any { it has body == null }` — this fix brings the class-member walker into parity.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). Found via the small-diff failing-test scan that surfaced 17.74 / 17.75 in the same /loop iteration; this is the third feature commit this iteration.
+
   **Session 2026-05-01 (17.75, 8455 → 8456, +1) — Skip "provides no match" chain for primitive sources:** Continuation /loop after 17.74. Pool stayed at 0/0/0 fresh. Spot-checked the small-diff candidates list and identified `assignToFn_ts` as a 2-line over-fire: we emit a chain `Type 'string' provides no match for the signature '(n: number): boolean'.` for `x.f = "hello"` where `x.f: (n:number)=>boolean`, but TypeScript's baseline has only the bare TS2322. The chain is correct for object-shaped sources lacking a call sig (e.g. interface→callable), wrong for primitives.
 
   **Implementation:** `getCallableMismatchElaboration` (Checker.kt ~35541) early-returns null when source is a primitive type (`Type.Intrinsic` / `Type.StringLiteral` / `Type.NumberLiteral` / `Type.BigIntLiteral`). Pairs with the existing object-source non-callable check. Single-spot edit.

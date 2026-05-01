@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,456 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,458 / 10,078 tests passing (~84%).
+
+**17.76 (2026-05-01, +2)** — Suppress TS2793 "implementation would have
+succeeded" for non-overloaded methods. Flips `genericOfACloduleType1_ts` and
+`genericOfACloduleType2_ts`. Pre-fix: a single class method `bar(x: T) { ... }`
+emitted spurious TS2793 related info pointing to itself, because
+`findImplementationInStatements` (Checker.kt ~45333) returned the method
+whenever `foundOverload && impl != null` — but for a single body-having method
+both conditions trivially hold (overloadDecl IS the impl, both are the same
+declaration). Fix: require at least one body-less overload-sig declaration
+in the class members AND a separate body-having implementation — only then
+is it a real overload pair. Net delta: 1619 → 1617 failed (8456 → 8458
+passing). Zero regressions across 10078-test suite.
 
 **17.75 (2026-05-01, +1)** — Skip "provides no match for the signature" chain
 for primitive sources. Flips `assignToFn_ts`. Pre-fix: `x.f = "hello"` where
