@@ -16804,6 +16804,76 @@ interface Console {
     warn(...data: any[]): void;
 }
 declare var console: Console;
+interface Performance {
+    readonly timeOrigin: number;
+    clearMarks(markName?: string): void;
+    clearMeasures(measureName?: string): void;
+    clearResourceTimings(): void;
+    getEntries(): any[];
+    getEntriesByName(name: string, type?: string): any[];
+    getEntriesByType(type: string): any[];
+    mark(markName: string, options?: any): any;
+    measure(measureName: string, startOrOptions?: any, endMark?: string): any;
+    now(): number;
+    setResourceTimingBufferSize(maxSize: number): void;
+    toJSON(): any;
+}
+interface MediaQueryList {
+    readonly matches: boolean;
+    readonly media: string;
+    onchange: ((this: MediaQueryList, ev: any) => any) | null;
+    addEventListener(type: string, listener: (ev: any) => void, options?: any): void;
+    removeEventListener(type: string, listener: (ev: any) => void, options?: any): void;
+}
+interface Window {
+    readonly console: Console;
+    readonly performance: Performance;
+    readonly document: any;
+    readonly history: any;
+    readonly innerHeight: number;
+    readonly innerWidth: number;
+    readonly length: number;
+    readonly location: any;
+    readonly localStorage: any;
+    readonly sessionStorage: any;
+    readonly navigator: any;
+    readonly origin: string;
+    readonly outerHeight: number;
+    readonly outerWidth: number;
+    readonly screen: any;
+    readonly screenLeft: number;
+    readonly screenTop: number;
+    readonly screenX: number;
+    readonly screenY: number;
+    readonly scrollX: number;
+    readonly scrollY: number;
+    readonly self: Window;
+    readonly top: Window | null;
+    readonly window: Window;
+    name: string;
+    alert(message?: any): void;
+    confirm(message?: string): boolean;
+    prompt(message?: string, defaultText?: string): string | null;
+    matchMedia(query: string): MediaQueryList;
+    open(url?: string, target?: string, features?: string): Window | null;
+    close(): void;
+    focus(): void;
+    blur(): void;
+    setTimeout(handler: (...args: any[]) => void, timeout?: number, ...args: any[]): number;
+    setInterval(handler: (...args: any[]) => void, timeout?: number, ...args: any[]): number;
+    clearTimeout(id?: number): void;
+    clearInterval(id?: number): void;
+    requestAnimationFrame(callback: (time: number) => void): number;
+    cancelAnimationFrame(handle: number): void;
+    addEventListener(type: string, listener: (ev: any) => void, options?: any): void;
+    removeEventListener(type: string, listener: (ev: any) => void, options?: any): void;
+    dispatchEvent(event: any): boolean;
+    getComputedStyle(elt: any, pseudoElt?: string | null): any;
+    scrollTo(x?: number, y?: number): void;
+    scrollBy(x?: number, y?: number): void;
+}
+declare var window: Window;
+declare var performance: Performance;
 interface Symbol {
     toString(): string;
     valueOf(): symbol;
@@ -43197,6 +43267,10 @@ interface DataView {
         ts2576SquiggleStart: Int = diagStart,
         ts2576SquiggleLength: Int = diagLength,
     ) {
+        // 17.57: Skip TS2339 emission when the property name is empty — that's a parser
+        // error-recovery placeholder for incomplete syntax like `var p = window.` (TS1003
+        // already fires for the missing identifier; emitting TS2339 would be redundant).
+        if (propName.isEmpty()) return
         // Unwrap ParenthesizedExpression wrappers so `(new X).blah` / `(x).blah` reach the
         // same branches as their un-parenthesized forms. Parens only affect precedence.
         var objectExpr = objectExprIn
