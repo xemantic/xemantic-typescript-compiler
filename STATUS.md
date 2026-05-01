@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,458 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,459 / 10,078 tests passing (~84%).
+
+**17.77 (2026-05-01, +1)** — Refine 17.15b's TS2769 callee-position rule:
+only switch squiggle to callee when overloads fail at DIFFERENT argument
+positions. Flips `signatureLengthMismatchInOverload_ts`. Pre-fix: ANY
+fn-vs-fn arg mismatch caused the squiggle to move from the failing argument
+to the callee. For tests where all overloads fail at the SAME argument
+position (e.g. both overloads of `f(callback)` reject the arrow-fn arg —
+overload 1 by param-type, overload 2 by arity), TypeScript squiggles the
+argument; we incorrectly squiggled the callee `f`. Fix:
+`checkArgumentsAgainstOverloads` (Checker.kt ~45759) computes per-overload
+`getFirstFailingArgPosition`; if all overloads agree on the failing
+position, use that — otherwise fall back to callee for fn-vs-fn cases.
+Verified `specializedSignatureAsCallbackParameter1_ts` (the 17.15b
+flip-trigger) still squiggles callee since its overloads fail at
+different positions (arg[0] vs arg[1]). Net delta: 1617 → 1616 failed
+(8458 → 8459 passing). Zero regressions.
 
 **17.76 (2026-05-01, +2)** — Suppress TS2793 "implementation would have
 succeeded" for non-overloaded methods. Flips `genericOfACloduleType1_ts` and

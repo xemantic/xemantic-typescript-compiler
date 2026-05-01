@@ -45753,10 +45753,24 @@ interface DataView {
             // mismatch and we have a callee, point the squiggle at the callee instead
             // of the failing argument — TypeScript treats fn-vs-fn arg mismatch as a
             // more fundamental error and squiggles the callee identifier.
+            // 17.77: Refinement — only switch to callee when overloads fail at
+            // DIFFERENT argument positions (e.g. overload 1 fails on arg[1]:fn,
+            // overload 2 fails on arg[0]:primitive). When ALL overloads fail at
+            // the SAME arg position (e.g. both fail on the arrow-fn arg),
+            // TypeScript squiggles the argument, not the callee. Cf.
+            // signatureLengthMismatchInOverload_ts where two overloads both fail
+            // at arg[0] (arity vs param-type) — expected squiggle is the arg.
             val anyFnFnMismatch = callee != null && overloadErrors.any { (_, sig, _) ->
                 getFirstFailingFnTypeArgPair(args, sig) != null
             }
-            val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null) {
+            // Collect first-failing-arg position per overload. If all overloads
+            // share the same failing position, use that — otherwise fall back to
+            // callee for fn-vs-fn cases.
+            val perOverloadPos = overloadErrors.map { (_, sig, _) ->
+                getFirstFailingArgPosition(args, sig)
+            }
+            val allSamePos = perOverloadPos.isNotEmpty() && perOverloadPos.all { it == perOverloadPos.first() }
+            val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null && !allSamePos) {
                 Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
             } else {
                 getFirstFailingArgPosition(args, signatures.last())
