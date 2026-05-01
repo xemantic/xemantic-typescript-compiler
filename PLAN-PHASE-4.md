@@ -2619,6 +2619,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-01 (17.77, 8458 → 8459, +1) — Refine 17.15b TS2769 callee-position rule:** Continuation /loop after 17.76. Pool stayed at 0/0/0 fresh. The small-diff candidate scan surfaced `signatureLengthMismatchInOverload_ts` (4 lines) — squiggle at column 1 width 1 (the callee `f`) instead of expected column 3 width 33 (the arrow-fn arg). Test pattern: `f(callback: (string, string) => void)` overload 1 + `f(callback: (number) => void)` overload 2, called with `f((arg: number, arg2: number) => {})` — both overloads fail at arg[0], differing only in *why* (param-type mismatch vs arity).
+
+  **Root cause:** 17.15b changed `checkArgumentsAgainstOverloads` (Checker.kt ~45759) to point the squiggle at the callee whenever ANY overload had a fn-vs-fn arg mismatch. Motivated by `specializedSignatureAsCallbackParameter1_ts` where overloads fail at DIFFERENT positions (arg[0] number-vs-string for one; arg[1] fn-vs-fn for the other) — TypeScript squiggles the callee in that case. But when all overloads fail at the SAME argument position, TypeScript squiggles that argument.
+
+  **Implementation:** Compute per-overload first-failing-arg position. If all overloads agree, use that argument's position. If positions differ AND any fn-vs-fn mismatch exists, fall back to callee. If neither, use the last overload's arg position (existing behavior). Single-spot edit; preserves 17.15b's flip (verified `specializedSignatureAsCallbackParameter1_ts` still squiggles callee — its overloads fail at distinct positions).
+
+  **Test results:** 1617 → 1616 failed (8458 → 8459 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). Found via the small-diff scan that surfaced 17.74-17.76 — fourth feature commit this iteration.
+
   **Session 2026-05-01 (17.76, 8456 → 8458, +2) — Suppress TS2793 for non-overloaded methods:** Continuation /loop after 17.75. Pool stayed at 0/0/0 fresh. The small-diff candidate scan surfaced `genericOfACloduleType1_ts` and `genericOfACloduleType2_ts` (1 line each) — both were over-firing TS2793 "implementation would have succeeded against this implementation" related info on `g1.bar(null)` where `bar(x: T)` is a single non-overloaded class method.
 
   **Root cause:** `findImplementationInStatements` (Checker.kt ~45333) returned the matched method whenever `foundOverload && impl != null` was true. But for a single body-having method these conditions trivially both hold — `member === overloadDecl` AND `member.body != null`. So the method gets returned as its own implementation, generating a spurious TS2793 self-pointer.
