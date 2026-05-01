@@ -2,6 +2,20 @@
 
 **Phase 4 — Checker buildout.** 8,447 / 10,078 tests passing (~84%).
 
+**17.67 (2026-05-01, net-zero infra)** — Symmetric extension of 17.66's
+contextual literal preservation to function-call args.
+`checkArgumentsAgainstSignature` (Checker.kt ~45774) now uses
+`literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)` when
+`propTypeContainsLiteral(paramType)` is true — preserving literal types
+(`"x"`, `"z"`) instead of widening to primitives (`string`) for TS2345
+source-display purposes. Same gate, same fallback as 17.66. Net delta:
+1628 → 1628 failed (8447 unchanged). No currently-failing test gates
+SOLELY on this; tests that LOOK like they benefit need additional
+infrastructure (TS2820 "Did you mean", intersection-of-literals reduction,
+target-type-alias display expansion). Preventive completion of the
+literal-preservation pattern across all source-type computation sites
+(var-decl init, assignment RHS, call arg).
+
 **17.66 (2026-05-01, +2)** — Contextual literal preservation for var-decl init
 and assignment-expression RHS. Flips `checkJsObjectLiteralHasCheckedKeyof_ts`
 plus one additional test. Mirrors TypeScript's bidirectional contextual-typing
