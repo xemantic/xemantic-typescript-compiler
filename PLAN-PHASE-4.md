@@ -2619,6 +2619,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-02 (17.85, 8465 → 8466, +1) — TS2769 overload chain uses signatureToStringColon for optional-param display:** Continuation /loop after 17.84. Pool empty (find_candidates --fresh: 0/0/0). The small-diff scan filtered out previously-explored candidates and surfaced `namespaceMergedWithFunctionWithOverloadsUsage_ts` (8 lines) — TS2769 chain showed `'(opts: Whatever): void'` instead of `'(opts?: Whatever | undefined): void'` for an optional parameter.
+
+  **Root cause:** Two `signatureToString` overloads exist in Checker.kt: (a) the full version at ~38710 routing through `formatParameter` which handles optional params (`?:` + `| undefined`); (b) a simpler 1-arg version at ~46294 doing `${param.name}: $typeStr` without checking the questionToken. The TS2769 chain emission at ~45990 was calling the simpler version, dropping the optional marker.
+
+  **Implementation:** Single-spot edit at TS2769 chain emission. Replaced `signatureToString(sig)` with `signatureToStringColon(sig, isConstruct = false)` which uses `formatParameter` and produces colon-form output `'(...): void'` (matching TypeScript's TS2769 baseline). Note: not switching to the arrow-form `signatureToString(sig, isConstruct=false)` because TS2769 baseline uses colon form for the chain.
+
+  **Test results:** 1610 → 1609 failed (8465 → 8466 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). 11th feature commit since the 17.74 iteration started; small-diff scan continues productive at the 8-line bucket.
+
   **Session 2026-05-02 (17.84, 8464 → 8465, +1) — TS2349 squiggle on property name for PropertyAccess callees:** Continuation /loop after the 17.83 revert. Pool empty (find_candidates --fresh: 0/0/0 after a stale-XML refresh — initial output had 16 fresh candidates that traced to leftover state from the 17.83 regressing run; full-suite re-run cleared this). Small-diff scan surfaced `methodChainError_ts` (6 lines) — TS2349 squiggled the whole multi-line `new Builder().method("a").notMethod()` chain instead of just `notMethod` (9 chars).
 
   **Root cause:** TS2349 emission (Checker.kt ~45315) used `calleeExpr.pos` to `expressionTrueEnd(calleeExpr)` for squiggle bounds. For chained calls where the callee is a PropertyAccessExpression, this spans the entire expression (back to the receiver `new Builder()`), producing a multi-line squiggle that doesn't match TypeScript's per-segment behavior.

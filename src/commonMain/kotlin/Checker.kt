@@ -45987,7 +45987,14 @@ interface DataView {
                 val chain = mutableListOf<String>()
                 val totalOverloads = signatures.size
                 for ((overloadIdx, sig, errorMsg) in overloadErrors) {
-                    val sigStr = signatureToString(sig)
+                    // 17.85: Use signatureToStringColon (which handles optional
+                    // params via formatParameter — `?:` + `| undefined` widening)
+                    // for TS2769 overload chain display, instead of the simpler
+                    // 1-arg signatureToString which omitted both. Cf.
+                    // namespaceMergedWithFunctionWithOverloadsUsage_ts where
+                    // `(opts?: Foo.Whatever)` should display as
+                    // `'(opts?: Whatever | undefined): void'`.
+                    val sigStr = signatureToStringColon(sig, isConstruct = false)
                     chain.add("  Overload $overloadIdx of $totalOverloads, '$sigStr', gave the following error.")
                     chain.add("    $errorMsg")
                     // 17.15b: Add deeper "Types of parameters X and Y are incompatible." chain

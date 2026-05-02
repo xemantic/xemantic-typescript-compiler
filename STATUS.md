@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,465 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,466 / 10,078 tests passing (~84%).
+
+**17.85 (2026-05-02, +1)** — TS2769 overload chain display: use
+`signatureToStringColon` (with optional-param `?` + `| undefined`
+widening) instead of the simpler 1-arg `signatureToString`. Flips
+`namespaceMergedWithFunctionWithOverloadsUsage_ts`. Pre-fix: chain line
+`Overload 1 of 2, '(opts: Whatever): void', gave the following error.`
+TypeScript baseline: `'(opts?: Whatever | undefined): void'` (with `?` and
+`| undefined`). The TS2769 chain emission (Checker.kt ~45990) was
+calling the simpler `signatureToString(sig)` overload at ~46294 which
+emitted `${param.name}: $typeStr` without checking `questionToken` or
+adding the `| undefined` widening. Fixed by switching to
+`signatureToStringColon(sig, isConstruct = false)` which routes through
+`formatParameter` (already handles optional params per 17.13). Net delta:
+1610 → 1609 failed (8465 → 8466 passing). Zero regressions.
 
 **17.84 (2026-05-02, +1)** — TS2349 squiggle on property name only for
 PropertyAccessExpression callees. Flips `methodChainError_ts`. Pre-fix:
