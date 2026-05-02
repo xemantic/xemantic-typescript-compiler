@@ -34885,7 +34885,18 @@ interface DataView {
                         }
                         if (canUse && !isAssignable) {
                             val displaySource = typeToString(sourceType)
-                            val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                            // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
+                            // the resolved type display (`'Infinity'` / `'-Infinity'` / `'NaN'`)
+                            // over the type-annotation alias name. TypeScript expands type
+                            // aliases to their resolved form when displaying intrinsic-like
+                            // numeric values (cf. fakeInfinity1_ts: `type A = 1e999;` displays
+                            // as `'Infinity'` not `'A'`).
+                            val resolvedDisplay = typeToString(tt)
+                            val isIntrinsicNumericLiteral = resolvedDisplay == "Infinity" ||
+                                resolvedDisplay == "-Infinity" || resolvedDisplay == "NaN"
+                            val displayTarget = if (isIntrinsicNumericLiteral) resolvedDisplay
+                                else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: resolvedDisplay
+                                else resolvedDisplay
                             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
                             // 16.4bf: Compute missing-property set directly rather than relying on
                             // `lastMissingPropertyName` side-effect — a cached Ternary.False result
