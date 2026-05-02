@@ -17251,6 +17251,7 @@ interface Iterator<T> {
 }
 interface IterableIterator<T> { }
 interface AsyncIterable<T> { }
+interface ThisType<T> { }
 interface AsyncIterator<T> {
     next(value?: any): any;
     return?(value?: any): any;
