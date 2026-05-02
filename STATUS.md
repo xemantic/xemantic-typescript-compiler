@@ -1,6 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,464 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,465 / 10,078 tests passing (~84%).
+
+**17.84 (2026-05-02, +1)** — TS2349 squiggle on property name only for
+PropertyAccessExpression callees. Flips `methodChainError_ts`. Pre-fix:
+`new Builder().method("a").notMethod()` emitted TS2349 with squiggle
+spanning the entire chain expression (multi-line). TypeScript's baseline
+squiggles only `notMethod` (9 chars). Fix: in TS2349 emission
+(Checker.kt ~45315), when `calleeExpr is PropertyAccessExpression`, use
+`calleeExpr.name.pos` and `calleeExpr.name.text.length` for the squiggle
+position/length instead of the whole expression. Net delta: 1611 → 1610
+failed (8464 → 8465 passing). Zero regressions.
 
 **17.82 (2026-05-02, +1)** — TS2352 array-to-array cast: prefer
 excess-property chain at the prop position over whole-cast position.
