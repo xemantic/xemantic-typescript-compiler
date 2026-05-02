@@ -45316,8 +45316,16 @@ interface DataView {
                 calleeType !== nullType && calleeType !== undefinedType &&
                 calleeType !== neverType && calleeType !== unknownType) {
                 val displayType = typeToString(getApparentType(calleeType))
-                val start = calleeExpr.pos
-                val length = expressionTrueEnd(calleeExpr) - start
+                // 17.84: When the callee is a PropertyAccessExpression, squiggle just
+                // the property name (matches TypeScript's per-segment elaboration for
+                // chained calls like `obj.method().notMethod()` — only `notMethod`
+                // is highlighted, not the whole chain).
+                val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                } else {
+                    val s = calleeExpr.pos
+                    Pair(s, expressionTrueEnd(calleeExpr) - s)
+                }
                 if (length > 0) {
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(

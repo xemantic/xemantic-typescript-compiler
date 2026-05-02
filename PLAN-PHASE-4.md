@@ -2619,6 +2619,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-02 (17.84, 8464 → 8465, +1) — TS2349 squiggle on property name for PropertyAccess callees:** Continuation /loop after the 17.83 revert. Pool empty (find_candidates --fresh: 0/0/0 after a stale-XML refresh — initial output had 16 fresh candidates that traced to leftover state from the 17.83 regressing run; full-suite re-run cleared this). Small-diff scan surfaced `methodChainError_ts` (6 lines) — TS2349 squiggled the whole multi-line `new Builder().method("a").notMethod()` chain instead of just `notMethod` (9 chars).
+
+  **Root cause:** TS2349 emission (Checker.kt ~45315) used `calleeExpr.pos` to `expressionTrueEnd(calleeExpr)` for squiggle bounds. For chained calls where the callee is a PropertyAccessExpression, this spans the entire expression (back to the receiver `new Builder()`), producing a multi-line squiggle that doesn't match TypeScript's per-segment behavior.
+
+  **Implementation:** Single-spot edit in TS2349 emission. When `calleeExpr is PropertyAccessExpression`, use `calleeExpr.name.pos` and `calleeExpr.name.text.length` for the squiggle bounds. Other callee shapes (non-property-access) fall through to the existing `pos`/`expressionTrueEnd` path.
+
+  **Test results:** 1611 → 1610 failed (8464 → 8465 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). Tenth feature commit since the 17.74 iteration started.
+
   **Session 2026-05-02 (17.83 ATTEMPTED + REVERTED, 8464 unchanged) — Skip static class members in `resolveInterfaceMembers`:** Continuation /loop after 17.82. The 7-10 line scan surfaced `classImplementsClass6_ts` (7 lines) — FP TS2741 at line 19 (`c2 = c`) and missing TS2339 at line 20 (`c.bar()`). Hypothesis: `class A { static bar() ...; foo() ... }` should have `bar` on the static side only; our resolver was including it in C's instance-shape comparison.
 
   **Implementation:** Added `if (ModifierFlag.Static in member.modifiers) continue` at the top of both `PropertyDeclaration` and `MethodDeclaration` branches in `resolveInterfaceMembers` (~36344). Targeted test partially flipped (FP TS2741 gone) but TS2339 at line 20 still missing — needed additional work in `checkSinglePropertyAccess` to fire on no-base class instance with implements clause.
