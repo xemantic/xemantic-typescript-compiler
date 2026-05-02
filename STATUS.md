@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,461 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,462 / 10,078 tests passing (~84%).
+
+**17.80 (2026-05-02, +1)** — Prefer resolved display over type-alias name
+for intrinsic-like numeric literals (`Infinity` / `-Infinity` / `NaN`).
+Flips `fakeInfinity1_ts`. Pre-fix: `let a: A` where `type A = 1e999;`
+displayed as `'A'` in TS2322, but TypeScript baseline expands the alias
+to `'Infinity'` because `1e999` evaluates to `Double.POSITIVE_INFINITY`
+which TS treats as the named intrinsic-like literal. Fix: in
+`checkAssignmentExpression`'s display-target path (Checker.kt ~34888),
+when `typeToString(targetType)` returns one of `"Infinity"`,
+`"-Infinity"`, or `"NaN"`, prefer that over `formatTypeForDisplay`'s
+type-alias text. Other type aliases (e.g. `type Box<T> = ...`) still
+preserve their alias name in display. Net delta: 1614 → 1613 failed
+(8461 → 8462 passing). Zero regressions.
 
 **17.79 (2026-05-01, +1)** — Synthetic TS2728 "declared here" pointing to
 `lib.dom.d.ts:--:--` for KNOWN_GLOBALS without a real symbol declaration.

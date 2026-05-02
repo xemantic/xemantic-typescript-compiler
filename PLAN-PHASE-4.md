@@ -2619,6 +2619,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-02 (17.80, 8461 → 8462, +1) — Prefer resolved display for intrinsic-like numeric literals:** Continuation /loop after 17.79. Pool stayed at 0/0/0 fresh. The small-diff scan surfaced `fakeInfinity1_ts` (4 lines) — TS2322 display `'A'` vs expected `'Infinity'` for `let a: A; a = Infinity;` where `type A = 1e999;`.
+
+  **Root cause:** `1e999` evaluates to `Double.POSITIVE_INFINITY`. TypeScript treats this as a named intrinsic-like literal and displays it as `'Infinity'` regardless of the alias. Our `checkAssignmentExpression` (Checker.kt ~34888) computes `displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)` — `formatTypeForDisplay` returns `"A"` (the alias text), winning over `typeToString(tt)` which would correctly return `"Infinity"` for an infinite NumberLiteral.
+
+  **Implementation:** Two-line gate before the existing `formatTypeForDisplay` check: when `typeToString(targetType)` is one of `"Infinity"` / `"-Infinity"` / `"NaN"`, use that resolved display. Otherwise fall through to the existing alias-name-preferred logic. The `Type.NumberLiteral.toString()` already handles infinite/NaN values correctly; just need to consult it earlier.
+
+  **Test results:** 1614 → 1613 failed (8461 → 8462 passing). Zero regressions across 10078-test suite.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Lands real code per protocol option (a). Seventh feature commit since the iteration started.
+
   **Session 2026-05-01 (17.79, 8460 → 8461, +1) — Synthetic TS2728 pointing to lib.dom.d.ts for DOM globals:** Fresh /loop iteration after 17.78. Pool stayed at 0/0/0 fresh. The small-diff scan surfaced `baseCheck_ts` (1 line) — missing `!!! related TS2728 lib.dom.d.ts:--:--: 'Lock' is declared here.` for the TS2552 spelling suggestion of `Lock` (Web Locks API DOM global) when user typed `loc`.
 
   **Root cause:** `findDeclarationRelatedInfo` (Checker.kt ~10968) returns null when the suggested name has no real symbol with declarations. Since `Lock` is only in KNOWN_GLOBALS as a NAME (no real declaration in our embedded BUILTIN_LIB_SOURCE which is a subset of lib.es5.d.ts), the lookup fails and TS2728 is silently dropped.
