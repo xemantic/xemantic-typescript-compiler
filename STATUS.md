@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,462 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,463 / 10,078 tests passing (~84%).
+
+**17.81 (2026-05-02, +1)** — Per-element TS2741 for type-asserted array
+elements + outer-TS2741 suppression in class property init path. Flips
+`contextualTyping11_ts`. Pre-fix: `class foo { public bar: {id:number;}[]
+= [<foo>({})]; }` emitted only the OUTER TS2741 at the `bar` property
+name (`'foo[]' missing 'id' in '{id:number}[]'`). TypeScript baseline
+emits the per-element TS2741 at `<foo>({})`'s position (`'foo' missing
+'id' in '{id:number}'`). Three coordinated pieces:
+(1) `checkArrayLiteralElementExcessProps` (Checker.kt ~48124) extended
+with a `TypeAssertionExpression` / `AsExpression` branch — emits TS2741
+when the asserted type is missing a required property of the target
+element (via `getMissingRequiredPropertySymbol`).
+(2) `expressionTrueEnd` (~26217) extended with `TypeAssertionExpression`
+case (returns inner expression's true end — fixed off-by-one squiggle
+that was emitting 10 chars instead of 9 for `<foo>({})`).
+(3) `checkPropertyInitAssignability` (~34403) suppresses the outer
+TS2741 / TS2322 when `checkArrayLiteralElementExcessProps` already
+emitted at least one diagnostic and source/target are array-literal /
+Array-Reference. Mirrors the var-decl init suppression at ~34146.
+Net delta: 1613 → 1612 failed (8462 → 8463 passing). Zero regressions.
 
 **17.80 (2026-05-02, +1)** — Prefer resolved display over type-alias name
 for intrinsic-like numeric literals (`Infinity` / `-Infinity` / `NaN`).

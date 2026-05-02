@@ -26260,6 +26260,10 @@ interface DataView {
         is TypeOfExpression -> expressionTrueEnd(expr.expression)
         is VoidExpression -> expressionTrueEnd(expr.expression)
         is AwaitExpression -> expressionTrueEnd(expr.expression)
+        is TypeAssertionExpression -> expressionTrueEnd(expr.expression)
+        // For `as`, the end is after the type annotation; expr.end may overshoot
+        // by one token, so prefer `type.end` when available, else fallback.
+        is AsExpression -> expr.end
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
@@ -34417,7 +34421,18 @@ interface DataView {
                 }
             }
             // 16.0: Array literal class property initializer — TS2353 for each element
+            val initialDiagsBeforeElemCheck = diagnostics.size
             checkArrayLiteralElementExcessProps(init, targetType, source, fileName)
+            // 17.81: When per-element diagnostics fired (TS2741/TS2322 from
+            // checkArrayLiteralElementExcessProps), suppress the outer
+            // class-property-level TS2741/TS2322 — per-element already covers the
+            // specific mismatches at the precise position. Mirrors var-decl path
+            // suppression at ~34146 for ArrayLiteralExpression vs Array target.
+            if (init is ArrayLiteralExpression && targetType is Type.Reference &&
+                targetType.target.symbol?.name == "Array" &&
+                diagnostics.size > initialDiagsBeforeElemCheck) {
+                return
+            }
             if (canUse && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 val displaySource = typeToString(sourceType)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -48143,6 +48158,36 @@ interface DataView {
                         val elemType = getTypeOfExpression(elem)
                         if (elemType is Type.Object && canUseTypeEngine(elemType, elementType)) {
                             checkExcessProperties(elem, elemType, elementType, elementDisplay, source, fileName)
+                        }
+                    }
+                    is TypeAssertionExpression, is AsExpression -> {
+                        // 17.81: Type-asserted element vs structured element-type — emit
+                        // TS2741 when the asserted type is missing a required property of
+                        // the target element. Cf. contextualTyping11_ts:
+                        // `class foo { public bar: {id:number;}[] = [<foo>({})]; }` —
+                        // the cast type `foo` lacks `id`, so element-level TS2741 fires.
+                        val elemType = getTypeOfExpression(elem)
+                        if (elemType !is Type.Object) continue
+                        try { resolveStructuredTypeMembers(elemType) } catch (_: StackOverflowError) { continue }
+                        val missingSym = getMissingRequiredPropertySymbol(elemType, elementType)
+                        if (missingSym != null) {
+                            val displaySource = typeToString(elemType)
+                            val start = elem.pos
+                            val length = expressionTrueEnd(elem) - start
+                            if (length <= 0) continue
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            val relatedInfo = createPropertyDeclaredHereRelatedInfo(missingSym)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '${missingSym.name}' is missing in type '$displaySource' but required in type '$elementDisplay'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2741,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                                relatedInformation = listOfNotNull(relatedInfo),
+                            ))
                         }
                     }
                     else -> {
