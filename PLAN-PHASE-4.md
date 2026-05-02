@@ -2619,6 +2619,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-02 (17.83 ATTEMPTED + REVERTED, 8464 unchanged) — Skip static class members in `resolveInterfaceMembers`:** Continuation /loop after 17.82. The 7-10 line scan surfaced `classImplementsClass6_ts` (7 lines) — FP TS2741 at line 19 (`c2 = c`) and missing TS2339 at line 20 (`c.bar()`). Hypothesis: `class A { static bar() ...; foo() ... }` should have `bar` on the static side only; our resolver was including it in C's instance-shape comparison.
+
+  **Implementation:** Added `if (ModifierFlag.Static in member.modifiers) continue` at the top of both `PropertyDeclaration` and `MethodDeclaration` branches in `resolveInterfaceMembers` (~36344). Targeted test partially flipped (FP TS2741 gone) but TS2339 at line 20 still missing — needed additional work in `checkSinglePropertyAccess` to fire on no-base class instance with implements clause.
+
+  **Why it regressed (-19 across full suite):** `resolveInterfaceMembers` is shared between class-instance-type resolution AND `typeof Class` (static-side) resolution paths. Filtering static members at the source breaks every test that expects static methods on `typeof Class` references — e.g. `Class.staticMethod()` calls, `typeof Class` assignments, etc. The static-skip needs to happen at the consumer site (e.g., `propertiesRelatedTo` for instance-instance comparison), not at the resolver, OR the resolver needs to bifurcate into instance-side and static-side member sets.
+
+  **Forward path:** A correct fix would (a) populate BOTH `members` (instance-side, no statics) and a separate `staticMembers` field on Type.Interface, OR (b) gate the skip on the comparison-context (instance-vs-instance only). Both are >1-file changes touching how Type.Interface is consumed across many call sites. Out of scope for surgical session per autonomous-decision policy. Logged for future agents.
+
+  **Anti-loop check:** Pool empty (find_candidates --fresh: 0/0/0). Did not commit a recon-only note — this session note documents an attempt+revert per protocol option (d). No code change committed. The 17.74-17.82 multi-session run accumulated +11 tests; this attempt at +1 failed under regression. Stopping cleanly.
+
   **Session 2026-05-02 (17.82, 8463 → 8464, +1) — TS2352 array-cast excess-property chain at prop position:** Continuation /loop after 17.81. Pool stayed at 0/0/0 fresh. The 7-10 line diff scan surfaced `arrayCast_ts` (8 lines) — TS2352 emitted at the whole-cast position with the wrong chain message. TypeScript's baseline emits at the FIRST excess property's position with the excess-prop chain.
 
   **Root cause:** `emitTS2352IfSameTargetMismatch` (Checker.kt ~27373) emits TS2352 at the whole expression position with chain "Type 'X' is not comparable to type 'Y'." for any same-target Reference cast where type args fail mutual assignability. For `<{id:number}[]>[{foo:"s"}]`, source and target are both `Array<...>` references; the type-arg pair `{foo:string}` vs `{id:number}` fails. We emit at column 1 with the type-comparable chain. TypeScript prefers the excess-property variant when source is an array literal.
