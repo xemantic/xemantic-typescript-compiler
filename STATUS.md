@@ -2,6 +2,19 @@
 
 **Phase 4 — Checker buildout.** 8,466 / 10,078 tests passing (~84%).
 
+**17.86 (2026-05-02, net-zero infra)** — Add `interface ThisType<T> {}` to
+embedded BUILTIN_LIB_SOURCE. Pre-fix: `A & ThisType<any>` resolved to
+`anyType` in our checker (because ThisType wasn't a real interface, only
+in KNOWN_GLOBALS as a name) — `getIntersectionType` collapses anyType
+intersections to anyType, then `canUseTypeEngine` returns false for
+anyType targets, suppressing excess-prop checks. Post-fix: ThisType
+resolves as a proper empty interface, intersections like
+`A & ThisType<any>` retain their structure, and excess-prop check fires
+correctly. Partial progress on `excessPropertyCheckWithEmptyObject_ts`
+(2 of 3 expected TS2353 emissions now fire; the 3rd is gated on
+`Object.defineProperty`'s coarse `any` signature in our lib). Net delta:
+0 tests; foundation for future tests using `ThisType<T>` patterns.
+
 **17.85 (2026-05-02, +1)** — TS2769 overload chain display: use
 `signatureToStringColon` (with optional-param `?` + `| undefined`
 widening) instead of the simpler 1-arg `signatureToString`. Flips
