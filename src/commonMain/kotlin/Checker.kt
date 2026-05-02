@@ -27399,6 +27399,48 @@ interface DataView {
             if (sToT) continue
             val tToS = try { checkTypeRelatedTo(t, s, assignableRelation) } catch (_: StackOverflowError) { return }
             if (tToS) continue
+            // 17.82: For array-to-array casts where the source is an array literal AND
+            // an element is an object literal with excess properties relative to the
+            // target's element type, prefer the excess-property chain at the excess
+            // prop's position. Cf. arrayCast_ts: `<{id:number}[]>[{foo:"s"}]` should
+            // emit TS2352 at `foo` (col 23, 3 chars) with chain "Object literal may
+            // only specify known properties, and 'foo' does not exist in type
+            // '{ id: number; }'." rather than the whole-cast position with a
+            // "type X is not comparable to type Y" chain.
+            if (inner is ArrayLiteralExpression && sourceType.target.symbol?.name == "Array" &&
+                targetType.target.symbol?.name == "Array" && t is Type.Object) {
+                try { resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) { return }
+                val targetPropNames = collectTargetPropertyNames(t)
+                if (targetPropNames != null) {
+                    for (elem in inner.elements) {
+                        if (elem !is ObjectLiteralExpression) continue
+                        for (prop in elem.properties) {
+                            if (prop !is PropertyAssignment) continue
+                            val propName = when (val n = prop.name) {
+                                is Identifier -> n.text
+                                is StringLiteralNode -> n.text
+                                else -> continue
+                            }
+                            if (propName !in targetPropNames) {
+                                val propPos = prop.name.pos
+                                val (eLine, eChar) = getLineAndCharacterOfPosition(source, propPos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Conversion of type '${typeToString(sourceType)}' to type '${typeToString(targetType)}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+                                    messageChain = listOf("  Object literal may only specify known properties, and '$propName' does not exist in type '${typeToString(t)}'."),
+                                    category = DiagnosticCategory.Error,
+                                    code = 2352,
+                                    fileName = fileName,
+                                    line = eLine,
+                                    character = eChar,
+                                    start = propPos,
+                                    length = propName.length,
+                                ))
+                                return
+                            }
+                        }
+                    }
+                }
+            }
             val start = expr.pos
             val endPos = expressionTrueEnd(inner)
             val length = (endPos - start).coerceAtLeast(1)

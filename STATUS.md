@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,463 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,464 / 10,078 tests passing (~84%).
+
+**17.82 (2026-05-02, +1)** — TS2352 array-to-array cast: prefer
+excess-property chain at the prop position over whole-cast position.
+Flips `arrayCast_ts`. Pre-fix: `<{id:number}[]>[{foo:"s"}]` emitted
+TS2352 at column 1 (whole cast) with chain "Type '{ foo: string; }' is
+not comparable to type '{ id: number; }'." TypeScript's baseline emits
+at column 23 (the `foo` prop) with chain "Object literal may only
+specify known properties, and 'foo' does not exist in type
+'{ id: number; }'." Fix: in `emitTS2352IfSameTargetMismatch`
+(Checker.kt ~27395), when source is `ArrayLiteralExpression` and both
+source/target are `Array<...>`-shaped, walk source elements that are
+`ObjectLiteralExpression`s and emit TS2352 at the FIRST excess property
+with the excess-prop chain. Falls back to the existing whole-cast
+emission when no excess prop is found. Net delta: 1612 → 1611 failed
+(8463 → 8464 passing). Zero regressions.
 
 **17.81 (2026-05-02, +1)** — Per-element TS2741 for type-asserted array
 elements + outer-TS2741 suppression in class property init path. Flips
