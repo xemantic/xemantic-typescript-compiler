@@ -2619,6 +2619,26 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.97, 8481 → 8482, +1) — TS2428 default-aware canonical merge (regression fix on 17.92):** Fresh /loop iteration after 17.96. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/76/19), so I extended the scan to 4-8 line diffs and surfaced `genericDefaults_ts` (EXTRA +6: 4× TS2428 over-fired on `i04` declarations + 2× over-fired on `i07`).
+
+  **Root cause:** 17.92 introduced TS2428 for class+interface merges and constraint comparison via raw `(name, constraintText)` signature pairs across all merged decls, firing on any pairwise difference. This over-fired on `interface i04 {}` + `interface i04<T>` + `interface i04<T = number>` + `interface i04<T = number, U = string>` — TypeScript treats this 4-decl merge as valid because the extra type parameters at positions 0 and 1 carry defaults that reconcile the length gap. A separate latent bug: `node.end` overshoots by one token (documented gotcha), so `source.substring(c.pos, c.end)` for decl3's `T = number` gave default text `number>` while decl4's first param gave `number,` — false mismatch even with correct comparison logic.
+
+  **Implementation:**
+  - Restructure the comparison to model TypeScript's canonical merged signature. For each position k in the longest signature, walk all decls with a param at position k: (a) names must agree across them; (b) constraints must agree (including null vs non-null); (c) non-null defaults must agree across decls; (d) when no decl at position k provides a default AND any declaration omits position k entirely → TS2428 fires.
+  - Replace naive `source.substring(c.pos, c.end)` with a balanced-bracket walker `typeText(n)` that walks forward from `n.pos`, balancing `<({[` against `>)}]`, stopping at the first unbalanced closer or top-level `,`/`=`. Returns the trimmed normalized type text up to the true end.
+
+  **Verification matrix** (traced by hand, then full-suite verified):
+  - `i04` (genericDefaults): canonical position 0 = T (default `number` from decls 3+4); canonical position 1 = U (default `string` from decl 4). decl1 (0 params) is allowed because both canonical positions have defaults. → no TS2428 ✓
+  - `i07` (genericDefaults): canonical position 0 = A (default `number` from decl 2). decl 1 (0 params) allowed. → no TS2428 ✓
+  - `I3` (interfaceWithMultipleDeclarations): canonical position 0 = T with NO default (only one decl provides position 0, no default). decl 1 (0 params) is shorter → length gap with no canonical default → TS2428 ✓
+  - `i01` (genericDefaultsErrors): canonical position 0 has DIFFERENT non-null defaults (`number` vs `string`) → TS2428 ✓
+  - `Foo` / `Quux` (nonIdenticalTypeConstraints): different constraints / different names at position 0 → TS2428 ✓
+  - `Bar` / `Baz` (nonIdenticalTypeConstraints): identical signatures → no TS2428 ✓
+
+  **Test results:** Net delta: 1594 → 1593 failed (8481 → 8482 passing). Zero regressions across 10078-test suite. `genericDefaults_ts` flips clean. `nonIdenticalTypeConstraints_ts` still passes (constraint-mismatch detection unchanged). `interfaceWithMultipleDeclarations_ts` still passes (length-with-no-default detection preserved). `genericDefaultsErrors_ts` still fails for unrelated TS2716/TS2344/TS2558/TS2707 emissions, but the i00/i01 TS2428 part now fires correctly.
+
+  **Foundation:** The canonical-merge model is more accurate to TypeScript's actual semantics than the prior pairwise-equality model. Any future declaration-merging diagnostic that needs to compare type-parameter shapes across decls (e.g. TS2706 "Required type parameters may not follow optional type parameters" — currently missing) can build on the same `signature(tps) -> List<TpSig>` extraction. The `typeText(n)` balanced-bracket helper is local to this branch but the underlying gotcha (`node.end` overshoots) bites in many other places — see CLAUDE.md "node.end overshoots by one token".
+
   **Session 2026-05-03 (17.96, 8480 → 8481, +1) — TS7032/TS7006 setter implicit-any gates on any sibling getter (regression fix on 17.94):** Fresh /loop iteration after 17.95. `find_candidates.py --fresh` returned 1 EXTRA candidate (`implicitAnyGetAndSetAccessorWithAnyReturnType_ts`) — exactly the test pattern 17.94 over-fired on, surfaced by the same fresh suite.
 
   **Root cause:** 17.94 added the SetAccessor implicit-any check (Checker.kt:8485+) but gated suppression on `it.type != null` — i.e. "skip ONLY when sibling getter has a typed return." Reading TypeScript's actual behavior: the suppression rule is "ANY sibling getter exists," because the getter's INFERRED return type provides contextual typing for the setter parameter even without an explicit annotation. The test case has `class GetAndSet { get haveGetAndSet() { return this.getAndSet; } set haveGetAndSet(value) { ... } }` — the getter's return type is inferred to `any` (from `getAndSet = null`), but its presence alone suppresses TS7032/TS7006 on the paired setter.

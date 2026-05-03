@@ -1,6 +1,33 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,481 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,482 / 10,078 tests passing (~84%).
+
+**17.97 (2026-05-03, +1)** — TS2428 type-parameter identity check is now
+default-aware. Flips `genericDefaults_ts`. Pre-fix (introduced in 17.92):
+`checkDuplicateDeclarations` compared raw `(name, constraintText)` signatures
+across all merged declarations and fired TS2428 on any pairwise difference,
+including length differences and default-only differences. This over-fired
+on patterns like `interface i04 {}` + `interface i04<T>` +
+`interface i04<T = number>` + `interface i04<T = number, U = string>` (4
+declarations with extra type parameters all carrying defaults — TypeScript
+treats these as a valid merge because the defaults reconcile the gap). Fix:
+restructure the comparison to model TypeScript's canonical merged signature.
+For each position k in the longest signature, compute the "shape" by walking
+all declarations that have a param at position k: (a) names must agree;
+(b) constraints must agree (including null-vs-non-null); (c) non-null defaults
+must agree across decls; (d) when no decl at position k provides a default
+AND any declaration omits position k entirely → TS2428 fires (the merge
+can't fill the gap). Also fixed a secondary bug in default/constraint text
+extraction: `node.end` overshoots by one token (documented gotcha), which
+caused decl3's `T = number` to extract default text `number>` while decl4's
+extracted `number,` — false mismatch even with correct logic. Replaced
+naive `source.substring(c.pos, c.end)` with a balanced-bracket walker that
+stops at the first unbalanced `>)}]` or top-level `,`/`=`. Verified against
+`nonIdenticalTypeConstraints_ts` (still flips correctly), `genericDefaults_ts`
+(now flips), `interfaceWithMultipleDeclarations_ts` (still flips correctly —
+length-mismatch with non-default at canonical position 0 still fires for
+`I3 {}` + `I3<T>`). Net delta: 1594 → 1593 failed (8481 → 8482 passing).
+Zero regressions across 10078-test suite.
 
 **17.96 (2026-05-03, +1)** — TS7032/TS7006 setter implicit-any suppression
 correctly gates on presence of ANY sibling getter (not just one with a typed

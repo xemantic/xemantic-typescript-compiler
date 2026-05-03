@@ -12284,18 +12284,65 @@ class Checker(
                 val classCount = mergeable.count { it.kind == "class" }
                 val applies = ifaceCount >= 2 || (classCount == 1 && ifaceCount >= 1)
                 if (applies) {
-                    fun signature(tps: List<TypeParameter>?): List<Pair<String, String?>> {
-                        if (tps.isNullOrEmpty()) return emptyList()
-                        return tps.map { tp ->
-                            val name = tp.name.text
-                            val constraintText = tp.constraint?.let { c ->
-                                source.substring(c.pos, c.end).trim().replace(Regex("\\s+"), " ")
+                    data class TpSig(val name: String, val constraint: String?, val default: String?)
+                    // Extract a TypeNode's source text up to its true balanced end.
+                    // `node.end` overshoots by one token (documented gotcha), so naive
+                    // substring(pos, end) for `T = number, U = string` yields `number,`.
+                    // Walk forward from pos, balancing `<({[` against `>)}]`, stopping
+                    // at the first unbalanced closer or at `,` / `=` at depth 0.
+                    fun typeText(n: TypeNode?): String? {
+                        if (n == null) return null
+                        var i = n.pos
+                        var lastNonTrivia = i - 1
+                        var depth = 0
+                        val end = minOf(n.end, source.length)
+                        while (i < end) {
+                            val c = source[i]
+                            when (c) {
+                                '<', '(', '[', '{' -> { depth++; lastNonTrivia = i }
+                                '>', ')', ']', '}' -> {
+                                    if (depth == 0) break
+                                    depth--; lastNonTrivia = i
+                                }
+                                ',', '=' -> if (depth == 0) break else lastNonTrivia = i
+                                ' ', '\t', '\n', '\r' -> { /* trivia */ }
+                                else -> lastNonTrivia = i
                             }
-                            name to constraintText
+                            i++
                         }
+                        if (lastNonTrivia < n.pos) return null
+                        return source.substring(n.pos, lastNonTrivia + 1)
+                            .trim().replace(Regex("\\s+"), " ")
                     }
-                    val firstSig = signature(mergeable.first().tps)
-                    val mismatch = mergeable.drop(1).any { signature(it.tps) != firstSig }
+                    fun signature(tps: List<TypeParameter>?): List<TpSig> {
+                        if (tps.isNullOrEmpty()) return emptyList()
+                        return tps.map { TpSig(it.name.text, typeText(it.constraint), typeText(it.default)) }
+                    }
+                    // TypeScript builds a canonical "merged" type-parameter list: at each
+                    // position, the merge supplies a default if ANY declaration provided one
+                    // at that position. TS2428 fires when the canonical merge is impossible:
+                    //   - At any position: declarations with that position have differing
+                    //     names → error.
+                    //   - At any position: declarations with that position have differing
+                    //     constraints (including one-has + other-doesn't) → error.
+                    //   - At any position: two declarations supply DIFFERENT non-null
+                    //     defaults → error.
+                    //   - At any position: NO declaration at that position supplies a
+                    //     default AND a shorter declaration omits the position entirely →
+                    //     error (the merge can't fill the gap).
+                    val sigs = mergeable.map { signature(it.tps) }
+                    val maxLen = sigs.maxOf { it.size }
+                    var mismatch = false
+                    for (k in 0 until maxLen) {
+                        val present = sigs.filter { k < it.size }.map { it[k] }
+                        if (present.isEmpty()) continue
+                        if (present.distinctBy { it.name }.size > 1) { mismatch = true; break }
+                        if (present.distinctBy { it.constraint }.size > 1) { mismatch = true; break }
+                        val nonNullDefaults = present.mapNotNull { it.default }.distinct()
+                        if (nonNullDefaults.size > 1) { mismatch = true; break }
+                        val shorterCount = sigs.count { k >= it.size }
+                        if (shorterCount > 0 && nonNullDefaults.isEmpty()) { mismatch = true; break }
+                    }
                     if (mismatch) {
                         for (info in mergeable) {
                             val start = info.nameNode.pos
