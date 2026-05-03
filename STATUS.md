@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,479 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,480 / 10,078 tests passing (~84%).
+
+**17.95 (2026-05-03, +1)** — TS2341 "Property 'X' is private and only
+accessible within class 'Y'." now fires for object-binding-pattern
+destructuring of class instance privates. Flips
+`destructureComputedProperty_ts`. Pre-fix: `checkPrivateMemberAccess`
+(Checker.kt:43510) only handled `PropertyAccessExpression` (e.g. `c.p`) —
+destructuring patterns like `const { p: p3 } = new C()`,
+`const { "p": p0 } = new C()`, `const { ["p"]: p1 } = new C()`,
+`const { [nameP]: p2 } = new C()` (where `const nameP = "p"`) all silently
+passed. Fix: new `checkDestructuringPrivateAccess` walker hooked into
+`checkVarDeclAssignability` after the existing nullable-union check. Walks
+each `BindingElement`, resolves the destructured property name via a new
+`resolveDestructuringPropName` helper that handles 4 shapes: bare
+Identifier (shorthand or named), StringLiteralNode (`"p"`),
+ComputedPropertyName with literal expr, and ComputedPropertyName with
+identifier expr (resolved via new `findConstStringValue` walker that scans
+top-level `const X = "literal"` decls). Squiggle for ComputedPropertyName
+uses bracket-matching forward from the first `[` to handle `propNode.pos`
+trivia overshoot and `expr.end` one-token-past overshoot. Net delta:
+1596 → 1595 failed (8479 → 8480 passing). Zero regressions.
 
 **17.94 (2026-05-03, +2)** — TS7032 + TS7006 now fire for set accessors
 without parameter type annotations when no sibling getter has a typed return.
