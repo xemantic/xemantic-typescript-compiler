@@ -8483,19 +8483,19 @@ class Checker(
                 element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
             }
             is SetAccessor -> {
-                // 17.94: Setter value parameters are contextually typed from the getter
-                // return type IF a sibling getter with the same name exists AND has a
-                // typed return. Otherwise (no getter, or getter without return type),
-                // TypeScript emits BOTH TS7032 (on the property name) AND TS7006 (on
-                // the param) under noImplicitAny. Applies to both abstract and
-                // concrete setters, as well as bodyless overload signatures.
+                // Setter value parameters are contextually typed from a sibling getter
+                // (its declared OR inferred return type). When ANY sibling getter with
+                // the same name exists, suppress TS7032/TS7006. Otherwise emit BOTH
+                // TS7032 (on the property name) AND TS7006 (on the param) under
+                // noImplicitAny. Applies to both abstract and concrete setters, as
+                // well as bodyless overload signatures.
                 val nameNode = element.name as? Identifier
                 val firstParam = element.parameters.firstOrNull()
                 if (nameNode != null && firstParam != null && firstParam.type == null) {
-                    val getterTyped = siblings.filterIsInstance<GetAccessor>().any {
-                        (it.name as? Identifier)?.text == nameNode.text && it.type != null
+                    val hasSiblingGetter = siblings.filterIsInstance<GetAccessor>().any {
+                        (it.name as? Identifier)?.text == nameNode.text
                     }
-                    if (!getterTyped && nameNode.text.isNotEmpty()) {
+                    if (!hasSiblingGetter && nameNode.text.isNotEmpty()) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         diagnostics.add(Diagnostic(
                             message = "Property '${nameNode.text}' implicitly has type 'any', because its set accessor lacks a parameter type annotation.",

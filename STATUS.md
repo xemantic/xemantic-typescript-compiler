@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,480 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,481 / 10,078 tests passing (~84%).
+
+**17.96 (2026-05-03, +1)** — TS7032/TS7006 setter implicit-any suppression
+correctly gates on presence of ANY sibling getter (not just one with a typed
+return). Flips `implicitAnyGetAndSetAccessorWithAnyReturnType_ts`. Pre-fix:
+17.94 introduced the SetAccessor implicit-any check in
+`checkImplicitAnyInClassElement` (Checker.kt:8485) but gated suppression on
+`it.type != null` — i.e. "skip ONLY when sibling getter has a typed return."
+Incorrect: TypeScript suppresses TS7032/TS7006 whenever ANY sibling getter
+exists, because the getter's INFERRED return type still provides contextual
+typing for the setter parameter (a getter returning `any` is sufficient).
+Fix: drop the `&& it.type != null` clause from the sibling-getter probe and
+rename the flag from `getterTyped` to `hasSiblingGetter`. The originating
+17.94 test (`noImplicitAnyMissingGetAccessor_ts`) is unaffected — both its
+setters (abstract `set message` in Parent + concrete `set message` in Child)
+have no sibling getter in the same class. Net delta: 1595 → 1594 failed
+(8480 → 8481 passing). Zero regressions.
 
 **17.95 (2026-05-03, +1)** — TS2341 "Property 'X' is private and only
 accessible within class 'Y'." now fires for object-binding-pattern
