@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.89, 8469 → 8471, +2) — TS2300/TS1118 for duplicate get/set accessors in object literals + Identifier rawText squiggle fix:** Continuation of same /loop session after 17.88. Pool stayed at 0/0/0 fresh. The 4-6 line bucket scan surfaced `duplicateObjectLiteralProperty_ts` (both target=es5 and target=es2015) — 4 missing diagnostics for `var y = { get a, set a, get a }` accessor pattern.
+
+  **Root cause:** `checkObjectLiteralDuplicates` (Checker.kt:21945) walked properties pairwise via a `seen[name]` map storing the most recent kind ('g'/'s'/'p'). For `get a, set a, get a` the kind toggled `'g' → 's' → 'g'`; each step was a legitimate get↔set pair so no error fired. The check needs GROUP-level state (count of gets, count of sets) not pairwise.
+
+  **Implementation:** Extended `checkObjectLiteralDuplicates` with a per-name accessor list `accessorsByName: Map<String, List<(prop, kind, nameNode)>>`. The existing TS1117 pairwise loop still runs to keep prop-prop duplicate detection unchanged (it correctly fires 4× for the `a: 1, ..., a: 56, a: ..., a: {...}` chain in the same test). After the loop, walk `accessorsByName`: for any name with `getCount > 1 || setCount > 1`, emit TS2300 "Duplicate identifier 'X'." on EVERY accessor in the group, and TS1118 "An object literal cannot have multiple get/set accessors with the same name." on the SECOND-and-later get-after-get or set-after-set. A clean get+set pair (1 each) emits nothing.
+
+  **Companion squiggle fix:** `getPropertyNameLength` (Checker.kt:22185) returned `name.length` for `Identifier` — but `a` is a 6-char source span representing the 1-char name "a". Now uses `Identifier.rawText?.length ?: name.length`. The `rawText` field is already populated by Scanner.kt for identifiers containing `\uXXXX` escape sequences. This was a pre-existing squiggle bug exposed when 17.89 closed the missing TS2300/TS1118 emissions and the test framework ran the next-line-style `~~~~~~` width check.
+
+  **Test results:** Both `__target_es5__` and `__target_es2015__` errors-baseline variants flip clean. Full-suite: 1606 → 1604 failed (8469 → 8471 passing). Zero regressions across the 10078-test suite.
+
+  **Foundation:** Future tests with duplicate-accessor patterns (`{ set a, set a }`, `{ get a, get a, set a }`, etc.) benefit automatically. The code-swap from "pair-based" to "group-based" is also more semantically correct — TypeScript checks accessor groups, not pairs.
+
   **Session 2026-05-03 (17.88, 8467 → 8469, +2) — TS2373 walker recurses into ClassExpression for eager positions:** Continuation of same /loop session after 17.87. The 4-6 line bucket scan surfaced `capturedParametersInInitializers2_ts` (4 missing TS2373 emissions, both target=es5 and target=es2015 variants).
 
   **Root cause:** `findForwardParamRefs` (Checker.kt:28541) explicitly skipped `ClassExpression`, with the comment "own scope, not immediately evaluated". This is correct for *deferred-evaluation* class members (method bodies, constructor bodies, instance-field initializers) but wrong for *eager-evaluation* members that the engine evaluates AT class-expr-eval time = param-init time:

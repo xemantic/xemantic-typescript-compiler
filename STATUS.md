@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,469 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,471 / 10,078 tests passing (~84%).
+
+**17.89 (2026-05-03, +2)** — TS2300 "Duplicate identifier" + TS1118 "An object
+literal cannot have multiple get/set accessors with the same name." now fire
+for object-literal accessor groups with multiple getters or multiple setters.
+Flips `duplicateObjectLiteralProperty_ts__target_es5__` and
+`__target_es2015__`. Pre-fix: `checkObjectLiteralDuplicates` (Checker.kt:21945)
+walked properties pairwise (`prevKind`/`kind`), so `get a, set a, get a`
+toggled the seen-kind to `'g' → 's' → 'g'` and never detected the duplicate
+getter (each step was a "g↔s" pair, no error). Fix: in addition to the
+existing TS1117 emission for prop-prop duplicates, collect accessors per name
+into `accessorsByName`; after the loop, for each name with `getCount > 1` OR
+`setCount > 1`, emit TS2300 "Duplicate identifier 'X'." on every accessor
+declaration plus TS1118 on the second/third/... duplicate get/set. Clean
+get+set pairs (one of each) emit nothing. Also fixes a related squiggle bug:
+`getPropertyNameLength` now uses `Identifier.rawText.length` when set so
+`a` (= "a") gets the full 6-char source span instead of 1. Net delta:
+1606 → 1604 failed (8469 → 8471 passing). Zero regressions.
 
 **17.88 (2026-05-03, +2)** — TS2373 "Parameter 'X' cannot reference identifier
 'Y' declared after it." now recurses into `ClassExpression` for eagerly-evaluated
