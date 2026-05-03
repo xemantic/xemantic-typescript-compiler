@@ -2619,6 +2619,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (post-17.100 vararg attempt, ATTEMPTED + REVERTED — net 0):** Continuation /loop iteration after 17.100. Pool stayed at 0/0/0 fresh; 3-10 line dominantly-same-code scan surfaced `vararg_ts` (4 missing TS2345 emissions on namespace-scoped class method calls — `var x = new M.C(); x.f(x, 3, 3)` etc.). Root cause: `getReturnTypeOfNewExpression` only handled callee=Identifier, returning anyType for PropertyAccess callees like `new M.C()`. So `var x` typed as anyType, blocking downstream method-arg checks.
+
+  **Two-part attempt:**
+  1. Extended `getReturnTypeOfNewExpression` (Checker.kt:39302+) to handle `PropertyAccessExpression` callees by resolving via `resolvePropertyAccessToSymbol` then `getTypeOfSymbol`. With this alone, 3 of 4 missing TS2345 in vararg_ts fired.
+  2. Relaxed the rest-arg gate in `checkRestArgsAgainstArrayElementType` (Checker.kt:48117+) — when `elementType is Type.Intrinsic` (primitive), allow non-primitive argType through (so `x.fonly(x)` where `x: C` and rest is `string[]` fires the 4th TS2345).
+
+  **Result:** `vararg_ts` flipped (verified individually). But full-suite re-run with both changes: 1585 → 1585 failed (NET 0). Even with just the PropertyAccess fix alone (without the rest-arg relax), full-suite was still 1585 → 1585. So either (a) just resolving `new M.C()` to a real type triggers downstream type-check FPs in tests that previously bailed, or (b) some test that depended on `new SomeNs.SomeClass()` typing as anyType has now started failing. Likely the former — once `var x = new M.C()` types `x` as M.C, every subsequent `x.method()` site enters the type-check pipeline and may emit FPs in places where our checker is incomplete (overload resolution, generic substitution, etc.).
+
+  **Reverted both changes** since net-zero with regressions (vs net-positive guaranteed). The vararg test stays in the failing pool. Future agents: don't re-attempt without first auditing what tests rely on `new NS.Class()` returning anyType; the regression is likely tractable by either (i) gating the PropertyAccess fix behind a stricter condition, or (ii) discovering and fixing the downstream FP that fires once the type resolves. Logged here so the next agent doesn't re-tread the same path.
+
   **Session 2026-05-03 (17.100, 8489 → 8490, +1) — TS2337 for `super(...)` calls in nested functions inside constructors:** Continuation of same /loop session after 17.99. Pool stayed at 0/0/0 fresh. The 4-6 line PURE-MISSING bucket scan (custom Python on the existing XMLs, since `find_candidates.py` caps at diff ≤ 3) surfaced `illegalSuperCallsInConstructor_ts` (5 missing TS2337 emissions across nested arrow / function / object-literal getter+setter inside a derived class constructor body).
 
   **Implementation:** New top-level `checkIllegalSuperCallsInNestedFunctions()` walker (Checker.kt ~24001+) hooked into init pipeline (line 583+) right after the new 17.99 `checkSuperInObjectLiterals()`. Walks every `ClassDeclaration`'s `Constructor` members, descending through statements/expressions in the body with an `inNestedFn: Boolean` flag. The flag flips to `true` upon entering:
@@ -5116,6 +5126,9 @@ the live plan focused. Quick reference:
 ### Explored-but-skipped tests (2026-04-17, 8186 passing)
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
+
+**Cross-cutting `new NS.Class()` typing — needs careful regression handling:**
+- `vararg_ts`: 4 missing TS2345 on `x.f(x,3,3)` etc. where `x: M.C` namespace-scoped class instance. Root cause: `getReturnTypeOfNewExpression` only handles callee=Identifier, returns anyType for `new M.C()` PropertyAccess callee. Attempted 2026-05-03 (post-17.100): two-part fix (PropertyAccess resolution + relax rest-arg gate when elementType is Type.Intrinsic) made vararg_ts pass individually but full-suite was net 0 (-3 elsewhere even with PropertyAccess fix alone). Once `var x = new NS.Class()` types `x` as the class instead of anyType, every downstream `x.method()` enters the type-check pipeline and triggers FPs in places where overload resolution / generic substitution is incomplete. Reverted both changes. Future fix needs to either narrow the PropertyAccess-resolution gate (e.g., only when downstream usage looks safe — but that's hard to know) or audit and fix the downstream FPs that fire once the type resolves.
 
 **Blocker #1 — structural comparison of generic refs (architectural, see below):**
 - ~~`genericCloneReturnTypes_ts`, `genericCloneReturnTypes2_ts`~~: passing since 16.4dc (same-target ref arg comparison) + 16.4dg (single-stmt `return new X<...>()` body inference). Stale entry — verified passing by 2026-04-26 (post-16.4gl) recon.
