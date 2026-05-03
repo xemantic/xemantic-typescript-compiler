@@ -21945,12 +21945,21 @@ interface DataView {
     private fun checkObjectLiteralDuplicates(obj: ObjectLiteralExpression, source: String, fileName: String) {
         // Track what kind of property has been seen: 'p' = property/method, 'g' = getter, 's' = setter
         val seen = mutableMapOf<String, Char>()
+        // Per-name accessor list (in source order) for the post-pass that emits TS2300/TS1118
+        // on duplicate get/set accessors. Each entry is (prop, kind='g'|'s', nameNode).
+        val accessorsByName = mutableMapOf<String, MutableList<Triple<Node, Char, Node>>>()
         for (prop in obj.properties) {
             val name = getPropertyName(prop) ?: continue
             val kind = when (prop) {
                 is GetAccessor -> 'g'
                 is SetAccessor -> 's'
                 else -> 'p' // PropertyAssignment, ShorthandPropertyAssignment, MethodDeclaration
+            }
+            if (kind == 'g' || kind == 's') {
+                val nameNode = getPropertyNameNode(prop)
+                if (nameNode != null) {
+                    accessorsByName.getOrPut(name) { mutableListOf() }.add(Triple(prop, kind, nameNode))
+                }
             }
             val prevKind = seen[name]
             val isDuplicate = when {
@@ -21977,6 +21986,47 @@ interface DataView {
                 ))
             } else {
                 seen[name] = kind
+            }
+        }
+        // Post-pass: for each accessor group, if it has more than one getter OR more
+        // than one setter, emit TS2300 on every accessor in the group and TS1118 on
+        // the SECOND/THIRD/... duplicate (the get-after-get or set-after-set).
+        // A clean get+set pair (one of each) emits nothing here.
+        for ((name, group) in accessorsByName) {
+            val getCount = group.count { it.second == 'g' }
+            val setCount = group.count { it.second == 's' }
+            val hasDuplicate = getCount > 1 || setCount > 1
+            if (!hasDuplicate) continue
+            var seenGet = false
+            var seenSet = false
+            for ((_, kind, nameNode) in group) {
+                val start = nameNode.pos
+                val length = getPropertyNameLength(nameNode, name)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                if ((kind == 'g' && seenGet) || (kind == 's' && seenSet)) {
+                    diagnostics.add(Diagnostic(
+                        message = "An object literal cannot have multiple get/set accessors with the same name.",
+                        category = DiagnosticCategory.Error,
+                        code = 1118,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Duplicate identifier '$name'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2300,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                if (kind == 'g') seenGet = true
+                if (kind == 's') seenSet = true
             }
         }
     }
@@ -22134,7 +22184,9 @@ interface DataView {
 
     private fun getPropertyNameLength(nameNode: Node, name: String): Int {
         return when (nameNode) {
-            is Identifier -> name.length
+            // `\uXXXX` escape sequences in identifiers (e.g. `a` for `a`) keep the
+            // raw source text; use its length so the squiggle covers the whole escape.
+            is Identifier -> nameNode.rawText?.length ?: name.length
             is StringLiteralNode -> nameNode.rawText?.let { it.length + 2 } ?: (name.length + 2) // quotes
             is NumericLiteralNode -> nameNode.text.length // use original text length, not normalized name
             is ComputedPropertyName -> {
