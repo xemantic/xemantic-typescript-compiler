@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,487 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,489 / 10,078 tests passing (~84%).
+
+**17.99 (2026-05-03, +2)** — TS2659 + TS2660 now fire for `super` references
+inside object-literal members. Flips both target=es5 and target=es2015 variants
+of `super_inside-object-literal-getters-and-setters_ts`. Rules: (a) `super`
+inside object-literal getter/setter/shorthand-method body emits TS2659
+("'super' is only allowed in members of object literal expressions when
+option 'target' is 'ES2015' or higher.") only when `options.target <
+ScriptTarget.ES2015` — under ES2015+, these are valid; (b) `super` inside
+a `function` value of a `PropertyAssignment` (e.g. `{ test: function () {
+super.x } }`) emits TS2660 ("'super' can only be referenced in members of
+derived classes or object literal expressions.") regardless of target,
+because regular FunctionExpression rebinds nothing — `super` in such a
+function isn't an "object literal member." Implementation: a new top-level
+`checkSuperInObjectLiterals()` walker runs unconditionally (per
+`checkSuperInNonDerived` pattern). Walks every statement / expression
+recursively; on encountering an `ObjectLiteralExpression`, dispatches per
+property: `GetAccessor`/`SetAccessor`/`MethodDeclaration` → conditional
+TS2659; `PropertyAssignment` with `FunctionExpression` value → unconditional
+TS2660. Each property body is then re-walked to find nested object literals
+(so `{ get x() { return { foo: function() { super.y } } } }` would emit
+both inner TS2660 and outer TS2659 if applicable). The TS2335 walker
+already skips `FunctionExpression`/`ArrowFunction` in `findSuperRefsInExpr`,
+so no overlap with existing non-derived-class TS2335 emission. Net delta:
+1588 → 1586 failed (8487 → 8489 passing). Zero regressions across
+10078-test suite.
 
 **17.98 (2026-05-03, +5)** — TS2331 + TS2683 now fire for `this` references
 directly inside namespace/module bodies (not nested in functions/classes).
