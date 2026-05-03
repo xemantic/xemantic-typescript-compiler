@@ -44783,6 +44783,28 @@ interface DataView {
         enclosingClassType: Type?,
     ) {
         val arg = expr.argumentExpression
+        // 17.93: TS2538 "Type 'null'/'undefined' cannot be used as an index type." for
+        // element-access indices that resolve to null/undefined. Mirrors TypeScript's
+        // checker: this fires independent of strictNullChecks because it's a constant
+        // index whose type is exactly null/undefined (not a widened "any" path).
+        if (arg is Identifier && (arg.text == "null" || arg.text == "undefined")) {
+            val argType = getTypeOfIdentifier(arg)
+            if (argType === nullType || argType === undefinedType) {
+                val display = if (argType === nullType) "null" else "undefined"
+                val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$display' cannot be used as an index type.",
+                    category = DiagnosticCategory.Error,
+                    code = 2538,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = arg.pos,
+                    length = arg.text.length,
+                ))
+                return
+            }
+        }
         val propName: String
         val diagStart: Int
         val diagLength: Int
