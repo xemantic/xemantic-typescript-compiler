@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.93, 8475 → 8477, +2) — TS2538 for null/undefined element-access indices:** Continuation of same /loop session after 17.92. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `indexWithUndefinedAndNullStrictNullChecks_ts` (4 missing TS2538 emissions on `n[undefined]` / `n[null]` patterns).
+
+  **Root cause:** `checkSingleElementAccess` (Checker.kt:44781+) only emitted diagnostics when the argument was `StringLiteralNode` or `NumericLiteralNode` — every other shape fell into `else -> return`. The existing TS2538 emitter at Checker.kt:10122 (`checkIndexTypeValidity`) only fires for type-position `IndexedAccessType` (e.g. `type X = Foo[Bar]`), NOT for runtime element-access. So `n[undefined]` silently passed.
+
+  **Implementation:** Add an `Identifier` branch BEFORE the literal switch in `checkSingleElementAccess`. When `arg is Identifier && arg.text in ("null", "undefined")` AND `getTypeOfIdentifier(arg)` resolves to `nullType` / `undefinedType` exactly, emit TS2538 with squiggle on the identifier (`arg.pos`, `arg.text.length`) and `return` (skip the rest of the element-access check — TS2538 is the dominant diagnostic). The type-resolution gate (not just textual) ensures a user-shadowed `let undefined = "foo"; n[undefined]` correctly skips emission.
+
+  **Test results:** Target test flips clean (4 of 4 expected TS2538 emissions fire). Full-suite: 1600 → 1598 failed (8475 → 8477 passing) — one additional test in the corpus also flipped (likely another null/undefined element-access pattern). Zero regressions across 10078-test suite.
+
+  **Foundation:** Future tests with constant null/undefined indices benefit automatically. Does NOT extend to dynamic null/undefined (e.g. `let x: undefined; n[x]`) — that requires general "is this expression's type null/undefined" detection on arbitrary expressions, which would risk FPs in narrowing scenarios. The literal-Identifier gate is conservative enough to stay safe.
+
+  **Anti-loop check:** Pool empty per `--fresh` (0/0/0). Lands real code per protocol option (a). 14th feature commit since the 17.74 iteration started.
+
   **Session 2026-05-03 (17.92, 8474 → 8475, +1) — TS2428 widening to class+interface merges + constraint comparison:** Continuation of same /loop session after 17.91. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `nonIdenticalTypeConstraints_ts` (6 missing TS2428 emissions across `class Foo`/`interface Foo` and `class Quux`/`interface Quux` pairs).
 
   **Root cause:** TS2428 check at Checker.kt:12246+ had two gaps. (1) It only collected `InterfaceDeclaration` decls (`group.filter { it.kind == "interface" }.mapNotNull { it.stmt as? InterfaceDeclaration }`), so `class Foo<T extends Function>` + `interface Foo<T extends Different>` and `class Quux<T>` + `interface Quux<U>` produced an `ifaceDecls.size == 1` and the entire check short-circuited. (2) Even when it did fire (interface+interface with mismatched names), it only compared type-param names — so a hypothetical `interface Bar<T extends Foo>` + `interface Bar<T extends Bar>` would have silently passed.

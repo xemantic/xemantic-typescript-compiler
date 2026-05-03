@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,475 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,477 / 10,078 tests passing (~84%).
+
+**17.93 (2026-05-03, +2)** — TS2538 "Type 'null'/'undefined' cannot be used as
+an index type." now fires for runtime element-access expressions like
+`n[undefined]` / `n[null]`, not just `IndexedAccessType` in type positions.
+Flips `indexWithUndefinedAndNullStrictNullChecks_ts` plus one more test in
+the corpus. Pre-fix: `checkSingleElementAccess` (Checker.kt:44781+) handled
+only `StringLiteralNode` and `NumericLiteralNode` argument expressions —
+identifiers `null` / `undefined` fell into the `else -> return` branch.
+Fix: add an `Identifier` branch BEFORE the literal switch — when
+`arg.text in ("null", "undefined")` AND `getTypeOfIdentifier(arg)` resolves
+to `nullType` / `undefinedType` exactly, emit TS2538 with squiggle on the
+identifier (`arg.pos`, `arg.text.length`). Routes via `getTypeOfIdentifier`
+(not a textual check) so a user-shadowed `let undefined = "foo"; n[undefined]`
+correctly skips the diagnostic. Net delta: 1600 → 1598 failed
+(8475 → 8477 passing). Zero regressions.
 
 **17.92 (2026-05-03, +1)** — TS2428 "All declarations of 'X' must have identical
 type parameters." now fires for class+interface merges (not just
