@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.90, 8471 → 8473, +2) — TS1038 redundant `declare` modifier inside ambient namespaces:** Continuation of same /loop session after 17.89. The 4-line bucket scan surfaced `declFileWithErrorsInInputDeclarationFileWithOut_ts` (4 missing TS1038 emissions inside `declare namespace M { declare X }` patterns).
+
+  **Root cause:** TypeScript fires TS1038 on the `declare` keyword of any declaration nested inside a `declare namespace` body, since the parent namespace already establishes ambient context. We had no walker for this. Top-level `.d.ts` declarations are NOT flagged (TypeScript convention: `declare` at file scope is standard practice in declaration files).
+
+  **Implementation:** New `checkRedundantDeclareModifier` walker (Checker.kt:28321). Recursively descends through `ModuleDeclaration` bodies, threading `inAmbientNamespace: Boolean` (false at file root, true inside any `declare namespace M {...}` body). For each child statement carrying `ModifierFlag.Declare`, locate the `declare` keyword span in source.
+
+  **Position-recovery quirk:** The parser's `parseDeclareDeclaration` captures `pos = getPos()` BEFORE `nextToken()` skips `declare`, but does NOT pass that pos to the inner `parseVariableStatement` / `parseFunctionDeclaration` / `parseClassDeclaration` / `parseModuleDeclaration` helpers. Each inner helper recomputes `pos = getPos()` AFTER `declare` was already consumed, so `stmt.pos` lands on the start of the underlying KEYWORD (`var`/`function`/`class`/`namespace`). The `declare` keyword therefore sits BEHIND `stmt.pos` in source order. The walker scans backward from `stmt.pos - 7` looking for a word-bounded "declare" match (max 64-char lookback to bound the search and avoid false matches on far-distant `declare`s).
+
+  **Test results:** Target test flips with 4 of 4 expected TS1038 emissions firing (lines 2, 3, 5, 7 — `declare var`, `declare function`, `declare namespace`, `declare class`, all inside `declare namespace M`). Full-suite: 1604 → 1602 failed (8471 → 8473 passing). One additional test in the corpus also flipped (likely another `declare namespace { declare X }` pattern). Zero regressions across the 10078-test suite.
+
+  **Foundation:** Walker also handles `declare module "X"` bodies and `declare global` augmentations (any `ModuleDeclaration` with `Declare` modifier). Future tests using these patterns benefit automatically. The walker is non-recursive within a single statement (only recurses through `ModuleDeclaration` bodies — does not descend into class members, function bodies, etc.) since TS1038 is a syntactic check on declaration statements.
+
   **Session 2026-05-03 (17.89, 8469 → 8471, +2) — TS2300/TS1118 for duplicate get/set accessors in object literals + Identifier rawText squiggle fix:** Continuation of same /loop session after 17.88. Pool stayed at 0/0/0 fresh. The 4-6 line bucket scan surfaced `duplicateObjectLiteralProperty_ts` (both target=es5 and target=es2015) — 4 missing diagnostics for `var y = { get a, set a, get a }` accessor pattern.
 
   **Root cause:** `checkObjectLiteralDuplicates` (Checker.kt:21945) walked properties pairwise via a `seen[name]` map storing the most recent kind ('g'/'s'/'p'). For `get a, set a, get a` the kind toggled `'g' → 's' → 'g'`; each step was a legitimate get↔set pair so no error fired. The check needs GROUP-level state (count of gets, count of sets) not pairwise.
