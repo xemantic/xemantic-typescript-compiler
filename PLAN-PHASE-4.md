@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.94, 8477 → 8479, +2) — TS7032 + TS7006 for set accessor without typed param:** Continuation of same /loop session after 17.93. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `noImplicitAnyMissingGetAccessor_ts__target_es5__` (and `__target_es2015__`) — 4 missing TS7032/TS7006 emissions for `abstract set message(str)` and `set message(str)` patterns.
+
+  **Root cause:** `checkImplicitAnyInClassElement` (Checker.kt:8467+) had a `SetAccessor` branch with the comment "Skip TS7006 for them — TypeScript never emits implicit-any for setter params." This was wrong: TypeScript DOES emit implicit-any for setter params, but ONLY when no sibling getter provides a contextual return type. The comment confused "can be contextually typed" with "is always silent."
+
+  **Implementation:** In the `SetAccessor` branch, when the first param has no type annotation, look for a sibling `GetAccessor` with the same name AND a typed return (`it.type != null`). If none found, emit TS7032 on the property name (`Property 'X' implicitly has type 'any', because its set accessor lacks a parameter type annotation.`) then call `checkParamsForImplicitAny(element.parameters, ...)` for the TS7006 on the param. Applies to both abstract setters (no body) and concrete setters; the body walk continues unchanged.
+
+  **Test results:** Both `__target_es5__` and `__target_es2015__` errors-baseline variants flip clean (4 of 4 expected emissions per variant fire). Full-suite: 1598 → 1596 failed (8477 → 8479 passing). Zero regressions across 10078-test suite — the no-getter gate is conservative, and tests with paired get/set accessors (typed getter) keep their existing silence.
+
+  **Foundation:** Future tests with abstract or concrete setters lacking param annotations and no companion getter benefit automatically. Does NOT extend to ambient (`declare`) classes — they go through a different branch (`checkImplicitAnyInStatements` line 8302) that doesn't currently handle SetAccessor; if a future test gates on that path, mirror the same logic there.
+
+  **Anti-loop check:** Pool empty per `--fresh` (0/0/0). Lands real code per protocol option (a). 15th feature commit since the 17.74 iteration started.
+
   **Session 2026-05-03 (17.93, 8475 → 8477, +2) — TS2538 for null/undefined element-access indices:** Continuation of same /loop session after 17.92. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `indexWithUndefinedAndNullStrictNullChecks_ts` (4 missing TS2538 emissions on `n[undefined]` / `n[null]` patterns).
 
   **Root cause:** `checkSingleElementAccess` (Checker.kt:44781+) only emitted diagnostics when the argument was `StringLiteralNode` or `NumericLiteralNode` — every other shape fell into `else -> return`. The existing TS2538 emitter at Checker.kt:10122 (`checkIndexTypeValidity`) only fires for type-position `IndexedAccessType` (e.g. `type X = Foo[Bar]`), NOT for runtime element-access. So `n[undefined]` silently passed.

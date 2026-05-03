@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,477 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,479 / 10,078 tests passing (~84%).
+
+**17.94 (2026-05-03, +2)** — TS7032 + TS7006 now fire for set accessors
+without parameter type annotations when no sibling getter has a typed return.
+Flips both `noImplicitAnyMissingGetAccessor_ts__target_es5__` and
+`__target_es2015__`. Pre-fix: `checkImplicitAnyInClassElement`
+(Checker.kt:8467+) had a SetAccessor branch but explicitly skipped TS7006
+emission with the comment "TypeScript never emits implicit-any for setter
+params" — incorrect; the rule is "skip ONLY when a sibling getter provides
+a contextual return type." Fix: in the SetAccessor branch, when the first
+param has no type annotation AND no sibling `GetAccessor` with the same
+name has a typed return, emit TS7032 ("Property 'X' implicitly has type
+'any', because its set accessor lacks a parameter type annotation.") on
+the property name node, then call `checkParamsForImplicitAny` to emit
+TS7006 on the param. Applies to abstract setters (no body) and concrete
+setters alike. Net delta: 1598 → 1596 failed (8477 → 8479 passing).
+Zero regressions.
 
 **17.93 (2026-05-03, +2)** — TS2538 "Type 'null'/'undefined' cannot be used as
 an index type." now fires for runtime element-access expressions like
