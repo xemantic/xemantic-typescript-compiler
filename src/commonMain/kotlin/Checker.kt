@@ -36672,7 +36672,28 @@ interface DataView {
         // call signatures were resolved from the member loop. getReturnTypeOfCallExpression
         // uses sigs[0], so inherited-first preserves backward compatibility.
         val callSignatures = inheritedCallSignatures + ownCallSignatures
-        val constructSignatures = inheritedConstructSignatures + ownConstructSignatures
+        // 17.91: Constructor overload visibility — when a class declares both
+        // body-less overload signatures AND body-having implementation(s), only
+        // the overload signatures are externally visible (TypeScript convention).
+        // Without this, `new Foo(...)` falls through to the impl sig (often
+        // `(x: any)`) and silences TS2769 "no overload matches this call".
+        // Construct signatures from interface `new(...)` members keep their
+        // existing visibility (they're not Constructor decls).
+        val ctorOverloads = ownConstructSignatures.filter {
+            val d = it.declaration
+            d is Constructor && d.body == null
+        }
+        val ctorImpls = ownConstructSignatures.filter {
+            val d = it.declaration
+            d is Constructor && d.body != null
+        }
+        val nonCtorConstructSigs = ownConstructSignatures.filter { it.declaration !is Constructor }
+        val visibleCtorSigs = if (ctorOverloads.isNotEmpty() && ctorImpls.isNotEmpty()) {
+            ctorOverloads
+        } else {
+            ctorOverloads + ctorImpls
+        }
+        val constructSignatures = inheritedConstructSignatures + visibleCtorSigs + nonCtorConstructSigs
         type.callSignatures = callSignatures.ifEmpty { null }
         type.constructSignatures = constructSignatures.ifEmpty { null }
         type.stringIndexInfo = stringIndexInfo
@@ -39160,14 +39181,17 @@ interface DataView {
     /**
      * Emit TS2392 "Multiple constructor implementations are not allowed." when a class has 2+
      * constructors with bodies. TypeScript allows 1 implementation + N overload signatures
-     * (signatures have no body). All implementations get the diagnostic.
+     * (signatures have no body). When 2+ implementations exist, TS2392 fires on EVERY
+     * constructor declaration in the class — including the body-less overload signatures —
+     * because the overload pair model becomes invalid as a whole.
      * Squiggle covers the `constructor` keyword.
      */
     private fun checkMultipleConstructorImpls(members: List<ClassElement>, source: String, fileName: String) {
-        val impls = members.filterIsInstance<Constructor>().filter { it.body != null }
+        val ctors = members.filterIsInstance<Constructor>()
+        val impls = ctors.filter { it.body != null }
         if (impls.size < 2) return
         val keyword = "constructor"
-        for (ctor in impls) {
+        for (ctor in ctors) {
             val kwStart = source.indexOf(keyword, startIndex = ctor.pos).takeIf { it >= 0 && it < ctor.end } ?: continue
             val (line, character) = getLineAndCharacterOfPosition(source, kwStart)
             diagnostics.add(Diagnostic(
@@ -45715,6 +45739,46 @@ interface DataView {
                 }
             }
         }
+        // 17.91: Constructor overloads — find the containing class and the FIRST
+        // constructor implementation. The first impl is the conventional anchor
+        // for TS2793 even when multiple impls exist (which themselves emit TS2392).
+        if (overloadDecl is Constructor) {
+            for (result in binderResults) {
+                if (result.sourceFile.fileName != fileName) continue
+                val implDecl = findCtorImplementationInStatements(result.sourceFile.statements, overloadDecl)
+                if (implDecl != null) {
+                    return makeTs2793Diagnostic(implDecl, source, fileName)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun findCtorImplementationInStatements(stmts: List<Statement>, overloadDecl: Constructor): Constructor? {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    var foundOverload = false
+                    var hasBodylessOverload = false
+                    var firstImpl: Constructor? = null
+                    for (member in stmt.members) {
+                        if (member !is Constructor) continue
+                        if (member === overloadDecl) foundOverload = true
+                        if (member.body == null) hasBodylessOverload = true
+                        if (member.body != null && firstImpl == null) firstImpl = member
+                    }
+                    if (foundOverload && hasBodylessOverload && firstImpl != null) return firstImpl
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        val result = findCtorImplementationInStatements(body.statements, overloadDecl)
+                        if (result != null) return result
+                    }
+                }
+                else -> {}
+            }
+        }
         return null
     }
 
@@ -45766,15 +45830,21 @@ interface DataView {
     }
 
     private fun makeTs2793Diagnostic(implDecl: Node, source: String, fileName: String): Diagnostic {
-        // Point to the function/method name, spanning to the body start
+        // Point to the function/method name, spanning to the body start.
+        // For Constructor, point to the `constructor` keyword (no name node).
         val namePos = when (implDecl) {
             is FunctionDeclaration -> implDecl.name?.pos ?: implDecl.pos
             is MethodDeclaration -> (implDecl.name as? Identifier)?.pos ?: implDecl.pos
+            is Constructor -> {
+                val kwStart = source.indexOf("constructor", startIndex = implDecl.pos)
+                if (kwStart in implDecl.pos..<implDecl.end) kwStart else implDecl.pos
+            }
             else -> implDecl.pos
         }
         val implEnd = when (implDecl) {
             is MethodDeclaration -> implDecl.body?.pos ?: implDecl.end
             is FunctionDeclaration -> implDecl.body?.pos ?: implDecl.end
+            is Constructor -> implDecl.body?.pos ?: implDecl.end
             else -> implDecl.end
         }
         val implLength = implEnd - namePos
@@ -45923,6 +45993,23 @@ interface DataView {
                     !it.questionToken && !it.dotDotDotToken && it.initializer == null
                 },
             )
+        }
+        // 17.91: Constructor overloads — find the FIRST impl among sibling constructors
+        // in the containing class. Used as the TS2793 "would have succeeded" gate.
+        if (overloadDecl is Constructor) {
+            for (result in binderResults) {
+                if (result.sourceFile.fileName != fileName) continue
+                val implDecl = findCtorImplementationInStatements(result.sourceFile.statements, overloadDecl)
+                    ?: continue
+                return Signature(
+                    declaration = implDecl,
+                    parameters = getParameterSymbols(implDecl.parameters),
+                    resolvedReturnType = overloadSig.resolvedReturnType,
+                    minArgumentCount = implDecl.parameters.count {
+                        !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                    },
+                )
+            }
         }
         return null
     }

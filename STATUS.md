@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,473 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,474 / 10,078 tests passing (~84%).
+
+**17.91 (2026-05-03, +1)** — Constructor overload visibility + TS2392 on all
+constructors when 2+ implementations + TS2793 wired for Constructor decls. Flips
+`constructorOverloads1_ts`. Three coordinated changes in `Checker.kt`:
+(1) `resolveInterfaceMembers` now filters `ownConstructSignatures` — when a
+class declares both body-less overload signatures AND body-having
+implementation(s), only the overload signatures are externally visible
+(matching TypeScript's checker semantics). Without this, `new Foo(...)` falls
+through to the impl sig (often `(x: any)`) and silences TS2769. Construct
+signatures from interface `new(...)` members keep their visibility (they're not
+`Constructor` decls). (2) `checkMultipleConstructorImpls` now fires TS2392 on
+EVERY `Constructor` member (signatures + impls) when the class has 2+
+implementations, not just on the impls themselves — TypeScript treats the
+overload pair model as invalid as a whole when there are multiple impls.
+(3) New `findCtorImplementationInStatements` helper + Constructor branches in
+`getOverloadImplementationRelated`, `getImplementationSignature`, and
+`makeTs2793Diagnostic` — together emit TS2793 "The call would have succeeded
+against this implementation..." pointing to the FIRST impl when the user's call
+matches the impl shape but no overload sig accepts it. The Constructor squiggle
+in `makeTs2793Diagnostic` locates the `constructor` keyword via
+`source.indexOf("constructor", startIndex = implDecl.pos)` (no name node).
+Net delta: 1602 → 1601 failed (8473 → 8474 passing). Zero regressions.
 
 **17.90 (2026-05-03, +2)** — TS1038 "A 'declare' modifier cannot be used in an
 already ambient context." now fires for declarations carrying the `declare`
