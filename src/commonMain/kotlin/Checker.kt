@@ -650,6 +650,8 @@ class Checker(
         checkForInLhsTypeAnnotation()
         // 50. Check statements in ambient contexts (TS1036)
         checkAmbientStatements()
+        // 50b. Check redundant `declare` modifier inside ambient namespaces (TS1038)
+        checkRedundantDeclareModifier()
         // 51. Check parameter initializer in non-implementation context (TS2371)
         checkParameterInitializerInNonImpl()
         // 51b. Check parameter initializer references later parameter (TS2373)
@@ -28314,6 +28316,89 @@ interface DataView {
             if (stmt is ModuleDeclaration) {
                 val body = stmt.body
                 if (body is ModuleBlock) checkStatementsInAmbient(body.statements, source, fileName)
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1038: A 'declare' modifier cannot be used in an already ambient context
+    // -----------------------------------------------------------------------
+    //
+    // Fires for any declaration carrying the `declare` modifier when nested
+    // inside a `declare namespace` body. (Top-level declarations in `.d.ts`
+    // files are NOT flagged — TypeScript treats `declare` at file scope as
+    // standard practice in declaration files.)
+
+    private fun checkRedundantDeclareModifier() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            walkRedundantDeclare(result.sourceFile.statements, source, fileName, inAmbientNamespace = false)
+        }
+    }
+
+    private fun statementHasDeclareModifier(stmt: Statement): Boolean = when (stmt) {
+        is VariableStatement -> ModifierFlag.Declare in stmt.modifiers
+        is FunctionDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        is ClassDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        is InterfaceDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        is TypeAliasDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        is EnumDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        else -> false
+    }
+
+    private fun walkRedundantDeclare(
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+        inAmbientNamespace: Boolean,
+    ) {
+        for (stmt in stmts) {
+            if (inAmbientNamespace && statementHasDeclareModifier(stmt)) {
+                // Locate the `declare` keyword span. The parser captures
+                // `stmt.pos` at the START of the declaration KEYWORD (var /
+                // function / class / namespace) — `declare` is consumed before
+                // `parseXyzDeclaration` is called, so the keyword's position
+                // sits BEHIND `stmt.pos`. Search backward through trivia to
+                // find the `e` then the start of `declare`.
+                val DECLARE = "declare"
+                val limit = (stmt.pos - 64).coerceAtLeast(0)
+                var declareStart = -1
+                var idx = stmt.pos.coerceAtMost(source.length) - DECLARE.length
+                while (idx >= limit) {
+                    if (idx >= 0 && idx + DECLARE.length <= source.length
+                        && source.regionMatches(idx, DECLARE, 0, DECLARE.length)) {
+                        val before = if (idx > 0) source[idx - 1] else ' '
+                        val after = source[idx + DECLARE.length]
+                        // Must be word-bounded on both sides.
+                        if (!before.isLetterOrDigit() && before != '_' && before != '$'
+                            && !after.isLetterOrDigit() && after != '_' && after != '$') {
+                            declareStart = idx
+                            break
+                        }
+                    }
+                    idx--
+                }
+                if (declareStart >= 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, declareStart)
+                    diagnostics.add(Diagnostic(
+                        message = "A 'declare' modifier cannot be used in an already ambient context.",
+                        category = DiagnosticCategory.Error,
+                        code = 1038,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = declareStart,
+                        length = DECLARE.length,
+                    ))
+                }
+            }
+            if (stmt is ModuleDeclaration) {
+                val nowAmbient = inAmbientNamespace || ModifierFlag.Declare in stmt.modifiers
+                (stmt.body as? ModuleBlock)?.let {
+                    walkRedundantDeclare(it.statements, source, fileName, nowAmbient)
+                }
             }
         }
     }

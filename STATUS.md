@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,471 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,473 / 10,078 tests passing (~84%).
+
+**17.90 (2026-05-03, +2)** — TS1038 "A 'declare' modifier cannot be used in an
+already ambient context." now fires for declarations carrying the `declare`
+modifier when nested inside a `declare namespace` body. Flips at least
+`declFileWithErrorsInInputDeclarationFileWithOut_ts` (+1 in candidate finder
+report; full-suite delta of +2 indicates one additional test elsewhere in the
+corpus also gated on TS1038). New `checkRedundantDeclareModifier` walker
+recursively descends through `ModuleDeclaration` bodies tracking
+`inAmbientNamespace`; for each child statement carrying
+`ModifierFlag.Declare`, scans BACKWARD through the source from `stmt.pos` to
+locate the `declare` keyword span (the parser captures stmt.pos at the start
+of the underlying declaration keyword — `var`/`function`/`class`/`namespace`
+— after `parseDeclareDeclaration` consumed `declare`, so the keyword sits
+behind stmt.pos). Top-level `.d.ts` declarations are NOT flagged
+(TypeScript convention: `declare` at file scope of declaration files is
+standard practice). Net delta: 1604 → 1602 failed (8471 → 8473 passing). Zero
+regressions.
 
 **17.89 (2026-05-03, +2)** — TS2300 "Duplicate identifier" + TS1118 "An object
 literal cannot have multiple get/set accessors with the same name." now fire
