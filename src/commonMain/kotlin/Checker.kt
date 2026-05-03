@@ -560,6 +560,11 @@ class Checker(
         if (options.noImplicitThis || options.strict) {
             checkImplicitThis()
         }
+        // 22b. Check for `this` directly inside namespace/module bodies (TS2331 + TS2683).
+        // Always runs — TS2331 is a structural error (`this` in namespace body has no
+        // meaningful binding), and TypeScript pairs it with TS2683 at the same position.
+        // Independent of `noImplicitThis` / `strict`.
+        checkThisInNamespaceBodies()
         // 23. Check duplicate object literal properties (TS1117)
         checkDuplicateObjectLiteralProperties()
         // 23b. Check tuple destructuring bounds (TS2493) for empty-literal sources
@@ -21867,6 +21872,143 @@ interface DataView {
             }
         }
         return false
+    }
+
+    /**
+     * Find every namespace/module body across all checked source files and emit
+     * TS2331 + TS2683 for each `this` reference that's directly in the body (not
+     * nested inside a function/class). Always runs — independent of `noImplicitThis`.
+     */
+    private fun checkThisInNamespaceBodies() {
+        // TS2331 always fires for `this` directly in a namespace/module body
+        // (structural error). TS2683 ALSO fires unless `strict: false` was set
+        // explicitly — in test default mode (no explicit @strict), TS2683 still
+        // fires because TypeScript treats namespace-body `this` as implicit-any.
+        val emitTs2683 = !options.strictExplicitlyFalse
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) walkStmtForNamespaceBodies(stmt, source, fileName, emitTs2683)
+        }
+    }
+
+    private fun walkStmtForNamespaceBodies(stmt: Statement, source: String, fileName: String, emitTs2683: Boolean) {
+        when (stmt) {
+            is ModuleDeclaration -> when (val b = stmt.body) {
+                is ModuleBlock -> {
+                    checkThisDirectInNamespaceBody(b.statements, source, fileName, emitTs2683)
+                    // Recurse for nested namespaces (those bodies are also namespace bodies).
+                    for (s in b.statements) walkStmtForNamespaceBodies(s, source, fileName, emitTs2683)
+                }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk a namespace/module body looking for `this` references that are NOT nested
+     * inside a function/class. For each, emit TS2331 ("'this' cannot be referenced
+     * in a module or namespace body.") + TS2683 ("'this' implicitly has type 'any'…").
+     * Both fire at the same position with the standard `this`-keyword length of 4.
+     * Arrow functions are transparent (their `this` inherits from the enclosing
+     * scope, which is the namespace body).
+     */
+    private fun checkThisDirectInNamespaceBody(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        emitTs2683: Boolean,
+    ) {
+        for (stmt in statements) walkStmtForNamespaceThis(stmt, source, fileName, emitTs2683)
+    }
+
+    private fun walkStmtForNamespaceThis(stmt: Statement, source: String, fileName: String, emitTs2683: Boolean) {
+        when (stmt) {
+            is FunctionDeclaration, is ClassDeclaration -> { /* nested function/class — `this` rebinds */ }
+            is ExpressionStatement -> walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+            is IfStatement -> {
+                walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+                walkStmtForNamespaceThis(stmt.thenStatement, source, fileName, emitTs2683)
+                stmt.elseStatement?.let { walkStmtForNamespaceThis(it, source, fileName, emitTs2683) }
+            }
+            is Block -> checkThisDirectInNamespaceBody(stmt.statements, source, fileName, emitTs2683)
+            is ModuleDeclaration -> when (val b = stmt.body) {
+                is ModuleBlock -> checkThisDirectInNamespaceBody(b.statements, source, fileName, emitTs2683)
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkExprForNamespaceThis(expr: Expression, source: String, fileName: String, emitTs2683: Boolean) {
+        when (expr) {
+            is Identifier -> if (expr.text == "this") emitNamespaceThisErrors(expr, source, fileName, emitTs2683)
+            is PropertyAccessExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is ElementAccessExpression -> {
+                walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+                walkExprForNamespaceThis(expr.argumentExpression, source, fileName, emitTs2683)
+            }
+            is BinaryExpression -> {
+                walkExprForNamespaceThis(expr.left, source, fileName, emitTs2683)
+                walkExprForNamespaceThis(expr.right, source, fileName, emitTs2683)
+            }
+            is CallExpression -> {
+                walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+                for (a in expr.arguments) walkExprForNamespaceThis(a, source, fileName, emitTs2683)
+            }
+            is NewExpression -> {
+                walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+                expr.arguments?.let { for (a in it) walkExprForNamespaceThis(a, source, fileName, emitTs2683) }
+            }
+            is ParenthesizedExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is PrefixUnaryExpression -> walkExprForNamespaceThis(expr.operand, source, fileName, emitTs2683)
+            is PostfixUnaryExpression -> walkExprForNamespaceThis(expr.operand, source, fileName, emitTs2683)
+            is ConditionalExpression -> {
+                walkExprForNamespaceThis(expr.condition, source, fileName, emitTs2683)
+                walkExprForNamespaceThis(expr.whenTrue, source, fileName, emitTs2683)
+                walkExprForNamespaceThis(expr.whenFalse, source, fileName, emitTs2683)
+            }
+            is ArrowFunction -> when (val b = expr.body) {
+                is Block -> checkThisDirectInNamespaceBody(b.statements, source, fileName, emitTs2683)
+                is Expression -> walkExprForNamespaceThis(b, source, fileName, emitTs2683)
+                else -> {}
+            }
+            // FunctionExpression, ClassExpression: nested function/class rebinds `this` — skip.
+            else -> {}
+        }
+    }
+
+    private fun emitNamespaceThisErrors(thisExpr: Identifier, source: String, fileName: String, emitTs2683: Boolean) {
+        val start = thisExpr.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'this' cannot be referenced in a module or namespace body.",
+            category = DiagnosticCategory.Error,
+            code = 2331,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = 4,
+        ))
+        if (emitTs2683) {
+            diagnostics.add(Diagnostic(
+                message = "'this' implicitly has type 'any' because it does not have a type annotation.",
+                category = DiagnosticCategory.Error,
+                code = 2683,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = 4,
+            ))
+        }
     }
 
     private fun emitTS2683(

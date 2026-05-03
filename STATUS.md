@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,482 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,487 / 10,078 tests passing (~84%).
+
+**17.98 (2026-05-03, +5)** — TS2331 + TS2683 now fire for `this` references
+directly inside namespace/module bodies (not nested in functions/classes).
+Flips 5 tests: `thisAssignmentInNamespaceDeclaration1_ts` (JS file with
+checkJs — both diags), `thisKeyword_ts` and `thisInModule_ts` (TS files
+without explicit @strict — both diags), `topLevelLambda_ts` and
+`lambdaPropSelf_ts` (TS files with `@strict: false` — only TS2331).
+Implementation: a new top-level `checkThisInNamespaceBodies()` walker
+runs unconditionally (independent of the strict-mode-gated `checkImplicitThis`).
+For each `ModuleDeclaration` body, recurses into statements / expressions
+that don't rebind `this` (skips `FunctionDeclaration`, `ClassDeclaration`,
+`FunctionExpression`, `ClassExpression`; transparently descends into
+arrow function bodies). Each direct `this` Identifier emits TS2331
+("'this' cannot be referenced in a module or namespace body."). TS2683
+also fires UNLESS `// @strict: false` was set explicitly — guard via
+`!options.strictExplicitlyFalse` — matching the empirical TypeScript
+test-baseline pattern (default-false strict still emits TS2683 in
+namespace-body context, but explicit-false suppresses it). Net delta:
+1593 → 1588 failed (8482 → 8487 passing). Zero regressions.
 
 **17.97 (2026-05-03, +1)** — TS2428 type-parameter identity check is now
 default-aware. Flips `genericDefaults_ts`. Pre-fix (introduced in 17.92):
