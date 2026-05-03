@@ -1,6 +1,30 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,489 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,490 / 10,078 tests passing (~84%).
+
+**17.100 (2026-05-03, +1)** — TS2337 now fires for `super(...)` constructor
+calls inside nested functions (FunctionExpression / ArrowFunction /
+object-literal MethodDeclaration / GetAccessor / SetAccessor) inside any
+class constructor body. Flips `illegalSuperCallsInConstructor_ts` (5
+missing TS2337 emissions). Implementation: a new top-level
+`checkIllegalSuperCallsInNestedFunctions()` walker (Checker.kt ~24001+)
+runs unconditionally. Walks each `ClassDeclaration`'s `Constructor`
+members, then descends through statements/expressions in the constructor
+body with an `inNestedFn: Boolean` flag. The flag flips to `true` upon
+entering ANY of: `FunctionExpression.body`, `ArrowFunction.body` (block
+or expression), or `ObjectLiteralExpression` property bodies
+(GetAccessor / SetAccessor / MethodDeclaration). Once `inNestedFn` is
+true, every `CallExpression(expression=super)` emits TS2337 ("Super calls
+are not permitted outside constructors or in nested functions inside
+constructors.") at the `super` Identifier position with length 5.
+Crucially, arrow functions still trigger TS2337 even though they
+lexically inherit `this`/`super` for property access — `super(...)` (the
+constructor invocation) is a separate operation that's bound to the
+direct constructor scope only. The walker also recurses into nested
+class declarations via member bodies (so `class A { constructor() {
+class B { constructor() { var f = () => super(); } } } }` still fires
+TS2337 for B's nested arrow). Net delta: 1586 → 1585 failed (8489 →
+8490 passing). Zero regressions across 10078-test suite.
 
 **17.99 (2026-05-03, +2)** — TS2659 + TS2660 now fire for `super` references
 inside object-literal members. Flips both target=es5 and target=es2015 variants

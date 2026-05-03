@@ -2619,6 +2619,23 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.100, 8489 → 8490, +1) — TS2337 for `super(...)` calls in nested functions inside constructors:** Continuation of same /loop session after 17.99. Pool stayed at 0/0/0 fresh. The 4-6 line PURE-MISSING bucket scan (custom Python on the existing XMLs, since `find_candidates.py` caps at diff ≤ 3) surfaced `illegalSuperCallsInConstructor_ts` (5 missing TS2337 emissions across nested arrow / function / object-literal getter+setter inside a derived class constructor body).
+
+  **Implementation:** New top-level `checkIllegalSuperCallsInNestedFunctions()` walker (Checker.kt ~24001+) hooked into init pipeline (line 583+) right after the new 17.99 `checkSuperInObjectLiterals()`. Walks every `ClassDeclaration`'s `Constructor` members, descending through statements/expressions in the body with an `inNestedFn: Boolean` flag. The flag flips to `true` upon entering:
+  - `FunctionExpression.body` (regular function expression)
+  - `ArrowFunction.body` (block OR expression body — even arrow lexically inherits `this`/`super` for property access, but `super(...)` constructor invocation is a SEPARATE operation bound only to the direct constructor scope)
+  - `ObjectLiteralExpression` property bodies — `GetAccessor`, `SetAccessor`, `MethodDeclaration`
+
+  Once `inNestedFn` is true, every `CallExpression(expression=super)` encountered emits TS2337 at the `super` Identifier position with length 5. Statement walker (`findNestedSuperCallsInStmt`) covers ExpressionStatement / VariableStatement / Return / If / Block / For / While / Do / Throw. Expression walker (`findNestedSuperCallsInExpr`) covers Call / Binary / PropertyAccess / ElementAccess / Paren / Conditional / ArrayLiteral / New / FunctionExpression / ArrowFunction / ObjectLiteralExpression.
+
+  The outer walker (`walkForIllegalSuperCalls`) also recurses into nested class declarations via member bodies (so `class A { method() { class B extends C { constructor() { var f = () => super(); } } } }` fires TS2337 for B's nested arrow even though A's body doesn't have constructors).
+
+  **Test results:** Net delta: 1586 → 1585 failed (8489 → 8490 passing). Zero regressions. The single test variant (`@target: es2015`) flips with all 5 TS2337 emissions. Pre-existing TS2564 (`x: string` no init in Base) and TS2377 (Derived constructor missing super call) emissions were already firing — only the 5 TS2337s were missing.
+
+  **No overlap:** TS2335 (`super` in non-derived class) walker (`findSuperRefsInExpr`, Checker.kt:23733+) skips `FunctionExpression`/`ArrowFunction` bodies, so it doesn't fire for these nested-function `super` refs in non-derived classes either. The 17.99 `checkSuperInObjectLiterals()` walker fires for `super` *references* (TS2659/TS2660) inside object-literal getter/setter/method/function-property — different code, different rule. The new TS2337 fires specifically for `super(...)` *calls* inside constructor-nested functions, regardless of whether the constructor's class is derived (we don't gate on `extends` because the test exercises a derived class and TypeScript's behavior matches per the baseline; non-derived constructors with nested-function super calls would be very unusual).
+
+  **Foundation:** The walker correctly handles nested classes inside class methods, nested functions inside object literals, and arrows inside arrows. The `inNestedFn` flag is preserved (not reset) when entering a nested function from another nested function, so doubly-nested cases like `() => () => super()` correctly emit TS2337 once.
+
   **Session 2026-05-03 (17.99, 8487 → 8489, +2) — TS2659 + TS2660 for `super` references inside object-literal members:** Fresh /loop iteration after 17.98. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/76/19); a custom 4-10 line bucket scan (extended above the standard finder's `<= 3` filter to surface multi-emission patterns sharing one root cause) surfaced `super_inside-object-literal-getters-and-setters_ts__target_es5__` (4 missing: 3× TS2659 + 1× TS2660) and `__target_es2015__` (1 missing: TS2660). Both variants flip from a single fix.
 
   **Implementation:** New top-level `checkSuperInObjectLiterals()` walker (Checker.kt ~23800+) hooked into init pipeline (line 582+) right after the existing `checkSuperInNonDerived()` (TS2335). Per-file walker runs unconditionally (TS2660 fires regardless of target — guarded only at the per-property level for TS2659). For each `ObjectLiteralExpression` encountered, dispatches per property:

@@ -581,6 +581,8 @@ class Checker(
         checkSuperInNonDerived()
         // 27b. Check super in object literal members (TS2659/TS2660)
         checkSuperInObjectLiterals()
+        // 27c. Check super(...) calls in nested functions inside constructors (TS2337)
+        checkIllegalSuperCallsInNestedFunctions()
         // 28. Check const without initializer (TS1155)
         checkConstWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
@@ -23988,6 +23990,178 @@ interface DataView {
             message = message,
             category = DiagnosticCategory.Error,
             code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Illegal super(...) calls in nested functions inside constructors (TS2337)
+    // -----------------------------------------------------------------------
+
+    private fun checkIllegalSuperCallsInNestedFunctions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForIllegalSuperCalls(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForIllegalSuperCalls(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    // Process this class's constructors.
+                    for (member in stmt.members) {
+                        if (member is Constructor) {
+                            member.body?.let { findNestedSuperCalls(it.statements, source, fileName, inNestedFn = false) }
+                        }
+                    }
+                    // Recurse into nested classes via member bodies.
+                    for (member in stmt.members) {
+                        val body = when (member) {
+                            is MethodDeclaration -> member.body
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
+                            is Constructor -> member.body
+                            is ClassStaticBlockDeclaration -> member.body
+                            else -> null
+                        }
+                        body?.let { walkForIllegalSuperCalls(it.statements, source, fileName) }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForIllegalSuperCalls(it.statements, source, fileName) }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkForIllegalSuperCalls(body.statements, source, fileName)
+                }
+                is Block -> walkForIllegalSuperCalls(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForIllegalSuperCalls(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForIllegalSuperCalls(listOf(it), source, fileName) }
+                }
+                is ForStatement, is WhileStatement, is DoStatement -> {} // bodies don't typically contain class decls; skip
+                else -> {}
+            }
+        }
+    }
+
+    /** Walks the constructor body looking for `super(...)` calls. Once we descend into
+     * a nested function/arrow/object-literal-method body, [inNestedFn] becomes true and
+     * any `super(...)` call there fires TS2337. */
+    private fun findNestedSuperCalls(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        inNestedFn: Boolean,
+    ) {
+        for (stmt in statements) findNestedSuperCallsInStmt(stmt, source, fileName, inNestedFn)
+    }
+
+    private fun findNestedSuperCallsInStmt(stmt: Statement, source: String, fileName: String, inNestedFn: Boolean) {
+        when (stmt) {
+            is ExpressionStatement -> findNestedSuperCallsInExpr(stmt.expression, source, fileName, inNestedFn)
+            is VariableStatement -> stmt.declarationList.declarations.forEach {
+                it.initializer?.let { i -> findNestedSuperCallsInExpr(i, source, fileName, inNestedFn) }
+            }
+            is ReturnStatement -> stmt.expression?.let { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
+            is IfStatement -> {
+                findNestedSuperCallsInExpr(stmt.expression, source, fileName, inNestedFn)
+                findNestedSuperCallsInStmt(stmt.thenStatement, source, fileName, inNestedFn)
+                stmt.elseStatement?.let { findNestedSuperCallsInStmt(it, source, fileName, inNestedFn) }
+            }
+            is Block -> findNestedSuperCalls(stmt.statements, source, fileName, inNestedFn)
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
+                findNestedSuperCallsInStmt(stmt.statement, source, fileName, inNestedFn)
+            }
+            is WhileStatement -> {
+                findNestedSuperCallsInExpr(stmt.expression, source, fileName, inNestedFn)
+                findNestedSuperCallsInStmt(stmt.statement, source, fileName, inNestedFn)
+            }
+            is DoStatement -> {
+                findNestedSuperCallsInStmt(stmt.statement, source, fileName, inNestedFn)
+                findNestedSuperCallsInExpr(stmt.expression, source, fileName, inNestedFn)
+            }
+            is ThrowStatement -> stmt.expression?.let { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
+            else -> {}
+        }
+    }
+
+    private fun findNestedSuperCallsInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        inNestedFn: Boolean,
+    ) {
+        when (expr) {
+            is CallExpression -> {
+                if (inNestedFn && isSuperIdentifier(expr.expression)) {
+                    emitTS2337(expr.expression as Identifier, source, fileName)
+                } else if (!isSuperIdentifier(expr.expression)) {
+                    findNestedSuperCallsInExpr(expr.expression, source, fileName, inNestedFn)
+                }
+                expr.arguments.forEach { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
+            }
+            is BinaryExpression -> {
+                findNestedSuperCallsInExpr(expr.left, source, fileName, inNestedFn)
+                findNestedSuperCallsInExpr(expr.right, source, fileName, inNestedFn)
+            }
+            is PropertyAccessExpression -> findNestedSuperCallsInExpr(expr.expression, source, fileName, inNestedFn)
+            is ElementAccessExpression -> {
+                findNestedSuperCallsInExpr(expr.expression, source, fileName, inNestedFn)
+                findNestedSuperCallsInExpr(expr.argumentExpression, source, fileName, inNestedFn)
+            }
+            is ParenthesizedExpression -> findNestedSuperCallsInExpr(expr.expression, source, fileName, inNestedFn)
+            is ConditionalExpression -> {
+                findNestedSuperCallsInExpr(expr.condition, source, fileName, inNestedFn)
+                findNestedSuperCallsInExpr(expr.whenTrue, source, fileName, inNestedFn)
+                findNestedSuperCallsInExpr(expr.whenFalse, source, fileName, inNestedFn)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
+            is NewExpression -> {
+                findNestedSuperCallsInExpr(expr.expression, source, fileName, inNestedFn)
+                expr.arguments?.forEach { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
+            }
+            is FunctionExpression -> {
+                // Entering nested function — `super()` inside is illegal.
+                findNestedSuperCalls(expr.body.statements, source, fileName, inNestedFn = true)
+            }
+            is ArrowFunction -> {
+                // Entering nested arrow — even though arrows inherit lexical `this`/`super`,
+                // `super()` (the constructor call) is still illegal in arrow inside constructor.
+                val body = expr.body
+                if (body is Block) findNestedSuperCalls(body.statements, source, fileName, inNestedFn = true)
+                else if (body is Expression) findNestedSuperCallsInExpr(body, source, fileName, inNestedFn = true)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is GetAccessor -> prop.body?.let { findNestedSuperCalls(it.statements, source, fileName, inNestedFn = true) }
+                        is SetAccessor -> prop.body?.let { findNestedSuperCalls(it.statements, source, fileName, inNestedFn = true) }
+                        is MethodDeclaration -> prop.body?.let { findNestedSuperCalls(it.statements, source, fileName, inNestedFn = true) }
+                        is PropertyAssignment -> findNestedSuperCallsInExpr(prop.initializer, source, fileName, inNestedFn)
+                        is SpreadAssignment -> findNestedSuperCallsInExpr(prop.expression, source, fileName, inNestedFn)
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2337(superRef: Identifier, source: String, fileName: String) {
+        val start = superRef.pos
+        val length = 5 // "super"
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Super calls are not permitted outside constructors or in nested functions inside constructors.",
+            category = DiagnosticCategory.Error,
+            code = 2337,
             fileName = fileName,
             line = line,
             character = character,
