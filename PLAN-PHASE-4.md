@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.96, 8480 → 8481, +1) — TS7032/TS7006 setter implicit-any gates on any sibling getter (regression fix on 17.94):** Fresh /loop iteration after 17.95. `find_candidates.py --fresh` returned 1 EXTRA candidate (`implicitAnyGetAndSetAccessorWithAnyReturnType_ts`) — exactly the test pattern 17.94 over-fired on, surfaced by the same fresh suite.
+
+  **Root cause:** 17.94 added the SetAccessor implicit-any check (Checker.kt:8485+) but gated suppression on `it.type != null` — i.e. "skip ONLY when sibling getter has a typed return." Reading TypeScript's actual behavior: the suppression rule is "ANY sibling getter exists," because the getter's INFERRED return type provides contextual typing for the setter parameter even without an explicit annotation. The test case has `class GetAndSet { get haveGetAndSet() { return this.getAndSet; } set haveGetAndSet(value) { ... } }` — the getter's return type is inferred to `any` (from `getAndSet = null`), but its presence alone suppresses TS7032/TS7006 on the paired setter.
+
+  **Implementation:** Drop the `&& it.type != null` clause from the sibling-getter probe in the `SetAccessor` branch of `checkImplicitAnyInClassElement`. Rename the local `getterTyped` → `hasSiblingGetter` to match the corrected semantics. Comment updated.
+
+  **Test results:** Target test flips clean (4 over-fired diagnostics on `haveGetAndSet` setter at line 9 disappear; the 2 expected diagnostics on `haveOnlySet` setter at line 15 still fire as required). Full-suite: 1595 → 1594 failed (8480 → 8481 passing). Zero regressions across 10078-test suite — the originating 17.94 test (`noImplicitAnyMissingGetAccessor_ts`) is unaffected because both its setters (abstract `set message` in Parent + concrete `set message` in Child) have NO sibling getter in their respective classes.
+
+  **Foundation:** Future tests with paired get/set accessors where the getter is untyped benefit automatically. The narrower interpretation that 17.94 used (typed-return required) was a misreading of the TypeScript rule — the corrected version matches the spec exactly.
+
+  **Anti-loop check:** Pool returned to 0/0/0 fresh post-fix. Lands real code per protocol option (a). 17th feature commit since the 17.74 iteration started.
+
   **Session 2026-05-03 (17.95, 8479 → 8480, +1) — TS2341 for object-binding-pattern destructuring of class privates:** Continuation of same /loop session after 17.94. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `destructureComputedProperty_ts` (4 missing TS2341 emissions across 4 destructuring variants).
 
   **Root cause:** `checkPrivateMemberAccess` (Checker.kt:43510+) only considered `PropertyAccessExpression` (`c.p`). Destructuring an instance via `const { p } = new C()` extracts the property structurally — TypeScript treats this identically to `c.p` for accessibility purposes, but our checker had no walker for binding patterns. Four shapes silently passed: bare `{ p: p3 }`, string-literal `{ "p": p0 }`, computed-string `{ ["p"]: p1 }`, and computed-identifier `{ [nameP]: p2 }` (where `const nameP = "p"`).
