@@ -28660,7 +28660,50 @@ interface DataView {
                 }
             }
             is SpreadElement -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
-            // Skip ArrowFunction, FunctionExpression, ClassExpression — own scope, not immediately evaluated.
+            is ClassExpression -> {
+                // Eagerly evaluated at class-expr eval time (= param-init time):
+                //   - computed property/method/accessor keys (always)
+                //   - static field initializers
+                //   - static blocks
+                // Deferred (NOT walked):
+                //   - method/accessor/constructor BODIES
+                //   - instance field initializers
+                //   - constructor parameter defaults
+                for (member in expr.members) {
+                    when (member) {
+                        is PropertyDeclaration -> {
+                            (member.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                            }
+                            if (ModifierFlag.Static in member.modifiers) {
+                                member.initializer?.let {
+                                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                }
+                            }
+                        }
+                        is MethodDeclaration -> {
+                            (member.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                            }
+                        }
+                        is GetAccessor -> {
+                            (member.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                            }
+                        }
+                        is SetAccessor -> {
+                            (member.name as? ComputedPropertyName)?.let {
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                            }
+                        }
+                        is ClassStaticBlockDeclaration -> {
+                            findForwardParamRefsInBlock(member.body, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            // Skip ArrowFunction, FunctionExpression — own scope, not immediately evaluated.
             // Skip TypeAssertionExpression / AsExpression — TypeScript doesn't fire in type positions.
             else -> {}
         }

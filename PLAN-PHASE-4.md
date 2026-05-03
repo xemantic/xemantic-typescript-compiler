@@ -2619,6 +2619,27 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.88, 8467 → 8469, +2) — TS2373 walker recurses into ClassExpression for eager positions:** Continuation of same /loop session after 17.87. The 4-6 line bucket scan surfaced `capturedParametersInInitializers2_ts` (4 missing TS2373 emissions, both target=es5 and target=es2015 variants).
+
+  **Root cause:** `findForwardParamRefs` (Checker.kt:28541) explicitly skipped `ClassExpression`, with the comment "own scope, not immediately evaluated". This is correct for *deferred-evaluation* class members (method bodies, constructor bodies, instance-field initializers) but wrong for *eager-evaluation* members that the engine evaluates AT class-expr-eval time = param-init time:
+  - Computed property/method/accessor keys (`get [x](){}`, `[z](){}`, `[x] = ...`) — computed-name expressions are evaluated to compute the actual property name, which has to happen at class-decl time;
+  - Static field initializers (`static c = x;`) — TC39 spec: static initializers run at class-definition time;
+  - Static blocks (`static { ... }`) — same.
+
+  Method/accessor/constructor bodies and INSTANCE field initializers (`= x` without `static`) stay deferred — they don't see param-init-time bindings.
+
+  **Implementation:** New `is ClassExpression -> { ... }` branch (Checker.kt:28663+) walks `expr.members` and per-member dispatches:
+  - `PropertyDeclaration`: walk computed name expression always; walk `initializer` only when `ModifierFlag.Static in member.modifiers`;
+  - `MethodDeclaration` / `GetAccessor` / `SetAccessor`: walk computed name expression only;
+  - `ClassStaticBlockDeclaration`: reuse `findForwardParamRefsInBlock` for the body (only ReturnStatement / ExpressionStatement walked, matches IIFE handling at line 28672);
+  - other members (Constructor, IndexSignature) skipped.
+
+  Existing skip-comment updated to "Skip ArrowFunction, FunctionExpression — own scope" (ClassExpression removed from the skip list).
+
+  **Test results:** Both `__target_es5__` and `__target_es2015__` errors-baseline variants flip clean. The `__target_es2015__` JS-emit baseline still fails (preexisting transformer issue with `__setFunctionName` helper emission — unrelated to TS2373). Full-suite: 1608 → 1606 failed (8467 → 8469 passing). Zero regressions across the 10078-test suite.
+
+  **Foundation:** Future tests using parameter initializers that contain `class { ... }` expressions with eagerly-evaluated members benefit automatically. The asymmetry (eager keys/static-init vs deferred body/instance-init) matches TypeScript's checker.ts `checkParameterInitializer` semantics. If a test ever expects TS2373 on a method body identifier reference inside a class expression, that's a different feature (lexical capture + later-param check) — not in scope here.
+
   **Session 2026-05-03 (17.87, 8466 → 8467, +1) — TS2845 enum-condition check wired into IfStatement:** Fresh /loop iteration after 17.86. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/76/19). The 4-6 line bucket scan surfaced `errorOnEnumReferenceInCondition_ts` (4 missing TS2845 emissions on if-statement conditions, while ternary `a ? b : c` versions emit correctly).
 
   **Root cause:** `checkEnumReferenceFalsyCondition` (Checker.kt:17937) — the helper that walks an enum-member PropertyAccessExpression, resolves it through `resolveAlias` + `enumValues`, and emits TS2845 with the truthy/falsy verdict — was only invoked from the `ConditionalExpression` branch of `checkAlwaysTruthyInExpr` (line 17913). The `IfStatement` branch in `checkAlwaysTruthyInStatement` (line 17839) walks the if-else chain for unreachable always-truthy branches and emits TS2873 for always-falsy expressions, but never called the enum helper. So `if (Nums.Zero) {...}` silently passed despite the expected TS2845 emission at the condition position.

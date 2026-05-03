@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,467 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,469 / 10,078 tests passing (~84%).
+
+**17.88 (2026-05-03, +2)** — TS2373 "Parameter 'X' cannot reference identifier
+'Y' declared after it." now recurses into `ClassExpression` for eagerly-evaluated
+positions (computed property/method/accessor keys, static field initializers,
+static blocks). Flips `capturedParametersInInitializers2_ts__target_es5__` and
+`__target_es2015__` (errors-baseline variants). Pre-fix: `findForwardParamRefs`
+(Checker.kt:28541) explicitly skipped `ClassExpression` with the comment "own
+scope, not immediately evaluated", so `function foo(y = class { static c = x;
+get [x](){}; [z](){} }, x = 1, z = 2) {}` produced no TS2373 emissions despite
+the class-decl-time evaluation of static initializers and computed keys. Fix:
+add a `ClassExpression` branch that walks each member, descending into
+computed property names (PropertyDeclaration / MethodDeclaration / GetAccessor
+/ SetAccessor), static-field initializers (`ModifierFlag.Static` on
+PropertyDeclaration), and ClassStaticBlockDeclaration bodies. Method/accessor/
+constructor bodies and instance-field initializers stay skipped (deferred
+evaluation). Net delta: 1608 → 1606 failed (8467 → 8469 passing). Zero
+regressions.
 
 **17.87 (2026-05-03, +1)** — TS2845 "This condition will always return 'false'/'true'."
 now fires for enum-member references in `if (...)` test conditions, not just
