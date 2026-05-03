@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,466 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,467 / 10,078 tests passing (~84%).
+
+**17.87 (2026-05-03, +1)** — TS2845 "This condition will always return 'false'/'true'."
+now fires for enum-member references in `if (...)` test conditions, not just
+ternary `a ? b : c`. Flips `errorOnEnumReferenceInCondition_ts`. Pre-fix:
+`checkEnumReferenceFalsyCondition` (Checker.kt:17937) was only called from the
+`ConditionalExpression` branch in `checkAlwaysTruthyInExpr`, so `if (Nums.Zero)`
+patterns silently passed despite expected TS2845 emissions at the if-condition
+position. Fix: add the call in the `IfStatement` branch in
+`checkAlwaysTruthyInStatement` (both for the leading `if` expression and inside
+the `else if` chain walker). Net delta: 1609 → 1608 failed (8466 → 8467
+passing). Zero regressions.
 
 **17.86 (2026-05-02, net-zero infra)** — Add `interface ThisType<T> {}` to
 embedded BUILTIN_LIB_SOURCE. Pre-fix: `A & ThisType<any>` resolved to
