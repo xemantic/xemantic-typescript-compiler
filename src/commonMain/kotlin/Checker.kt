@@ -34250,6 +34250,7 @@ interface DataView {
         val name = decl.name
         if (name is ObjectBindingPattern) {
             checkDestructuringFromNullableUnion(name, decl.initializer, source, fileName)
+            checkDestructuringPrivateAccess(name, decl.initializer, source, fileName)
         }
         if (name !is Identifier) return
 
@@ -34667,6 +34668,109 @@ interface DataView {
                 length = squiggleLen,
             ))
         }
+    }
+
+    /**
+     * 17.95: TS2341 for destructuring patterns that extract a private property from
+     * a class instance — `const { p: p3 } = new C()`, `const { "p": p0 } = new C()`,
+     * `const { ["p"]: p1 } = new C()`, `const { [nameP]: p2 } = new C()` (where
+     * `const nameP = "p"`). Mirrors TypeScript's behavior: the destructure is
+     * structurally a property access, so private-member accessibility applies.
+     */
+    private fun checkDestructuringPrivateAccess(
+        pattern: ObjectBindingPattern,
+        initializer: Expression?,
+        source: String,
+        fileName: String,
+    ) {
+        val init = initializer ?: return
+        val initType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
+        if (initType !is Type.Interface) return
+        resolveStructuredTypeMembers(initType)
+        for (el in pattern.elements) {
+            if (el.dotDotDotToken) continue
+            val propNode = el.propertyName ?: el.name
+            val resolved = resolveDestructuringPropName(propNode, source, fileName) ?: continue
+            val (propName, squiggleStart, squiggleLen) = resolved
+            val prop = getPropertyOfType(initType, propName) ?: continue
+            val declNode = prop.valueDeclaration ?: prop.declarations.firstOrNull() ?: continue
+            if (!isMemberPrivate(declNode)) continue
+            val (_, displayName) = findPrivateDeclaringClassInfo(initType, propName) ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, squiggleStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' is private and only accessible within class '$displayName'.",
+                category = DiagnosticCategory.Error,
+                code = 2341,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = squiggleStart,
+                length = squiggleLen,
+            ))
+        }
+    }
+
+    /**
+     * Resolve the property name being destructured + the squiggle (start, length).
+     * Returns Triple(propName, squiggleStart, squiggleLen) or null if not statically resolvable.
+     * Computed names like `[nameP]` resolve `nameP` via [findConstStringValue] if it's a top-level
+     * `const NAME = "literal"`.
+     */
+    private fun resolveDestructuringPropName(
+        propNode: Node, source: String, fileName: String,
+    ): Triple<String, Int, Int>? = when (propNode) {
+        is Identifier -> Triple(propNode.text, propNode.pos, propNode.text.length)
+        is StringLiteralNode -> Triple(
+            propNode.text, propNode.pos,
+            (propNode.rawText?.length ?: propNode.text.length) + 2,
+        )
+        is ComputedPropertyName -> {
+            val expr = propNode.expression
+            val name = when (expr) {
+                is StringLiteralNode -> expr.text
+                is NoSubstitutionTemplateLiteralNode -> expr.text
+                is Identifier -> findConstStringValue(expr.text, fileName)
+                else -> null
+            }
+            if (name == null) null else {
+                // ComputedPropertyName.pos may overshoot backward into trivia and
+                // expr.end may overshoot forward (one-token rule). Compute the span
+                // by finding `[` forward from propNode.pos, then bracket-match to `]`.
+                val lbracket = source.indexOf('[', propNode.pos)
+                if (lbracket < 0) null else {
+                    var depth = 1
+                    var i = lbracket + 1
+                    while (i < source.length && depth > 0) {
+                        when (source[i]) {
+                            '[' -> depth++
+                            ']' -> depth--
+                        }
+                        i++
+                    }
+                    Triple(name, lbracket, i - lbracket)
+                }
+            }
+        }
+        else -> null
+    }
+
+    /** Walk the file's top-level `const X = "literal"` decls; return the literal value or null. */
+    private fun findConstStringValue(name: String, fileName: String): String? {
+        val result = binderResults.find { it.sourceFile.fileName == fileName } ?: return null
+        for (stmt in result.sourceFile.statements) {
+            if (stmt !is VariableStatement) continue
+            if (stmt.declarationList.flags != SyntaxKind.ConstKeyword) continue
+            for (d in stmt.declarationList.declarations) {
+                val n = d.name as? Identifier ?: continue
+                if (n.text != name) continue
+                return when (val init = d.initializer) {
+                    is StringLiteralNode -> init.text
+                    is NoSubstitutionTemplateLiteralNode -> init.text
+                    else -> null
+                }
+            }
+        }
+        return null
     }
 
     /** Check property initializer assignability (class member: `x: Type = value`). */

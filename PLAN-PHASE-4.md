@@ -2619,6 +2619,24 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.95, 8479 → 8480, +1) — TS2341 for object-binding-pattern destructuring of class privates:** Continuation of same /loop session after 17.94. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `destructureComputedProperty_ts` (4 missing TS2341 emissions across 4 destructuring variants).
+
+  **Root cause:** `checkPrivateMemberAccess` (Checker.kt:43510+) only considered `PropertyAccessExpression` (`c.p`). Destructuring an instance via `const { p } = new C()` extracts the property structurally — TypeScript treats this identically to `c.p` for accessibility purposes, but our checker had no walker for binding patterns. Four shapes silently passed: bare `{ p: p3 }`, string-literal `{ "p": p0 }`, computed-string `{ ["p"]: p1 }`, and computed-identifier `{ [nameP]: p2 }` (where `const nameP = "p"`).
+
+  **Implementation:**
+  - **`checkDestructuringPrivateAccess`** new walker hooked into `checkVarDeclAssignability` for `ObjectBindingPattern` initializers. Uses `getTypeOfExpression(init)` to resolve the RHS type; gates on `Type.Interface` (the class instance shape). Iterates `pattern.elements`; per element, resolves the destructured property name + squiggle range, checks if the property's declaration is private via existing `isMemberPrivate`, then emits TS2341 with the existing `findPrivateDeclaringClassInfo`-derived display name.
+  - **`resolveDestructuringPropName`** helper handles 4 propNode shapes: `Identifier` (text + pos + length), `StringLiteralNode` (text + pos + len+2 for quotes), `ComputedPropertyName` with `StringLiteralNode`/`NoSubstitutionTemplateLiteralNode` expression (literal text), `ComputedPropertyName` with `Identifier` expression (resolved via `findConstStringValue`). For ComputedPropertyName, the squiggle span is computed by **bracket-matching forward** from `source.indexOf('[', propNode.pos)` — `propNode.pos` overshoots backward into trivia (cf. CLAUDE.md gotcha "node.end overshoots by one token") and `expr.end` overshoots forward, so naive position arithmetic gave 4-22-char widths instead of the correct 5/7. Bracket-depth counter handles nested brackets like `[arr[0]]` for free.
+  - **`findConstStringValue`** walker scans the file's top-level `VariableStatement` decls for a `const X = "literal"` (or `const X = \`literal\``) match — narrow but covers the common pattern in the test.
+
+  **Test results:** Target test flips clean (4 of 4 TS2341 emissions fire at correct positions and widths). Full-suite: 1596 → 1595 failed (8479 → 8480 passing). Zero regressions across 10078-test suite — `checkDestructuringPrivateAccess` only fires for `Type.Interface` initializers (class instances) where a property is statically known private.
+
+  **Foundation:** Future tests with destructuring of class privates benefit automatically. The `findConstStringValue` helper is reusable for any computed-property-name resolution that needs a literal string. Does NOT extend to:
+  - Same-class destructuring (no `enclosingClassType` check — top-level destructuring is always external; if a future test uses destructuring inside a method on the same class, add the check).
+  - Non-const computed identifiers (e.g. `let nameP = "p"` — widened, not const).
+  - Static private members (test only covers instance privates).
+
+  **Anti-loop check:** Pool empty per `--fresh` (0/0/0). Lands real code per protocol option (a). 16th feature commit since the 17.74 iteration started.
+
   **Session 2026-05-03 (17.94, 8477 → 8479, +2) — TS7032 + TS7006 for set accessor without typed param:** Continuation of same /loop session after 17.93. Pool stayed at 0/0/0 fresh. The 4-line bucket scan surfaced `noImplicitAnyMissingGetAccessor_ts__target_es5__` (and `__target_es2015__`) — 4 missing TS7032/TS7006 emissions for `abstract set message(str)` and `set message(str)` patterns.
 
   **Root cause:** `checkImplicitAnyInClassElement` (Checker.kt:8467+) had a `SetAccessor` branch with the comment "Skip TS7006 for them — TypeScript never emits implicit-any for setter params." This was wrong: TypeScript DOES emit implicit-any for setter params, but ONLY when no sibling getter provides a contextual return type. The comment confused "can be contextually typed" with "is always silent."
