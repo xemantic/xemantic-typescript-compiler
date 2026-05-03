@@ -2619,6 +2619,25 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.98, 8482 → 8487, +5) — TS2331 + TS2683 for `this` directly in namespace/module bodies:** Continuation /loop after 17.97. `find_candidates.py --fresh` returned 0/0/0; 4-6 line bucket scan surfaced `thisAssignmentInNamespaceDeclaration1_ts` (4 missing diagnostics across 2 .js files: 2× TS2331 + 2× TS2683 for `this.bar = 4` / `this.prop = 42` directly in `namespace foo {}` / `namespace blah {}` bodies).
+
+  **Implementation:** New top-level `checkThisInNamespaceBodies()` walker (Checker.kt ~21389+) hooked into the main check pipeline (line 561+) AFTER the existing strict-gated `checkImplicitThis()`. Always runs — TS2331 is a structural error so it can't be gated on `noImplicitThis`/`strict`. For each `ModuleDeclaration` body, walks statements + expressions via narrow-purpose `walkStmtForNamespaceThis` / `walkExprForNamespaceThis` helpers that:
+  - Skip `FunctionDeclaration`, `ClassDeclaration`, `FunctionExpression`, `ClassExpression` (they rebind `this`).
+  - Transparently descend into `ArrowFunction` bodies (arrows inherit `this` from the namespace).
+  - Recurse for nested `ModuleDeclaration` statements.
+
+  Each `this` Identifier found emits TS2331 ("'this' cannot be referenced in a module or namespace body.") at the `this`-keyword position with length 4. **TS2683 also fires UNLESS `@strict: false` was set explicitly** — gate via `!options.strictExplicitlyFalse`. Empirical TypeScript baseline pattern:
+  - `thisKeyword_ts` / `thisInModule_ts` (no @strict flag → strict=false but strictExplicitlyFalse=false): both TS2331 + TS2683 ✓
+  - `thisAssignmentInNamespaceDeclaration1_ts` (`@checkJs: true` JS files): both TS2331 + TS2683 ✓
+  - `topLevelLambda_ts` (`@strict: false` explicit, `this` inside arrow inside namespace): only TS2331 ✓
+  - `lambdaPropSelf_ts` (`@strict: false` explicit, direct `this` in namespace): only TS2331 ✓
+
+  **Verification:** First attempt gated TS2683 on `isJsLike && options.checkJs` — that suppressed TS2683 in TS files where it was expected (e.g. `thisKeyword_ts`), causing 2 fresh MISS candidates after the full-suite re-run. Second attempt gated on `!strictExplicitlyFalse` matches all 5 baselines. The pre-existing failure `thisInModuleFunction1_ts` (which expects TS2683 on `this` inside a function inside a namespace) is unaffected — that requires extending the function-body `this` check to recognize namespace-enclosed functions, separate from this fix's direct-namespace-body case.
+
+  **Test results:** Net delta: 1593 → 1588 failed (8482 → 8487 passing). Zero regressions. The 5 wins span both JS-checkJs and TS files, and both with-TS2683 and TS2331-only cases.
+
+  **Foundation:** The `walkExprForNamespaceThis` helper handles all common expression shapes (Identifier, PropertyAccess, ElementAccess, BinaryExpression, CallExpression, NewExpression, ParenthesizedExpression, prefix/postfix unary, conditional, ArrowFunction body). Future tests with `this` in less-common expression positions inside namespaces (e.g. in template literals, spread elements, JSX) would need to extend this list. Independent of `checkImplicitThis`'s 22-call-site `thisIsTyped`/`insideFunction` plumbing — a smaller surface area for safer iteration.
+
   **Session 2026-05-03 (17.97, 8481 → 8482, +1) — TS2428 default-aware canonical merge (regression fix on 17.92):** Fresh /loop iteration after 17.96. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/76/19), so I extended the scan to 4-8 line diffs and surfaced `genericDefaults_ts` (EXTRA +6: 4× TS2428 over-fired on `i04` declarations + 2× over-fired on `i07`).
 
   **Root cause:** 17.92 introduced TS2428 for class+interface merges and constraint comparison via raw `(name, constraintText)` signature pairs across all merged decls, firing on any pairwise difference. This over-fired on `interface i04 {}` + `interface i04<T>` + `interface i04<T = number>` + `interface i04<T = number, U = string>` — TypeScript treats this 4-decl merge as valid because the extra type parameters at positions 0 and 1 carry defaults that reconcile the length gap. A separate latent bug: `node.end` overshoots by one token (documented gotcha), so `source.substring(c.pos, c.end)` for decl3's `T = number` gave default text `number>` while decl4's first param gave `number,` — false mismatch even with correct comparison logic.
