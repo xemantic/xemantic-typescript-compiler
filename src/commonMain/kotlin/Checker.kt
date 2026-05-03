@@ -17841,6 +17841,7 @@ interface DataView {
                 if (isAlwaysFalsyExpr(stmt.expression)) {
                     emitTS2873(stmt.expression, source, fileName)
                 }
+                checkEnumReferenceFalsyCondition(stmt.expression, source, fileName)
                 // Walk the if-else chain: only flag always-truthy conditions that are
                 // UNREACHABLE because a preceding branch was always-truthy
                 var prevTruthy = isAlwaysTruthyExpr(stmt.expression)
@@ -17850,6 +17851,7 @@ interface DataView {
                     if (prevTruthy) {
                         checkAlwaysTruthyCondition(elseStmt.expression, source, fileName)
                     }
+                    checkEnumReferenceFalsyCondition(elseStmt.expression, source, fileName)
                     if (isAlwaysTruthyExpr(elseStmt.expression)) prevTruthy = true
                     checkAlwaysTruthyInStatement(elseStmt.thenStatement, source, fileName)
                     elseStmt = elseStmt.elseStatement
