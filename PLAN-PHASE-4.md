@@ -2619,6 +2619,21 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-03 (17.91, 8473 → 8474, +1) — Constructor overload visibility + TS2392 on all ctors when 2+ impls + TS2793 wired for Constructor:** Fresh /loop iteration after 17.90. `find_candidates.py --fresh` returned 0/0/0 (filtered from 6/76/19). The 4-10 line bucket scan surfaced `constructorOverloads1_ts` (4 missing TS2392 + 2 missing TS2769) — class with 2 overload signatures + 2 implementation bodies.
+
+  **Root cause (3 coupled gaps):** (1) `resolveInterfaceMembers` (Checker.kt:36585+) added EVERY `Constructor` declaration to `ownConstructSignatures`, including impl sigs. So `new Foo(x)` resolution found the impl `(x: any)` accepted everything and silenced TS2769. (2) `checkMultipleConstructorImpls` only fired TS2392 on impl-having constructors (skipped overload sigs above the impl in source order). (3) `getOverloadImplementationRelated` / `getImplementationSignature` / `makeTs2793Diagnostic` had branches for `FunctionDeclaration` and `MethodDeclaration` but not `Constructor` — TS2793 "would have succeeded against this implementation" was unwirable for ctor overloads.
+
+  **Implementation:**
+  - **Visibility filter** (Checker.kt:36669+): after the member loop, partition `ownConstructSignatures` into `ctorOverloads` (`Constructor` decl with `body == null`), `ctorImpls` (`Constructor` decl with `body != null`), and `nonCtorConstructSigs` (interface `new(...)` declarations). When BOTH `ctorOverloads` and `ctorImpls` are non-empty, expose only `ctorOverloads + nonCtorConstructSigs`. Otherwise expose the union — preserves the "ambient class with only signatures" and "single impl with no overloads" cases.
+  - **TS2392 widening** (Checker.kt:39166+): when `impls.size >= 2`, fire on EVERY `Constructor` member (signatures and impls), not just the impls. The overload-pair model breaks down when 2+ impls exist, so the entire ctor group is invalid.
+  - **TS2793 Constructor branch**: new `findCtorImplementationInStatements` (parallels the MethodDeclaration helper); branches in `getOverloadImplementationRelated` (returns related diag pointing to first impl), `getImplementationSignature` (returns synthesized `Signature` for the first impl), and `makeTs2793Diagnostic` (Constructor `namePos = source.indexOf("constructor", startIndex = implDecl.pos)` since Constructor has no name node).
+
+  **Test results:** `constructorOverloads1_ts` flips clean (4 TS2392 + 2 TS2769 + 2 TS2793 related now fire). Full-suite: 1602 → 1601 failed (8473 → 8474 passing). Zero regressions across the 10078-test suite — the visibility filter is a strict superset of the previous behavior for the `0 overloads + 1 impl` and `N overloads + 0 impls` cases.
+
+  **Foundation:** Future tests with constructor overloads (new ctor overload patterns, base-class super-call resolution against external overload sigs) benefit automatically. The TS2793 wiring also opens the door to wiring TS2793 for super-call mismatches against overloaded base ctors (not in scope here).
+
+  **Anti-loop check:** Pool empty per `--fresh` (0/0/0). Lands real code per protocol option (a) "feature commit landing real code." 12th feature commit since the 17.74 iteration started; the 4-10 line bucket continues to yield wins where the surgical pool's ≤3 cap doesn't.
+
   **Session 2026-05-03 (17.90, 8471 → 8473, +2) — TS1038 redundant `declare` modifier inside ambient namespaces:** Continuation of same /loop session after 17.89. The 4-line bucket scan surfaced `declFileWithErrorsInInputDeclarationFileWithOut_ts` (4 missing TS1038 emissions inside `declare namespace M { declare X }` patterns).
 
   **Root cause:** TypeScript fires TS1038 on the `declare` keyword of any declaration nested inside a `declare namespace` body, since the parent namespace already establishes ambient context. We had no walker for this. Top-level `.d.ts` declarations are NOT flagged (TypeScript convention: `declare` at file scope is standard practice in declaration files).
