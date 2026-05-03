@@ -12242,32 +12242,50 @@ class Checker(
                 }
             }
 
-            // TS2428: All declarations of interface must have identical type parameters.
+            // TS2428: All declarations of class/interface must have identical type parameters.
+            // Applies to interface+interface AND class+interface merges (NOT class+class —
+            // that's a TS2300 duplicate-class error). Compares both type-parameter NAMES and
+            // CONSTRAINT text (normalized whitespace), so `<T extends Function>` vs
+            // `<T extends Different>` is detected even though the names match.
             val hasInterface = "interface" in kinds
             if (hasInterface) {
-                val ifaceDecls = group.filter { it.kind == "interface" }.mapNotNull { it.stmt as? InterfaceDeclaration }
-                if (ifaceDecls.size >= 2) {
-                    // Compare type parameter signatures: count and names
-                    val firstDecl = ifaceDecls.first()
-                    val firstSig = firstDecl.typeParameters?.map { it.name.text } ?: emptyList()
-                    val mismatch = ifaceDecls.drop(1).any { decl ->
-                        val sig = decl.typeParameters?.map { it.name.text } ?: emptyList()
-                        sig.size != firstSig.size || sig != firstSig
+                data class GenericInfo(val nameNode: Identifier, val tps: List<TypeParameter>?, val kind: String)
+                val mergeable = group.mapNotNull { d ->
+                    when (val s = d.stmt) {
+                        is InterfaceDeclaration -> GenericInfo(s.name, s.typeParameters, "interface")
+                        is ClassDeclaration -> s.name?.let { GenericInfo(it, s.typeParameters, "class") }
+                        else -> null
                     }
+                }
+                val ifaceCount = mergeable.count { it.kind == "interface" }
+                val classCount = mergeable.count { it.kind == "class" }
+                val applies = ifaceCount >= 2 || (classCount == 1 && ifaceCount >= 1)
+                if (applies) {
+                    fun signature(tps: List<TypeParameter>?): List<Pair<String, String?>> {
+                        if (tps.isNullOrEmpty()) return emptyList()
+                        return tps.map { tp ->
+                            val name = tp.name.text
+                            val constraintText = tp.constraint?.let { c ->
+                                source.substring(c.pos, c.end).trim().replace(Regex("\\s+"), " ")
+                            }
+                            name to constraintText
+                        }
+                    }
+                    val firstSig = signature(mergeable.first().tps)
+                    val mismatch = mergeable.drop(1).any { signature(it.tps) != firstSig }
                     if (mismatch) {
-                        // Fire TS2428 on ALL declarations
-                        for (decl in ifaceDecls) {
-                            val start = decl.name.pos
+                        for (info in mergeable) {
+                            val start = info.nameNode.pos
                             val (line, character) = getLineAndCharacterOfPosition(source, start)
                             diagnostics.add(Diagnostic(
-                                message = "All declarations of '${decl.name.text}' must have identical type parameters.",
+                                message = "All declarations of '${info.nameNode.text}' must have identical type parameters.",
                                 category = DiagnosticCategory.Error,
                                 code = 2428,
                                 fileName = fileName,
                                 line = line,
                                 character = character,
                                 start = start,
-                                length = decl.name.text.length,
+                                length = info.nameNode.text.length,
                             ))
                         }
                     }

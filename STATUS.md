@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,474 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,475 / 10,078 tests passing (~84%).
+
+**17.92 (2026-05-03, +1)** — TS2428 "All declarations of 'X' must have identical
+type parameters." now fires for class+interface merges (not just
+interface+interface) AND compares type-parameter CONSTRAINTS (not just names).
+Flips `nonIdenticalTypeConstraints_ts`. Pre-fix: the TS2428 check at
+`Checker.kt:12246+` only collected `InterfaceDeclaration` decls and only
+compared the type-param NAMES — so `class Foo<T extends Function>` +
+`interface Foo<T extends Different>` (matching name `T`, mismatched
+constraint) silently passed; `class Quux<T>` + `interface Quux<U>` was
+skipped because `ifaceDecls.size == 1`. Fix: collect both `Interface` and
+`Class` decls into a `mergeable` list (gated to `interface+interface`
+or `class+interface` cases — `class+class` is a TS2300 case and not
+applicable here). The signature comparison now produces
+`List<Pair<name, constraintText>>` where `constraintText` is the source
+slice from the constraint TypeNode (whitespace normalized via
+`Regex("\\s+")` collapse). Mismatch fires TS2428 on every decl's name node.
+Net delta: 1601 → 1600 failed (8474 → 8475 passing). Zero regressions.
 
 **17.91 (2026-05-03, +1)** — Constructor overload visibility + TS2392 on all
 constructors when 2+ implementations + TS2793 wired for Constructor decls. Flips
