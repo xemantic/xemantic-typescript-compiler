@@ -2619,6 +2619,22 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.103, 8494 → 8496, +2) — TS2660 for `super` references in regular-function rebinding scopes:** Custom 5-10 line bucket scan (extending past `find_candidates.py`'s `<= 3` filter) surfaced `superErrors_ts` (8 missing TS2660) as the next surgical candidate. Pattern: `super` references (NOT calls) inside regular function bodies — `function` declarations/expressions at top-level OR nested inside class methods/constructors. TypeScript's TS2660: "'super' can only be referenced in members of derived classes or object literal expressions."
+
+  **Implementation:** New `checkSuperRefInRebindingScope()` walker (Checker.kt ~24223+) hooked into init pipeline (line 590+) right after the existing 17.99/17.100 super walkers. Threads `rebound: Boolean` through `walkSuperRebindStmts` / `walkSuperRebindStmt` / `walkSuperRebindExpr`. Boundaries:
+  - File top level: `rebound = true` (no super available at module scope).
+  - `FunctionDeclaration` / `FunctionExpression` body: `rebound = true` (regular functions rebind super).
+  - `ArrowFunction` body: preserve outer `rebound` (arrows inherit super).
+  - `ClassDeclaration`'s `MethodDeclaration` / `Constructor` / `GetAccessor` / `SetAccessor` / `ClassStaticBlockDeclaration` body: `rebound = false` at the immediate level — TS2335 covers non-derived classes; derived class methods have valid super. Walker still descends INTO their bodies to catch nested function rebinds.
+
+  Two key emission gates carved out after first attempt regressed -5:
+  - **Skip super-as-CallExpression-callee**: `super(...)` is TS2337 territory (illegal-super-call) — handled by `checkIllegalSuperCallsInNestedFunctions` (17.100). My walker only emits TS2660 for `super.x` / `super[k]` / bare `super` references. The CallExpression branch only recurses into args + non-super expression positions.
+  - **Skip ObjectLiteralExpression entirely**: 17.99/17.101 own object-literal direct-level super refs (TS2660). My walker would double-emit on the same positions. Walker treats object literals as a no-op (the 17.99 walker handles their internals separately).
+
+  **Test results:** Net delta: 1581 → 1579 failed (8494 → 8496 passing). Zero regressions. `superErrors_ts` flips with all 8 TS2660 emissions (3 in top-level `function foo()` body + 1 each in 5 different nested-function/IIFE positions inside `class RegisteredUser`'s constructor and `sayHello()` method). The +2 (vs expected +1 for superErrors_ts alone) suggests another test flipped via a coincidental positive interaction — `find_candidates.py --fresh` shows zero regressions and the only remaining missing-diag candidate is `classImplementsClass6_ts` (already deferred).
+
+  **Foundation:** TS2660 emission now covers (a) object-literal super invariants (17.99/17.101), (b) regular-function rebinding scopes anywhere (17.103). Two gaps remain: `super(...)` calls in non-class contexts (e.g. `function foo() { super(); }` at top level) still silently miss TS2337 — the `superCallFromFunction1_ts` test still fails. Would require extending `checkIllegalSuperCallsInNestedFunctions` (17.100) to also fire for super calls in plain top-level functions, not just class-constructor-nested-function context. Logged here for future agents — different walker, different concern.
+
   **Session 2026-05-04 (17.102, 8493 → 8494, +1) — TS2337 for `super(...)` in class property initializers:** Continuation /loop after 17.101. `find_candidates.py --fresh` had 2 candidates; classImplementsClass6 was already attempted and reverted earlier in the session, leaving `superCallOutsideConstructor_ts` (1 missing TS2337 at line 7 `x = super();`).
 
   **Implementation:** Extended 17.100's `walkForIllegalSuperCalls` ClassDeclaration handler (Checker.kt ~24050+) with a new third loop that walks each `PropertyDeclaration.initializer` via `findNestedSuperCallsInExpr(init, source, fileName, inNestedFn = true)`. The `inNestedFn = true` flag triggers TS2337 emission for any direct `super(...)` call in the initializer expression — matching TypeScript's semantics that property initializers run in constructor scope but are still "outside the constructor" for super-call purposes. Uses the existing leaf walker (no new infrastructure). Constructors and method/getter/setter bodies remain handled by the existing two loops; the new loop only adds property-initializer coverage.
