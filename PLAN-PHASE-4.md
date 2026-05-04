@@ -2619,6 +2619,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (moduleKeywordDeprecated_ts ATTEMPTED + REVERTED, 8496 unchanged):** Continuation /loop after 17.103. Custom 5-10 line bucket scan surfaced `moduleKeywordDeprecated_ts` (+8 missing TS1540 — namespace declarations using `module` keyword instead of `namespace`). Two-part fix attempted:
+
+  1. **Parser change**: Extended `parseModuleDeclaration` (Parser.kt ~2175) to emit TS1540 for EACH identifier in a dotted module path (`module not.ok { }` fires twice — once on `not`, once on `ok`). Previous code emitted only once per declaration, missing the dotted-path dups. Used `reportError(..., overrideStart=ident.pos, overrideLength=ident.text.length)` per identifier.
+
+  2. **Compiler change**: Removed the `if (isDtsFile) continue` gate before `diagnostics.addAll(parser.getDiagnostics())` in `TypeScriptCompiler.kt` (~947). Previously parser diagnostics from `.d.ts` files were silently dropped (the gate was BEFORE the diagnostic-collection line). After the change, .d.ts parser diagnostics flow through; the `isDtsFile continue` only suppresses JS emit, not parser errors.
+
+  **Result — REVERTED:** Net delta: 1579 → 1579 failed (8496 unchanged). The combined change flipped `moduleKeywordDeprecated_ts` (+1) but regressed exactly one other test (-1) because the newly-exposed `.d.ts` parser diagnostics include some that aren't in baselines for OTHER tests. Per protocol any regression > 0 → revert. Could be retried with a more targeted approach: filter .d.ts parser diagnostics to whitelist only TS1540 (the only one we're trying to expose). Logged here for future agents — the value is small (+1) and the regression surface is unbounded without targeted filtering.
+
   **Session 2026-05-04 (17.103, 8494 → 8496, +2) — TS2660 for `super` references in regular-function rebinding scopes:** Custom 5-10 line bucket scan (extending past `find_candidates.py`'s `<= 3` filter) surfaced `superErrors_ts` (8 missing TS2660) as the next surgical candidate. Pattern: `super` references (NOT calls) inside regular function bodies — `function` declarations/expressions at top-level OR nested inside class methods/constructors. TypeScript's TS2660: "'super' can only be referenced in members of derived classes or object literal expressions."
 
   **Implementation:** New `checkSuperRefInRebindingScope()` walker (Checker.kt ~24223+) hooked into init pipeline (line 590+) right after the existing 17.99/17.100 super walkers. Threads `rebound: Boolean` through `walkSuperRebindStmts` / `walkSuperRebindStmt` / `walkSuperRebindExpr`. Boundaries:
