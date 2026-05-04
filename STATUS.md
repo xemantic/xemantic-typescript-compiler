@@ -2,6 +2,23 @@
 
 **Phase 4 — Checker buildout.** 8,490 / 10,078 tests passing (~84%).
 
+**Static-member bifurcation (2026-05-04, net 0, architectural)** — Multi-
+session piece deferred from 17.83's revert: `Type.Interface` now carries
+a separate `staticMembers: SymbolTable?` populated alongside the existing
+`members` table for class declarations (Step 1, commit 82405f2). Three
+structural-comparison consumers (`propertiesRelatedTo`,
+`collectMissingProperties`, `getMissingRequiredPropertySymbol`) now skip
+target.properties entries that live on the static side via a new
+`getStaticMembersOfType()` helper (Step 2, commit ac59fde). Together this
+removes the FP TS2741 on `classImplementsClass6_ts` line 19 (`c2 = c`
+claiming static `bar` is missing in C) without regressing anything —
+both commits are zero-regression. The canary still fails because the
+expected TS2339 at line 20 (`c.bar()`) is a separate emission gap (the
+class-instance-receiver bail-out in `checkSinglePropertyAccess` isn't
+related to the bifurcation). Architectural foundation now in place for
+future class-side semantics work that depends on a clean static/instance
+split. Test count unchanged.
+
 **17.100 (2026-05-03, +1)** — TS2337 now fires for `super(...)` constructor
 calls inside nested functions (FunctionExpression / ArrowFunction /
 object-literal MethodDeclaration / GetAccessor / SetAccessor) inside any
