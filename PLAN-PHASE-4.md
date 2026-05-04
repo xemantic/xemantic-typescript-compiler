@@ -2619,6 +2619,22 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.106, 8499 → 8500, +1) — TS1253 + TS7008 for abstract members in non-abstract classes:** Continuation /loop after 17.105. `find_candidates.py --fresh` now showed `errorInUnnamedClassExpression_ts` as 2-MISS (previously 3-MISS — 17.105 already added the TS2715 emission). Two remaining: TS1253 at (7,5) length 8 (squiggle on `abstract` keyword) + TS7008 at (7,14) length 3 (squiggle on `bar` identifier). Single-commit fix flips the test.
+
+  Implementation: new `checkAbstractMemberContext()` walker (Checker.kt ~24881) registered after `checkAbstractMemberAccessInConstructor`. Walks all classes in source files threading two flags:
+  - `inAmbient`: starts false at file root, flips true upon entering `ModuleDeclaration` body when `Declare` modifier is set (so `declare namespace M { class C { abstract X; } }` inherits ambient state without needing explicit `declare class`).
+  - `classIsAbstract`: own `Abstract` modifier on the class itself.
+
+  For each ClassDeclaration / ClassExpression, `processClassForAbstractContext` iterates members. Per abstract member:
+  - **TS1253** ("Abstract properties can only appear within an abstract class.") fires when `!classIsAbstract && !inAmbient`. Position: forward-search from `member.pos` for `"abstract"` substring with word-boundary checks (rejects matches embedded in longer identifiers like `abstract_ish`). Length=8. Word-boundary check is critical because `member.pos` may include trivia, and a comment like `/* abstract */ foo` could otherwise match the wrong position.
+  - **TS7008** ("Member 'X' implicitly has an 'any' type.") fires for PropertyDeclaration only (not Method/GetAccessor/SetAccessor — those have signatures), when no type annotation and no initializer, in non-ambient context, gated on `options.noImplicitAny || options.strict`. Position: `member.name.pos`, length=`name.text.length`. The non-ambient gate is critical — ambient classes already get TS7008 via the existing implicit-any walker at Checker.kt:8302+; emitting both would double-fire.
+
+  Walker structure intentionally mirrors the 17.105 walker but kept separate so each can be reasoned about / extended independently. Both walkers iterate the same statement structure but emit different diagnostics. Cross-cutting: `inAmbient` flag is NOT propagated through 17.105's walker (which doesn't distinguish ambient — TS2715 fires regardless of declare modifier on the class). 17.106's flag-threading is also kept simple: only ModuleDeclaration `declare` is treated as ambient context for purposes of this check. Tests with `declare class C { abstract foo; }` would have C's modifiers include both Declare AND Abstract — `classIsAbstract=true` short-circuits the TS1253 emission anyway.
+
+  Verified TS1253 also fires correctly on `abstractPropertyNegative_ts` line 15 — `class C extends B { abstract notAllowed: string; ... }` — emitting `(15,5): error TS1253` exactly matching baseline. Test still fails due to other missing diagnostics (TS2654 missing-implementations, TS1005 missing-`{`, TS2676 accessor-mismatch — all out of scope) but TS1253 portion is correct.
+
+  Net delta: 1576 → 1575 failed (8499 → 8500 passing). STATUS.md bumped 8499 → 8500.
+
   **Session 2026-05-04 (17.105, 8498 → 8499, +1) — TS2715 abstract property access in constructor:** Continuation /loop after MAINT-1d audit. `find_candidates.py --fresh` reproduced 0/1/0 (only `classImplementsClass6_ts` MISS, already attempted-and-reverted). Per the anti-loop rule (recon-only forbidden when queue has unchecked items), promoted from the 3-architectural-candidates list logged earlier today (commit 4347761): `abstractPropertyInConstructor_ts` (10 missing TS2715 + 1 missing TS2729) was sized as "doable as a self-contained walker but the destructuring-pattern path adds significant code; not surgical for one session." Decided to land it in one commit since each piece (own-abstract walker, inherited-abstract tracking, destructuring patterns) is interdependent for the test to flip.
 
   Implementation added `checkAbstractMemberAccessInConstructor()` (Checker.kt ~24494) registered after `checkSuperRefInRebindingScope`. Three-layer architecture:
