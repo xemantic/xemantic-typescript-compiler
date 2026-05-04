@@ -205,6 +205,12 @@ class Checker(
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
 
+    /** Set during [checkTypeUsedAsValue] per file. Names in this set are forward-declarable
+     *  lib types (Promise, Symbol, …) that the user declared as interfaces but the active
+     *  @lib excludes the introducing es2015+ lib. Used by [emitTS2693] to switch to TS2585
+     *  with a lib-hint message instead of the generic TS2693. */
+    private var currentForwardLibTypeNames: Set<String> = emptySet()
+
     /** Stack of containing namespace symbols pushed during lazy initializer-type inference
      *  for namespace-scoped variables. [getTypeOfIdentifier] consults the top entry's parent
      *  chain to resolve names exported by the enclosing namespace(s) — required so that
@@ -16451,6 +16457,19 @@ class Checker(
         )
 
         /**
+         * Lib types introduced in es2015+ that are commonly forward-declared as
+         * type-only interfaces (`interface Promise<T> {}` etc.). When a user file
+         * declares one of these as an interface AND options.lib excludes es2015+,
+         * the user's interface is effectively type-only — using it as a value
+         * (`new Promise`, `Symbol()`) fires TS2585 with a lib-hint message instead
+         * of the generic TS2693.
+         */
+        private val FORWARD_DECLARABLE_LIB_TYPES_ES2015 = setOf(
+            "Promise", "Symbol", "Map", "WeakMap", "Set", "WeakSet",
+            "Iterable", "IterableIterator", "Iterator",
+        )
+
+        /**
          * Keywords/reserved words that parse as Identifier nodes in our AST.
          * These should never trigger TS2304.
          */
@@ -19586,11 +19605,26 @@ interface DataView {
                 }
             }
             val namespaceOnlyNames = mutableSetOf<String>()
+            // When @lib explicitly excludes es2015+, user-declared interfaces matching
+            // well-known forward-declarable lib types (Promise, Symbol, Map, …) ARE
+            // type-only — the lib doesn't provide a value-side counterpart for them.
+            // Use as a value fires TS2585 with a lib-hint message instead of TS2693.
+            val libExcludesEs2015 = options.lib.isNotEmpty() &&
+                options.lib.none { lname ->
+                    lname.startsWith("es2") || lname.equals("esnext", ignoreCase = true) ||
+                        lname.startsWith("ES2") || lname.equals("ESNext", ignoreCase = true)
+                }
+            val forwardLibTypeNames = mutableSetOf<String>()
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
                     is InterfaceDeclaration -> {
                         val n = stmt.name.text
                         if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                        if (libExcludesEs2015 && n !in valueNames &&
+                            n in FORWARD_DECLARABLE_LIB_TYPES_ES2015) {
+                            forwardLibTypeNames.add(n)
+                            typeOnlyNames.add(n)
+                        }
                     }
                     is TypeAliasDeclaration -> {
                         val n = stmt.name.text
@@ -19615,7 +19649,12 @@ interface DataView {
                     else -> {}
                 }
             }
-            checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            currentForwardLibTypeNames = forwardLibTypeNames
+            try {
+                checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            } finally {
+                currentForwardLibTypeNames = emptySet()
+            }
         }
     }
 
@@ -19852,6 +19891,29 @@ interface DataView {
                 checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                 checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             }
+            // Descend into function/arrow bodies — type-as-value checks apply inside
+            // IIFE-style `(function() { new ForwardLibType; })` patterns.
+            is FunctionExpression -> {
+                val innerValues = valueNames.toMutableSet()
+                for (p in expr.parameters) {
+                    val pName = p.name
+                    if (pName is Identifier) innerValues.add(pName.text)
+                }
+                checkTypeAsValueInStatements(expr.body.statements, source, fileName, typeOnlyNames, innerValues, namespaceOnlyNames)
+            }
+            is ArrowFunction -> {
+                val innerValues = valueNames.toMutableSet()
+                for (p in expr.parameters) {
+                    val pName = p.name
+                    if (pName is Identifier) innerValues.add(pName.text)
+                }
+                when (val body = expr.body) {
+                    is Block -> checkTypeAsValueInStatements(body.statements, source, fileName, typeOnlyNames, innerValues, namespaceOnlyNames)
+                    is Expression -> checkTypeAsValueInExpr(body, source, fileName, typeOnlyNames, innerValues, namespaceOnlyNames)
+                    else -> {}
+                }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
             else -> {}
         }
     }
@@ -19860,10 +19922,17 @@ interface DataView {
         val start = node.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // Forward-declarable lib types (Promise, Symbol, Map, …) under restrictive @lib
+        // get the more specific TS2585 with a lib-hint message instead of TS2693.
+        val (code, message) = if (name in currentForwardLibTypeNames) {
+            2585 to "'$name' only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later."
+        } else {
+            2693 to "'$name' only refers to a type, but is being used as a value here."
+        }
         diagnostics.add(Diagnostic(
-            message = "'$name' only refers to a type, but is being used as a value here.",
+            message = message,
             category = DiagnosticCategory.Error,
-            code = 2693,
+            code = code,
             fileName = fileName,
             line = line,
             character = character,

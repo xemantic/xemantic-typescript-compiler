@@ -2619,6 +2619,21 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.104, 8496 → 8498, +2) — TS2585 for forward-declared lib types under restrictive `@lib`:** Continuation /loop after 17.103. Promoted from the queued-candidates list — `forwardDeclaredCommonTypes01_ts` with @target=es5 and @target=es2015 variants (7 missing TS2585 each). Test forward-declares `interface Promise<T> {}`, `Symbol`, `Map`, `WeakMap`, `Set`, `WeakSet` then uses them as values via `new X` and `X()` under `@lib: es5`. TypeScript fires TS2585 ("X only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later.") instead of the generic TS2693.
+
+  **Implementation:**
+  - Added `FORWARD_DECLARABLE_LIB_TYPES_ES2015 = setOf("Promise", "Symbol", "Map", "WeakMap", "Set", "WeakSet", "Iterable", "IterableIterator", "Iterator")` companion constant.
+  - Added `currentForwardLibTypeNames: Set<String>` checker field set per-file in `checkTypeUsedAsValue`.
+  - In `checkTypeUsedAsValue`: compute `libExcludesEs2015` via `options.lib.isNotEmpty() && options.lib.none { es2/esnext (case-insensitive) }`. For each `InterfaceDeclaration`, ALSO add to `typeOnlyNames` (and `forwardLibTypeNames`) when name is in the forward-declarable set AND `libExcludesEs2015` AND not also a value name. The existing `n !in KNOWN_GLOBALS` exclusion is bypassed for these specific names.
+  - In `emitTS2693`: switched `code` and `message` based on `name in currentForwardLibTypeNames`. TS2585 gets the lib-hint message; TS2693 keeps the generic message.
+  - Added `FunctionExpression` and `ArrowFunction` cases to `checkTypeAsValueInExpr` so the walker descends into IIFE-style `(function() { new ForwardLibType; })` patterns. Required for the test, which wraps all the offending uses in `(function() { ... });`. Each function/arrow body extends `valueNames` with parameter names (so `(s) => s` doesn't FP-emit on `s`).
+
+  **Test results:** Net delta: 1579 → 1577 failed (8496 → 8498 passing). Zero regressions across 10078-test suite. Both variants flip with all 7 TS2585 emissions each.
+
+  **Risk surface considered:** The `FunctionExpression`/`ArrowFunction` walker descent could expose TS2693 emissions in places we previously skipped. Empirically zero regressions — the walker fires TS2693 on identifier references that ARE in `typeOnlyNames` (interface/type alias names without value declarations). The walker still skips arrow params because those are added to `innerValues`. The forward-lib gate is narrow: only fires when `options.lib` is explicitly set AND excludes es2015+, so most tests (no explicit lib, or es2015+ lib) are unaffected by the new TS2585 path.
+
+  **Foundation:** The threading-through-field pattern (`currentForwardLibTypeNames`) is reusable for any future per-file context that affects emission code/message selection. Future agents could extend `FORWARD_DECLARABLE_LIB_TYPES_ES2015` (e.g. `AsyncIterator`, `Reflect`, `Proxy` — also es2015+) without touching the walker logic.
+
   **Session 2026-05-04 (continued investigation, queued candidates):** After 17.103 + moduleKeyword revert, ran a higher-diff (5-10 line) scan to surface the next surgical wave. Three candidates investigated and queued as architectural follow-ups (not landed this session):
 
   - **`abstractClassUnionInstantiation_ts` (+5 TS2511)**: "Cannot create an instance of an abstract class." Requires (a) tracking abstract-flag on class declarations, (b) `typeof X` constructor-side typing, (c) Union-type detection where any member is abstract, plus the `Array<typeof Class>.map(cls => new cls())` flow path for the array-element variant. Significant new infrastructure for constructor-side abstract typing.
