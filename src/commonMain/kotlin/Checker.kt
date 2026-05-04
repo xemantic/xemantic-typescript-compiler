@@ -597,6 +597,8 @@ class Checker(
         checkSuperRefInRebindingScope()
         // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
         checkAbstractMemberAccessInConstructor()
+        // 27f. Check abstract members in non-abstract class (TS1253) + abstract property without annotation (TS7008)
+        checkAbstractMemberContext()
         // 28. Check const without initializer (TS1155)
         checkConstWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
@@ -24886,6 +24888,177 @@ interface DataView {
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS1253: abstract members in non-abstract class
+    // TS7008: abstract property without annotation in non-ambient class
+    // -----------------------------------------------------------------------
+
+    private fun checkAbstractMemberContext() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkClassesForAbstractContext(result.sourceFile.statements, source, fileName, inAmbient = false)
+        }
+    }
+
+    private fun walkClassesForAbstractContext(
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+        inAmbient: Boolean,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val isAmbientClass = inAmbient || ModifierFlag.Declare in stmt.modifiers
+                    val classIsAbstract = ModifierFlag.Abstract in stmt.modifiers
+                    processClassForAbstractContext(stmt.members, classIsAbstract, isAmbientClass, source, fileName)
+                    // Recurse into nested classes inside member bodies.
+                    for (member in stmt.members) {
+                        val body = when (member) {
+                            is MethodDeclaration -> member.body
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
+                            is Constructor -> member.body
+                            is ClassStaticBlockDeclaration -> member.body
+                            else -> null
+                        }
+                        body?.let { walkClassesForAbstractContext(it.statements, source, fileName, isAmbientClass) }
+                    }
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val init = decl.initializer ?: continue
+                        walkExprForAbstractContext(init, source, fileName, inAmbient)
+                    }
+                }
+                is ExpressionStatement -> walkExprForAbstractContext(stmt.expression, source, fileName, inAmbient)
+                is FunctionDeclaration -> stmt.body?.let { walkClassesForAbstractContext(it.statements, source, fileName, inAmbient) }
+                is Block -> walkClassesForAbstractContext(stmt.statements, source, fileName, inAmbient)
+                is IfStatement -> {
+                    walkClassesForAbstractContext(listOf(stmt.thenStatement), source, fileName, inAmbient)
+                    stmt.elseStatement?.let { walkClassesForAbstractContext(listOf(it), source, fileName, inAmbient) }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    val nowAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
+                    if (body is ModuleBlock) walkClassesForAbstractContext(body.statements, source, fileName, nowAmbient)
+                }
+                is ReturnStatement -> stmt.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkExprForAbstractContext(expr: Expression, source: String, fileName: String, inAmbient: Boolean) {
+        when (expr) {
+            is ClassExpression -> {
+                val classIsAbstract = ModifierFlag.Abstract in expr.modifiers
+                processClassForAbstractContext(expr.members, classIsAbstract, inAmbient, source, fileName)
+                for (member in expr.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        is Constructor -> member.body
+                        is ClassStaticBlockDeclaration -> member.body
+                        else -> null
+                    }
+                    body?.let { walkClassesForAbstractContext(it.statements, source, fileName, inAmbient) }
+                }
+            }
+            is ParenthesizedExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is BinaryExpression -> {
+                walkExprForAbstractContext(expr.left, source, fileName, inAmbient)
+                walkExprForAbstractContext(expr.right, source, fileName, inAmbient)
+            }
+            is CallExpression -> {
+                walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+                expr.arguments.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+            }
+            is NewExpression -> {
+                walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+                expr.arguments?.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun processClassForAbstractContext(
+        members: List<ClassElement>,
+        classIsAbstract: Boolean,
+        isAmbient: Boolean,
+        source: String,
+        fileName: String,
+    ) {
+        for (member in members) {
+            val (memberModifiers, memberPos, isProperty, hasType, hasInit, memberName) = when (member) {
+                is PropertyDeclaration -> AbstractMemberInfo(member.modifiers, member.pos, true, member.type != null, member.initializer != null, member.name as? Identifier)
+                is MethodDeclaration -> AbstractMemberInfo(member.modifiers, member.pos, false, true, false, member.name as? Identifier)
+                is GetAccessor -> AbstractMemberInfo(member.modifiers, member.pos, false, true, false, member.name as? Identifier)
+                is SetAccessor -> AbstractMemberInfo(member.modifiers, member.pos, false, true, false, member.name as? Identifier)
+                else -> continue
+            }
+            if (ModifierFlag.Abstract !in memberModifiers) continue
+            // TS1253: abstract member in non-abstract, non-ambient class
+            if (!classIsAbstract && !isAmbient) {
+                emitTS1253ForAbstractKeyword(memberPos, source, fileName)
+            }
+            // TS7008: abstract property without type annotation in non-ambient class — implicit any
+            // Emits regardless of class abstractness; needs noImplicitAny/strict.
+            if (isProperty && !hasType && !hasInit && !isAmbient
+                && (options.noImplicitAny || options.strict)
+                && memberName != null && memberName.text.isNotEmpty()) {
+                val (line, character) = getLineAndCharacterOfPosition(source, memberName.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Member '${memberName.text}' implicitly has an 'any' type.",
+                    category = DiagnosticCategory.Error,
+                    code = 7008,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = memberName.pos,
+                    length = memberName.text.length,
+                ))
+            }
+        }
+    }
+
+    private data class AbstractMemberInfo(
+        val modifiers: Set<ModifierFlag>,
+        val pos: Int,
+        val isProperty: Boolean,
+        val hasType: Boolean,
+        val hasInit: Boolean,
+        val name: Identifier?,
+    )
+
+    private fun emitTS1253ForAbstractKeyword(memberPos: Int, source: String, fileName: String) {
+        // Find the 'abstract' keyword position by searching forward from memberPos.
+        // The parser's pos may include leading trivia, so search up to a reasonable bound.
+        val searchStart = maxOf(0, memberPos)
+        val searchEnd = minOf(source.length, memberPos + 200)
+        val idx = source.indexOf("abstract", searchStart)
+        if (idx < 0 || idx >= searchEnd) return
+        // Verify it's a complete word (not part of another identifier).
+        val before = if (idx > 0) source[idx - 1] else ' '
+        val after = if (idx + 8 < source.length) source[idx + 8] else ' '
+        if (before.isLetterOrDigit() || before == '_' || before == '$') return
+        if (after.isLetterOrDigit() || after == '_' || after == '$') return
+        val (line, character) = getLineAndCharacterOfPosition(source, idx)
+        diagnostics.add(Diagnostic(
+            message = "Abstract properties can only appear within an abstract class.",
+            category = DiagnosticCategory.Error,
+            code = 1253,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = idx,
+            length = 8,
         ))
     }
 

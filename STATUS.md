@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,499 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,500 / 10,078 tests passing (~84%).
+
+**17.106 (2026-05-04, +1)** — TS1253 + TS7008 now fire for abstract
+members in non-abstract classes. Flips `errorInUnnamedClassExpression_ts`
+(`let Foo = class { abstract bar; }` — class expression without
+abstract modifier with abstract property declaration). New
+`checkAbstractMemberContext()` walker (Checker.kt ~24881) registered
+after `checkAbstractMemberAccessInConstructor`. For each ClassDeclaration
+/ ClassExpression: tracks `classIsAbstract` (own modifier) + `isAmbient`
+(declare modifier or inside declare namespace). Per member, when
+`abstract` modifier is present:
+- TS1253 ("Abstract properties can only appear within an abstract
+  class.") fires when `!classIsAbstract && !isAmbient`. Squiggle: scans
+  source forward from `member.pos` for the `abstract` keyword (using
+  word-boundary checks to avoid false matches on identifiers like
+  `abstract_ish`), length 8.
+- TS7008 ("Member 'X' implicitly has an 'any' type.") fires for an
+  abstract PropertyDeclaration with no type annotation and no
+  initializer in non-ambient context, when `noImplicitAny || strict`.
+  Squiggle: `member.name.pos`, length=`name.text.length`.
+Also threads ambient context through ModuleDeclaration descent so
+`declare namespace M { class C { abstract foo; } }` inherits ambient
+state. Note: TS1253 also fires correctly on `abstractPropertyNegative_ts`
+line 15 (`class C extends B { abstract notAllowed: string; }`) but
+that test still fails because TS2654, TS1005, TS2676 are out of scope.
+Net delta: 1576 → 1575 failed (8499 → 8500 passing). Zero regressions.
 
 **17.105 (2026-05-04, +1)** — TS2715 now fires for `this.X` accesses in
 constructor bodies and class-field initializers when X is an abstract
