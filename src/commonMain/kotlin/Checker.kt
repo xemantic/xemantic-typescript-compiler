@@ -42138,8 +42138,95 @@ interface DataView {
                 for ((name, sym) in globals) {
                     if (isAbstractClass(sym)) abstractClasses.add(name)
                 }
-                checkAbstractInStmts(result.sourceFile.statements, source, fileName, abstractClasses)
+                // Build type alias map for `typeof X` resolution through aliases.
+                val typeAliases = mutableMapOf<String, TypeNode>()
+                collectTypeAliases(result.sourceFile.statements, typeAliases)
+                // Identify variable/parameter names whose type annotation resolves to "abstract-constructible"
+                // (i.e. typeof X for some abstract X, or a union containing one).
+                val typeofAbstractVars = mutableSetOf<String>()
+                collectTypeofAbstractVars(result.sourceFile.statements, abstractClasses, typeAliases, typeofAbstractVars)
+                checkAbstractInStmts(result.sourceFile.statements, source, fileName, abstractClasses, typeofAbstractVars)
             } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun collectTypeAliases(stmts: List<Statement>, aliases: MutableMap<String, TypeNode>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is TypeAliasDeclaration -> aliases[stmt.name.text] = stmt.type
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) collectTypeAliases(body.statements, aliases)
+                }
+                is Block -> collectTypeAliases(stmt.statements, aliases)
+                is FunctionDeclaration -> stmt.body?.let { collectTypeAliases(it.statements, aliases) }
+                else -> {}
+            }
+        }
+    }
+
+    /** Returns true if [type] denotes a constructor whose target may be abstract — i.e. `typeof X`
+     * where X is an abstract class, or a union/parenthesized variant containing one. */
+    private fun typeNodeIsAbstractConstructible(
+        type: TypeNode,
+        abstractClasses: Set<String>,
+        typeAliases: Map<String, TypeNode>,
+        visited: MutableSet<String> = mutableSetOf(),
+    ): Boolean {
+        return when (type) {
+            is TypeQuery -> {
+                val expr = type.exprName
+                expr is Identifier && expr.text in abstractClasses
+            }
+            is UnionType -> type.types.any { typeNodeIsAbstractConstructible(it, abstractClasses, typeAliases, visited) }
+            is ParenthesizedType -> typeNodeIsAbstractConstructible(type.type, abstractClasses, typeAliases, visited)
+            is TypeReference -> {
+                val tname = type.typeName
+                if (tname is Identifier) {
+                    if (tname.text in visited) return false
+                    val aliasType = typeAliases[tname.text] ?: return false
+                    visited.add(tname.text)
+                    typeNodeIsAbstractConstructible(aliasType, abstractClasses, typeAliases, visited)
+                } else false
+            }
+            else -> false
+        }
+    }
+
+    private fun collectTypeofAbstractVars(
+        stmts: List<Statement>,
+        abstractClasses: Set<String>,
+        typeAliases: Map<String, TypeNode>,
+        out: MutableSet<String>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val name = decl.name as? Identifier ?: continue
+                        val type = decl.type ?: continue
+                        if (typeNodeIsAbstractConstructible(type, abstractClasses, typeAliases)) {
+                            out.add(name.text)
+                        }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    for (param in stmt.parameters) {
+                        val pname = param.name as? Identifier ?: continue
+                        val ptype = param.type ?: continue
+                        if (typeNodeIsAbstractConstructible(ptype, abstractClasses, typeAliases)) {
+                            out.add(pname.text)
+                        }
+                    }
+                    stmt.body?.let { collectTypeofAbstractVars(it.statements, abstractClasses, typeAliases, out) }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) collectTypeofAbstractVars(body.statements, abstractClasses, typeAliases, out)
+                }
+                is Block -> collectTypeofAbstractVars(stmt.statements, abstractClasses, typeAliases, out)
+                else -> {}
+            }
         }
     }
 
@@ -42151,7 +42238,7 @@ interface DataView {
         }
     }
 
-    private fun checkAbstractInStmts(stmts: List<Statement>, source: String, fileName: String, abstractClasses: MutableSet<String>) {
+    private fun checkAbstractInStmts(stmts: List<Statement>, source: String, fileName: String, abstractClasses: MutableSet<String>, typeofAbstractVars: Set<String>) {
         // Collect abstract class names declared in this block
         val saved = abstractClasses.toSet()
         collectAbstractClassNames(stmts, abstractClasses)
@@ -42162,81 +42249,81 @@ interface DataView {
             }
         }
         for (stmt in stmts) {
-            checkAbstractInStmt(stmt, source, fileName, abstractClasses)
+            checkAbstractInStmt(stmt, source, fileName, abstractClasses, typeofAbstractVars)
         }
         // Restore scope
         abstractClasses.clear()
         abstractClasses.addAll(saved)
     }
 
-    private fun checkAbstractInStmt(stmt: Statement, source: String, fileName: String, abstractClasses: MutableSet<String>) {
+    private fun checkAbstractInStmt(stmt: Statement, source: String, fileName: String, abstractClasses: MutableSet<String>, typeofAbstractVars: Set<String>) {
         when (stmt) {
-            is ExpressionStatement -> checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+            is ExpressionStatement -> checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is VariableStatement -> {
                 for (d in stmt.declarationList.declarations) {
-                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
                 }
             }
-            is ReturnStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+            is ReturnStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
             is IfStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
-                checkAbstractInStmt(stmt.thenStatement, source, fileName, abstractClasses)
-                stmt.elseStatement?.let { checkAbstractInStmt(it, source, fileName, abstractClasses) }
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInStmt(stmt.thenStatement, source, fileName, abstractClasses, typeofAbstractVars)
+                stmt.elseStatement?.let { checkAbstractInStmt(it, source, fileName, abstractClasses, typeofAbstractVars) }
             }
-            is Block -> checkAbstractInStmts(stmt.statements, source, fileName, abstractClasses)
-            is FunctionDeclaration -> stmt.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+            is Block -> checkAbstractInStmts(stmt.statements, source, fileName, abstractClasses, typeofAbstractVars)
+            is FunctionDeclaration -> stmt.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
             is ClassDeclaration -> for (m in stmt.members) {
                 when (m) {
-                    is MethodDeclaration -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
-                    is Constructor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
-                    is PropertyDeclaration -> m.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
-                    is GetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
-                    is SetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+                    is MethodDeclaration -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                    is Constructor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                    is PropertyDeclaration -> m.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
+                    is GetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                    is SetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
                     else -> {}
                 }
             }
             is ForStatement -> {
                 (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
-                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
+                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
                 }
-                stmt.condition?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
-                stmt.incrementor?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+                stmt.condition?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
+                stmt.incrementor?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
             }
             is WhileStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
             }
             is DoStatement -> {
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
             }
             is SwitchStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses)
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
                 for (c in stmt.caseBlock) {
                     val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
-                    checkAbstractInStmts(clauseStmts, source, fileName, abstractClasses)
+                    checkAbstractInStmts(clauseStmts, source, fileName, abstractClasses, typeofAbstractVars)
                 }
             }
             is TryStatement -> {
-                checkAbstractInStmts(stmt.tryBlock.statements, source, fileName, abstractClasses)
-                stmt.catchClause?.let { checkAbstractInStmts(it.block.statements, source, fileName, abstractClasses) }
-                stmt.finallyBlock?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+                checkAbstractInStmts(stmt.tryBlock.statements, source, fileName, abstractClasses, typeofAbstractVars)
+                stmt.catchClause?.let { checkAbstractInStmts(it.block.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                stmt.finallyBlock?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
             }
-            is ThrowStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses) }
-            is ForInStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
-            is ForOfStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
-            is LabeledStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
+            is ThrowStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
+            is ForInStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            is ForOfStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            is LabeledStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
             else -> {}
         }
     }
 
-    private fun checkAbstractInExpr(expr: Expression, source: String, fileName: String, abstractClasses: MutableSet<String>) {
+    private fun checkAbstractInExpr(expr: Expression, source: String, fileName: String, abstractClasses: MutableSet<String>, typeofAbstractVars: Set<String>) {
         when (expr) {
             is NewExpression -> {
                 val callee = expr.expression
-                if (callee is Identifier && callee.text in abstractClasses) {
+                if (callee is Identifier && (callee.text in abstractClasses || callee.text in typeofAbstractVars)) {
                     val start = expr.pos
                     val exprEnd = expressionTrueEnd(expr)
                     val length = exprEnd - start
@@ -42253,57 +42340,57 @@ interface DataView {
                     ))
                 }
                 for (arg in expr.arguments ?: emptyList()) {
-                    checkAbstractInExpr(arg, source, fileName, abstractClasses)
+                    checkAbstractInExpr(arg, source, fileName, abstractClasses, typeofAbstractVars)
                 }
             }
             is BinaryExpression -> {
-                checkAbstractInExpr(expr.left, source, fileName, abstractClasses)
-                checkAbstractInExpr(expr.right, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.left, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInExpr(expr.right, source, fileName, abstractClasses, typeofAbstractVars)
             }
             is CallExpression -> {
-                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-                for (arg in expr.arguments) checkAbstractInExpr(arg, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                for (arg in expr.arguments) checkAbstractInExpr(arg, source, fileName, abstractClasses, typeofAbstractVars)
             }
-            is ParenthesizedExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is ParenthesizedExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is ConditionalExpression -> {
-                checkAbstractInExpr(expr.condition, source, fileName, abstractClasses)
-                checkAbstractInExpr(expr.whenTrue, source, fileName, abstractClasses)
-                checkAbstractInExpr(expr.whenFalse, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.condition, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInExpr(expr.whenTrue, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInExpr(expr.whenFalse, source, fileName, abstractClasses, typeofAbstractVars)
             }
             is ArrowFunction -> expr.body?.let {
                 when (it) {
-                    is Block -> checkAbstractInStmts(it.statements, source, fileName, abstractClasses)
-                    is Expression -> checkAbstractInExpr(it, source, fileName, abstractClasses)
+                    is Block -> checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars)
+                    is Expression -> checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars)
                     else -> {}
                 }
             }
-            is FunctionExpression -> expr.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses) }
-            is ArrayLiteralExpression -> for (el in expr.elements) checkAbstractInExpr(el, source, fileName, abstractClasses)
+            is FunctionExpression -> expr.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+            is ArrayLiteralExpression -> for (el in expr.elements) checkAbstractInExpr(el, source, fileName, abstractClasses, typeofAbstractVars)
             is ObjectLiteralExpression -> for (prop in expr.properties) {
                 when (prop) {
-                    is PropertyAssignment -> checkAbstractInExpr(prop.initializer, source, fileName, abstractClasses)
-                    is SpreadAssignment -> checkAbstractInExpr(prop.expression, source, fileName, abstractClasses)
+                    is PropertyAssignment -> checkAbstractInExpr(prop.initializer, source, fileName, abstractClasses, typeofAbstractVars)
+                    is SpreadAssignment -> checkAbstractInExpr(prop.expression, source, fileName, abstractClasses, typeofAbstractVars)
                     else -> {}
                 }
             }
             is TemplateExpression -> for (span in expr.templateSpans) {
-                checkAbstractInExpr(span.expression, source, fileName, abstractClasses)
+                checkAbstractInExpr(span.expression, source, fileName, abstractClasses, typeofAbstractVars)
             }
-            is AsExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is TypeAssertionExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is PrefixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses)
-            is PostfixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses)
-            is PropertyAccessExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is AsExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is TypeAssertionExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is PrefixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses, typeofAbstractVars)
+            is PostfixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses, typeofAbstractVars)
+            is PropertyAccessExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is ElementAccessExpression -> {
-                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-                checkAbstractInExpr(expr.argumentExpression, source, fileName, abstractClasses)
+                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInExpr(expr.argumentExpression, source, fileName, abstractClasses, typeofAbstractVars)
             }
-            is SpreadElement -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is AwaitExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is VoidExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is DeleteExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is NonNullExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
-            is TypeOfExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses)
+            is SpreadElement -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is AwaitExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is VoidExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is DeleteExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is NonNullExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is TypeOfExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             else -> {}
         }
     }

@@ -2,6 +2,37 @@
 
 **Phase 4 — Checker buildout.** 8,500 / 10,078 tests passing (~84%).
 
+**17.107a (2026-05-04, net 0, infra)** — TS2511 now also fires for
+`new x()` where x is a variable/parameter whose type annotation is
+`typeof AbstractClass` (or a union/parenthesized variant containing
+one). Infrastructure for typeof-class-union abstract detection. Adds
+two pre-passes to `checkAbstractClassInstantiation()`:
+- `collectTypeAliases()` builds `Map<String, TypeNode>` for same-file
+  type alias resolution (`type Abstracts = typeof AbstractA | typeof
+  AbstractB`).
+- `collectTypeofAbstractVars()` walks top-level VariableStatements +
+  FunctionDeclaration parameters + nested namespace/block bodies to
+  identify variable/parameter names whose type annotation resolves
+  (recursively, with cycle detection on type-alias names) to
+  "abstract-constructible" via `typeNodeIsAbstractConstructible`. The
+  helper resolves: TypeQuery (Identifier in abstractClasses), UnionType
+  (any member matches), ParenthesizedType (recurse), TypeReference
+  (resolve via type alias map and recurse). Returns `Set<String>` of
+  variable/parameter names known to construct abstract instances.
+- `checkAbstractInExpr`'s NewExpression branch checks `callee.text in
+  abstractClasses || callee.text in typeofAbstractVars`, with
+  `typeofAbstractVars: Set<String>` threaded through the existing
+  walker via mechanical signature update.
+
+Lands the 2 simple `new cls1()` / `new cls2()` emissions in
+`abstractClassUnionInstantiation_ts`; test still fails because the
+remaining 3 emissions are inside `[A, B].map(cls => new cls())` and
+need array-element-inference + Function-arg contextual-type
+infrastructure (planned 17.107b). Verified zero regressions across
+10078 suite (1575 failed unchanged). Foundation for 17.107b which
+will reuse `typeNodeIsAbstractConstructible` against synthesized
+union types from array literal element identifiers.
+
 **17.106 (2026-05-04, +1)** — TS1253 + TS7008 now fire for abstract
 members in non-abstract classes. Flips `errorInUnnamedClassExpression_ts`
 (`let Foo = class { abstract bar; }` — class expression without

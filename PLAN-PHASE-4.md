@@ -2619,6 +2619,39 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.107a, 8500 unchanged — net-zero infra) — TS2511 for typeof-Class-typed variables/parameters:** Continuation /loop after 17.106. `find_candidates.py --fresh` returned 0/1/0 (only `classImplementsClass6_ts` MISS, attempted-and-reverted). Per the anti-loop rule + queued-architectural-candidates list (commit 4347761), promoted `abstractClassUnionInstantiation_ts` (5 missing TS2511) — the last queued candidate from 2026-05-04's 5-10-line bucket scan. Test source: forward-declared classes split into Concrete/Abstract pairs, `type Abstracts = typeof AbstractA | typeof AbstractB`, then `declare const cls1: ConcretesOrAbstracts; new cls1();` should emit TS2511 because at least one union member is typeof an abstract class. Plus 3 array-literal `.map((cls) => new cls())` cases.
+
+  Decomposed into 17.107a (typeof-class variable/parameter handling — 2 of 5 emissions, net-zero because remaining 3 array.map emissions still missing) and 17.107b (array element inference for `.map` callback — closes remaining 3, flips test). 17.107a is the foundation; 17.107b reuses its `typeNodeIsAbstractConstructible` helper.
+
+  Implementation: extended `checkAbstractClassInstantiation()` (Checker.kt:42128) with two pre-passes building file-scope state before the main walk:
+
+  1. **`collectTypeAliases()`** walks ClassDeclarations / ModuleDeclaration bodies / Block / FunctionDeclaration bodies to harvest `TypeAliasDeclaration` entries into `Map<String, TypeNode>` (alias name → underlying TypeNode). Used by step 3 for through-alias resolution.
+
+  2. **`collectTypeofAbstractVars()`** walks VariableStatement.declarationList.declarations (any modifier — `declare const` / `var` / `let`), pulls each `decl.name as Identifier` and `decl.type` (declared type annotation), and tests via `typeNodeIsAbstractConstructible` whether the type denotes an abstract-constructor reference. Also walks FunctionDeclaration parameters (so `function constructB(Factory: typeof B) { new Factory; }` correctly marks Factory). Recurses into ModuleDeclaration / Block / FunctionDeclaration bodies to pick up nested function parameters. Result is a `Set<String>` of variable/parameter names that, when used as a NewExpression callee, should fire TS2511.
+
+  3. **`typeNodeIsAbstractConstructible`** (helper) recursively resolves:
+     - `TypeQuery(exprName=Identifier(text in abstractClasses))` → true (the core case `typeof AbstractA`)
+     - `UnionType` → any member returns true (covers `typeof AbstractA | typeof ConcreteB` — TypeScript fires TS2511 if ANY union member is abstract)
+     - `ParenthesizedType` → recurse (handles `(typeof X | typeof Y)`)
+     - `TypeReference(typeName=Identifier in typeAliases)` → resolve via the alias map and recurse, with `visited: MutableSet<String>` cycle detection (prevents StackOverflow on recursive aliases like `type T = T | string` even though that's invalid)
+     - Otherwise → false (conservative — IntersectionType / TypeLiteral / etc. not currently flagged; may need future extension)
+
+  4. **NewExpression check** (existing site, Checker.kt:42326): augmented from `callee.text in abstractClasses` to `callee.text in abstractClasses || callee.text in typeofAbstractVars`. Mechanical signature change adds `typeofAbstractVars: Set<String>` parameter through `checkAbstractInStmts` / `checkAbstractInStmt` / `checkAbstractInExpr` (single-line replace_all change).
+
+  Verified emissions:
+  - `declare const cls1: ConcretesOrAbstracts; new cls1();` → TS2511 ✓ (alias-resolved union, 2 of 4 members abstract)
+  - `declare const cls2: Abstracts; new cls2();` → TS2511 ✓ (alias-resolved union, both abstract)
+  - `declare const cls3: Concretes; new cls3();` → no error ✓ (alias-resolved union, neither abstract)
+
+  Test still fails because remaining 3 emissions need `[ConcreteA, AbstractA, AbstractB].map(cls => new cls())` to:
+  (a) infer the array literal's element type as `typeof ConcreteA | typeof AbstractA | typeof AbstractB` from the Identifier elements, and
+  (b) flow that through `Array<T>.map((cls: T) => ...)` so `cls` parameter inside the arrow gets the element type, and
+  (c) check `new cls()` against cls's inferred type.
+
+  Designed 17.107b approach: in `walkExprForAbstractContext`'s ArrayLiteralExpression branch, build a transient `Set<String>` of "array-element abstract candidates" by scanning Identifier elements against abstractClasses. Then in CallExpression where the callee is `<arrayLit>.map`, the callback's first parameter (if Identifier) inherits this set's union state. The arrow body walker checks `new param()` against this. Single-commit fix following 17.107a.
+
+  Net delta: 1575 unchanged (8500 unchanged). Zero regressions across 10078 suite. Foundation commit; 17.107b expected to flip `abstractClassUnionInstantiation_ts` (+1).
+
   **Session 2026-05-04 (17.106, 8499 → 8500, +1) — TS1253 + TS7008 for abstract members in non-abstract classes:** Continuation /loop after 17.105. `find_candidates.py --fresh` now showed `errorInUnnamedClassExpression_ts` as 2-MISS (previously 3-MISS — 17.105 already added the TS2715 emission). Two remaining: TS1253 at (7,5) length 8 (squiggle on `abstract` keyword) + TS7008 at (7,14) length 3 (squiggle on `bar` identifier). Single-commit fix flips the test.
 
   Implementation: new `checkAbstractMemberContext()` walker (Checker.kt ~24881) registered after `checkAbstractMemberAccessInConstructor`. Walks all classes in source files threading two flags:
