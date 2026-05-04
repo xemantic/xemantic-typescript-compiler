@@ -37570,6 +37570,20 @@ interface DataView {
         return null
     }
 
+    /**
+     * Get the static-side member set of a class-shaped Type.Object, or null when
+     * the type has no static side (interfaces, anonymous objects, primitives).
+     * For Type.Reference whose target is a Type.Interface, returns the target's
+     * staticMembers. Used by structural-comparison consumers that need to filter
+     * static members from instance-side iterations (instance↔instance comparison
+     * must not see `static foo()` on either side).
+     */
+    private fun getStaticMembersOfType(type: Type.Object): SymbolTable? = when (type) {
+        is Type.Interface -> type.staticMembers
+        is Type.Reference -> type.target.staticMembers
+        else -> null
+    }
+
     // -----------------------------------------------------------------------
     // Expression type inference (Phase 4 item 3a)
     // -----------------------------------------------------------------------
@@ -48648,8 +48662,14 @@ interface DataView {
         val targetProps = target.properties ?: return true
         val sourceHasCallSigs = !source.callSignatures.isNullOrEmpty()
         val sourceMembers = source.members ?: if (sourceHasCallSigs) emptyMap() else return targetProps.isEmpty()
+        // Statics filter: when target carries a static side (class declaration),
+        // skip target.properties entries that live on the static side. Instance-vs-
+        // instance shape comparison must not see `static bar()` on either side.
+        // Type.Reference defers to its target Interface's staticMembers.
+        val targetStatics = getStaticMembersOfType(target)
         for (targetProp in targetProps) {
             val targetName = targetProp.name
+            if (targetStatics != null && targetStatics.containsKey(targetName)) continue
             // Inherited Object prototype members (constructor, toString, valueOf, …)
             // are never "missing" — every JS object has them via the prototype chain.
             // Without this filter, an empty `{a:string}` fails to satisfy `Object` because
@@ -48818,9 +48838,13 @@ interface DataView {
         resolveStructuredTypeMembers(targetType)
         val sourceMembers = sourceType.members ?: return emptyList()
         val targetProps = targetType.properties ?: return emptyList()
+        val targetStatics = getStaticMembersOfType(targetType)
         val missing = mutableListOf<String>()
         for (prop in targetProps) {
             if (isOptionalProperty(prop)) continue
+            // Skip target static members — they live on the class's static side and
+            // are not part of the instance shape we're comparing against.
+            if (targetStatics != null && targetStatics.containsKey(prop.name)) continue
             if (prop.name !in sourceMembers && prop.name !in OBJECT_PROTOTYPE_PROPERTIES) {
                 missing.add(prop.name)
             }
@@ -50185,7 +50209,9 @@ interface DataView {
         val targetProps = target.properties ?: return null
         val sourceMembers = source.members ?: return null
         val srcIndex = source.stringIndexInfo
+        val targetStatics = getStaticMembersOfType(target)
         for (targetProp in targetProps) {
+            if (targetStatics != null && targetStatics.containsKey(targetProp.name)) continue
             if (sourceMembers[targetProp.name] != null) continue
             if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
             if (isOptionalProperty(targetProp)) continue
