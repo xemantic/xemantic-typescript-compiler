@@ -2619,6 +2619,36 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.107b, 8500 → 8501, +1) — TS2511 for `[A, B].map((cls) => new cls())` pattern:** Continuation of same /loop after 17.107a. The 17.107a foundation enables this by providing `typeofAbstractVars` plumbing through the existing TS2511 walker; 17.107b extends `checkAbstractInExpr`'s `CallExpression` branch to recognize the array-literal-`.map`-callback pattern and inject the callback's first-parameter name into a per-call extended `typeofAbstractVars`.
+
+  Implementation pattern (Checker.kt:42463+):
+  ```
+  is CallExpression -> {
+      val callee = expr.expression
+      val handledArrayMap = if (callee is PropertyAccessExpression && callee.name.text == "map") {
+          val recv = callee.expression
+          if (recv is ArrayLiteralExpression && expr.arguments.size == 1) {
+              val anyAbstract = recv.elements.any { e -> e is Identifier &&
+                  (e.text in abstractClasses || e.text in typeofAbstractVars) }
+              if (anyAbstract) { ... extract paramName + body, walk body with
+                  extendedSet = typeofAbstractVars + paramName ... }
+          }
+      } else false
+      if (!handledArrayMap) <existing default walk>
+  }
+  ```
+
+  Restricted to LITERAL `<ArrayLit>.map(<arrow-or-fn>)` syntactic pattern — does NOT yet handle:
+  - `const arr = [A, B]; arr.map(...)` (variable-bound array; needs initializer-type inference, future work)
+  - `[A, B].forEach((cls) => new cls())` (any callback that exposes the element type — deferred until we have a generic mechanism)
+  - `Array.from([A, B]).map(...)` (non-literal receiver — a single test wouldn't justify the extra surface area)
+
+  The 17.107a + 17.107b combo flips `abstractClassUnionInstantiation_ts` (5 missing TS2511 emissions across both patterns: 2 typeof-variable + 3 array-map-callback). Verified emissions match baseline at exact (line, col, length) positions including the 9-char `new cls()` squiggles inside arrow bodies. Net delta: 1575 → 1574 failed (8500 → 8501 passing). Zero regressions across 10078-test suite.
+
+  Architectural debt to track for future extensions:
+  - The `.map` recognition is purely syntactic (callee.name.text == "map"). Doesn't verify the receiver is actually an Array — just that it's an ArrayLiteralExpression. False positives would require a non-Array type with a `.map` method that takes an arrow + does NOT actually pass the element type to the callback (vanishingly rare).
+  - `extendedSet` is per-call, not threaded through nested function-scope changes. If the callback contains a nested function expression that re-binds the parameter name, our walker still treats the inner reference as the abstract-typeofs binding. Edge case unlikely in practice.
+
   **Session 2026-05-04 (17.107a, 8500 unchanged — net-zero infra) — TS2511 for typeof-Class-typed variables/parameters:** Continuation /loop after 17.106. `find_candidates.py --fresh` returned 0/1/0 (only `classImplementsClass6_ts` MISS, attempted-and-reverted). Per the anti-loop rule + queued-architectural-candidates list (commit 4347761), promoted `abstractClassUnionInstantiation_ts` (5 missing TS2511) — the last queued candidate from 2026-05-04's 5-10-line bucket scan. Test source: forward-declared classes split into Concrete/Abstract pairs, `type Abstracts = typeof AbstractA | typeof AbstractB`, then `declare const cls1: ConcretesOrAbstracts; new cls1();` should emit TS2511 because at least one union member is typeof an abstract class. Plus 3 array-literal `.map((cls) => new cls())` cases.
 
   Decomposed into 17.107a (typeof-class variable/parameter handling — 2 of 5 emissions, net-zero because remaining 3 array.map emissions still missing) and 17.107b (array element inference for `.map` callback — closes remaining 3, flips test). 17.107a is the foundation; 17.107b reuses its `typeNodeIsAbstractConstructible` helper.

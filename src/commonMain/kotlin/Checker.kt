@@ -42348,8 +42348,46 @@ interface DataView {
                 checkAbstractInExpr(expr.right, source, fileName, abstractClasses, typeofAbstractVars)
             }
             is CallExpression -> {
-                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                for (arg in expr.arguments) checkAbstractInExpr(arg, source, fileName, abstractClasses, typeofAbstractVars)
+                // Detect `[A, B, ...].map((cls) => new cls())` pattern: when the receiver is an
+                // ArrayLiteralExpression containing abstract-class identifiers, the callback
+                // parameter inherits "abstract-constructible" state so `new param()` fires TS2511.
+                val callee = expr.expression
+                val handledArrayMap = if (callee is PropertyAccessExpression && callee.name.text == "map") {
+                    val recv = callee.expression
+                    if (recv is ArrayLiteralExpression && expr.arguments.size == 1) {
+                        val elementsContainAbstract = recv.elements.any { el ->
+                            el is Identifier && (el.text in abstractClasses || el.text in typeofAbstractVars)
+                        }
+                        if (elementsContainAbstract) {
+                            val arg = expr.arguments[0]
+                            val paramName = when (arg) {
+                                is ArrowFunction -> (arg.parameters.firstOrNull()?.name as? Identifier)?.text
+                                is FunctionExpression -> (arg.parameters.firstOrNull()?.name as? Identifier)?.text
+                                else -> null
+                            }
+                            val argBody: Node? = when (arg) {
+                                is ArrowFunction -> arg.body
+                                is FunctionExpression -> arg.body
+                                else -> null
+                            }
+                            if (paramName != null && argBody != null) {
+                                val extendedSet = typeofAbstractVars + paramName
+                                when (argBody) {
+                                    is Block -> checkAbstractInStmts(argBody.statements, source, fileName, abstractClasses, extendedSet)
+                                    is Expression -> checkAbstractInExpr(argBody, source, fileName, abstractClasses, extendedSet)
+                                    else -> {}
+                                }
+                                // Recurse into the array literal's elements for any other diagnostics.
+                                for (el in recv.elements) checkAbstractInExpr(el, source, fileName, abstractClasses, typeofAbstractVars)
+                                true
+                            } else false
+                        } else false
+                    } else false
+                } else false
+                if (!handledArrayMap) {
+                    checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                    for (arg in expr.arguments) checkAbstractInExpr(arg, source, fileName, abstractClasses, typeofAbstractVars)
+                }
             }
             is ParenthesizedExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is ConditionalExpression -> {

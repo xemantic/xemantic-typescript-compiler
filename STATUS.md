@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,500 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,501 / 10,078 tests passing (~84%).
+
+**17.107b (2026-05-04, +1)** — TS2511 now also fires for
+`[A, B, ...].map((cls) => new cls())` when any array element is an
+abstract class. Flips `abstractClassUnionInstantiation_ts`. Builds on
+17.107a's `typeofAbstractVars` infrastructure: `checkAbstractInExpr`'s
+CallExpression branch detects the `<ArrayLiteralExpression>.map(<arrow
+or fn>)` pattern. When any array element is an Identifier whose name
+is in `abstractClasses` (or already in `typeofAbstractVars`), the
+callback's first parameter (Identifier) is added to a per-callback
+extended `typeofAbstractVars` set. The callback body (Block or
+expression) is then walked with that extended set, so `new param()`
+inside the body fires TS2511 against the parameter name. The handled
+flag prevents fall-through to the default CallExpression walk
+(elements still walked once for nested diagnostics). Restricted to
+the literal pattern `<ArrayLit>.map(arrow|fn)` — generalized
+inference (e.g. through a typed array variable) deferred. Net delta:
+1575 → 1574 failed (8500 → 8501 passing). Zero regressions across
+10078 suite.
 
 **17.107a (2026-05-04, net 0, infra)** — TS2511 now also fires for
 `new x()` where x is a variable/parameter whose type annotation is
