@@ -1,6 +1,35 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,498 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,499 / 10,078 tests passing (~84%).
+
+**17.105 (2026-05-04, +1)** — TS2715 now fires for `this.X` accesses in
+constructor bodies and class-field initializers when X is an abstract
+property. Flips `abstractPropertyInConstructor_ts` (11 missing TS2715
+emissions across 3 patterns: direct property access in constructor body,
+field initializer access, and ObjectBindingPattern / ObjectAssignmentPattern
+destructuring of `this`). Implementation: a new top-level
+`checkAbstractMemberAccessInConstructor()` walker (Checker.kt ~24494)
+runs unconditionally. For each ClassDeclaration / ClassExpression, builds
+an `abstractMap: Map<String, String>` (property name → declaring class
+name) by collecting own abstract `PropertyDeclaration`s plus inherited
+abstracts from same-file extends chain (subtracting concrete shadows).
+Then walks each `Constructor` body and each non-abstract
+`PropertyDeclaration.initializer` for `this.X` accesses. Critically:
+nested `FunctionExpression` / `ArrowFunction` / object-literal
+accessor+method bodies switch `inDeferredFn=true` so accesses inside
+them don't fire (those execute later, after construction). Destructuring
+patterns `let { x, y: y1 } = this` (ObjectBindingPattern in
+VariableDeclaration) and `({ x, y: y1, "y": y1 } = this)` (BinaryExpression
+with ObjectLiteralExpression LHS) emit one TS2715 per matching key —
+shorthand uses Identifier name; `prop: alias` uses propertyName position;
+string-literal keys squiggle the entire `"y"` (3 chars). Method/accessor
+abstracts are NOT flagged (TS2715 is property-only — methods are on the
+prototype and always available). For inherited abstracts, the diagnostic
+references the ORIGINAL declaring class (`AbstractClass`), not the
+descendant class doing the access (so `class DerivedAbstractClass
+extends AbstractClass` accessing inherited `prop` says "in class
+'AbstractClass'"). Net delta: 1577 → 1576 failed (8498 → 8499 passing).
+Zero regressions across 10078-test suite.
 
 **Static-member bifurcation (2026-05-04, net 0, architectural)** — Multi-
 session piece deferred from 17.83's revert: `Type.Interface` now carries
