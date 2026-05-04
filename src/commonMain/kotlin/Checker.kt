@@ -37214,6 +37214,10 @@ interface DataView {
         // merging with the built-in Array which was cached at init with no heritage).
         if (type.baseTypes == null) resolveBaseTypesLazy(type)
         val members = symbolTable()
+        // Static-side mirror of [members]. Step 1 (dual-population): every member
+        // we add to [members] that carries ModifierFlag.Static is ALSO added here.
+        // Behavior is unchanged at this step — consumers still read from [members].
+        val staticMembers = symbolTable()
         val ownCallSignatures = mutableListOf<Signature>()
         val ownConstructSignatures = mutableListOf<Signature>()
         val inheritedCallSignatures = mutableListOf<Signature>()
@@ -37230,6 +37234,14 @@ interface DataView {
                     if (name !in members) {
                         members[name] = sym
                         inheritedMemberNames.add(name)
+                    }
+                }
+                // Class-side inheritance for `class C extends B`: B's statics are
+                // inherited as C's statics (mirrors how members inherit). Interface
+                // base types have no statics, so `it.staticMembers` is null there.
+                if (baseType is Type.Interface) {
+                    baseType.staticMembers?.forEach { (name, sym) ->
+                        if (name !in staticMembers) staticMembers[name] = sym
                     }
                 }
                 baseType.callSignatures?.let { inheritedCallSignatures.addAll(it) }
@@ -37255,6 +37267,11 @@ interface DataView {
                         propSymbol.valueDeclaration = member
                         propSymbol.parent = symbol
                         members[name] = propSymbol
+                        // Step 1 dual-population: mirror static members onto staticMembers
+                        // while keeping them in [members] (no behavior change yet).
+                        if (ModifierFlag.Static in member.modifiers) {
+                            staticMembers[name] = propSymbol
+                        }
                     }
                     is MethodDeclaration -> {
                         val name = getMemberName(member.name) ?: continue
@@ -37304,6 +37321,10 @@ interface DataView {
                             methodSymbol.valueDeclaration = member
                         }
                         if (methodSymbol.parent == null) methodSymbol.parent = symbol
+                        // Step 1 dual-population: static methods also live on staticMembers.
+                        if (ModifierFlag.Static in member.modifiers) {
+                            staticMembers[name] = methodSymbol
+                        }
                     }
                     is Constructor -> {
                         val returnType = type as Type
@@ -37330,22 +37351,28 @@ interface DataView {
                     }
                     is GetAccessor -> {
                         val name = getMemberName(member.name) ?: continue
-                        members.getOrPut(name) {
+                        val sym = members.getOrPut(name) {
                             Symbol(SymbolFlags.Property, name).also {
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
                                 it.parent = symbol
                             }
                         }
+                        if (ModifierFlag.Static in member.modifiers) {
+                            staticMembers[name] = sym
+                        }
                     }
                     is SetAccessor -> {
                         val name = getMemberName(member.name) ?: continue
-                        members.getOrPut(name) {
+                        val sym = members.getOrPut(name) {
                             Symbol(SymbolFlags.Property, name).also {
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
                                 it.parent = symbol
                             }
+                        }
+                        if (ModifierFlag.Static in member.modifiers) {
+                            staticMembers[name] = sym
                         }
                     }
                     is IndexSignature -> {
@@ -37391,6 +37418,13 @@ interface DataView {
 
         type.members = members
         type.properties = members.values.toList()
+        // Step 1 dual-population: staticMembers is the static-side mirror. Empty
+        // staticMembers stays empty (not null) for class declarations so callers
+        // can distinguish "no static side" (pure interface — null) from "class
+        // without statics" (empty map). Only ClassDeclaration carries a static side.
+        type.staticMembers = if (symbol.declarations.any { it is ClassDeclaration }) {
+            staticMembers
+        } else null
         // Inherited signatures first, then own — matches the implicit ordering before
         // call signatures were resolved from the member loop. getReturnTypeOfCallExpression
         // uses sigs[0], so inherited-first preserves backward compatibility.

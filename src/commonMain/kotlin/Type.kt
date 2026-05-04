@@ -185,6 +185,14 @@ sealed class Type {
         var declaredConstructSignatures: List<Signature>? = null
         var declaredStringIndexInfo: IndexInfo? = null
         var declaredNumberIndexInfo: IndexInfo? = null
+        // Static-side members for class declarations. Populated alongside the
+        // instance-side `members` map by [resolveInterfaceMembers] when iterating
+        // ClassDeclaration members carrying ModifierFlag.Static. Consumers of the
+        // class's static shape (`typeof Class` / `Class.staticMethod` access /
+        // class-side inheritance) read this map; instance-side comparisons (e.g.
+        // `class C implements A` checking that C satisfies A's instance shape)
+        // read [members] only. See "static-member bifurcation" notes.
+        var staticMembers: SymbolTable? = null
     }
 
     /** Generic type instantiation: Array<string>, Map<K, V>, etc. */
