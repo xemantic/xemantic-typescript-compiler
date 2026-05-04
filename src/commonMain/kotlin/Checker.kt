@@ -595,6 +595,8 @@ class Checker(
         // bodies are skipped here (TS2335 covers non-derived; derived class methods have
         // valid super); we only descend INTO their bodies to find nested function rebinds.
         checkSuperRefInRebindingScope()
+        // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
+        checkAbstractMemberAccessInConstructor()
         // 28. Check const without initializer (TS1155)
         checkConstWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
@@ -24430,6 +24432,455 @@ interface DataView {
             message = "'super' can only be referenced in members of derived classes or object literal expressions.",
             category = DiagnosticCategory.Error,
             code = 2660,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2715: Abstract property access in constructor
+    // -----------------------------------------------------------------------
+
+    /** Walks every file looking for `this.X` references inside constructor bodies
+     * or class-field initializers, where X is an abstract member of the surrounding
+     * class. Nested function/arrow bodies are skipped (their `this` use is deferred,
+     * so the abstract member has been initialized by then). */
+    private fun checkAbstractMemberAccessInConstructor() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val classMap = buildClassDeclarationMap(result.sourceFile.statements)
+            walkClassesForAbstractAccess(result.sourceFile.statements, source, fileName, classMap)
+        }
+    }
+
+    private fun buildClassDeclarationMap(stmts: List<Statement>): Map<String, ClassDeclaration> {
+        val map = mutableMapOf<String, ClassDeclaration>()
+        fun walk(stmts: List<Statement>) {
+            for (stmt in stmts) {
+                when (stmt) {
+                    is ClassDeclaration -> stmt.name?.let { map[it.text] = stmt }
+                    is ModuleDeclaration -> {
+                        val body = stmt.body
+                        if (body is ModuleBlock) walk(body.statements)
+                    }
+                    is Block -> walk(stmt.statements)
+                    is FunctionDeclaration -> stmt.body?.let { walk(it.statements) }
+                    else -> {}
+                }
+            }
+        }
+        walk(stmts)
+        return map
+    }
+
+    /**
+     * Returns a map of abstract property name → declaring class name.
+     * Includes own abstract properties and inherited abstract properties (recursively),
+     * minus those concretely declared in this class.
+     */
+    private fun collectAbstractPropertyNames(
+        cls: ClassDeclaration,
+        classMap: Map<String, ClassDeclaration>,
+        visited: MutableSet<String> = mutableSetOf(),
+    ): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        val ownClassName = cls.name?.text ?: "<anonymous>"
+        // Own abstract properties.
+        for (member in cls.members) {
+            if (member !is PropertyDeclaration) continue
+            if (ModifierFlag.Abstract !in member.modifiers) continue
+            getMemberName(member.name)?.let { result[it] = ownClassName }
+        }
+        // Inherited abstract properties from base class, minus those concretely shadowed in this class.
+        val baseName = cls.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()?.expression
+            ?.let { (it as? Identifier)?.text }
+        if (baseName != null && baseName !in visited) {
+            visited.add(baseName)
+            classMap[baseName]?.let { base ->
+                val inherited = collectAbstractPropertyNames(base, classMap, visited).toMutableMap()
+                // Remove names concretely declared in cls (any kind: PropertyDeclaration without abstract,
+                // MethodDeclaration, GetAccessor, SetAccessor) — those override the inherited abstract.
+                for (member in cls.members) {
+                    val (name, isAbstract) = when (member) {
+                        is PropertyDeclaration -> getMemberName(member.name) to (ModifierFlag.Abstract in member.modifiers)
+                        is MethodDeclaration -> getMemberName(member.name) to (ModifierFlag.Abstract in member.modifiers)
+                        is GetAccessor -> getMemberName(member.name) to (ModifierFlag.Abstract in member.modifiers)
+                        is SetAccessor -> getMemberName(member.name) to (ModifierFlag.Abstract in member.modifiers)
+                        else -> null to true
+                    }
+                    if (name != null && !isAbstract) inherited.remove(name)
+                }
+                // Inherited entries do NOT overwrite own — own takes precedence (re-declared abstract uses cls's name).
+                for ((k, v) in inherited) if (k !in result) result[k] = v
+            }
+        }
+        return result
+    }
+
+    private fun walkClassesForAbstractAccess(
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+        classMap: Map<String, ClassDeclaration>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val abstractMap = collectAbstractPropertyNames(stmt, classMap)
+                    processClassForAbstractAccess(stmt.members, stmt.name?.text, abstractMap, source, fileName, classMap)
+                }
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val init = decl.initializer ?: continue
+                        if (init is ClassExpression) {
+                            val nameOverride = init.name?.text
+                                ?: (decl.name as? Identifier)?.text
+                            // ClassExpression — own abstract names only (no parent map for inheritance through identifier).
+                            val abstractMap = mutableMapOf<String, String>()
+                            val effectiveName = nameOverride ?: "<class>"
+                            for (member in init.members) {
+                                if (member is PropertyDeclaration && ModifierFlag.Abstract in member.modifiers) {
+                                    getMemberName(member.name)?.let { abstractMap[it] = effectiveName }
+                                }
+                            }
+                            processClassForAbstractAccess(init.members, nameOverride, abstractMap, source, fileName, classMap)
+                        } else {
+                            walkExprForNestedClasses(init, source, fileName, classMap)
+                        }
+                    }
+                }
+                is ExpressionStatement -> walkExprForNestedClasses(stmt.expression, source, fileName, classMap)
+                is FunctionDeclaration -> stmt.body?.let { walkClassesForAbstractAccess(it.statements, source, fileName, classMap) }
+                is Block -> walkClassesForAbstractAccess(stmt.statements, source, fileName, classMap)
+                is IfStatement -> {
+                    walkClassesForAbstractAccess(listOf(stmt.thenStatement), source, fileName, classMap)
+                    stmt.elseStatement?.let { walkClassesForAbstractAccess(listOf(it), source, fileName, classMap) }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) walkClassesForAbstractAccess(body.statements, source, fileName, classMap)
+                }
+                is ReturnStatement -> stmt.expression?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkExprForNestedClasses(expr: Expression, source: String, fileName: String, classMap: Map<String, ClassDeclaration>) {
+        when (expr) {
+            is ClassExpression -> {
+                val abstractMap = mutableMapOf<String, String>()
+                val effectiveName = expr.name?.text ?: "<class>"
+                for (member in expr.members) {
+                    if (member is PropertyDeclaration && ModifierFlag.Abstract in member.modifiers) {
+                        getMemberName(member.name)?.let { abstractMap[it] = effectiveName }
+                    }
+                }
+                processClassForAbstractAccess(expr.members, expr.name?.text, abstractMap, source, fileName, classMap)
+            }
+            is ParenthesizedExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is BinaryExpression -> {
+                walkExprForNestedClasses(expr.left, source, fileName, classMap)
+                walkExprForNestedClasses(expr.right, source, fileName, classMap)
+            }
+            is CallExpression -> {
+                walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+                expr.arguments.forEach { walkExprForNestedClasses(it, source, fileName, classMap) }
+            }
+            is NewExpression -> {
+                walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+                expr.arguments?.forEach { walkExprForNestedClasses(it, source, fileName, classMap) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun processClassForAbstractAccess(
+        members: List<ClassElement>,
+        className: String?,
+        abstractMap: Map<String, String>,
+        source: String,
+        fileName: String,
+        classMap: Map<String, ClassDeclaration>,
+    ) {
+        // Recurse into nested classes inside member bodies (always, regardless of abstractMap).
+        for (member in members) {
+            val body = when (member) {
+                is MethodDeclaration -> member.body
+                is GetAccessor -> member.body
+                is SetAccessor -> member.body
+                is Constructor -> member.body
+                is ClassStaticBlockDeclaration -> member.body
+                else -> null
+            }
+            body?.let { walkClassesForAbstractAccess(it.statements, source, fileName, classMap) }
+        }
+
+        if (abstractMap.isEmpty() || className == null) return
+
+        // Walk constructor body for `this.X` accesses.
+        for (member in members) {
+            if (member is Constructor) {
+                member.body?.let {
+                    findAbstractAccessInStmts(it.statements, source, fileName, abstractMap, className, inDeferredFn = false)
+                }
+            }
+        }
+        // Walk non-abstract field initializers for `this.X` accesses.
+        for (member in members) {
+            if (member !is PropertyDeclaration) continue
+            if (ModifierFlag.Abstract in member.modifiers) continue
+            if (ModifierFlag.Static in member.modifiers) continue
+            val init = member.initializer ?: continue
+            findAbstractAccessInExpr(init, source, fileName, abstractMap, className, inDeferredFn = false)
+        }
+    }
+
+    private fun findAbstractAccessInStmts(
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+        abstractMap: Map<String, String>,
+        className: String,
+        inDeferredFn: Boolean,
+    ) {
+        for (stmt in stmts) findAbstractAccessInStmt(stmt, source, fileName, abstractMap, className, inDeferredFn)
+    }
+
+    private fun findAbstractAccessInStmt(
+        stmt: Statement,
+        source: String,
+        fileName: String,
+        abstractMap: Map<String, String>,
+        className: String,
+        inDeferredFn: Boolean,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> findAbstractAccessInExpr(stmt.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
+                // Destructuring `let { x, y } = this` (only when initializer is `this`).
+                val name = decl.name
+                val init = decl.initializer
+                if (!inDeferredFn && name is ObjectBindingPattern && init is Identifier && init.text == "this") {
+                    for (element in name.elements) {
+                        emitTS2715ForBindingElement(element, source, fileName, abstractMap, className)
+                    }
+                }
+                init?.let { i -> findAbstractAccessInExpr(i, source, fileName, abstractMap, className, inDeferredFn) }
+            }
+            is ReturnStatement -> stmt.expression?.let { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+            is IfStatement -> {
+                findAbstractAccessInExpr(stmt.expression, source, fileName, abstractMap, className, inDeferredFn)
+                findAbstractAccessInStmt(stmt.thenStatement, source, fileName, abstractMap, className, inDeferredFn)
+                stmt.elseStatement?.let { findAbstractAccessInStmt(it, source, fileName, abstractMap, className, inDeferredFn) }
+            }
+            is Block -> findAbstractAccessInStmts(stmt.statements, source, fileName, abstractMap, className, inDeferredFn)
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+                stmt.condition?.let { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+                stmt.incrementor?.let { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+                findAbstractAccessInStmt(stmt.statement, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is WhileStatement -> {
+                findAbstractAccessInExpr(stmt.expression, source, fileName, abstractMap, className, inDeferredFn)
+                findAbstractAccessInStmt(stmt.statement, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is DoStatement -> {
+                findAbstractAccessInStmt(stmt.statement, source, fileName, abstractMap, className, inDeferredFn)
+                findAbstractAccessInExpr(stmt.expression, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is ThrowStatement -> stmt.expression?.let { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+            is SwitchStatement -> {
+                findAbstractAccessInExpr(stmt.expression, source, fileName, abstractMap, className, inDeferredFn)
+                stmt.caseBlock.forEach { clause ->
+                    when (clause) {
+                        is CaseClause -> {
+                            findAbstractAccessInExpr(clause.expression, source, fileName, abstractMap, className, inDeferredFn)
+                            findAbstractAccessInStmts(clause.statements, source, fileName, abstractMap, className, inDeferredFn)
+                        }
+                        is DefaultClause -> findAbstractAccessInStmts(clause.statements, source, fileName, abstractMap, className, inDeferredFn)
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun findAbstractAccessInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        abstractMap: Map<String, String>,
+        className: String,
+        inDeferredFn: Boolean,
+    ) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                val recv = expr.expression
+                if (!inDeferredFn && recv is Identifier && recv.text == "this") {
+                    abstractMap[expr.name.text]?.let { emitTS2715(expr.name, source, fileName, it) }
+                }
+                // Always recurse into receiver (chained access like `this.prop.foo`).
+                findAbstractAccessInExpr(recv, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is ElementAccessExpression -> {
+                findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+                findAbstractAccessInExpr(expr.argumentExpression, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is BinaryExpression -> {
+                // Destructuring assignment `({ x, y } = this)`.
+                val left = expr.left
+                val right = expr.right
+                if (!inDeferredFn
+                    && expr.operator == SyntaxKind.Equals
+                    && left is ObjectLiteralExpression
+                    && right is Identifier
+                    && right.text == "this"
+                ) {
+                    for (prop in left.properties) {
+                        emitTS2715ForObjectAssignmentProp(prop, source, fileName, abstractMap, className)
+                    }
+                } else {
+                    findAbstractAccessInExpr(expr.left, source, fileName, abstractMap, className, inDeferredFn)
+                    findAbstractAccessInExpr(expr.right, source, fileName, abstractMap, className, inDeferredFn)
+                }
+            }
+            is CallExpression -> {
+                findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+                expr.arguments.forEach { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+            }
+            is NewExpression -> {
+                findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+                expr.arguments?.forEach { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+            }
+            is ParenthesizedExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is ConditionalExpression -> {
+                findAbstractAccessInExpr(expr.condition, source, fileName, abstractMap, className, inDeferredFn)
+                findAbstractAccessInExpr(expr.whenTrue, source, fileName, abstractMap, className, inDeferredFn)
+                findAbstractAccessInExpr(expr.whenFalse, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+            is PrefixUnaryExpression -> findAbstractAccessInExpr(expr.operand, source, fileName, abstractMap, className, inDeferredFn)
+            is PostfixUnaryExpression -> findAbstractAccessInExpr(expr.operand, source, fileName, abstractMap, className, inDeferredFn)
+            is SpreadElement -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is TaggedTemplateExpression -> {
+                findAbstractAccessInExpr(expr.tag, source, fileName, abstractMap, className, inDeferredFn)
+            }
+            is TemplateExpression -> {
+                expr.templateSpans.forEach { findAbstractAccessInExpr(it.expression, source, fileName, abstractMap, className, inDeferredFn) }
+            }
+            is FunctionExpression -> {
+                // Nested function rebinds this; descend with inDeferredFn=true so `this.X` accesses inside don't fire.
+                findAbstractAccessInStmts(expr.body.statements, source, fileName, abstractMap, className, inDeferredFn = true)
+            }
+            is ArrowFunction -> {
+                // Arrow body deferred — `this` access inside is OK (initializer runs later).
+                val body = expr.body
+                if (body is Block) findAbstractAccessInStmts(body.statements, source, fileName, abstractMap, className, inDeferredFn = true)
+                else if (body is Expression) findAbstractAccessInExpr(body, source, fileName, abstractMap, className, inDeferredFn = true)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> findAbstractAccessInExpr(prop.initializer, source, fileName, abstractMap, className, inDeferredFn)
+                        is SpreadAssignment -> findAbstractAccessInExpr(prop.expression, source, fileName, abstractMap, className, inDeferredFn)
+                        is GetAccessor -> prop.body?.let { findAbstractAccessInStmts(it.statements, source, fileName, abstractMap, className, inDeferredFn = true) }
+                        is SetAccessor -> prop.body?.let { findAbstractAccessInStmts(it.statements, source, fileName, abstractMap, className, inDeferredFn = true) }
+                        is MethodDeclaration -> prop.body?.let { findAbstractAccessInStmts(it.statements, source, fileName, abstractMap, className, inDeferredFn = true) }
+                        else -> {}
+                    }
+                }
+            }
+            is ClassExpression -> {
+                val nestedAbstract = mutableMapOf<String, String>()
+                val effectiveName = expr.name?.text ?: "<class>"
+                for (member in expr.members) {
+                    if (member is PropertyDeclaration && ModifierFlag.Abstract in member.modifiers) {
+                        getMemberName(member.name)?.let { nestedAbstract[it] = effectiveName }
+                    }
+                }
+                processClassForAbstractAccess(expr.members, expr.name?.text, nestedAbstract, source, fileName, emptyMap())
+            }
+            is AsExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is TypeAssertionExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is NonNullExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is AwaitExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is YieldExpression -> expr.expression?.let { findAbstractAccessInExpr(it, source, fileName, abstractMap, className, inDeferredFn) }
+            is DeleteExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is TypeOfExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            is VoidExpression -> findAbstractAccessInExpr(expr.expression, source, fileName, abstractMap, className, inDeferredFn)
+            else -> {}
+        }
+    }
+
+    private fun emitTS2715ForBindingElement(
+        element: BindingElement,
+        source: String,
+        fileName: String,
+        abstractMap: Map<String, String>,
+        @Suppress("UNUSED_PARAMETER") className: String,
+    ) {
+        // Property name = propertyName ?? name (when name is Identifier shorthand).
+        val keyNode: Node? = element.propertyName ?: (element.name as? Identifier)
+        when (keyNode) {
+            is Identifier -> abstractMap[keyNode.text]?.let { emitTS2715Generic(keyNode.pos, keyNode.text.length, keyNode.text, source, fileName, it) }
+            is StringLiteralNode -> abstractMap[keyNode.text]?.let { emitTS2715Generic(keyNode.pos, (keyNode.rawText?.length ?: keyNode.text.length) + 2, keyNode.text, source, fileName, it) }
+            is NumericLiteralNode -> abstractMap[keyNode.text]?.let { emitTS2715Generic(keyNode.pos, keyNode.text.length, keyNode.text, source, fileName, it) }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2715ForObjectAssignmentProp(
+        prop: Node,
+        source: String,
+        fileName: String,
+        abstractMap: Map<String, String>,
+        @Suppress("UNUSED_PARAMETER") className: String,
+    ) {
+        when (prop) {
+            is ShorthandPropertyAssignment -> abstractMap[prop.name.text]?.let { emitTS2715Generic(prop.name.pos, prop.name.text.length, prop.name.text, source, fileName, it) }
+            is PropertyAssignment -> {
+                when (val n = prop.name) {
+                    is Identifier -> abstractMap[n.text]?.let { emitTS2715Generic(n.pos, n.text.length, n.text, source, fileName, it) }
+                    is StringLiteralNode -> abstractMap[n.text]?.let { emitTS2715Generic(n.pos, (n.rawText?.length ?: n.text.length) + 2, n.text, source, fileName, it) }
+                    is NumericLiteralNode -> abstractMap[n.text]?.let { emitTS2715Generic(n.pos, n.text.length, n.text, source, fileName, it) }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2715Generic(start: Int, length: Int, propName: String, source: String, fileName: String, className: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Abstract property '$propName' in class '$className' cannot be accessed in the constructor.",
+            category = DiagnosticCategory.Error,
+            code = 2715,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun emitTS2715(nameNode: Identifier, source: String, fileName: String, className: String) {
+        val start = nameNode.pos
+        val length = nameNode.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Abstract property '${nameNode.text}' in class '$className' cannot be accessed in the constructor.",
+            category = DiagnosticCategory.Error,
+            code = 2715,
             fileName = fileName,
             line = line,
             character = character,
