@@ -2619,6 +2619,23 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.101, 8490 → 8493, +3) — TS2660 for arrow in object-literal PropertyAssignment when surrounding scope lacks super:** Continuation /loop after the canary bail-out attempt. `find_candidates.py --fresh` returned 5 missing-diag candidates; the 3 `superInObjectLiterals_*` variants (ES5×2, ES6×1) all needed the same fix: TS2660 at line 23 col 9 for `p3: () => { super.method() }` at top-level obj. Symmetric absence of error inside `class B extends A { f() { var obj = { p3: () => super.x } } }` (super valid via lexical inheritance from B's method).
+
+  **Implementation:** Threaded `superValid: Boolean` through the existing 17.99 walker family (`walkForObjLitSuper` / `walkObjLitSuperInStmt` / `walkObjLitSuperInExpr`). Boundaries:
+  - Initial (file top level): `false`.
+  - `FunctionDeclaration` / `FunctionExpression` body entry: `false` (regular functions rebind super).
+  - `ClassDeclaration`'s `MethodDeclaration` / `Constructor` / `GetAccessor` / `SetAccessor` / `ClassStaticBlockDeclaration` body entry, plus `PropertyDeclaration.initializer`: `superValid = (class has ExtendsKeyword heritage clause)`.
+  - `ObjectLiteralExpression`'s `MethodDeclaration` / `GetAccessor` / `SetAccessor` body entry: `true` (object-literal methods bind super via __proto__).
+  - `ArrowFunction` body entry (in any walker position): preserve current `superValid`.
+
+  New emission site: `PropertyAssignment` with `ArrowFunction` initializer in an object literal. When `!superValid`, run the existing `findObjLitSuperRefs` leaf walker on the arrow's body with `code = 2660`. The leaf walker already skips nested `ArrowFunction`/`FunctionExpression` (separately re-entered by the main walker) so no double emission. After emission, the main walker still recurses into the arrow body with the preserved `superValid` so nested object literals are still walked.
+
+  Other `PropertyAssignment` initializers (non-Function/Arrow) recurse via `walkObjLitSuperInExpr(init, source, fileName, superValid)` unchanged. `FunctionExpression` initializer in `PropertyAssignment` keeps the existing unconditional TS2660 emission (regular function rebinds super → always invalid in object literal context).
+
+  **Test results:** Net delta: 1585 → 1582 failed (8490 → 8493 passing). Zero regressions across 10078-test suite. All 3 variant flips clean: `superInObjectLiterals_ES5_ts__target_es2015__`, `superInObjectLiterals_ES5_ts__target_es5__`, `superInObjectLiterals_ES6_ts`.
+
+  **Foundation:** The threaded `superValid` parameter is now available for any future check that needs to gate on lexical super availability inside the object-literal walker family. Other `super`-context checks elsewhere in the checker (`checkIllegalSuperCallsInNestedFunctions` 17.100, `checkSuperInNonDerived` for TS2335) are independent and don't share this state — keeping each walker self-contained avoids cross-coupling but also means new walkers in this family need their own threading.
+
   **Session 2026-05-04 (canary bail-out lift ATTEMPTED + REVERTED, 8490 unchanged):** Continuation after the static-member bifurcation landed earlier today (commits 82405f2 + ac59fde). User-prompted attempt to flip `classImplementsClass6_ts` (+1 expected) by lifting the `if (exprType is Type.Interface) return` bail-out at Checker.kt:45320/45342 — the conservative "may be narrowed via instanceof" guard that suppresses TS2339 for class-instance receivers. Hypothesis: safe to lift when the class has no `extends` heritage AND propName isn't on the instance/static heritage chain.
 
   **Implementation:** Added `tryEmitInstanceMissingTs2339NoExtends(typeSym, exprType, propName, ...)` helper next to `tryEmitStaticAccessTs2576` (~45744). Gated on: `propName.isNotEmpty()`, `propName !in RUNTIME_PROPERTIES`, classDecl present, no `ExtendsKeyword` heritage clause, `!hasInstanceMemberNamed`, `!isStaticMemberOfClass`. Wired into both call sites (globals branch + local-fallback branch) symmetrically via a single-line addition before the bail-out `return`. Canary flipped (verified individually: TS2339 at line 20 fires).
