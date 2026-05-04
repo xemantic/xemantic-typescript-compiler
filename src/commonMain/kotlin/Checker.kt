@@ -583,6 +583,12 @@ class Checker(
         checkSuperInObjectLiterals()
         // 27c. Check super(...) calls in nested functions inside constructors (TS2337)
         checkIllegalSuperCallsInNestedFunctions()
+        // 27d. Check `super` references inside regular function bodies (TS2660) — `function`
+        // declarations/expressions rebind super. Top-level statements rebind super too
+        // (no super available). Arrow bodies preserve the outer binding. Class member
+        // bodies are skipped here (TS2335 covers non-derived; derived class methods have
+        // valid super); we only descend INTO their bodies to find nested function rebinds.
+        checkSuperRefInRebindingScope()
         // 28. Check const without initializer (TS1155)
         checkConstWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
@@ -24206,6 +24212,155 @@ interface DataView {
             message = "Super calls are not permitted outside constructors or in nested functions inside constructors.",
             category = DiagnosticCategory.Error,
             code = 2337,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2660: super references in regular-function rebinding scopes
+    // -----------------------------------------------------------------------
+
+    /** Walks every file looking for `super` references inside regular-function bodies
+     * (which rebind super) or arrow bodies whose enclosing scope rebinds super. Class
+     * member bodies are entered but the direct level is skipped — TS2335 covers
+     * non-derived class methods, and derived class methods have valid super. We only
+     * emit when descending past a function/expression boundary that rebinds super. */
+    private fun checkSuperRefInRebindingScope() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Top-level statements: super rebound (none available).
+            walkSuperRebindStmts(result.sourceFile.statements, source, fileName, rebound = true)
+        }
+    }
+
+    private fun walkSuperRebindStmts(statements: List<Statement>, source: String, fileName: String, rebound: Boolean) {
+        for (stmt in statements) walkSuperRebindStmt(stmt, source, fileName, rebound)
+    }
+
+    private fun walkSuperRebindStmt(stmt: Statement, source: String, fileName: String, rebound: Boolean) {
+        when (stmt) {
+            is ExpressionStatement -> walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+            is VariableStatement -> stmt.declarationList.declarations.forEach {
+                it.initializer?.let { i -> walkSuperRebindExpr(i, source, fileName, rebound) }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
+            is IfStatement -> {
+                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+                walkSuperRebindStmt(stmt.thenStatement, source, fileName, rebound)
+                stmt.elseStatement?.let { walkSuperRebindStmt(it, source, fileName, rebound) }
+            }
+            is Block -> walkSuperRebindStmts(stmt.statements, source, fileName, rebound)
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
+                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
+            }
+            is WhileStatement -> {
+                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
+            }
+            is DoStatement -> {
+                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
+                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+            }
+            is ThrowStatement -> stmt.expression?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
+            // Regular function body: super rebound to undefined.
+            is FunctionDeclaration -> stmt.body?.let { walkSuperRebindStmts(it.statements, source, fileName, rebound = true) }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        is Constructor -> member.body
+                        is ClassStaticBlockDeclaration -> member.body
+                        else -> null
+                    }
+                    // Direct level of class member body is NOT a rebinding scope —
+                    // super is valid for derived classes (TS2335 fires for non-derived,
+                    // separately). Walk into nested constructs which MAY rebind.
+                    body?.let { walkSuperRebindStmts(it.statements, source, fileName, rebound = false) }
+                    if (member is PropertyDeclaration) {
+                        // Property initializers run in constructor scope — not rebinding.
+                        member.initializer?.let { walkSuperRebindExpr(it, source, fileName, rebound = false) }
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = stmt.body
+                if (body is ModuleBlock) walkSuperRebindStmts(body.statements, source, fileName, rebound)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkSuperRebindExpr(expr: Expression, source: String, fileName: String, rebound: Boolean) {
+        // Direct super reference at this position — emit if we're in a rebinding scope.
+        if (isSuperIdentifier(expr) && rebound) {
+            emitTS2660InRebindingScope(expr as Identifier, source, fileName)
+            return
+        }
+        when (expr) {
+            // Regular function expression body: super rebinds.
+            is FunctionExpression -> walkSuperRebindStmts(expr.body.statements, source, fileName, rebound = true)
+            // Arrow body: preserve outer rebinding state.
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkSuperRebindStmts(body.statements, source, fileName, rebound)
+                is Expression -> walkSuperRebindExpr(body, source, fileName, rebound)
+                else -> {}
+            }
+            // Object literals are owned by checkSuperInObjectLiterals (17.99/17.101) for
+            // direct super refs in their members. Skip entirely to avoid double emission.
+            is ObjectLiteralExpression -> {}
+            is BinaryExpression -> {
+                walkSuperRebindExpr(expr.left, source, fileName, rebound)
+                walkSuperRebindExpr(expr.right, source, fileName, rebound)
+            }
+            is CallExpression -> {
+                // `super(...)` call is TS2337 territory (handled by checkIllegalSuperCallsInNestedFunctions
+                // and similar). Don't emit TS2660 for super-as-callee here.
+                if (!isSuperIdentifier(expr.expression)) walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+                expr.arguments.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
+            }
+            is NewExpression -> {
+                walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+                expr.arguments?.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
+            }
+            is PropertyAccessExpression -> {
+                if (!isSuperIdentifier(expr.expression)) walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+                else if (rebound) emitTS2660InRebindingScope(expr.expression as Identifier, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                if (!isSuperIdentifier(expr.expression)) walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+                else if (rebound) emitTS2660InRebindingScope(expr.expression as Identifier, source, fileName)
+                walkSuperRebindExpr(expr.argumentExpression, source, fileName, rebound)
+            }
+            is ParenthesizedExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is ConditionalExpression -> {
+                walkSuperRebindExpr(expr.condition, source, fileName, rebound)
+                walkSuperRebindExpr(expr.whenTrue, source, fileName, rebound)
+                walkSuperRebindExpr(expr.whenFalse, source, fileName, rebound)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
+            is PrefixUnaryExpression -> walkSuperRebindExpr(expr.operand, source, fileName, rebound)
+            is PostfixUnaryExpression -> walkSuperRebindExpr(expr.operand, source, fileName, rebound)
+            else -> {}
+        }
+    }
+
+    private fun emitTS2660InRebindingScope(superRef: Identifier, source: String, fileName: String) {
+        val start = superRef.pos
+        val length = 5
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'super' can only be referenced in members of derived classes or object literal expressions.",
+            category = DiagnosticCategory.Error,
+            code = 2660,
             fileName = fileName,
             line = line,
             character = character,
