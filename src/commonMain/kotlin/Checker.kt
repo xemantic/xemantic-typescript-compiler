@@ -23794,41 +23794,52 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            walkForObjLitSuper(result.sourceFile.statements, source, fileName)
+            walkForObjLitSuper(result.sourceFile.statements, source, fileName, superValid = false)
         }
     }
 
-    private fun walkForObjLitSuper(statements: List<Statement>, source: String, fileName: String) {
-        for (stmt in statements) walkObjLitSuperInStmt(stmt, source, fileName)
+    // [superValid] tracks whether the current LEXICAL scope provides a valid `super`
+    // binding (derived-class method/constructor/getter/setter body, or object-literal
+    // method/getter/setter body). Arrows preserve it; regular functions reset to false;
+    // class members set it from their containing class's `extends` clause. Used to
+    // decide whether an ArrowFunction-initialized PropertyAssignment in an object literal
+    // should fire TS2660 — the arrow inherits super from the enclosing context, so
+    // `obj = { p: () => super.x }` at top level errors but `class B extends A { f() {
+    // var obj = { p: () => super.x } } }` is valid.
+    private fun walkForObjLitSuper(statements: List<Statement>, source: String, fileName: String, superValid: Boolean) {
+        for (stmt in statements) walkObjLitSuperInStmt(stmt, source, fileName, superValid)
     }
 
-    private fun walkObjLitSuperInStmt(stmt: Statement, source: String, fileName: String) {
+    private fun walkObjLitSuperInStmt(stmt: Statement, source: String, fileName: String, superValid: Boolean) {
         when (stmt) {
-            is ExpressionStatement -> walkObjLitSuperInExpr(stmt.expression, source, fileName)
+            is ExpressionStatement -> walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
             is VariableStatement -> stmt.declarationList.declarations.forEach {
-                it.initializer?.let { i -> walkObjLitSuperInExpr(i, source, fileName) }
+                it.initializer?.let { i -> walkObjLitSuperInExpr(i, source, fileName, superValid) }
             }
-            is ReturnStatement -> stmt.expression?.let { walkObjLitSuperInExpr(it, source, fileName) }
+            is ReturnStatement -> stmt.expression?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
             is IfStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName)
-                walkObjLitSuperInStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkObjLitSuperInStmt(it, source, fileName) }
+                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
+                walkObjLitSuperInStmt(stmt.thenStatement, source, fileName, superValid)
+                stmt.elseStatement?.let { walkObjLitSuperInStmt(it, source, fileName, superValid) }
             }
-            is Block -> walkForObjLitSuper(stmt.statements, source, fileName)
+            is Block -> walkForObjLitSuper(stmt.statements, source, fileName, superValid)
             is ForStatement -> {
-                (stmt.initializer as? Expression)?.let { walkObjLitSuperInExpr(it, source, fileName) }
-                walkObjLitSuperInStmt(stmt.statement, source, fileName)
+                (stmt.initializer as? Expression)?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
+                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
             }
             is WhileStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName)
-                walkObjLitSuperInStmt(stmt.statement, source, fileName)
+                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
+                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
             }
             is DoStatement -> {
-                walkObjLitSuperInStmt(stmt.statement, source, fileName)
-                walkObjLitSuperInExpr(stmt.expression, source, fileName)
+                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
+                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
             }
-            is FunctionDeclaration -> stmt.body?.let { walkForObjLitSuper(it.statements, source, fileName) }
+            // Regular functions rebind super (to undefined for object literals).
+            is FunctionDeclaration -> stmt.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = false) }
             is ClassDeclaration -> {
+                val classHasExtends = stmt.heritageClauses
+                    ?.any { it.token == SyntaxKind.ExtendsKeyword } == true
                 for (member in stmt.members) {
                     val body = when (member) {
                         is MethodDeclaration -> member.body
@@ -23838,86 +23849,108 @@ interface DataView {
                         is ClassStaticBlockDeclaration -> member.body
                         else -> null
                     }
-                    body?.let { walkForObjLitSuper(it.statements, source, fileName) }
+                    body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = classHasExtends) }
                     if (member is PropertyDeclaration) {
-                        member.initializer?.let { walkObjLitSuperInExpr(it, source, fileName) }
+                        member.initializer?.let { walkObjLitSuperInExpr(it, source, fileName, superValid = classHasExtends) }
                     }
                 }
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
-                if (body is ModuleBlock) walkForObjLitSuper(body.statements, source, fileName)
+                if (body is ModuleBlock) walkForObjLitSuper(body.statements, source, fileName, superValid)
             }
             else -> {}
         }
     }
 
-    private fun walkObjLitSuperInExpr(expr: Expression, source: String, fileName: String) {
+    private fun walkObjLitSuperInExpr(expr: Expression, source: String, fileName: String, superValid: Boolean) {
         when (expr) {
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
+                        // Object-literal methods/accessors bind super (via __proto__).
                         is GetAccessor -> {
                             if (options.target < ScriptTarget.ES2015) {
                                 prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                             }
-                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName) }
+                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = true) }
                         }
                         is SetAccessor -> {
                             if (options.target < ScriptTarget.ES2015) {
                                 prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                             }
-                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName) }
+                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = true) }
                         }
                         is MethodDeclaration -> {
                             if (options.target < ScriptTarget.ES2015) {
                                 prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                             }
-                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName) }
+                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = true) }
                         }
                         is PropertyAssignment -> {
                             when (val init = prop.initializer) {
                                 is FunctionExpression -> {
+                                    // Regular function expression rebinds super → unconditional TS2660.
                                     findObjLitSuperRefs(init.body.statements, source, fileName, code = 2660)
-                                    walkForObjLitSuper(init.body.statements, source, fileName)
+                                    walkForObjLitSuper(init.body.statements, source, fileName, superValid = false)
                                 }
-                                else -> walkObjLitSuperInExpr(init, source, fileName)
+                                is ArrowFunction -> {
+                                    // Arrow inherits super from the enclosing lexical scope.
+                                    // Emit TS2660 only when that scope lacks a super binding.
+                                    if (!superValid) {
+                                        when (val body = init.body) {
+                                            is Block -> findObjLitSuperRefs(body.statements, source, fileName, code = 2660)
+                                            is Expression -> findObjLitSuperRefsInExpr(body, source, fileName, code = 2660)
+                                            else -> {}
+                                        }
+                                    }
+                                    when (val body = init.body) {
+                                        is Block -> walkForObjLitSuper(body.statements, source, fileName, superValid)
+                                        is Expression -> walkObjLitSuperInExpr(body, source, fileName, superValid)
+                                        else -> {}
+                                    }
+                                }
+                                else -> walkObjLitSuperInExpr(init, source, fileName, superValid)
                             }
                         }
-                        is SpreadAssignment -> walkObjLitSuperInExpr(prop.expression, source, fileName)
+                        is SpreadAssignment -> walkObjLitSuperInExpr(prop.expression, source, fileName, superValid)
                         else -> {}
                     }
                 }
             }
             is BinaryExpression -> {
-                walkObjLitSuperInExpr(expr.left, source, fileName)
-                walkObjLitSuperInExpr(expr.right, source, fileName)
+                walkObjLitSuperInExpr(expr.left, source, fileName, superValid)
+                walkObjLitSuperInExpr(expr.right, source, fileName, superValid)
             }
             is CallExpression -> {
-                walkObjLitSuperInExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { walkObjLitSuperInExpr(it, source, fileName) }
+                walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+                expr.arguments.forEach { walkObjLitSuperInExpr(it, source, fileName, superValid) }
             }
             is NewExpression -> {
-                walkObjLitSuperInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkObjLitSuperInExpr(it, source, fileName) }
+                walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+                expr.arguments?.forEach { walkObjLitSuperInExpr(it, source, fileName, superValid) }
             }
-            is PropertyAccessExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName)
+            is PropertyAccessExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
             is ElementAccessExpression -> {
-                walkObjLitSuperInExpr(expr.expression, source, fileName)
-                walkObjLitSuperInExpr(expr.argumentExpression, source, fileName)
+                walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+                walkObjLitSuperInExpr(expr.argumentExpression, source, fileName, superValid)
             }
-            is ParenthesizedExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName)
+            is ParenthesizedExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
             is ConditionalExpression -> {
-                walkObjLitSuperInExpr(expr.condition, source, fileName)
-                walkObjLitSuperInExpr(expr.whenTrue, source, fileName)
-                walkObjLitSuperInExpr(expr.whenFalse, source, fileName)
+                walkObjLitSuperInExpr(expr.condition, source, fileName, superValid)
+                walkObjLitSuperInExpr(expr.whenTrue, source, fileName, superValid)
+                walkObjLitSuperInExpr(expr.whenFalse, source, fileName, superValid)
             }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkObjLitSuperInExpr(it, source, fileName) }
-            is FunctionExpression -> walkForObjLitSuper(expr.body.statements, source, fileName)
+            is ArrayLiteralExpression -> expr.elements.forEach { walkObjLitSuperInExpr(it, source, fileName, superValid) }
+            // Regular function expression rebinds super.
+            is FunctionExpression -> walkForObjLitSuper(expr.body.statements, source, fileName, superValid = false)
+            // Arrow function preserves super from outer scope.
             is ArrowFunction -> {
-                val body = expr.body
-                if (body is Block) walkForObjLitSuper(body.statements, source, fileName)
-                else if (body is Expression) walkObjLitSuperInExpr(body, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> walkForObjLitSuper(body.statements, source, fileName, superValid)
+                    is Expression -> walkObjLitSuperInExpr(body, source, fileName, superValid)
+                    else -> {}
+                }
             }
             else -> {}
         }
