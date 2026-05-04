@@ -24054,6 +24054,17 @@ interface DataView {
                             member.body?.let { findNestedSuperCalls(it.statements, source, fileName, inNestedFn = false) }
                         }
                     }
+                    // Property initializers run in constructor scope but a `super(...)`
+                    // call there is still illegal — TypeScript treats it as TS2337
+                    // ("outside constructors"). Walk each PropertyDeclaration.initializer
+                    // with inNestedFn=true so direct `super(...)` calls fire.
+                    for (member in stmt.members) {
+                        if (member is PropertyDeclaration) {
+                            member.initializer?.let { init ->
+                                findNestedSuperCallsInExpr(init, source, fileName, inNestedFn = true)
+                            }
+                        }
+                    }
                     // Recurse into nested classes via member bodies.
                     for (member in stmt.members) {
                         val body = when (member) {

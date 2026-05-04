@@ -2619,6 +2619,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-04 (17.102, 8493 → 8494, +1) — TS2337 for `super(...)` in class property initializers:** Continuation /loop after 17.101. `find_candidates.py --fresh` had 2 candidates; classImplementsClass6 was already attempted and reverted earlier in the session, leaving `superCallOutsideConstructor_ts` (1 missing TS2337 at line 7 `x = super();`).
+
+  **Implementation:** Extended 17.100's `walkForIllegalSuperCalls` ClassDeclaration handler (Checker.kt ~24050+) with a new third loop that walks each `PropertyDeclaration.initializer` via `findNestedSuperCallsInExpr(init, source, fileName, inNestedFn = true)`. The `inNestedFn = true` flag triggers TS2337 emission for any direct `super(...)` call in the initializer expression — matching TypeScript's semantics that property initializers run in constructor scope but are still "outside the constructor" for super-call purposes. Uses the existing leaf walker (no new infrastructure). Constructors and method/getter/setter bodies remain handled by the existing two loops; the new loop only adds property-initializer coverage.
+
+  **Test results:** Net delta: 1582 → 1581 failed (8493 → 8494 passing). Zero regressions. `superCallOutsideConstructor_ts` flips clean — the other two TS2337 emissions (super() in arrow inside constructor, super() in function expression inside constructor) were already firing from 17.100.
+
+  **Foundation:** The walker now covers all common `super(...)` illegal-call sites: (1) constructor body's nested functions/arrows/object-literal-method bodies (17.100), (2) class property initializers (17.102). Remaining gap: `super(...)` in non-constructor class methods (`class D extends C { foo() { super(); } }`) — that's a separate TS2337 case our walker doesn't yet catch, but no current failing test gates on it.
+
   **Session 2026-05-04 (17.101, 8490 → 8493, +3) — TS2660 for arrow in object-literal PropertyAssignment when surrounding scope lacks super:** Continuation /loop after the canary bail-out attempt. `find_candidates.py --fresh` returned 5 missing-diag candidates; the 3 `superInObjectLiterals_*` variants (ES5×2, ES6×1) all needed the same fix: TS2660 at line 23 col 9 for `p3: () => { super.method() }` at top-level obj. Symmetric absence of error inside `class B extends A { f() { var obj = { p3: () => super.x } } }` (super valid via lexical inheritance from B's method).
 
   **Implementation:** Threaded `superValid: Boolean` through the existing 17.99 walker family (`walkForObjLitSuper` / `walkObjLitSuperInStmt` / `walkObjLitSuperInExpr`). Boundaries:
