@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,493 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,494 / 10,078 tests passing (~84%).
 
 **Static-member bifurcation (2026-05-04, net 0, architectural)** — Multi-
 session piece deferred from 17.83's revert: `Type.Interface` now carries
