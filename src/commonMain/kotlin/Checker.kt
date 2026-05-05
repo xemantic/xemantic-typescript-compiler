@@ -21245,8 +21245,32 @@ interface DataView {
         source: String,
         fileName: String,
     ) {
+        // 17.126: Block-level FunctionDeclarations shadow outer same-named
+        // functions for arity-checking. Build an overlay map combining the
+        // outer funcParams with any FunctionDeclaration directly in this
+        // statement list. This frame goes out of scope when the enclosing
+        // call returns, so it doesn't leak past the block boundary.
+        val nestedFuncs = statements.asSequence()
+            .filterIsInstance<FunctionDeclaration>()
+            .filter { it.body != null && it.name != null }
+            .toList()
+        val effective: Map<String, FuncParamInfo> = if (nestedFuncs.isNotEmpty()) {
+            val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                    fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+            val overlay = funcParams.toMutableMap()
+            for (fd in nestedFuncs) {
+                val name = fd.name?.text ?: continue
+                // Don't downgrade overload markers from the outer scope (the
+                // overlay is a refinement, not a wholesale replacement).
+                if (overlay[name]?.isOverloaded == true) continue
+                overlay[name] = paramInfo(fd.parameters, isJsFile)
+            }
+            overlay
+        } else {
+            funcParams
+        }
         for (stmt in statements) {
-            checkArgCountInStatement(stmt, funcParams, classCtorParams, source, fileName)
+            checkArgCountInStatement(stmt, effective, classCtorParams, source, fileName)
         }
     }
 
