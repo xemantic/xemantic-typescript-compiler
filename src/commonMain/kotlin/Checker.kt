@@ -11521,6 +11521,11 @@ class Checker(
                         for ((name, decls) in localVars) {
                             if (decls.size >= 2) checkVarDeclTypeConsistency(decls, name, source, fileName)
                         }
+                        for (param in stmt.parameters) {
+                            val pname = (param.name as? Identifier)?.text ?: continue
+                            val decls = localVars[pname] ?: continue
+                            checkParamShadowedByVar(param, decls, source, fileName)
+                        }
                         // Recurse into nested functions
                         checkSubsequentVarTypesInStatements(body.statements, source, fileName)
                     }
@@ -11533,25 +11538,20 @@ class Checker(
                             else -> null
                         }
                         if (body != null) {
-                            // Collect var declarations including parameters
-                            val localVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
-                            // Add constructor/method parameters as pseudo-first-declarations
                             val params = when (member) {
                                 is Constructor -> member.parameters
                                 is MethodDeclaration -> member.parameters
                                 else -> emptyList()
                             }
+                            val localVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
                             collectVarDecls(body.statements, localVars)
-                            // For params that match var names, prepend param as first decl
-                            for (param in params) {
-                                val paramName = (param.name as? Identifier)?.text ?: continue
-                                val varDecls = localVars[paramName] ?: continue
-                                // Create a pseudo VariableDeclaration for the parameter to serve as "first"
-                                // We'll handle this in checkVarDeclTypeConsistency by checking the first decl
-                                // has the param's type annotation
-                            }
                             for ((name, decls) in localVars) {
                                 if (decls.size >= 2) checkVarDeclTypeConsistency(decls, name, source, fileName)
+                            }
+                            for (param in params) {
+                                val pname = (param.name as? Identifier)?.text ?: continue
+                                val decls = localVars[pname] ?: continue
+                                checkParamShadowedByVar(param, decls, source, fileName)
                             }
                             checkSubsequentVarTypesInStatements(body.statements, source, fileName)
                         }
@@ -11638,6 +11638,73 @@ class Checker(
                 is LabeledStatement -> collectVarDecls(listOf(stmt.statement), result)
                 else -> {}
             }
+        }
+    }
+
+    /** TS2403 + TS6203 for `var x: T2` inside a function/method/constructor body
+     *  whose parameter list already binds `x: T1` (T1 ≠ T2). The parameter acts
+     *  as the "first declaration"; each subsequent var with a different simple
+     *  type emits its own TS2403 with TS6203 related-info pointing back to the
+     *  parameter. Mirrors the var-vs-var [checkVarDeclTypeConsistency] shape. */
+    private fun checkParamShadowedByVar(
+        param: Parameter, decls: List<VariableDeclaration>,
+        source: String, fileName: String,
+    ) {
+        val paramType = param.type?.let { getTypeFromTypeNode(it) } ?: return
+        if (!isSimpleTypeForParamShadow(paramType)) return
+        val paramName = (param.name as? Identifier)?.text ?: return
+        val paramTypeName = typeToString(paramType)
+        val paramNameNode = param.name as? Identifier ?: return
+        // Use param.pos for TS6203 position so the related-info column matches
+        // TypeScript when modifiers (`public`, `private`, etc.) shift the name.
+        // For unmodified params (`function foo(x: A)`), param.pos == name.pos.
+        val refStart = param.pos
+        val refLen = paramNameNode.text.length
+        val (paramLine, paramChar) = getLineAndCharacterOfPosition(source, refStart)
+        val relatedInfo = listOf(Diagnostic(
+            message = "'$paramName' was also declared here.",
+            category = DiagnosticCategory.Message,
+            code = 6203,
+            fileName = fileName,
+            line = paramLine, character = paramChar,
+            start = refStart, length = refLen,
+        ))
+        for (decl in decls) {
+            val declType = getVarDeclType(decl) ?: continue
+            if (!isSimpleTypeForParamShadow(declType)) continue
+            if (paramType === declType) continue
+            val declTypeName = typeToString(declType)
+            if (paramTypeName == declTypeName) continue
+            val nameNode = decl.name as? Identifier ?: continue
+            val start = nameNode.pos
+            val length = nameNode.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Subsequent variable declarations must have the same type.  Variable '$paramName' must be of type '$paramTypeName', but here has type '$declTypeName'.",
+                category = DiagnosticCategory.Error,
+                code = 2403,
+                fileName = fileName,
+                line = line, character = character,
+                start = start, length = length,
+                relatedInformation = relatedInfo,
+            ))
+        }
+    }
+
+    /** Slightly broader simple-type predicate for param-shadowed-by-var TS2403.
+     *  Accepts named class/interface types in addition to the intrinsic + function
+     *  shapes [isSimpleTypeForTs2403] allows, since `function foo(x: A) { var x: B }`
+     *  needs to compare distinct class names via `typeToString`. */
+    private fun isSimpleTypeForParamShadow(type: Type): Boolean {
+        if (isSimpleTypeForTs2403(type)) return true
+        return when (type) {
+            is Type.Reference -> type.target.symbol?.name?.isNotEmpty() == true
+            is Type.Interface -> {
+                val sym = type.symbol
+                sym != null && sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+                    && sym.name.isNotEmpty()
+            }
+            else -> false
         }
     }
 

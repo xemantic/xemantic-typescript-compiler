@@ -2619,6 +2619,33 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.119, 8515 → 8516, +1) — TS2403
+  parameter-shadowed-by-var (`functionArgShadowing_ts` flip):**
+  Continuation /loop after 17.118. Custom 4-line MISSING-only diff scan
+  surfaced `functionArgShadowing_ts` with a missing TS2403 +TS6203 at
+  line 4 for `function foo(x: A) { var x: B }`. Root cause: existing
+  `checkSubsequentVarTypesInStatements` had a TODO comment in the
+  ClassDeclaration branch ("prepend param as first decl") but never
+  implemented it — and the FunctionDeclaration branch didn't even have
+  the comment. Added a `checkParamShadowedByVar` helper called from
+  both FunctionDeclaration and ClassDeclaration → Constructor /
+  MethodDeclaration branches. Helper iterates each parameter, looks up
+  vars sharing the name in the already-collected `localVars` map, and
+  emits one TS2403 + TS6203 per mismatched var. Position for TS6203
+  uses `param.pos` (start of the parameter declaration including
+  modifiers) so when a parameter property like `public p: number`
+  shifts the name, the related-info column matches TypeScript's
+  baseline. Initial impl using `paramNameNode.pos` produced col 21 vs
+  expected col 14 — `public ` (7 chars) precedes `p`; using `param.pos`
+  fixes it. New helper `isSimpleTypeForParamShadow` extends
+  `isSimpleTypeForTs2403` to also accept named class/interface types
+  (`Type.Reference` with named target.symbol, `Type.Interface` with
+  Class/Interface symbol flag) — the existing predicate only allowed
+  intrinsics + function shapes, but the test compares user classes A
+  vs B. Comparison still goes through `typeToString` so generic
+  instantiations stay distinguishable. Net delta: 1560 → 1559 failed.
+  Zero regressions across 10078 suite.
+
   **Session 2026-05-05 (17.118, 8514 → 8515, +1) — Object-literal
   accessors registered as Property symbols (`gettersAndSetters_ts`
   flip):** Continuation /loop after 17.117. Custom diff scan surfaced
