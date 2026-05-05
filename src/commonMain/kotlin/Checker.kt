@@ -8924,7 +8924,27 @@ class Checker(
                     if (name !in ambientExternalModuleNames) fileScope.names.add(name)
                 }
             }
-            fileScope.names.addAll(KNOWN_GLOBALS)
+            // 17.122: Filter DOM/host globals when @lib explicitly excludes both
+            // `dom` and `webworker` and `scripthost`. Without this, tests with
+            // `@lib: es5` (or any es-only subset) miss TS2304 for `window`/`top`/
+            // `setTimeout`/etc. — they're declared in lib.dom.d.ts /
+            // lib.scripthost.d.ts which the user has opted out of. Conservative
+            // gate: ONLY when @lib is non-empty AND has zero entries that would
+            // pull in DOM/host. Default-empty `options.lib` means full lib.d.ts
+            // is loaded (including dom + scripthost).
+            val libExcludesDomHost = options.lib.isNotEmpty() &&
+                options.lib.none { lname ->
+                    val lower = lname.lowercase()
+                    lower == "dom" || lower == "webworker" || lower == "scripthost" ||
+                        lower.startsWith("dom.") || lower.startsWith("webworker.")
+                }
+            if (libExcludesDomHost) {
+                for (g in KNOWN_GLOBALS) {
+                    if (g !in DOM_GLOBAL_NAMES && g !in HOST_ONLY_GLOBALS) fileScope.names.add(g)
+                }
+            } else {
+                fileScope.names.addAll(KNOWN_GLOBALS)
+            }
 
             checkUnresolvedInStatements(
                 result.sourceFile.statements,
@@ -16790,6 +16810,22 @@ class Checker(
             "AddEventListenerOptions", "EventListenerOptions",
             "PromiseSettledResult", "PromiseFulfilledResult", "PromiseRejectedResult",
             "BufferSource", "BlobPart",
+        )
+
+        /**
+         * 17.122: Subset of [KNOWN_GLOBALS] declared in lib.dom.d.ts /
+         * lib.scripthost.d.ts that are NOT also in [DOM_GLOBAL_NAMES] but ARE
+         * unavailable when @lib excludes DOM/host. Specifically the timer family
+         * (setTimeout/clearTimeout/setInterval/clearInterval/setImmediate/
+         * clearImmediate/queueMicrotask) plus a handful of host-bound names
+         * (`alert`, `print`, etc.) that aren't in DOM_GLOBAL_NAMES yet. Used
+         * only by the fileScope-construction filter in [checkUnresolvedNames]
+         * — kept separate so the existing TS2728 lib-display path
+         * (DOM_GLOBAL_NAMES) is unchanged.
+         */
+        private val HOST_ONLY_GLOBALS: Set<String> = setOf(
+            "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+            "setImmediate", "clearImmediate", "queueMicrotask",
         )
 
         /**

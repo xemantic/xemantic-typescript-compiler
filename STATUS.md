@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,520 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,521 / 10,078 tests passing (~85%).
+
+**17.122 (2026-05-05, +1)** — Lib-aware DOM/host global filter in
+file-level scope construction. When `@lib` is non-empty AND every entry
+excludes `dom`/`webworker`/`scripthost`, the file-scope omits both
+`DOM_GLOBAL_NAMES` (existing set, line ~16801) and a new
+`HOST_ONLY_GLOBALS` set (timer family: `setTimeout`/`clearTimeout`/
+`setInterval`/`clearInterval`/`setImmediate`/`clearImmediate`/
+`queueMicrotask`) from the bulk `KNOWN_GLOBALS` add. Without this,
+tests with `@lib: es5` (or any explicit es-only subset) silently treat
+`window`/`top`/`setTimeout`/etc. as resolved when they live in
+lib.dom.d.ts / lib.scripthost.d.ts that the user opted out of —
+masking expected TS2304 emissions. Conservative gate: ONLY fires when
+`options.lib` has zero DOM/webworker/scripthost entries (default-empty
+`options.lib` means full lib.d.ts is loaded so no filtering). Flips
+`recursiveNamedLambdaCall_ts` (`@lib: es5`, missing TS2304 for
+`top` x3 and `setTimeout` x1). Net delta: 1555 → 1554 failed (8520 →
+8521 passing). Zero regressions across 10078 suite.
 
 **17.121 (2026-05-05, +2)** — TS2339 for class-instance receivers with
 fully-resolvable extends chain (17.117 follow-on). 17.117's

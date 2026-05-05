@@ -2619,6 +2619,28 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.122, 8520 → 8521, +1) — Lib-aware DOM/host
+  global filter (`recursiveNamedLambdaCall_ts` flip):** Continuation
+  /loop after the unknownSymbols1 revert. `find_candidates.py --fresh`
+  showed only `aliasUsageInOrExpression_ts` (architectural). A custom
+  4-line PURE-MISS/single-code scan (extends past
+  `find_candidates.py`'s ≤3 cap) surfaced `recursiveNamedLambdaCall_ts`
+  with 4 missing TS2304 (`top` x3 + `setTimeout` x1) under `@lib: es5`.
+  Pre-fix, file-level scope construction in `checkUnresolvedNames` did
+  `fileScope.names.addAll(KNOWN_GLOBALS)` unconditionally — so DOM
+  globals (`top`, `window`, etc.) and host globals (`setTimeout` family)
+  silently resolve even when the user explicitly opted out of those
+  libs. Fix: detect `libExcludesDomHost = options.lib.isNotEmpty() &&
+  options.lib.none { /* dom/webworker/scripthost */ }`. When true, add
+  every KNOWN_GLOBALS entry EXCEPT those in `DOM_GLOBAL_NAMES`
+  (existing) and a new `HOST_ONLY_GLOBALS` set covering the timer
+  family. New set is kept separate from `DOM_GLOBAL_NAMES` so the
+  existing TS2728 lib-display path (which uses `DOM_GLOBAL_NAMES` to
+  render `lib.dom.d.ts:--:--`) is unchanged. Conservative gate: empty
+  `options.lib` (default) means full lib.d.ts is loaded → no filter
+  → no behavior change. Net delta: 1555 → 1554 failed. Zero
+  regressions across 10078 suite.
+
   **Session 2026-05-05 (post-17.121 unknownSymbols1 attempt — REVERTED,
   net 0):** Continuation /loop after 17.121. `find_candidates.py
   --fresh` showed `unknownSymbols1_ts` (1 EXTRA: TS2355 at (4,35) for
