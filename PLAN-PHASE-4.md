@@ -2619,6 +2619,35 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.113, 8505 → 8507, +2) — TS2873 "always falsy"
+  for Identifier(null/undefined), TypeAssertion, AsExpression in `||` LHS
+  / `?:` cond / else-if chain:** Continuation /loop after 17.112.
+  `find_candidates.py --fresh` returned 2/0/0 with `aliasUsageInOrExpression_ts`
+  (3 missing: 2× TS2873 + 1× TS2322 chain) and `classImplementsClass6_ts`
+  (1 missing TS2339 — already attempted-and-reverted via class-instance
+  bail-out lift, see static-member-bifurcation session note).
+  classImplementsClass6 deferred per its prior revert; `aliasUsageInOrExpression`
+  picked.
+
+  **Test source patterns:**
+  - `aliasUsageInOrExpression_main.ts` (line 10): `var e: T = <T>null || {x: moduleA};` — TS2873 on the type-assertion (always-falsy `<T>null` LHS of `||`).
+  - line 11: `var f: T = <T>null ? {x: moduleA} : null;` — TS2873 on type-assertion (always-falsy condition of `?:`) + TS2322 on var-decl (Union branches `{x:typeof moduleA} | null` vs target).
+  - `destructuringAssignmentWithExportedName_ts` (related pattern): `if (null as any) { ... } else if (null as any) { ... }` chain — 4 expected TS2873 across the chain.
+
+  **Implementation:**
+  1. Extended `isAlwaysFalsyExpr` (Checker.kt ~18156) to handle `Identifier` with text `"null"` / `"undefined"` (parser produces these for `null`/`undefined` keyword literals — see Parser.kt:3961-3966), `TypeAssertionExpression` (recurse on `.expression`), and `AsExpression` (recurse on `.expression`). VoidExpression / ParenthesizedExpression already handled.
+  2. Wired three additional call sites in `checkAlwaysTruthyInExpr` / `checkAlwaysTruthyInStatement`:
+     - **`||` LHS**: BinaryExpression branch's `BarBar` operator path now checks `isAlwaysFalsyExpr(left)` parallel to the existing `isAlwaysTruthyForOrExpr` check (both for the top-level `||` AND the iterative left-spine for nested `||` chains).
+     - **`?:` condition**: ConditionalExpression branch now emits TS2873 on `expr.condition` when always-falsy.
+     - **else-if chain**: IfStatement branch's `while (elseStmt is IfStatement)` loop now checks `elseStmt.expression` for always-falsy (the original IfStatement condition check already covered the leading `if`).
+  3. Added `tightEnd: Int` field to `AsExpression` AST node (Ast.kt ~960). Populated via `scanner.getPrevTokenEnd()` at all 3 parser construction sites (Parser.kt:3009, 3047, 4590). `emitTS2873`'s length computation now prefers `expr.tightEnd` for AsExpression.
+
+  **Why `tightEnd` was needed:** `expr.type.end` overshoots by the next-token length. After `parseType` returns, the scanner has advanced past the type via `nextToken()`, scanned the next token (e.g., `)`), and `scanner.getPos()` (which `getEnd()` returns) points past that next token. For `null as any) {`, type.end = position past `)` = pos+12, but the desired tight end is pos+11 (end of `any`). `scanner.getPrevTokenEnd()` is set to `pos` BEFORE skipping trivia in the next `scan()` call (Scanner.kt:261), so at the moment `parseType` returns, `getPrevTokenEnd()` = end of last-consumed token text = end of type's last char. Walking back from `type.end` through trivia + arbitrary next-token chars in the checker would be brittle for multi-char tokens (e.g., `===`, `&&`) and complex types (e.g., `Foo[]` ending in `]` which is also a possible next-token char), so the parser-side capture is the clean approach.
+
+  **Test results:** Net delta: 1570 → 1568 failed (8505 → 8507 passing). Zero regressions (find_candidates.py shows EXTRA = 0 fresh, 6 in skip log unchanged). `destructuringAssignmentWithExportedName_ts` errors baseline flips with all 4 TS2873 emissions correctly squiggled on `null as any`. `aliasUsageInOrExpression_ts` reduces from 3 missing to 1 missing (the remaining TS2322 needs `typeof import("...")` display infrastructure for cross-file module namespace types in Union elaboration — separate architectural piece). The +2 vs +1-expected suggests one additional parameterized/related test flipped via the same emissions; not investigated further to keep session focused.
+
+  **Foundation:** The `tightEnd` capture pattern can be extended to `TypeAssertionExpression` (already has `headerEnd` for the closing `>` of the assertion's TYPE, but not for the operand's end) and `SatisfiesExpression` (similar shape to AsExpression) when those need precise spans. The TS2873 infrastructure now covers the common falsy-literal patterns; future extensions might handle PrefixUnary `!alwaysTruthy`-as-falsy (per `voidAsOperator`'s `if (!void 0 !== true)` pattern) but that requires walking-down behavior into expressions, not a top-level check.
+
   **Session 2026-05-05 (17.112, 8504 → 8505, +1) — TS2322 ctor-vs-fn-type
   (symmetric to 17.111):** Continuation /loop after 17.111.
   `find_candidates.py --fresh` showed `callConstructAssignment_ts`

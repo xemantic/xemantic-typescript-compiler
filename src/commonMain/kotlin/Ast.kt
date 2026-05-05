@@ -960,6 +960,9 @@ data class ClassExpression(
 data class AsExpression(
     val expression: Expression,
     val type: TypeNode,
+    /** Tight position right after the type's last character (no trivia overshoot).
+     *  Defaults to 0 — callers that need a precise end use [tightEnd] when set. */
+    val tightEnd: Int = 0,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

@@ -3006,7 +3006,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             if (token == SyntaxKind.AsKeyword) {
                 nextToken()
                 val type = parseType()
-                left = AsExpression(expression = left, type = type, pos = left.pos, end = getEnd())
+                left = AsExpression(expression = left, type = type, tightEnd = scanner.getPrevTokenEnd(), pos = left.pos, end = getEnd())
                 continue
             }
             if (token == SyntaxKind.SatisfiesKeyword) {
@@ -3044,7 +3044,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             AsKeyword -> {
                 nextToken()
                 val type = parseType()
-                parseExpressionSuffix(AsExpression(expression = expr, type = type, pos = expr.pos, end = getEnd()))
+                parseExpressionSuffix(AsExpression(expression = expr, type = type, tightEnd = scanner.getPrevTokenEnd(), pos = expr.pos, end = getEnd()))
             }
 
             SatisfiesKeyword -> {
@@ -4587,7 +4587,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             if (token == SyntaxKind.AsKeyword) {
                 nextToken()
                 val type = parseType()
-                result = AsExpression(expression = result, type = type, pos = result.pos, end = getEnd())
+                result = AsExpression(expression = result, type = type, tightEnd = scanner.getPrevTokenEnd(), pos = result.pos, end = getEnd())
                 continue
             }
             if (token == SyntaxKind.SatisfiesKeyword) {
