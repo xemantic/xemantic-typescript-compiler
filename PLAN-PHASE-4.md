@@ -2619,6 +2619,44 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.117, 8511 → 8514, +3) — TS2339 for
+  class-instance receiver missing-property:** Continuation /loop
+  after 17.116. `find_candidates.py --fresh` returned 0/2/0 — the 2
+  MISSING were `aliasUsageInOrExpression_ts` (architectural, documented
+  in 17.113 session note) and `classImplementsClass6_ts` (1 missing
+  TS2339 at 20,3 for `c.bar()` where `c: C` and `class C implements A`
+  with `bar` static-only on A). Investigated the second — root cause
+  was the existing bail in `checkMemberAccessMissing`'s class-instance
+  receiver branches (Checker.kt:46563-46566 for the globals path and
+  46585-46588 for the currentLocalTypes fallback): after
+  `tryEmitStaticAccessTs2576` returns false, the walker just `return`s
+  unconditionally, which is too conservative — many cases where the
+  property is genuinely absent from the class hierarchy are silently
+  swallowed. Added new `tryEmitClassInstanceMissingTs2339` helper
+  invoked AFTER `tryEmitStaticAccessTs2576` in both branches. The
+  helper walks the class via `hasInstanceMemberNamed` +
+  `isStaticMemberOfClass` (both traverse extends chains for
+  Identifier-resolvable bases) and emits TS2339 with display
+  `ClassName` when neither matches. Initial broad gate caused 5 FP
+  regressions across genericDefaults / declarationEmitExpressionInExtends
+  / exportAssignmentOfGenericType1 / importUsedInExtendsList1 /
+  interfaceClassMerging2 / indexerA / constructorOverloads3 (-4 net
+  delta), so narrowed the gate to require: (1) propName not in
+  RUNTIME_PROPERTIES; (2) `typeSym.declarations.size == 1` (no
+  interface/namespace augmentation); (3) class has no type parameters;
+  (4) class has NO `extends` clause (defends FPs from PropertyAccess
+  bases / generic-arg bases / import-alias bases that the helpers
+  don't walk into ClassDeclarations); (5) no IndexSignature in members
+  (would accept any property name); (6) NOT `declare class` (ambient
+  bases are partial views, upstream `new Subclass(...)` typing
+  sometimes returns the ambient base instead of the subclass); (7)
+  `getNarrowedTypeForReference` returns the same type as raw
+  (defends `if (c instanceof D) c.bar()` narrowing FP). With all 7
+  gates: 1564 → 1561 failed (+3 net). Implements clauses are NOT
+  inherited members per `resolveBaseTypesLazy`'s skip-implements rule,
+  so the fix correctly fires for `class C implements A {}` where A's
+  static `bar()` is not on C's instance side.
+
   **Session 2026-05-05 (17.116, 8509 → 8511, +2) — TS7015 + TS7053
   implicit-any element-access for `noImplicitAnyIndexingSuppressed_ts`
   + collateral on `noImplicitAnyIndexing_ts`:** Continuation /loop
