@@ -46223,6 +46223,24 @@ interface DataView {
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
 
+        // 17.115: Empty `{}` literal element/property access — emit TS2339 with display
+        // `{}`. Squiggle uses the caller-provided ts2576SquiggleStart/Length (which covers
+        // the full element-access expression for `{}["X"]` / `{}[N]`); for property-access
+        // form `({}).hi` it falls back to the bare `.hi` span. Conservative gate: only
+        // empty literals — non-empty literals have their own member set.
+        if (objectExpr is ObjectLiteralExpression && objectExpr.properties.isEmpty()) {
+            if (propName !in RUNTIME_PROPERTIES) {
+                val (line, character) = getLineAndCharacterOfPosition(source, ts2576Start)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type '{}'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = ts2576Start, length = ts2576Length,
+                ))
+            }
+            return
+        }
+
         // 16.4cq: `new ClassName(...).prop` or `(new ClassName(...)).prop` — emit TS2339 when
         // the class is declared locally and neither declares the property itself nor inherits
         // a satisfying declaration. Narrow gate: handles the simple "empty class + circular

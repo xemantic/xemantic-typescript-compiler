@@ -2619,6 +2619,22 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.115, 8509 unchanged — net-zero infra) —
+  TS2339 for property/element access on empty object literals:**
+  Continuation /loop after 17.114. New branch in
+  `checkMemberAccessMissing` ahead of NewExpression /
+  CallExpression / static-this / Identifier paths: when
+  `objectExpr is ObjectLiteralExpression && properties.isEmpty()`,
+  emits TS2339 with display `{}`. Squiggle uses caller-provided
+  `ts2576Start/Length` so `{}["hi"]` covers full expression (8
+  chars), `({}).hi` falls back to bare `.hi`. RUNTIME_PROPERTIES
+  filter retained. `noImplicitAnyIndexingSuppressed_ts` /
+  `noImplicitAnyIndexing_ts` reduce from 4-missing to 2-missing
+  (the 2 TS2339 emissions land; TS7015 / TS7053 / TS7052 still
+  needed to flip them — separate work). Foundation: any future
+  test exercising `{}.X` access will resolve cleanly through this
+  branch.
+
   **Session 2026-05-05 (17.114, 8507 → 8509, +2) — TS2840 + TS2693 +
   TS2411-method-vs-fn-index for `interfacedeclWithIndexerErrors_ts`:**
   Continuation /loop after 17.113. `find_candidates.py --fresh`
