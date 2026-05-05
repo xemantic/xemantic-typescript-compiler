@@ -2619,6 +2619,25 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.111, 8503 → 8504, +1) — TS2322 fn-vs-ctor-type
+  assignment + "provides no match for the signature 'new ...'" chain:**
+  Continuation /loop after 17.110. `find_candidates.py --fresh` showed
+  `parseTypes_ts` (MISS: TS2322 @ 11,1 — `Type '(s: string) => void' is
+  not assignable to type 'new () => number'`). The pre-existing 17.14a
+  fix in `checkPropertyAccessAssignment` already handles the same case
+  for `obj.prop = fn`; needed the equivalent in `checkAssignmentExpression`
+  Identifier-target path for `z = g`. Inserted `getNonConstructibleElaboration`
+  call before the `canUseTypeEngine` short-circuit (which returns false
+  for `source.constructSigs.isEmpty() && target.constructSigs.isNotEmpty()`
+  per Checker.kt:35168). Initial loose gate (`source.constructSigs.isEmpty()`
+  alone) regressed 2 tests via opaque import-aliased sources (`import ext2 =
+  require('...')` of `export = Class` resolves to Type.Object with no
+  resolved members; my check FP-fired TS2322 for `var y2: new() => ext2 =
+  ext2`). Tightened gate to require `source.callSignatures.isNotEmpty()`
+  — clearly callable function, NOT a constructor or opaque object —
+  excludes the regression cases cleanly. Net delta: 1572 → 1571 failed
+  (8503 → 8504 passing). Zero regressions across 10078 suite.
+
   **Session 2026-05-05 (17.110, 8502 → 8503, +1) — TS2352 for
   `<T[]>null` and `<[A,B]>null` casts:** Continuation /loop after 17.109.
   `find_candidates.py --fresh` now showed `castTest_ts` (MISS:
