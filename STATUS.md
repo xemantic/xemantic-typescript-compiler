@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,515 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,516 / 10,078 tests passing (~84%).
+
+**17.119 (2026-05-05, +1)** — TS2403 + TS6203 for parameter-shadowed-by-var
+inside function/method/constructor bodies. Pre-fix
+`checkSubsequentVarTypesInStatements` had a TODO comment for this case
+("prepend param as first decl") but never implemented it — `function
+foo(x: A) { var x: B = ... }` therefore emitted no diagnostic. New
+`checkParamShadowedByVar` helper called from both the FunctionDeclaration
+and the ClassDeclaration → Constructor/MethodDeclaration branches:
+when a parameter name matches a body-local var name, the param acts as
+the "first declaration" and each var with a different simple type
+emits its own TS2403 plus a TS6203 related-info pointing to the param.
+Position uses `param.pos` (start of the parameter declaration including
+modifiers like `public`) so the related-info column matches TypeScript
+when parameter properties shift the name. New helper
+`isSimpleTypeForParamShadow` extends `isSimpleTypeForTs2403` to also
+accept named class/interface types (`Type.Reference` with named
+target.symbol, `Type.Interface` with Class/Interface symbol flag) so
+the check fires for `(x: A) { var x: B }` where A/B are user classes;
+generic instantiations remain comparable via `typeToString`. Net delta:
+1560 → 1559 failed (8515 → 8516 passing). Flips
+`functionArgShadowing_ts`. Zero regressions across 10078 suite.
 
 **17.118 (2026-05-05, +1)** — Object-literal `get`/`set` accessors are
 now bound as Property symbols in `getTypeOfObjectLiteral`. Pre-fix:
