@@ -1,6 +1,37 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,511 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,514 / 10,078 tests passing (~84%).
+
+**17.117 (2026-05-05, +3)** — TS2339 for class-instance receiver when the
+property is genuinely absent from the class hierarchy. New
+`tryEmitClassInstanceMissingTs2339` helper called from both branches of
+`checkMemberAccessMissing` (the `globals[identName]` path AND the
+`currentLocalTypes` fallback) AFTER `tryEmitStaticAccessTs2576` returns
+false. Helper walks the class declaration's instance + static members
+(via existing `hasInstanceMemberNamed` + `isStaticMemberOfClass`, which
+already traverse extends chains) and emits TS2339 with display
+`ClassName` when the property name is absent everywhere. Conservative
+gates defend against false positives: (1) propName not in
+RUNTIME_PROPERTIES; (2) symbol has exactly 1 declaration (no
+interface/namespace augmentation contributing extra members the binder
+currently doesn't merge into the class symbol); (3) class has no type
+parameters (TypeParam-constraint members would be missed); (4) class
+has NO `extends` clause — bases that resolve through complex
+expressions (PropertyAccess `foo.Super`, generic type-args `q<string>`,
+import aliases) aren't fully walked by the helpers; (5) no
+IndexSignature in members (would accept any property name); (6) class
+not `declare class` — ambient bases are partial views and upstream
+type inference sometimes resolves `new Subclass(...)` to the ambient
+base type, so a receiver typed as the base is not authoritative for
+instance-side properties; (7) flow narrowing yields the same type
+(`if (c instanceof D) c.bar()` narrows c from C to D which may have
+bar). Implements clauses are NOT inherited members per
+`resolveBaseTypesLazy`'s skip-implements rule, so this fires correctly
+for `class C implements A {}; let c: C; c.bar()` where A has only
+`static bar()`. Net delta: 1564 → 1561 failed (8511 → 8514 passing).
+Zero regressions across 10078 suite. Flips `classImplementsClass6_ts`
+(target — TS2339 for `c.bar()` where c: C, C implements A) plus 2
+collateral wins.
 
 **17.116 (2026-05-05, +2)** — TS7015 + TS7053 implicit-any element-access
 diagnostics, gated on `noImplicitAny || strict`:

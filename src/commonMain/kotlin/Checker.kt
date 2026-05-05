@@ -46562,6 +46562,7 @@ interface DataView {
                         // property-missing checks (TS2339) below.
                         if (exprType is Type.Interface) {
                             if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return
+                            tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
                             return
                         }
                     }
@@ -46584,6 +46585,7 @@ interface DataView {
                 if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
                     if (exprType is Type.Interface) {
                         if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return
+                        tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
                         return
                     }
                 }
@@ -47024,6 +47026,60 @@ interface DataView {
      *  Only fires for INSTANCE-side access: skip when the receiver type already carries the
      *  property (e.g. `const k2: typeof K; k2.bar` — k2's type is the constructor side, so
      *  `bar` resolves there and `k2.bar` is legitimate). */
+    /** TS2339 when a class-instance receiver accesses a property that is genuinely
+     *  absent from the class hierarchy.
+     *
+     *  Conservative gates defend against false positives:
+     *   - propName not in [RUNTIME_PROPERTIES];
+     *   - symbol has exactly 1 declaration (no interface/namespace augmentation
+     *     contributing extra members);
+     *   - class is non-generic (TypeParam constraints could supply members we
+     *     don't yet check structurally);
+     *   - class has no `extends` clause — the base might resolve through complex
+     *     expressions (PropertyAccess, generic type-args, import aliases) that
+     *     [hasInstanceMemberNamed]/[isStaticMemberOfClass] don't fully resolve;
+     *   - class has no index signatures (would accept any property name);
+     *   - flow narrowing yields the same type (e.g., `if (c instanceof D) c.bar()`
+     *     narrows `c` from C to D which may have `bar` — the narrowed type
+     *     differs and we bail).
+     *
+     *  Implements clauses are NOT inherited members per [resolveBaseTypesLazy]'s
+     *  skip-implements rule, so this fires correctly for
+     *  `class C implements A {}; let c: C; c.bar()` where A has only `static bar()`. */
+    private fun tryEmitClassInstanceMissingTs2339(
+        typeSym: Symbol, rawType: Type, propName: String, objectExpr: Expression,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ) {
+        if (propName.isEmpty()) return
+        if (propName in RUNTIME_PROPERTIES) return
+        if (typeSym.declarations.size != 1) return
+        val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return
+        if (!classDecl.typeParameters.isNullOrEmpty()) return
+        val hasExtends = classDecl.heritageClauses?.any {
+            it.token == SyntaxKind.ExtendsKeyword
+        } ?: false
+        if (hasExtends) return
+        if (classDecl.members.any { it is IndexSignature }) return
+        // Skip `declare class` — ambient classes are partial views; user code may
+        // declare subclasses extending them with the missing property. The bug
+        // pattern this defends: upstream type inference sometimes resolves
+        // `new Subclass(...)` to the ambient base type, so a receiver typed as
+        // the base is not authoritative for instance-side properties.
+        if (ModifierFlag.Declare in classDecl.modifiers) return
+        if (hasInstanceMemberNamed(classDecl, propName)) return
+        if (isStaticMemberOfClass(classDecl, propName)) return
+        val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
+        if (narrowed !== rawType) return
+        val typeName = classDecl.name?.text ?: typeSym.name
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$typeName'.",
+            category = DiagnosticCategory.Error, code = 2339,
+            fileName = fileName, line = line, character = character,
+            start = diagStart, length = diagLength,
+        ))
+    }
+
     private fun tryEmitStaticAccessTs2576(
         typeSym: Symbol, propName: String, diagStart: Int, diagLength: Int,
         suggestionKey: String, source: String, fileName: String,
