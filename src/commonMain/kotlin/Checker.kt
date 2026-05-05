@@ -46801,6 +46801,44 @@ interface DataView {
                 return
             }
         }
+        // 17.116: TS7053 "Element implicitly has an 'any' type because expression of
+        // type 'any' can't be used to index type 'X'." Fires when the key expression
+        // resolves to `any` AND the receiver is an empty `{}`-typed value (Type.Object
+        // with no members and no index signatures). Gated on noImplicitAny/strict.
+        // Squiggle covers full `receiver[key]` expression. Must run BEFORE the `when (arg)`
+        // block which returns for non-literal keys.
+        if (arg is Identifier && (options.noImplicitAny || options.strict)) {
+            val argType = try { getTypeOfIdentifier(arg) } catch (_: StackOverflowError) { null }
+            if (argType === anyType) {
+                val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+                if (recvType is Type.Object && recvType !is Type.Reference && recvType !is Type.Interface) {
+                    try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { /* fall-through */ }
+                    val noProps = recvType.properties.isNullOrEmpty()
+                    val noIndex = recvType.stringIndexInfo == null && recvType.numberIndexInfo == null
+                    val noCalls = recvType.callSignatures.isNullOrEmpty() && recvType.constructSignatures.isNullOrEmpty()
+                    if (noProps && noIndex && noCalls) {
+                        val recvStart = expr.expression.pos
+                        var closeBracket = arg.pos + arg.text.length
+                        while (closeBracket < source.length && source[closeBracket] != ']') closeBracket++
+                        val end = if (closeBracket < source.length) closeBracket + 1 else expr.end
+                        val length = (end - recvStart).coerceAtLeast(1)
+                        val recvDisplay = typeToString(recvType)
+                        val (line, character) = getLineAndCharacterOfPosition(source, recvStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '$recvDisplay'.",
+                            category = DiagnosticCategory.Error,
+                            code = 7053,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = recvStart,
+                            length = length,
+                        ))
+                        return
+                    }
+                }
+            }
+        }
         val propName: String
         val diagStart: Int
         val diagLength: Int
@@ -46819,6 +46857,36 @@ interface DataView {
                 diagLength = arg.text.length
             }
             else -> return
+        }
+        // 17.116: TS7015 "Element implicitly has an 'any' type because index expression
+        // is not of type 'number'." Fires when a StringLiteral key accesses an enum-typed
+        // identifier AND the key isn't a known enum member name AND the key isn't a
+        // numeric-looking string. Enums have implicit number-index sigs (member name
+        // string -> number for forward, number -> name for reverse); a non-numeric string
+        // key bypasses both. Gated on noImplicitAny/strict.
+        if (arg is StringLiteralNode && (options.noImplicitAny || options.strict)) {
+            val recvIdent = expr.expression as? Identifier
+            if (recvIdent != null) {
+                val recvSym = globals[recvIdent.text]
+                if (recvSym != null && recvSym.flags.hasAny(SymbolFlags.Enum)) {
+                    val isNumericKey = arg.text.toDoubleOrNull() != null
+                    val isKnownMember = recvSym.exports?.containsKey(arg.text) == true
+                    if (!isNumericKey && !isKnownMember) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Element implicitly has an 'any' type because index expression is not of type 'number'.",
+                            category = DiagnosticCategory.Error,
+                            code = 7015,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = arg.pos,
+                            length = (arg.rawText?.length ?: arg.text.length) + 2,
+                        ))
+                        return
+                    }
+                }
+            }
         }
         // Build the raw suggestion syntax for TS2576 from the source text:
         // - StringLiteral key keeps original quoting: a["\""] → `["\""]`

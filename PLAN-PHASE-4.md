@@ -2619,6 +2619,28 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.116, 8509 → 8511, +2) — TS7015 + TS7053
+  implicit-any element-access for `noImplicitAnyIndexingSuppressed_ts`
+  + collateral on `noImplicitAnyIndexing_ts`:** Continuation /loop
+  after 17.115. Stacks on 17.115's `{}` TS2339 emission. Two checks
+  added in `checkSingleElementAccess`:
+  (1) **TS7015** for `enum["nonNumericKey"]` — fires when receiver
+  is enum-typed identifier and `arg is StringLiteralNode` whose text
+  is non-numeric AND not in `recvSym.exports`. Squiggle on quoted
+  string literal (`text.length + 2`). Inserted after the `when (arg)`
+  block (StringLiteral path).
+  (2) **TS7053** for `obj[anyKey]` — fires when `arg is Identifier`
+  resolving to `anyType` AND receiver is `Type.Object` with empty
+  members, no index sigs, no call/construct sigs, not
+  Type.Reference / Type.Interface. Squiggle covers full
+  `receiver[key]` span (search forward from `arg.pos + arg.text.length`
+  to closing `]`). MUST be placed BEFORE the `when (arg)` block —
+  the literal-key branch returns for Identifier args so a post-block
+  insertion would never fire. Both gated on
+  `options.noImplicitAny || options.strict`. Conservative: no
+  apparent-type widening; no widening of `recvType` from
+  `getTypeOfExpression`. Net delta: 1566 → 1564 (8509 → 8511).
+
   **Session 2026-05-05 (17.115, 8509 unchanged — net-zero infra) —
   TS2339 for property/element access on empty object literals:**
   Continuation /loop after 17.114. New branch in
