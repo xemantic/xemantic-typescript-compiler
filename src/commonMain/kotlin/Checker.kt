@@ -10515,6 +10515,15 @@ class Checker(
         // If X resolves to a TYPE-ONLY symbol (interface, type alias), emit TS2693 instead.
         when (name) {
             is Identifier -> {
+                // `typeof <primitive-type-keyword>` (e.g. `typeof string`) — primitive type
+                // keywords have no value symbol, so they're a TS2693 unless the user shadowed
+                // the name as a runtime value (e.g. `var string = "x"`).
+                if (name.text in TYPE_ONLY_KEYWORD_NAMES &&
+                    !nameResolvesToValue(name.text, fileName)
+                ) {
+                    emitTS2693(name.text, name, source, fileName)
+                    return
+                }
                 if (isTypeOnlySymbolName(name.text, fileName)) {
                     emitTS2693(name.text, name, source, fileName)
                     return
@@ -10530,6 +10539,17 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * Returns true when a value symbol exists for [name] in this file's scope or globals.
+     * Used to suppress the `typeof <type-keyword>` TS2693 emission when the user has
+     * shadowed the keyword with a runtime value (e.g. `var string = "x"; typeof string`).
+     */
+    private fun nameResolvesToValue(name: String, fileName: String): Boolean {
+        val result = fileResults[fileName]
+        val sym = result?.locals?.get(name) ?: globals[name] ?: return false
+        return sym.flags.hasAny(SymbolFlags.Value)
     }
 
     /**
@@ -16450,6 +16470,19 @@ class Checker(
          *  (e.g. anonymous `() => T`). Used in `propertiesRelatedTo` to allow assignment to a
          *  named-interface target whose only required member is `call`/`apply`/`bind`. */
         private val FUNCTION_PROTOTYPE_METHODS = setOf("call", "apply", "bind")
+
+        /** Primitive type-keyword names that may appear as plain Identifier expressions in
+         *  interface `extends` heritage clauses. Triggers TS2840. */
+        private val PRIMITIVE_HERITAGE_NAMES = setOf(
+            "number", "string", "boolean", "bigint", "symbol",
+        )
+
+        /** Type-only keywords that have no runtime value. Using them in `typeof X` value
+         *  position is TS2693. `null`/`undefined` excluded — they ARE valid JS values. */
+        private val TYPE_ONLY_KEYWORD_NAMES = setOf(
+            "string", "number", "boolean", "bigint", "symbol", "object",
+            "any", "unknown", "never", "void",
+        )
 
         /** Words that are reserved as identifiers in strict mode (TS1212). */
         private val STRICT_MODE_RESERVED_WORDS = setOf(
@@ -42168,11 +42201,22 @@ interface DataView {
             }
         }
 
+        // Method-overload tracking — skip TS2411 for methods declared more than once
+        // (interface overload signatures); the simple synthesis below would only see one.
+        val methodNameCounts = mutableMapOf<String, Int>()
+        for (m in members) {
+            if (m is MethodDeclaration) {
+                val nm = (m.name as? Identifier)?.text ?: continue
+                methodNameCounts[nm] = (methodNameCounts[nm] ?: 0) + 1
+            }
+        }
         // Check each named property against the string index type
         for (member in members) {
             val propName: String
             val propTypeNode: TypeNode?
             val nameNode: Node
+            // For MethodDeclaration: squiggle covers full decl through trailing `;`.
+            var methodSquiggle = false
             when (member) {
                 is PropertyDeclaration -> {
                     // Skip private fields (#name) — they're not accessible via index operator
@@ -42187,16 +42231,35 @@ interface DataView {
                     propTypeNode = member.type
                 }
                 is MethodDeclaration -> {
+                    // Methods only checked when string-index is callable (function-type).
+                    // The `stringIndexTypeIsPrimitive` branch above handles the primitive case
+                    // with a different display format; defer to it there.
+                    if (stringIndexTypeIsPrimitive) continue
                     nameNode = member.name ?: continue
                     propName = when (val n = member.name) {
                         is Identifier -> n.text
                         else -> continue
                     }
-                    propTypeNode = null // methods have function type
+                    if (propName.isEmpty() || propName == "new") continue // call/construct sigs
+                    if (propName.startsWith("#")) continue
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    // Skip overloaded methods — single-decl synthesis below misses the others.
+                    if ((methodNameCounts[propName] ?: 0) > 1) continue
+                    // Synthesize FunctionType TypeNode from the method's params + return.
+                    val retNode = member.type
+                        ?: KeywordTypeNode(SyntaxKind.AnyKeyword, member.pos, member.end)
+                    propTypeNode = FunctionType(
+                        typeParameters = member.typeParameters,
+                        parameters = member.parameters,
+                        type = retNode,
+                        pos = member.pos,
+                        end = member.end,
+                    )
+                    methodSquiggle = true
                 }
                 else -> continue
             }
-            if (propTypeNode == null) continue // skip methods without explicit type
+            if (propTypeNode == null) continue // properties without explicit type
             val propType = getTypeFromTypeNode(propTypeNode)
             if (propType === anyType || propType === errorType) continue
 
@@ -42205,7 +42268,13 @@ interface DataView {
                 val indexTypeDisplay = typeToString(stringIndexType)
                 val start: Int
                 val length: Int
-                when (nameNode) {
+                if (methodSquiggle && member is MethodDeclaration) {
+                    val nameStart = (member.name as Identifier).pos
+                    val semiIdx = source.indexOf(';', nameStart)
+                    val end = if (semiIdx >= 0 && semiIdx - nameStart < 80) semiIdx + 1 else member.end
+                    start = nameStart
+                    length = (end - nameStart).coerceAtLeast(1)
+                } else when (nameNode) {
                     is Identifier -> { start = nameNode.pos; length = nameNode.text.length }
                     is StringLiteralNode -> { start = nameNode.pos; length = nameNode.text.length + 2 }
                     else -> continue
@@ -42990,11 +43059,44 @@ interface DataView {
 
     private fun checkInterfaceExtendsInStatement(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
-            is InterfaceDeclaration -> checkInterfaceExtendsClauses(stmt, source, fileName)
+            is InterfaceDeclaration -> {
+                checkInterfaceExtendsPrimitive(stmt, source, fileName)
+                checkInterfaceExtendsClauses(stmt, source, fileName)
+            }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName)
             }
             else -> {}
+        }
+    }
+
+    /**
+     * TS2840: "An interface cannot extend a primitive type like 'X'. It can only extend other
+     * named object types." Fires when an `extends` heritage clause names a primitive type
+     * keyword (number/string/boolean/bigint/symbol). The parser produces these as plain
+     * Identifier expressions in heritage position.
+     */
+    private fun checkInterfaceExtendsPrimitive(ifaceDecl: InterfaceDeclaration, source: String, fileName: String) {
+        val extendsClauses = ifaceDecl.heritageClauses?.filter {
+            it.token == SyntaxKind.ExtendsKeyword
+        } ?: return
+        for (clause in extendsClauses) {
+            for (typeExpr in clause.types) {
+                val expr = typeExpr.expression
+                if (expr !is Identifier) continue
+                if (expr.text !in PRIMITIVE_HERITAGE_NAMES) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                diagnostics.add(Diagnostic(
+                    message = "An interface cannot extend a primitive type like '${expr.text}'. It can only extend other named object types.",
+                    category = DiagnosticCategory.Error,
+                    code = 2840,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = expr.pos,
+                    length = expr.text.length,
+                ))
+            }
         }
     }
 

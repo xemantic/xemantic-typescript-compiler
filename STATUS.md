@@ -1,6 +1,30 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,507 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,509 / 10,078 tests passing (~84%).
+
+**17.114 (2026-05-05, +2)** — Three coordinated diagnostics that flip
+`interfacedeclWithIndexerErrors_ts` plus one collateral test:
+(1) **TS2840** "An interface cannot extend a primitive type like 'X'":
+new `checkInterfaceExtendsPrimitive` walker fires when an interface
+`extends` clause names a primitive type keyword (number/string/boolean/
+bigint/symbol). Squiggle on the identifier name. (2) **TS2693** for
+`typeof <type-only-keyword>` in TypeQuery position: added a check in
+`checkTypeQueryName` that fires when the name is one of
+`TYPE_ONLY_KEYWORD_NAMES` (string/number/boolean/bigint/symbol/object/
+any/unknown/never/void) AND no value symbol shadows it (defensive —
+`var string = "x"; typeof string` continues to be valid). (3)
+**TS2411** for method declarations vs callable string-index types:
+extended the existing `checkIndexSigInStatement` property-loop to
+handle `MethodDeclaration` when the string-index type is NOT primitive
+(the primitive case is handled by 16.4ez). Synthesizes a `FunctionType`
+TypeNode from the method's parameters + return type, runs the existing
+`checkTypeRelatedTo(propType, stringIndexType, assignableRelation)`,
+emits TS2411 with `(params) => returnType` display. Squiggle covers
+the full method declaration through the trailing `;`. Conservative
+gates: skip overloaded methods (multi-decl by name), call/construct
+sigs (name=="" / name=="new"), statics, private (#name). Net delta:
+1568 → 1566 failed (8507 → 8509 passing). Zero regressions across
+10078 suite.
 
 **17.113 (2026-05-05, +2)** — Extended TS2873 "always falsy" to cover
 `Identifier("null"|"undefined")`, `TypeAssertionExpression`, and
