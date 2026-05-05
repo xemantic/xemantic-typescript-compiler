@@ -2619,6 +2619,47 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.114, 8507 → 8509, +2) — TS2840 + TS2693 +
+  TS2411-method-vs-fn-index for `interfacedeclWithIndexerErrors_ts`:**
+  Continuation /loop after 17.113. `find_candidates.py --fresh`
+  returned 0/2/0 (`aliasUsageInOrExpression_ts` and
+  `classImplementsClass6_ts` — both architectural per prior session
+  notes). Per anti-loop rule, ran custom 4-10 line diff scan;
+  `interfacedeclWithIndexerErrors_ts` surfaced with 4 missing diags
+  pointing at three orthogonal gaps. All three landed in one commit:
+  (1) **TS2840** "An interface cannot extend a primitive type like 'X'":
+  new `checkInterfaceExtendsPrimitive` walker invoked from
+  `checkInterfaceExtendsInStatement` ahead of the existing TS2430
+  delegate. Walks `extends` heritage clauses, fires when
+  `expression is Identifier && text in PRIMITIVE_HERITAGE_NAMES`
+  (number/string/boolean/bigint/symbol). Squiggle at the identifier
+  name. (2) **TS2693** for `typeof <type-only-keyword>` in TypeQuery
+  position: `checkTypeQueryName`'s Identifier branch now checks
+  `name.text in TYPE_ONLY_KEYWORD_NAMES` (string/number/boolean/bigint/
+  symbol/object/any/unknown/never/void) AND `!nameResolvesToValue`,
+  emits TS2693 with `name.length` squiggle. Defensive: a user shadow
+  like `var string = "x"; typeof string` falls through to the existing
+  identifier-resolution path. (3) **TS2411** for method declarations
+  vs callable string-index types: the existing property-loop in
+  `checkIndexSigInStatement` (line 42204) extended to handle
+  `MethodDeclaration` when string-index is NOT primitive (the
+  16.4ez branch handles primitive). Synthesizes a `FunctionType`
+  TypeNode from `member.parameters + member.type` (or `any` if
+  return-type-less), runs the existing
+  `checkTypeRelatedTo(propType, stringIndexType, assignableRelation)`,
+  emits TS2411 with `(params) => returnType` display via
+  `formatTypeForDisplay`. Squiggle covers the full method declaration
+  from `name.pos` through the trailing `;` (mirrors 16.4ez's
+  `source.indexOf(';', start)` lookup with 80-char cap). Conservative
+  gates: skip overloaded methods (`methodNameCounts[propName] > 1`),
+  call/construct sigs (`""` / `"new"` names), statics, private
+  (`#name`). Three pieces are independent but landed together because
+  all three are needed to flip the target test. Net delta: 1568 →
+  1566 failed (8507 → 8509 passing). Zero regressions across 10078.
+  Collateral flip from the TS2840 piece:
+  `errorLocationForInterfaceExtension_ts` (1 expected emission for
+  `interface x extends string` at line 3 col 21).
+
   **Session 2026-05-05 (17.113, 8505 → 8507, +2) — TS2873 "always falsy"
   for Identifier(null/undefined), TypeAssertion, AsExpression in `||` LHS
   / `?:` cond / else-if chain:** Continuation /loop after 17.112.
