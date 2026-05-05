@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,525 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,531 / 10,078 tests passing (~85%).
+
+**17.126 (2026-05-05, +6)** — Block-scoped function declaration shadowing
+in TS2554 arity check. `checkArgCountInStatements` (Checker.kt ~21241)
+unconditionally passed the file-level `funcParams` map through every
+recursive call, so a `function foo() {}` declared inside a block (e.g.
+inside an if/else body) couldn't shadow an outer `function foo(a:
+number)` for arity-checking — calls inside the block resolved against
+the OUTER signature. Pre-fix: `function foo(a:number) { if (...) {
+function foo(){} foo(); foo(10); } }` emitted FP TS2554 "Expected 1, got
+0" on inner `foo()` and missed TS2554 "Expected 0, got 1" on inner
+`foo(10)`. Post-fix: each call to `checkArgCountInStatements` builds an
+overlay map: `funcParams.toMutableMap()` + nested
+`FunctionDeclaration`s in this list (preserves overload markers from
+the outer scope to avoid downgrading them). The overlay frame goes
+out of scope when the call returns, so it doesn't leak past the block
+boundary. Flips 6 parameterized variants of
+`blockScopedSameNameFunctionDeclaration{ES5,ES6,StrictES5,StrictES6}`
+(both `errors_txt` and `compiles_to_javascript` variants where they
+share the same shadowing pattern). Net delta: 1550 → 1544 failed
+(8525 → 8531 passing). Zero regressions across 10078 suite.
 
 **17.125 (2026-05-05, +1)** — TS2666/TS2667 distinction +
 ExportAssignment-in-augmentation. Two-piece change in service of

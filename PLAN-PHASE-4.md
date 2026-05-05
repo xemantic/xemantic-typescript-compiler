@@ -2619,6 +2619,37 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.126, 8525 → 8531, +6) — Block-scoped
+  function declaration shadowing in TS2554 arity check
+  (`blockScopedSameNameFunctionDeclaration*` flip x6):**
+  Continuation /loop after 17.125. Custom 4-10 line scan surfaced
+  `blockScopedSameNameFunctionDeclarationStrictES6_ts` etc. with a
+  consistent SWAP pattern: missing TS2554 "Expected 0 arguments, but
+  got 1" at `foo(10)` calls inside `if`/`else` blocks (where a
+  block-scoped `function foo(){}` shadows the outer
+  `function foo(a:number)`), plus extra TS2554 "Expected 1 arguments,
+  but got 0" at `foo()` calls in the same blocks. Root cause:
+  `checkArgCountInStatements` (Checker.kt ~21241) unconditionally
+  forwarded the file-level `funcParams` map through every recursive
+  call — block-scope nested `FunctionDeclaration`s never overrode
+  outer same-named entries.
+  **Fix**: each call to `checkArgCountInStatements` now builds an
+  overlay: `funcParams.toMutableMap()` + nested `FunctionDeclaration`s
+  whose `name != null && body != null` from the IMMEDIATE statement
+  list. Preserves overload markers from outer scope (skips overlay if
+  `outer[name]?.isOverloaded == true` to avoid downgrading multi-decl
+  cases). The overlay frame is local to the function-call frame, so
+  it doesn't leak past the block boundary — exiting the if-block via
+  the IfStatement handler returns to the outer
+  `checkArgCountInStatements` call frame which still has the outer
+  funcParams map. Test impact: flips 6 parameterized variants
+  (`blockScopedSameNameFunctionDeclaration{ES5,ES6,StrictES5,StrictES6}`
+  × `target=es5/es2015` × `errors_txt`/`compiles_to_javascript`).
+  Net delta: 1550 → 1544 failed (8525 → 8531 passing). Zero
+  regressions. Foundation: the same overlay pattern could apply to
+  other arity-shadowing scenarios (block-scoped class declarations,
+  block-scoped imports), but no current failing test gates on those.
+
   **Session 2026-05-05 (17.125, 8524 → 8525, +1) — TS2666/TS2667
   distinction + ExportAssignment-in-augmentation
   (`moduleAugmentationDisallowedExtensions_ts` flip):** Continuation
