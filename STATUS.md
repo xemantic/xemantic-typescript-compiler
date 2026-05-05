@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,509 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,511 / 10,078 tests passing (~84%).
+
+**17.116 (2026-05-05, +2)** — TS7015 + TS7053 implicit-any element-access
+diagnostics, gated on `noImplicitAny || strict`:
+(1) **TS7015** "Element implicitly has an 'any' type because index
+expression is not of type 'number'" — fires when a string-literal key
+accesses an enum-typed identifier AND the key isn't a known member
+name AND the key isn't numeric-looking. Squiggle on the quoted string
+literal. (2) **TS7053** "Element implicitly has an 'any' type because
+expression of type 'any' can't be used to index type 'X'" — fires when
+the key is an Identifier resolving to `any` AND the receiver is a
+fully-empty `Type.Object` (no members, no index sigs, no call/construct
+sigs, not Type.Reference / Type.Interface). Squiggle covers full
+`receiver[key]` span (search forward from key end to the closing `]`).
+Both checks placed in `checkSingleElementAccess` ahead of the
+`when (arg)` literal-branch so non-literal keys (TS7053 case) are
+caught before that block returns. Pairs with 17.115's `{}` element-access
+TS2339 to flip both `noImplicitAnyIndexingSuppressed_ts` (target) and
+`noImplicitAnyIndexing_ts` (collateral). Net delta: 1566 → 1564
+failed (8509 → 8511 passing). Zero regressions across 10078.
 
 **17.115 (2026-05-05, net-zero infra)** — TS2339 for property/element
 access on empty object literals (`{}["X"]`, `{}[N]`, `({}).x`). New
