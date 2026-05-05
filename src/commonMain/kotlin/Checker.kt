@@ -9237,14 +9237,25 @@ class Checker(
             }
             is SwitchStatement -> {
                 checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+                // Switch case clauses share a single block scope (per ECMA-262 / TS semantics):
+                // `let x` in case 0 is visible in case 1 of the same switch (fall-through pattern).
+                // Collect declared names from ALL clauses into one shared child scope before walking.
+                val switchScope = scope.child()
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> collectDeclaredNames(clause.statements, switchScope)
+                        is DefaultClause -> collectDeclaredNames(clause.statements, switchScope)
+                        else -> {}
+                    }
+                }
                 for (clause in stmt.caseBlock) {
                     when (clause) {
                         is CaseClause -> {
-                            checkUnresolvedInExpr(clause.expression, scope, source, fileName)
-                            checkUnresolvedInStatements(clause.statements, scope, source, fileName)
+                            checkUnresolvedInExpr(clause.expression, switchScope, source, fileName)
+                            for (s in clause.statements) checkUnresolvedInStatement(s, switchScope, source, fileName)
                         }
                         is DefaultClause -> {
-                            checkUnresolvedInStatements(clause.statements, scope, source, fileName)
+                            for (s in clause.statements) checkUnresolvedInStatement(s, switchScope, source, fileName)
                         }
                         else -> {}
                     }
@@ -28339,7 +28350,10 @@ interface DataView {
                 is SwitchStatement -> {
                     // Check case clauses if the switch expression resolves to a const literal
                     val expr = stmt.expression
-                    val binding = if (expr is Identifier) constBindings[expr.text] else null
+                    val binding = when (expr) {
+                        is Identifier -> constBindings[expr.text]
+                        else -> literalKindDisplay(expr)
+                    }
                     if (binding != null) {
                         for (c in stmt.caseBlock) {
                             if (c !is CaseClause) continue

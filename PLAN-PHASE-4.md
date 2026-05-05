@@ -2619,6 +2619,44 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.124, 8522 → 8524, +2) — Switch-case literal
+  comparability extension + shared block scope across case clauses
+  (`unusedSwitchStatement_ts` flip):** Continuation /loop after 17.123.
+  `find_candidates.py --fresh` returned 0/1/0 (single MISSING
+  `aliasUsageInOrExpression_ts`, logged to skip-list this session as
+  architectural — needs cross-file `typeof import("...")` display
+  infrastructure). Custom 4-10 line scan (extends past
+  `find_candidates.py`'s ≤3 cap) surfaced `unusedSwitchStatement_ts`
+  with 3 missing TS2678 + 1 extra TS2304. Both gaps fixed in one
+  commit since they pair on the same test:
+  (1) **TS2678 missing**: `walkSwitchCaseComparable` (Checker.kt
+  line ~28342) only resolved `binding` when the switch expression was
+  an `Identifier` referencing a tracked const literal binding. Inline
+  literal switch expressions (`switch (1) { case 0: ... }`) silently
+  bailed. Extended the resolution to fall back to
+  `literalKindDisplay(expr)` for non-Identifier expressions, which
+  already supports NumericLiteral/StringLiteral/BigIntLiteral/true/false/
+  unary-minus-on-numeric. Surface impact bounded to inline-literal
+  switch heads, which is the common case for `switch (constant)`
+  patterns in the test corpus.
+  (2) **TS2304 FP**: `checkUnresolvedInStatement`'s SwitchStatement
+  branch (Checker.kt line ~9238) called `checkUnresolvedInStatements`
+  separately per case clause, which creates a fresh child scope per
+  call (line 8966). That made `let x` declared in case 0 invisible
+  in case 1's `x = 1` reference (fall-through pattern with no
+  intervening break). Replaced with: ONE `switchScope = scope.child()`
+  created at the SwitchStatement level, walk all clauses to collect
+  declared names into it via `collectDeclaredNames`, then walk each
+  clause's statements directly via `checkUnresolvedInStatement` (NOT
+  the wrapper that re-creates a child scope). Matches ECMA-262 / TS
+  semantics: case clauses share a single switch-block scope; only
+  explicit `{ }` braces around clause bodies create new scopes.
+  Net delta: 1553 → 1551 failed (8522 → 8524 passing). Zero
+  regressions across 10078 suite. Foundation: the same shared-scope
+  pattern could apply to other clause-grouped constructs in the future
+  (e.g. labeled continue targets), but no current failing test gates on
+  that.
+
   **Session 2026-05-05 (17.123, 8521 → 8522, +1) — TS1540 per dotted
   segment + `.d.ts` parser-diagnostic forwarding (`moduleKeywordDeprecated_ts`
   flip):** Continuation /loop after 17.122. `find_candidates.py --fresh`
@@ -5861,6 +5899,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `genericArrayExtenstions_ts` → TS2420 needs class generic name `ObservableArray<T>` and `T[]` display for the `Array<T>` target (the class implements an `Array<T>` with type-param `T[]` flattening for array-ref display).
 - `namespaceDisambiguationInUnion_ts` → `Foo.Yep | Bar.Yep` needs namespace-qualified display; otherwise both render as `Yep`.
 - `unionTypeWithRecursiveSubtypeReduction3_ts` → recursive type display `{ prop: { prop: number } | any }` vs our `{ prop: error }`.
+- `aliasUsageInOrExpression_ts` → MISS TS2322 at (11,5) with expected display `Type '{ x: typeof import("aliasUsageInOrExpression_moduleA"); } | null' is not assignable to type '{ x: IHasVisualizationModel; }'.` Pattern: `import moduleA = require("./moduleA"); var f: {x: IHasVisualizationModel} = <{x: IHasVisualizationModel}>null ? { x: moduleA } : null;`. Source-side type of `{ x: moduleA }` requires `moduleA` (an `import = require()` alias) to render as `typeof import("...")` cross-file display. Currently we resolve `moduleA` to anyType so the union elaboration silently passes. Architectural — needs cross-file `typeof import("...")` display infrastructure tied to the `import = require()` alias resolution. Confirmed via 17.113 session note + recurring in --fresh across 17.114–17.123 sessions.
 - `contextualTupleTypeParameterReadonly_ts` → SWAP TS2345 source display `(a: 1 | 2, b: "1" | "2") => void` vs our `(a: T, b: any) => void`. Test pattern: `each<T extends ReadonlyArray<any>>(cases: ReadonlyArray<T>): (fn: (...args: T) => any) => void` called with `[[1,'1'],[2,'2']] as const`. Needs three pieces in coordination: (a) Blocker #2 generic argument inference (T inferred from `cases` arg), (b) `as const` readonly tuple-of-tuples literal-type inference, (c) contextual typing of lambda params from the inferred-and-distributed tuple T. Architectural — blocker-adjacent.
 - `arrayAssignmentTest4_ts` → SWAP TS2740 missing-property count: expected `..., and 25 more.` vs our `..., and 29 more.` Test target=es2015 expects Array<T> properties from the es2015 lib subset (29 total: ~27 named after Object-prototype filter + 2 Symbol-keyed `[Symbol.iterator]`/`[Symbol.unscopables]`). Our embedded lib bundles all-version Array methods (`includes`, `flat`, `flatMap`, `at`, `findLast`, `findLastIndex` from es2016/2019/2022/2023) AND lacks the Symbol-keyed members → net +4 in the count. Needs lib-version-aware loading (or a runtime filter keyed off `options.target`/`options.lib`) — architectural at the lib-loading level. Identified post-17.27 recon (2026-04-26).
 
