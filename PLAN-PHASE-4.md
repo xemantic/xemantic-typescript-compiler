@@ -2619,6 +2619,35 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.127, 8531 → 8532, +1) — TS2395 narrow
+  default-import-vs-exported-var emission + skip TS2451 for
+  import-merge groups (`exportAssignmentImportMergeNoCrash_ts` flip):**
+  Continuation /loop after 17.126. Custom 4-10 line scan surfaced
+  `exportAssignmentImportMergeNoCrash_ts` as a SWAP candidate:
+  expected TS2395 at (1,8) and (3,14), our checker emitted TS2451 at
+  same positions. Pattern: `import Obj from "./assignment"; export
+  const Obj = void Obj;` — default import + exported const sharing
+  a name. TypeScript fires both TS2440 (which we already emit) and
+  TS2395 ("Individual declarations in merged declaration must be all
+  exported or all local"). Two-piece fix: (1) added a TS2395
+  emission in `checkDuplicateDeclarations` when an import group
+  contains a default-import binding AND any exported VariableStatement
+  of the same name — narrow scope, not for named imports / function
+  decls / class decls (TS routes those through TS2440 only). (2)
+  added `!hasImport` to the `allBlockScoped` gate so the existing
+  TS2451 emission for `import + const` no longer FP-fires.
+  **Iteration**: first attempt was too broad (mixed-export-status
+  with ANY non-import decl), regressed
+  `expandoFunctionContextualTypesNoValue_ts`,
+  `functionAndImportNameConflict_ts`,
+  `mergeWithImportedNamespace_ts` (the latter two were
+  pre-existing failures that briefly got worse). Narrowed gate
+  to default-import + exported-VariableStatement specifically.
+  Required also wiring `stmt` through `DeclInfo` for
+  `ImportDeclaration` paths (was null pre-fix; needed to recognize
+  default imports). Net delta: 1544 → 1543 failed (8531 → 8532
+  passing). Zero regressions.
+
   **Session 2026-05-05 (17.126, 8525 → 8531, +6) — Block-scoped
   function declaration shadowing in TS2554 arity check
   (`blockScopedSameNameFunctionDeclaration*` flip x6):**

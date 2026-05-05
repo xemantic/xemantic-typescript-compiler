@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,531 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,532 / 10,078 tests passing (~85%).
+
+**17.127 (2026-05-05, +1)** — TS2395 narrow default-import-vs-exported-var
+emission + skip TS2451 for import-merge groups. Two-piece change in
+service of `exportAssignmentImportMergeNoCrash_ts`:
+1. **TS2395 emission** in `checkDuplicateDeclarations` (Checker.kt
+   ~12377): when a group contains a default import binding (matched via
+   `clause.name === d.nameNode` on the parent `ImportDeclaration`) AND
+   any exported `VariableStatement` of the same name, emit
+   "Individual declarations in merged declaration must be all exported
+   or all local." at every group node. Narrow scope: function/class/
+   namespace/interface forms are NOT in scope (TS routes those through
+   TS2440 which we already emit on the var-conflict path); only
+   default imports trigger (named imports / `import * as` don't merge
+   with same-name local var/let/const in TS's symbol model).
+2. **TS2451 suppression** when an import is in the group (Checker.kt
+   ~12896): the `allBlockScoped` gate now requires `!hasImport` so
+   `import X + const X` no longer FP-emits "Cannot redeclare
+   block-scoped variable" — that path is reserved for non-import
+   block-scoped collisions; the import-merge case routes through
+   TS2395/TS2440. Net delta: 1544 → 1543 failed (8531 → 8532
+   passing). Zero regressions.
 
 **17.126 (2026-05-05, +6)** — Block-scoped function declaration shadowing
 in TS2554 arity check. `checkArgCountInStatements` (Checker.kt ~21241)

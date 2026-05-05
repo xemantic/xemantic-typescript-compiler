@@ -12286,13 +12286,13 @@ class Checker(
                 is ImportDeclaration -> {
                     val clause = stmt.importClause ?: continue
                     // Default binding: import X from "..."
-                    clause.name?.let { decls.add(DeclInfo(it.text, "import", it)) }
+                    clause.name?.let { decls.add(DeclInfo(it.text, "import", it, stmt)) }
                     // Named bindings
                     val nb = clause.namedBindings
                     when (nb) {
-                        is NamespaceImport -> decls.add(DeclInfo(nb.name.text, "import", nb.name))
+                        is NamespaceImport -> decls.add(DeclInfo(nb.name.text, "import", nb.name, stmt))
                         is NamedImports -> for (element in nb.elements) {
-                            decls.add(DeclInfo(element.name.text, "import", element.name))
+                            decls.add(DeclInfo(element.name.text, "import", element.name, stmt))
                         }
                         else -> {}
                     }
@@ -12380,6 +12380,43 @@ class Checker(
             if (importCount >= 2) {
                 for (decl in group.filter { it.kind == "import" }) {
                     emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+
+            // 17.127: TS2395 — "Individual declarations in merged declaration must be all
+            // exported or all local." Narrow scope: fires only for default imports paired
+            // with an exported var/let/const declaration of the same name. (Function /
+            // class / namespace / interface forms route through TS2440 instead — the
+            // baseline reserves TS2395 for the var-style overlap case.) Excluded entirely
+            // when the matching non-import decl is unresolved or when the import comes
+            // from a module-not-found path (TS2307 takes priority).
+            if (group.size >= 2 && group.any { it.kind == "import" }) {
+                fun declIsExportedVar(d: DeclInfo): Boolean {
+                    val s = d.stmt as? VariableStatement ?: return false
+                    return ModifierFlag.Export in s.modifiers
+                }
+                val isDefaultImport = group.any { d ->
+                    if (d.kind != "import") return@any false
+                    val s = (d.stmt as? ImportDeclaration) ?: return@any false
+                    s.importClause?.name === d.nameNode
+                }
+                val anyExportedVar = group.any { declIsExportedVar(it) }
+                if (isDefaultImport && anyExportedVar) {
+                    for (decl in group) {
+                        val nameLen = if (decl.nameNode is Identifier) (decl.nameNode as Identifier).text.length
+                            else (decl.nameNode.end - decl.nameNode.pos)
+                        val (line, character) = getLineAndCharacterOfPosition(source, decl.nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
+                            category = DiagnosticCategory.Error,
+                            code = 2395,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = decl.nameNode.pos,
+                            length = nameLen,
+                        ))
+                    }
                 }
             }
 
@@ -12849,7 +12886,11 @@ class Checker(
                     continue
                 }
 
-                val allBlockScoped = hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2
+                // 17.127: skip TS2451 when an import binding is in the group — TS2395
+                // (mixed export status) and TS2440 (import conflicts with local) are emitted
+                // separately at their own checks and replace the redeclare diagnostic.
+                val hasImport = "import" in kinds || "import=" in kinds
+                val allBlockScoped = hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && !hasImport
                 if (allBlockScoped && group.size >= 2) {
                     for (decl in group) {
                         val start = decl.nameNode.pos
