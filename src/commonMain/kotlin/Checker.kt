@@ -196,6 +196,12 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** Cache for [classNamesWithSiblingInterfaces]. Declared BEFORE [init] so the
+     *  field exists (as `null`) during init-time helper calls — accessing a `by
+     *  lazy {}` property before its declaration line has run produces NPEs because
+     *  the Lazy<T> backing field is itself uninitialized. */
+    private var classNamesWithSiblingInterfacesCache: Set<String>? = null
+
     /** Current function's parameters — set during implicit-return checking to enable exhaustive
      *  switch detection for literal-type parameters (e.g., `bar: "a" | "b"`). */
     private var currentFunctionParams: List<Parameter> = emptyList()
@@ -46382,40 +46388,28 @@ interface DataView {
                     if (ctorSym.declarations.size > 1) return
                     val classDecl = ctorSym.declarations.firstOrNull() as? ClassDeclaration
                     if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
-                        // Only fire when the class has NO declared member with this name.
-                        // Inherited/implemented members: if ANY heritage clause is present,
-                        // bail to avoid FPs (we can't reliably resolve recursive bases).
-                        val hasOwnMember = classDecl.members.any { m ->
-                            val name = when (m) {
-                                is PropertyDeclaration -> (m.name as? Identifier)?.text
-                                is MethodDeclaration -> (m.name as? Identifier)?.text
-                                is GetAccessor -> (m.name as? Identifier)?.text
-                                is SetAccessor -> (m.name as? Identifier)?.text
-                                else -> null
-                            }
-                            name == propName
-                        }
-                        if (!hasOwnMember) {
-                            // For TS2310/TS2506-flagged classes (circular base), treat as if
-                            // no inheritance is possible. For simple non-generic classes with
-                            // no base and no members named propName, also fire.
-                            val hasBase = classDecl.heritageClauses?.any {
-                                it.token == SyntaxKind.ExtendsKeyword
-                            } ?: false
-                            val isCircular = classHasCircularBase(classDecl)
-                            if (!hasBase || isCircular) {
-                                val typeArgs = classDecl.typeParameters?.size ?: 0
-                                val display = if (typeArgs > 0) {
-                                    ctor.text + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
-                                } else ctor.text
-                                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                                diagnostics.add(Diagnostic(
-                                    message = "Property '$propName' does not exist on type '$display'.",
-                                    category = DiagnosticCategory.Error, code = 2339,
-                                    fileName = fileName, line = line, character = character,
-                                    start = diagStart, length = diagLength,
-                                ))
-                            }
+                        // Walk own members + extends chain. `false` means the chain
+                        // resolves cleanly (no IndexSignature, no ambient base, no
+                        // unresolvable extends expression) and the property is
+                        // genuinely missing — fire TS2339. `true` means a base
+                        // class declares it. `null` means the chain has parts we
+                        // can't safely walk (complex extends like `Foo.Bar`,
+                        // generic call form, ambient base, IndexSignature) — bail.
+                        val chainResult = lookupInstanceMemberInResolvableChain(classDecl, propName)
+                        val isCircular = classHasCircularBase(classDecl)
+                        val canEmit = chainResult == false || isCircular
+                        if (canEmit) {
+                            val typeArgs = classDecl.typeParameters?.size ?: 0
+                            val display = if (typeArgs > 0) {
+                                ctor.text + "<" + List(typeArgs) { "unknown" }.joinToString(", ") + ">"
+                            } else ctor.text
+                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type '$display'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
                         }
                     }
                 }
@@ -46732,14 +46726,38 @@ interface DataView {
             // declaration for the static-member presence and emit a precise TS2339 when
             // the property isn't a static of the class.
             val ctorClassSym = objectType.symbol
-            if (ctorClassSym != null && ctorClassSym.flags.hasAny(SymbolFlags.Class)
-                && objectType !is Type.Interface) {
+            if (ctorClassSym != null && ctorClassSym.flags.hasAny(SymbolFlags.Class)) {
                 val classDecl = ctorClassSym.declarations.firstOrNull() as? ClassDeclaration
                 if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
                     if (isStaticMemberOfClass(classDecl, propName)) return
+                    if (objectType !is Type.Interface) {
+                        // Constructor side (`typeof C`): static-member check above already
+                        // rejected static hits. The class shape is the static side, which
+                        // is built once and not subject to "inherited static" cache misses,
+                        // so emit unconditionally.
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type 'typeof ${ctorClassSym.name}'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
+                    // Instance side (Type.Interface) with empty/missing properties: only
+                    // fire for `this`-access where we know we're authoritatively on the
+                    // instance side of the enclosing class. Other Type.Interface receivers
+                    // (variable references, class-Identifier-as-value like `C[1]` whose
+                    // `getTypeOfSymbol` mis-resolves to the declared instance type) have
+                    // their own dedicated handlers (`tryEmitClassInstanceMissingTs2339`,
+                    // `NewExpression` branch above) — calling here would FP-fire on
+                    // value-position class references. Display: bare `C`, not `typeof C`.
+                    if (!isThisAccess) return
+                    val chainResult = lookupInstanceMemberInResolvableChain(classDecl, propName)
+                    if (chainResult != false) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type 'typeof ${ctorClassSym.name}'.",
+                        message = "Property '$propName' does not exist on type '${ctorClassSym.name}'.",
                         category = DiagnosticCategory.Error, code = 2339,
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
@@ -47105,6 +47123,97 @@ interface DataView {
      * BOTH an instance member X and a static member X. `this.X` in an instance method
      * legitimately resolves to the instance member.
      */
+    /** Walk [classDecl]'s instance-side member set + extends chain looking for a
+     *  member named [propName]. Returns:
+     *
+     *  - `true` — member found in this class or any safely-resolvable base.
+     *  - `false` — chain fully resolved (terminates at a class with no extends or
+     *    a cycle) without finding the member.
+     *  - `null` — chain has un-resolvable parts (non-Identifier extends like
+     *    `Foo.Bar` or `q<T>()`, an Identifier base whose symbol isn't a
+     *    [ClassDeclaration] in [globals], an `IndexSignature` member that would
+     *    accept any property name, or a `declare class` whose lib augmentations
+     *    we can't see). Caller MUST treat `null` as "unsafe to emit" and bail.
+     *
+     *  Used by TS2339 emitters that need to ask "is this property genuinely
+     *  missing from the entire instance-side view?" without re-walking the
+     *  chain manually. Implements clauses are intentionally NOT followed —
+     *  per [resolveBaseTypesLazy], implements is a structural constraint, not
+     *  a source of inherited members. */
+    /** Set of class names that have a sibling [InterfaceDeclaration] with the
+     *  same name in any binderResult. Our binder's `canMerge` does not include
+     *  Class+Interface, so the second-bound declaration silently overwrites
+     *  the first, and `symbol.declarations` ends up holding only one — but the
+     *  AST still contains both, and TypeScript treats them as a merged
+     *  declaration with combined member sets. The chain walker must bail for
+     *  these names because it can't see members contributed by the
+     *  non-canonical sibling declaration. Computed on first access (during init)
+     *  via [classNamesWithSiblingInterfacesCache] — cannot use `by lazy {}`
+     *  because that would declare the property after init and the Lazy backing
+     *  field would be null during init-time access. */
+    private fun classNamesWithSiblingInterfaces(): Set<String> {
+        classNamesWithSiblingInterfacesCache?.let { return it }
+        val byName = mutableMapOf<String, MutableSet<String>>()
+        for (binderResult in binderResults) {
+            for (stmt in binderResult.sourceFile.statements) {
+                when (stmt) {
+                    is ClassDeclaration -> {
+                        val n = stmt.name?.text ?: continue
+                        byName.getOrPut(n) { mutableSetOf() }.add("C")
+                    }
+                    is InterfaceDeclaration -> {
+                        byName.getOrPut(stmt.name.text) { mutableSetOf() }.add("I")
+                    }
+                    else -> {}
+                }
+            }
+        }
+        val result = byName.filterValues { "C" in it && "I" in it }.keys
+        classNamesWithSiblingInterfacesCache = result
+        return result
+    }
+
+    private fun lookupInstanceMemberInResolvableChain(
+        classDecl: ClassDeclaration, propName: String, visited: MutableSet<String>? = null,
+    ): Boolean? {
+        val v = visited ?: mutableSetOf()
+        val className = classDecl.name?.text ?: return null
+        if (!v.add(className)) return false
+        if (className in classNamesWithSiblingInterfaces()) return null
+        if (classDecl.members.any { it is IndexSignature }) return null
+        if (ModifierFlag.Declare in classDecl.modifiers) return null
+        for (m in classDecl.members) {
+            when (m) {
+                is PropertyDeclaration -> {
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
+                }
+                is MethodDeclaration -> {
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
+                }
+                is GetAccessor -> {
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
+                }
+                is SetAccessor -> {
+                    if (ModifierFlag.Static !in m.modifiers && classMemberNameText(m.name) == propName) return true
+                }
+                is Constructor -> {
+                    for (p in m.parameters) {
+                        if (p.modifiers.isEmpty()) continue
+                        if ((p.name as? Identifier)?.text == propName) return true
+                    }
+                }
+                else -> {}
+            }
+        }
+        val baseExpr = classDecl.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()?.expression ?: return false
+        if (baseExpr !is Identifier) return null
+        val baseSym = globals[baseExpr.text] ?: return null
+        val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration ?: return null
+        return lookupInstanceMemberInResolvableChain(baseDecl, propName, v)
+    }
+
     private fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
         val v = visited ?: mutableSetOf()
         val className = classDecl.name?.text ?: return false
@@ -47160,10 +47269,15 @@ interface DataView {
      *     contributing extra members);
      *   - class is non-generic (TypeParam constraints could supply members we
      *     don't yet check structurally);
-     *   - class has no `extends` clause — the base might resolve through complex
-     *     expressions (PropertyAccess, generic type-args, import aliases) that
-     *     [hasInstanceMemberNamed]/[isStaticMemberOfClass] don't fully resolve;
-     *   - class has no index signatures (would accept any property name);
+     *   - chain walk via [lookupInstanceMemberInResolvableChain] returns `false`
+     *     (own + entire extends chain resolved cleanly, no member found). The
+     *     helper itself bails (`null`) on hazardous shapes — non-Identifier
+     *     extends (`Foo.Bar`, `q<T>()`), unresolvable Identifier bases, ambient
+     *     bases (`declare class`), index signatures, or sibling
+     *     [InterfaceDeclaration]s of the same name in any binderResult (since
+     *     our binder's `canMerge` does not include Class+Interface, those
+     *     declarations would silently overwrite each other and the helper can't
+     *     see members from the lost declaration);
      *   - flow narrowing yields the same type (e.g., `if (c instanceof D) c.bar()`
      *     narrows `c` from C to D which may have `bar` — the narrowed type
      *     differs and we bail).
@@ -47180,18 +47294,14 @@ interface DataView {
         if (typeSym.declarations.size != 1) return
         val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return
         if (!classDecl.typeParameters.isNullOrEmpty()) return
-        val hasExtends = classDecl.heritageClauses?.any {
-            it.token == SyntaxKind.ExtendsKeyword
-        } ?: false
-        if (hasExtends) return
-        if (classDecl.members.any { it is IndexSignature }) return
-        // Skip `declare class` — ambient classes are partial views; user code may
-        // declare subclasses extending them with the missing property. The bug
-        // pattern this defends: upstream type inference sometimes resolves
-        // `new Subclass(...)` to the ambient base type, so a receiver typed as
-        // the base is not authoritative for instance-side properties.
-        if (ModifierFlag.Declare in classDecl.modifiers) return
-        if (hasInstanceMemberNamed(classDecl, propName)) return
+        // Walk own + extends chain. The helper itself bails on IndexSignature
+        // and `declare class` (in this class OR any base), so those gates need
+        // not be repeated at this level. `null` means chain isn't safely
+        // resolvable (complex extends like `Foo.Bar`, unresolved Identifier,
+        // ambient base, etc.); `true` means a base in the chain declares the
+        // property; only `false` means "genuinely missing across the entire
+        // resolvable instance side".
+        if (lookupInstanceMemberInResolvableChain(classDecl, propName) != false) return
         if (isStaticMemberOfClass(classDecl, propName)) return
         val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
         if (narrowed !== rawType) return

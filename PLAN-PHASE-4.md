@@ -2619,6 +2619,43 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.121, 8518 → 8520, +2) — TS2339 chain-walker
+  for class-instance receivers with safely-resolvable extends
+  (`bases_ts` flip):** Continuation /loop after 17.120. A custom 4-line
+  PURE-MISS scan (extending past `find_candidates.py`'s ≤3 cap)
+  surfaced `bases_ts` (4 missing TS2339s spanning `this.y` in B's ctor,
+  `this.x` in C's ctor where C extends B implements I, plus `new C().x`
+  / `new C().y`). Pre-fix, 17.117's helper bailed via `if (hasExtends)
+  return` to defend against FPs from complex bases (`Foo.Bar`,
+  `q<T>()`), generic refs that hide TypeParam-typed members, ambient
+  bases whose lib augmentations we don't see, and class+interface
+  merges where our binder's `canMerge` doesn't combine the
+  declarations. Replacement: a single recursive helper
+  `lookupInstanceMemberInResolvableChain` returning Boolean? — `true`
+  (own/chain has member), `false` (chain resolved, missing), or `null`
+  (chain hazardous, bail). Hazards encoded inside the helper:
+  IndexSignature, `declare class`, non-Identifier extends, unresolvable
+  Identifier base. Plus a NEW gate via `classNamesWithSiblingInterfaces`
+  — a memoized scan of every binderResult's top-level statements for
+  ClassDeclaration/InterfaceDeclaration name pairs. Cache field
+  declared BEFORE `init` (per the Kotlin property-init-order gotcha;
+  `by lazy {}` would NPE during init when first accessed). Three call
+  sites updated to use the helper: `tryEmitClassInstanceMissingTs2339`
+  (Variable/Property branch in `checkMemberAccessMissing`),
+  NewExpression branch (was `!hasBase || isCircular`; now `chainResult
+  == false || isCircular`), and the Type.Interface empty-properties
+  branch (was guarded by `objectType !is Type.Interface`; now ALSO
+  fires for Type.Interface under `isThisAccess`). The `!isThisAccess`
+  guard on the Type.Interface branch is critical: class identifiers in
+  value position (`C[1]`, `C.foo` outside instance) go through this
+  same path because `getTypeOfSymbol` on a class symbol returns the
+  declared instance type — without the guard, `new C[1]; // not an
+  error` from `createArray_ts` FP-fires TS2339. Found this regression
+  during initial implementation (full-suite re-run flagged
+  `createArray_ts` and `interfaceClassMerging2_ts`, both fixed by the
+  guard + sibling-interface check). Net delta: 1557 → 1555 failed.
+  Zero regressions across 10078 suite.
+
   **Session 2026-05-05 (17.120, 8516 → 8518, +2) — Optional-param
   widening + initializer-scope seeding for `checkParamShadowedByVar`
   (`optionalParamterAndVariableDeclaration_ts` +

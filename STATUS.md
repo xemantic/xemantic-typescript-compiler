@@ -1,6 +1,45 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,518 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,520 / 10,078 tests passing (~84%).
+
+**17.121 (2026-05-05, +2)** — TS2339 for class-instance receivers with
+fully-resolvable extends chain (17.117 follow-on). 17.117's
+`tryEmitClassInstanceMissingTs2339` bailed unconditionally when the class
+had any `extends` clause, conservatively avoiding FPs from un-walkable
+bases. New `lookupInstanceMemberInResolvableChain(classDecl, propName)`
+helper walks own members + extends chain returning `true` (member found),
+`false` (chain fully resolved with no member), or `null` (chain has
+un-walkable parts — non-Identifier extends, ambient base, IndexSignature,
+or a sibling [InterfaceDeclaration] of the same name in any binderResult,
+which our binder's `canMerge` does not handle for Class+Interface so
+silently overwritten declarations leave members invisible to the AST
+walker). Three call sites updated to use the helper:
+1. `tryEmitClassInstanceMissingTs2339` — replaces the `hasExtends` bail
+   plus separate `hasInstanceMemberNamed`/IndexSignature/declare gates
+   with a single `lookupInstanceMemberInResolvableChain(...) != false`
+   check.
+2. NewExpression branch in `checkMemberAccessMissing` (line 46374) —
+   was emitting only when `!hasBase || isCircular`; now also emits when
+   the chain is safely walkable and resolves with no member found
+   (`chainResult == false`).
+3. Type.Interface empty-properties branch (line 46723) — was guarded
+   by `objectType !is Type.Interface` (constructor-side only). New
+   branch fires for instance-side Type.Interface BUT only under
+   `isThisAccess` (the receiver is `this` in an instance method/ctor
+   body, where we know we're authoritatively on the instance side). The
+   `!isThisAccess` guard is critical: class-Identifier-as-value (`C[1]`,
+   etc.) goes through this same path because `getTypeOfSymbol` on a
+   class symbol returns the declared instance type — without the guard,
+   value-position class references would FP-fire TS2339 (cf.
+   `createArray_ts`'s `new C[1]; // not an error`).
+Lazy-cached `classNamesWithSiblingInterfaces` (declared as
+`classNamesWithSiblingInterfacesCache` BEFORE init to avoid the
+init-order NPE that `by lazy {}` produces when accessed during init —
+the Lazy backing field is null until its declaration line runs).
+Flips `bases_ts` (target — TS2339 for `this.y`/`this.x`/`new C().x`/`new
+C().y` with `class C extends B implements I` chain) plus 1 collateral
+win. Net delta: 1557 → 1555 failed (8518 → 8520 passing). Zero
+regressions across 10078 suite.
 
 **17.120 (2026-05-05, +2)** — Optional-param widening + initializer-scope
 seeding for `checkParamShadowedByVar` (17.119 follow-on). Pre-fix the
