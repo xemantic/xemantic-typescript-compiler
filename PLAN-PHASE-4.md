@@ -2619,6 +2619,34 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.125, 8524 → 8525, +1) — TS2666/TS2667
+  distinction + ExportAssignment-in-augmentation
+  (`moduleAugmentationDisallowedExtensions_ts` flip):** Continuation
+  /loop after 17.124. `find_candidates.py --fresh` post-17.124's
+  TS2666/TS2667 partial fix surfaced
+  `moduleAugmentationDisallowedExtensions_ts` with 1 missing TS2666
+  at (24,5). Walker `checkInvalidModuleAugmentations` (Checker.kt
+  ~13980) only handled `ImportDeclaration` / `ExportDeclaration` /
+  `ImportEqualsDeclaration` (those that have moduleSpecifiers); the
+  `export = N1` form is `ExportAssignment` which has no specifier and
+  was silently skipped via `(specifier as? StringLiteralNode)?.text ?:
+  continue`. Added an early branch ahead of the specifier-resolution
+  path: when `innerStmt is ExportAssignment` AND we're in a
+  relative-name augmentation (`isRelativeAugmentation`), emit TS2666
+  at the `export` keyword (length 6) and `continue` past the
+  specifier-loop body. The same commit also folded in 17.125's
+  predecessor (the TS2666 vs TS2667 distinction for ExportDeclaration
+  vs ImportDeclaration) — that piece had been a net-zero infra change
+  on its own (tests still failed because of unrelated missing
+  diagnostics) but became a partial precondition for this flip
+  (without the distinction, the post-17.124 TS2667-vs-TS2666 swap on
+  this test would have masked the missing-emission gap). Net delta:
+  1551 → 1550 failed (8524 → 8525 passing). Zero regressions across
+  10078 suite. The other test in the same area
+  (`moduleAugmentationImportsAndExports2_ts`) still has 2 missing
+  TS2339 emissions on `A.prototype.foo` and `a.foo()` that need
+  separate `class.prototype` augmentation infrastructure to fire.
+
   **Session 2026-05-05 (17.124, 8522 → 8524, +2) — Switch-case literal
   comparability extension + shared block scope across case clauses
   (`unusedSwitchStatement_ts` flip):** Continuation /loop after 17.123.

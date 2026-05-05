@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,524 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,525 / 10,078 tests passing (~85%).
+
+**17.125 (2026-05-05, +1)** — TS2666/TS2667 distinction +
+ExportAssignment-in-augmentation. Two-piece change in service of
+`moduleAugmentationDisallowedExtensions_ts`:
+1. **TS2666 vs TS2667 distinction** in
+   `checkInvalidModuleAugmentations` (Checker.kt ~13980): pre-fix the
+   walker emitted TS2667 ("Imports are not permitted...") for BOTH
+   `ImportDeclaration` and `ExportDeclaration` inside relative-name
+   augmentations, where TypeScript distinguishes
+   `import ... from "..."` (TS2667) from `export ... from "..."`
+   (TS2666 — "Exports and export assignments are not permitted..."). Now
+   gated on `innerStmt is ExportDeclaration` to pick the code + message.
+2. **ExportAssignment branch**: pre-fix `export = N1` (no module
+   specifier) was silently skipped — the walker `continue`d when
+   `(specifier as? StringLiteralNode)?.text` returned null. Added an
+   early branch ahead of the specifier-resolution path: when
+   `innerStmt is ExportAssignment` AND we're in a relative-name
+   augmentation, emit TS2666 at the `export` keyword (length 6) and
+   `continue` past the specifier-loop body. The pair flips
+   `moduleAugmentationDisallowedExtensions_ts` (last missing TS2666
+   resolved) and partially helps
+   `moduleAugmentationImportsAndExports2_ts` (TS2666/TS2667 codes now
+   correct, but 2 unrelated TS2339 still missing). Net delta: 1551 →
+   1550 failed (8524 → 8525 passing). Zero regressions across 10078
+   suite.
 
 **17.124 (2026-05-05, +2)** — Switch-case literal comparability extension
 + shared block scope across case clauses for TS2304. Two-piece change in

@@ -13992,6 +13992,24 @@ class Checker(
                     val body = stmt.body
                     if (body is ModuleBlock) {
                         for (innerStmt in body.statements) {
+                            // ExportAssignment (`export = X` / `export default X`) — no module specifier,
+                            // but disallowed in relative augmentations with TS2666 at the `export` keyword.
+                            if (innerStmt is ExportAssignment && isRelativeAugmentation) {
+                                var kwStart = innerStmt.pos
+                                while (kwStart < source.length && source[kwStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) kwStart++
+                                val (kwLine, kwChar) = getLineAndCharacterOfPosition(source, kwStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Exports and export assignments are not permitted in module augmentations.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2666,
+                                    fileName = fileName,
+                                    line = kwLine,
+                                    character = kwChar,
+                                    start = kwStart,
+                                    length = 6,
+                                ))
+                                continue
+                            }
                             val specifier: Expression? = when (innerStmt) {
                                 is ImportDeclaration -> innerStmt.moduleSpecifier
                                 is ExportDeclaration -> innerStmt.moduleSpecifier
@@ -14006,15 +14024,18 @@ class Checker(
                                 // Squiggle only the `import` / `export` keyword (6 chars).
                                 var kwStart = innerStmt.pos
                                 while (kwStart < source.length && source[kwStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) kwStart++
-                                val kwLength = when (innerStmt) {
-                                    is ExportDeclaration -> 6
-                                    else -> 6
-                                }
+                                val kwLength = 6
+                                // TS2666 for `export ... from "..."`, TS2667 for `import ... from "..."`.
+                                // Both forms are disallowed in module augmentations but use different codes.
+                                val isExport = innerStmt is ExportDeclaration
                                 val (kwLine, kwChar) = getLineAndCharacterOfPosition(source, kwStart)
                                 diagnostics.add(Diagnostic(
-                                    message = "Imports are not permitted in module augmentations. Consider moving them to the enclosing external module.",
+                                    message = if (isExport)
+                                        "Exports and export assignments are not permitted in module augmentations."
+                                    else
+                                        "Imports are not permitted in module augmentations. Consider moving them to the enclosing external module.",
                                     category = DiagnosticCategory.Error,
-                                    code = 2667,
+                                    code = if (isExport) 2666 else 2667,
                                     fileName = fileName,
                                     line = kwLine,
                                     character = kwChar,
