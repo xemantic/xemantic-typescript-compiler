@@ -2619,6 +2619,26 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.109, 8502 unchanged — net-zero infra) —
+  TS2352 for `<FunctionType|ConstructorType|TypeLiteral>null` casts:**
+  Continuation /loop after 17.108. Custom 5-6 line bucket scan surfaced
+  `parseTypes_ts` (MISS: TS2352x4, TS2322x1) — 4 missing TS2352 for
+  `<() => number>null`, `<{(): number; }>null`, `<{new(): number; }>null`,
+  `<{[x:number]: number; }>null` patterns. Pre-existing
+  `emitTS2352IfNullCast` (Checker.kt:28885) only handled
+  TypeReference-to-Class/Interface form; extended the type-shape gate to
+  also accept `FunctionType`, `ConstructorType`, and non-empty
+  `TypeLiteral`. Display string reuses existing `formatTypeForDisplay`
+  (which already handles all three forms — `() => T`, `new () => T`,
+  `{ members; }` brace list with single-call/construct-sig collapse to
+  arrow form). Empty `{}` skipped (Object-like, accepts null-like
+  values). Test still fails because the 5th expected emission (TS2322
+  fn-vs-constructor-type at line 11 `z=g` with `provides no match for
+  the signature 'new (): number'` chain) is separate work. Net delta:
+  1573 → 1573 failed (8502 unchanged). Zero regressions across 10078
+  suite. Foundation for tuple-target / union-target null-cast TS2352
+  (one-liner gate addition once such a test surfaces).
+
   **Session 2026-05-05 (17.108, 8501 → 8502, +1) — Cross-file enum-merge
   conflict detection (TS2567 + TS6203):** Continuation /loop after 17.107b.
   `find_candidates.py --fresh` returned 0/1/0 (only `classImplementsClass6_ts`

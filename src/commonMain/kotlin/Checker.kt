@@ -28888,17 +28888,33 @@ interface DataView {
         val inner = expr.expression
         if (inner !is Identifier || inner.text != "null") return
         val typeNode = expr.type
-        if (typeNode !is TypeReference) return
-        val typeName = typeNode.typeName as? Identifier ?: return
-        val name = typeName.text
-        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return
-        // Only fire for locally-declared named Class or Interface (not TypeAlias,
-        // not Enum, not Module) — aliases can resolve to any/unknown/union, risk FP.
-        val isClassOrInterface = sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
-                && !sym.flags.hasAny(SymbolFlags.TypeAlias or SymbolFlags.Module)
-        if (!isClassOrInterface) return
-        // Skip lib-declared Object/Function — their interfaces accept null-like values in practice.
-        if (name == "Object" || name == "Function") return
+        // 17.109: Compute the display name and gate on type-shape.
+        // Allowed shapes (`null` doesn't sufficiently overlap):
+        //   - TypeReference to named Class or Interface (not TypeAlias)
+        //   - FunctionType, ConstructorType (function/constructor type expressions)
+        //   - TypeLiteral with at least one member (object/call/construct/index sig)
+        // Skipped: lib `Object`/`Function` (accept null-like values), TypeAlias,
+        // empty `{}`, and any other type form.
+        val name: String = when (typeNode) {
+            is TypeReference -> {
+                val typeName = typeNode.typeName as? Identifier ?: return
+                val n = typeName.text
+                val sym = currentFileLocals?.get(n) ?: globals[n] ?: return
+                val isClassOrInterface = sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+                        && !sym.flags.hasAny(SymbolFlags.TypeAlias or SymbolFlags.Module)
+                if (!isClassOrInterface) return
+                // Skip lib-declared Object/Function — their interfaces accept null-like values.
+                if (n == "Object" || n == "Function") return
+                n
+            }
+            is FunctionType, is ConstructorType -> formatTypeForDisplay(typeNode) ?: return
+            is TypeLiteral -> {
+                // Skip empty `{}` — too permissive (Object-like).
+                if (typeNode.members.isEmpty()) return
+                formatTypeForDisplay(typeNode) ?: return
+            }
+            else -> return
+        }
 
         val start = expr.pos
         val endPos = expressionTrueEnd(inner)
