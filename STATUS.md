@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,514 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,515 / 10,078 tests passing (~84%).
+
+**17.118 (2026-05-05, +1)** — Object-literal `get`/`set` accessors are
+now bound as Property symbols in `getTypeOfObjectLiteral`. Pre-fix:
+the `is GetAccessor, is SetAccessor -> continue` branch silently
+ignored accessors, leaving the resulting Type.Object with empty
+members; assignments like `var o: {Foo:number;} = {get Foo(){...},
+set Foo(){...}}` then FP-fired TS2741 saying `Foo` was missing.
+New branches register a single Property symbol per accessor name
+(merging getter+setter pairs into one entry via first-write-wins on
+declarations / valueDeclaration, last-write-wins suppressed). The
+member's type is the getter's declared return type if present, else
+the setter's parameter type, else `anyType` — sufficient for the
+`{Foo:number}` target since `anyType` is bidirectionally assignable
+and the structural compare passes. Flips `gettersAndSetters_ts`. Net
+delta: 1561 → 1560 failed (8514 → 8515 passing). Zero regressions
+across 10078 suite.
 
 **17.117 (2026-05-05, +3)** — TS2339 for class-instance receiver when the
 property is genuinely absent from the class hierarchy. New

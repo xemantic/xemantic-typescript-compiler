@@ -39579,7 +39579,45 @@ interface DataView {
                     symbolTypes[sym.id] = methodType
                 }
                 is SpreadAssignment -> continue // spread not yet supported
-                is GetAccessor, is SetAccessor -> continue // accessors not yet supported
+                is GetAccessor -> {
+                    val name = when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> continue
+                    }
+                    val existing = members[name]
+                    val sym = existing ?: Symbol(SymbolFlags.Property, name).also {
+                        members[name] = it
+                        properties.add(it)
+                    }
+                    sym.declarations.add(prop)
+                    if (sym.valueDeclaration == null) sym.valueDeclaration = prop
+                    if (existing == null) {
+                        val getterReturn = prop.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                        symbolTypes[sym.id] = getterReturn
+                    }
+                }
+                is SetAccessor -> {
+                    val name = when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> continue
+                    }
+                    val existing = members[name]
+                    val sym = existing ?: Symbol(SymbolFlags.Property, name).also {
+                        members[name] = it
+                        properties.add(it)
+                    }
+                    sym.declarations.add(prop)
+                    if (sym.valueDeclaration == null) sym.valueDeclaration = prop
+                    if (existing == null) {
+                        val paramType = prop.parameters.firstOrNull()?.type
+                            ?.let { getTypeFromTypeNode(it) } ?: anyType
+                        symbolTypes[sym.id] = paramType
+                    }
+                }
                 else -> continue
             }
         }
