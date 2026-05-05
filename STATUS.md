@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,505 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,507 / 10,078 tests passing (~84%).
+
+**17.113 (2026-05-05, +2)** — Extended TS2873 "always falsy" to cover
+`Identifier("null"|"undefined")`, `TypeAssertionExpression`, and
+`AsExpression` (recursive on `.expression`). Wired into three additional
+call sites: `||` LHS in `checkAlwaysTruthyInExpr`'s BinaryExpression
+branch (parallel to the existing always-truthy check), ConditionalExpression
+condition, and the else-if chain in IfStatement (the existing IfStatement
+condition check already fires). Added `tightEnd: Int` field to
+`AsExpression` AST node, populated via `scanner.getPrevTokenEnd()` at
+parser construction sites — `expr.type.end` overshoots by the next-token
+length (e.g., `null as any)` has `type.end` past `)` because parseType's
+final `nextToken()` advances scanner past `any` and the `)`'s end is
+reflected in `getEnd() = scanner.getPos()`). `emitTS2873` uses `tightEnd`
+when set. Flips `destructuringAssignmentWithExportedName_ts` errors
+baseline (4 expected TS2873 emissions on `if (null as any)` /
+`else if (null as any)` chain) and one other test (likely a
+parameterized variant). `aliasUsageInOrExpression_ts` reduced from 3
+missing diags to 1 missing diag (the remaining TS2322 with
+`typeof import("...")` display + null-branch chain is architectural).
+Net delta: 1570 → 1568 failed (8505 → 8507 passing). Zero regressions
+across 10078 suite.
 
 **17.112 (2026-05-05, +1)** — Symmetric to 17.111: source has
 `constructSignatures` (constructor type) but no `callSignatures`; target

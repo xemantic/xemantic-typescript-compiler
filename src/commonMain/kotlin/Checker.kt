@@ -17980,6 +17980,9 @@ interface DataView {
                 checkAlwaysTruthyInStatement(stmt.thenStatement, source, fileName)
                 var elseStmt = stmt.elseStatement
                 while (elseStmt is IfStatement) {
+                    if (isAlwaysFalsyExpr(elseStmt.expression)) {
+                        emitTS2873(elseStmt.expression, source, fileName)
+                    }
                     if (prevTruthy) {
                         checkAlwaysTruthyCondition(elseStmt.expression, source, fileName)
                     }
@@ -18027,6 +18030,8 @@ interface DataView {
                 if (expr.operator == SyntaxKind.BarBar) {
                     if (isAlwaysTruthyForOrExpr(expr.left)) {
                         emitTS2872(expr.left, source, fileName)
+                    } else if (isAlwaysFalsyExpr(expr.left)) {
+                        emitTS2873(expr.left, source, fileName)
                     }
                 }
                 // Iterative left spine to avoid StackOverflow
@@ -18035,6 +18040,8 @@ interface DataView {
                     if (current.operator == SyntaxKind.BarBar && current !== expr) {
                         if (isAlwaysTruthyForOrExpr(current.left)) {
                             emitTS2872(current.left, source, fileName)
+                        } else if (isAlwaysFalsyExpr(current.left)) {
+                            emitTS2873(current.left, source, fileName)
                         }
                     }
                     checkAlwaysTruthyInExpr(current.right, source, fileName)
@@ -18044,6 +18051,9 @@ interface DataView {
             }
             is ParenthesizedExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
+                if (isAlwaysFalsyExpr(expr.condition)) {
+                    emitTS2873(expr.condition, source, fileName)
+                }
                 checkEnumReferenceFalsyCondition(expr.condition, source, fileName)
                 checkAlwaysTruthyInExpr(expr.whenTrue, source, fileName)
                 checkAlwaysTruthyInExpr(expr.whenFalse, source, fileName)
@@ -18157,6 +18167,9 @@ interface DataView {
         return when (expr) {
             is VoidExpression -> true
             is ParenthesizedExpression -> isAlwaysFalsyExpr(expr.expression)
+            is TypeAssertionExpression -> isAlwaysFalsyExpr(expr.expression)
+            is AsExpression -> isAlwaysFalsyExpr(expr.expression)
+            is Identifier -> expr.text == "null" || expr.text == "undefined"
             else -> false
         }
     }
@@ -18166,6 +18179,7 @@ interface DataView {
         // For VoidExpression, compute length from operand's true end to get correct span
         val length = when (expr) {
             is VoidExpression -> expressionTrueEnd(expr.expression) - start
+            is AsExpression -> (if (expr.tightEnd > 0) expr.tightEnd else expr.type.end) - start
             else -> expressionTrueEnd(expr) - start
         }
         val (line, character) = getLineAndCharacterOfPosition(source, start)
