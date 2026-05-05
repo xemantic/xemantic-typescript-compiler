@@ -2619,6 +2619,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.112, 8504 → 8505, +1) — TS2322 ctor-vs-fn-type
+  (symmetric to 17.111):** Continuation /loop after 17.111.
+  `find_candidates.py --fresh` showed `callConstructAssignment_ts`
+  (MISS: TS2322 @ 5,1 — `Type 'new () => any' is not assignable to type
+  '() => void'`). The pre-existing 17.111 fix only handles one direction
+  of the fn↔ctor mismatch (callSig source vs constructSig target). Test
+  has both directions: `foo = bar` is ctorSig source vs callSig target
+  (this fix), `bar = foo` is the 17.111 case (already fires). Inserted
+  the symmetric branch using `getCallableMismatchElaboration` directly
+  after the 17.111 branch with the mirror gate: `target.callSigs.notEmpty
+  && target.constructSigs.empty && source.constructSigs.notEmpty &&
+  source.callSigs.empty`. Net delta: 1571 → 1570 failed (8504 → 8505
+  passing). Zero regressions.
+
   **Session 2026-05-05 (17.111, 8503 → 8504, +1) — TS2322 fn-vs-ctor-type
   assignment + "provides no match for the signature 'new ...'" chain:**
   Continuation /loop after 17.110. `find_candidates.py --fresh` showed
