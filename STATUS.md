@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,503 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,504 / 10,078 tests passing (~84%).
+
+**17.111 (2026-05-05, +1)** — TS2322 + "provides no match for the
+signature 'new ...'" chain for fn-vs-constructor-type assignment via
+plain Identifier target. Mirrors 17.14a's `checkPropertyAccessAssignment`
+branch in `checkAssignmentExpression`'s Identifier-target path: when
+`canUseTypeEngine` short-circuits the construct-sig mismatch case
+(`source.constructSigs.isEmpty() && target.constructSigs.isNotEmpty()`),
+detect directly and emit TS2322 with the elaboration chain via
+`getNonConstructibleElaboration`. Tight gate: source MUST have
+`callSignatures` (clearly callable function, NOT a constructor) but NOT
+`constructSignatures` — excludes opaque sources like import-aliased
+`export = Class` whose effective type isn't resolvable here. Skips when
+target is a class/interface instance (its construct sigs are
+static-side; instance↔instance compares follow the regular path).
+Flips `parseTypes_ts`: 8th expected emission `z=g` now fires with
+"Type '(s: string) => void' is not assignable to type 'new () => number'"
++ "Type '(s: string) => void' provides no match for the signature
+'new (): number'" chain. Net delta: 1572 → 1571 failed (8503 → 8504
+passing). Zero regressions.
 
 **17.110 (2026-05-05, +1)** — Extended `emitTS2352IfNullCast` to also fire
 for `<T[]>null` (`ArrayType`) and `<[A, B]>null` (`TupleType`) targets.

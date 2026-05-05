@@ -36724,6 +36724,45 @@ interface DataView {
                         contextualType = savedContextual
                         lastMissingPropertyName = null
                         lastMissingIndexSigKind = null
+                        // 17.111: Mirror of 17.14a's PropertyAccess branch for plain
+                        // Identifier-target assignment. canUseTypeEngine returns false
+                        // when source lacks construct sigs but target requires them
+                        // (Checker.kt:35168), short-circuiting the standard relation
+                        // path so TS2322 never fires. Detect the construct-sig mismatch
+                        // directly and emit TS2322 + "provides no match for the
+                        // signature 'new ...'" chain. Tight gate: source MUST have
+                        // callSignatures (clearly callable function, not a constructor)
+                        // but NOT constructSignatures — this excludes opaque sources
+                        // like import-aliased `export = Class` whose effective type
+                        // we can't resolve here. Skip when target is a class/iface
+                        // instance (its construct sigs are static-side; instance
+                        // structural compares should follow the regular path).
+                        if (tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
+                            !isClassOrInterfaceInstanceType(tt) &&
+                            sourceType is Type.Object &&
+                            !sourceType.callSignatures.isNullOrEmpty() &&
+                            sourceType.constructSignatures.isNullOrEmpty()) {
+                            val srcCtorElab = getNonConstructibleElaboration(sourceType, tt)
+                            if (srcCtorElab != null) {
+                                val displaySource = typeToString(sourceType)
+                                val displayTarget = if (typeAnnotation != null)
+                                    formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt)
+                                    else typeToString(tt)
+                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = target.pos,
+                                    length = target.text.length,
+                                    messageChain = srcCtorElab,
+                                ))
+                                return
+                            }
+                        }
                         val canUse = canUseTypeEngine(sourceType, tt)
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
                         // Excess property check for object literal assignments (TS2353)
