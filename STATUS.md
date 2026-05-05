@@ -1,6 +1,29 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,522 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,524 / 10,078 tests passing (~85%).
+
+**17.124 (2026-05-05, +2)** — Switch-case literal comparability extension
++ shared block scope across case clauses for TS2304. Two-piece change in
+service of `unusedSwitchStatement_ts`:
+1. **TS2678 emission** (`walkSwitchCaseComparable`): pre-fix only fired
+   when the switch expression was an `Identifier` referencing a tracked
+   const literal binding. Extended the binding resolution to also handle
+   inline literal switch expressions (e.g. `switch (1)`, `switch (2)`)
+   via the existing `literalKindDisplay(expr)` helper. Now `switch (1)
+   { case 0: ... }` correctly emits TS2678 "Type '0' is not comparable
+   to type '1'" at the case literal position.
+2. **Shared switch-block scope** (`checkUnresolvedInStatement` for
+   `SwitchStatement`): pre-fix called `checkUnresolvedInStatements`
+   separately per case clause, which created a fresh child scope per
+   call. That made `let x` in case 0 invisible in case 1's
+   `x = 1` (fall-through pattern) → spurious TS2304. Post-fix
+   creates ONE `switchScope = scope.child()`, walks all clauses to
+   collect declared names into it, then walks each clause's statements
+   directly via `checkUnresolvedInStatement` (bypassing the per-call
+   child-scope creation in `checkUnresolvedInStatements`). Mirrors
+   ECMA-262 / TS semantics: switch case clauses share a single block
+   scope. Net delta: 1553 → 1551 failed (8522 → 8524 passing). Zero
+   regressions across 10078 suite.
 
 **17.123 (2026-05-05, +1)** — TS1540 per dotted-segment + parser
 diagnostic forwarding for `.d.ts` files. Two-piece change in service of
