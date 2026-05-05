@@ -11650,9 +11650,16 @@ class Checker(
         param: Parameter, decls: List<VariableDeclaration>,
         source: String, fileName: String,
     ) {
-        val paramType = param.type?.let { getTypeFromTypeNode(it) } ?: return
-        if (!isSimpleTypeForParamShadow(paramType)) return
+        val rawParamType = param.type?.let { getTypeFromTypeNode(it) } ?: return
+        if (!isSimpleTypeForParamShadow(rawParamType)) return
         val paramName = (param.name as? Identifier)?.text ?: return
+        // Optional parameters (`x?: T`) are typed as `T | undefined` at the
+        // symbol level even without strictNullChecks, matching TypeScript's
+        // baseline (e.g. `optionalParamterAndVariableDeclaration_ts`). Wrap
+        // the displayed and compared param type accordingly.
+        val paramType = if (param.questionToken)
+            getUnionType(listOf(rawParamType, undefinedType))
+        else rawParamType
         val paramTypeName = typeToString(paramType)
         val paramNameNode = param.name as? Identifier ?: return
         // Use param.pos for TS6203 position so the related-info column matches
@@ -11669,25 +11676,38 @@ class Checker(
             line = paramLine, character = paramChar,
             start = refStart, length = refLen,
         ))
-        for (decl in decls) {
-            val declType = getVarDeclType(decl) ?: continue
-            if (!isSimpleTypeForParamShadow(declType)) continue
-            if (paramType === declType) continue
-            val declTypeName = typeToString(declType)
-            if (paramTypeName == declTypeName) continue
-            val nameNode = decl.name as? Identifier ?: continue
-            val start = nameNode.pos
-            val length = nameNode.text.length
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "Subsequent variable declarations must have the same type.  Variable '$paramName' must be of type '$paramTypeName', but here has type '$declTypeName'.",
-                category = DiagnosticCategory.Error,
-                code = 2403,
-                fileName = fileName,
-                line = line, character = character,
-                start = start, length = length,
-                relatedInformation = relatedInfo,
-            ))
+        // Seed `currentLocalTypes` with the un-widened parameter type so var
+        // initializers that reference the parameter (e.g. `var x = (x || 0)`)
+        // resolve their identifier reference to the parameter's declared type
+        // instead of falling through to `anyType`. Use the un-widened type
+        // (without `| undefined`) so `(x || 0)` evaluates to `number`,
+        // matching TypeScript's narrowed view of the truthy branch.
+        val savedLocalTypes = currentLocalTypes
+        currentLocalTypes = currentLocalTypes.toMutableMap()
+        currentLocalTypes[paramName] = rawParamType
+        try {
+            for (decl in decls) {
+                val declType = getVarDeclType(decl) ?: continue
+                if (!isSimpleTypeForParamShadow(declType)) continue
+                if (paramType === declType) continue
+                val declTypeName = typeToString(declType)
+                if (paramTypeName == declTypeName) continue
+                val nameNode = decl.name as? Identifier ?: continue
+                val start = nameNode.pos
+                val length = nameNode.text.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Subsequent variable declarations must have the same type.  Variable '$paramName' must be of type '$paramTypeName', but here has type '$declTypeName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2403,
+                    fileName = fileName,
+                    line = line, character = character,
+                    start = start, length = length,
+                    relatedInformation = relatedInfo,
+                ))
+            }
+        } finally {
+            currentLocalTypes = savedLocalTypes
         }
     }
 

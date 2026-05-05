@@ -2619,6 +2619,43 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.120, 8516 → 8518, +2) — Optional-param
+  widening + initializer-scope seeding for `checkParamShadowedByVar`
+  (`optionalParamterAndVariableDeclaration_ts` +
+  `optionalParamterAndVariableDeclaration2_ts` flip):** Fresh /loop after
+  17.119. `find_candidates.py --fresh` returned 1 MISSING + 2 SWAP — the
+  two SWAPs were `optionalParamterAndVariableDeclaration*_ts` showing
+  TS2403 emitted at the right position with the right code, but the
+  message text differed: expected `must be of type 'number | undefined',
+  but here has type 'number'`, actual `must be of type 'number', but
+  here has type 'any'`. Test source `class C { constructor(options?:
+  number) { var options = (options || 0); } }` exercises two gaps in
+  17.119's `checkParamShadowedByVar`: (1) `paramTypeName =
+  typeToString(paramType)` displayed the optional param as just `number`
+  — TypeScript's symbol-level optional widening adds `| undefined` to
+  optional params *regardless* of strictNullChecks (the second test
+  with `@strictNullChecks: true` emits the same diagnostic, confirming
+  the widening is not strict-mode-gated); (2) `getVarDeclType` for the
+  un-annotated `var options = (options || 0)` returned `anyType` because
+  inside `getTypeOfBinaryExpression(BarBar)`'s `getTypeOfExpression(left)`
+  call, `getTypeOfIdentifier("options")` falls through every scope
+  (currentLocalTypes / fileLocalTypeMaps / file locals / namespace /
+  globals) since constructor parameters aren't bound into any of them.
+  Both halves had to land together for the TS2403 message to match:
+  param widened to `number | undefined` AND var inferred to `number`.
+  Fix wraps `paramType` in `getUnionType([T, undefinedType])` when
+  `param.questionToken` is set, and (around the per-decl loop)
+  save/restore `currentLocalTypes` while seeding
+  `currentLocalTypes[paramName] = rawParamType` (un-widened, no
+  `| undefined`). The un-widened seeding is intentional: `(options || 0)`
+  with `options: number | undefined` would compute `getUnionType(number
+  | undefined, number) = number | undefined` since our BarBar logic
+  doesn't narrow the truthy branch — but TypeScript narrows `options`
+  to `number` for the truthy result and 0→number for the falsy result,
+  yielding `number`. Seeding with `numberType` makes our `||`
+  short-circuit to `number` via `leftT === rightT`. Net delta: 1559 →
+  1557 failed. Zero regressions across 10078 suite.
+
   **Session 2026-05-05 (17.119, 8515 → 8516, +1) — TS2403
   parameter-shadowed-by-var (`functionArgShadowing_ts` flip):**
   Continuation /loop after 17.118. Custom 4-line MISSING-only diff scan

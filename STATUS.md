@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,516 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,518 / 10,078 tests passing (~84%).
+
+**17.120 (2026-05-05, +2)** — Optional-param widening + initializer-scope
+seeding for `checkParamShadowedByVar` (17.119 follow-on). Pre-fix the
+shadow-by-var TS2403 check displayed an optional parameter as just `T`
+(missing `| undefined`) AND inferred the var initializer as `any` because
+the constructor parameter wasn't visible to `getTypeOfIdentifier`'s scope
+chain. New behavior: when `param.questionToken` is set, wrap the displayed
++ compared `paramType` as `getUnionType([T, undefinedType])` to match
+TypeScript's symbol-level optional widening (which fires regardless of
+strictNullChecks). Around the per-decl loop, save/restore
+`currentLocalTypes` and seed `currentLocalTypes[paramName] = rawParamType`
+(un-widened, no `| undefined`) so var initializers like `var x = (x || 0)`
+resolve their inner reference to the parameter's declared type — the `||`
+result then correctly narrows to `number`, matching TypeScript's truthy
+branch view. Flips `optionalParamterAndVariableDeclaration_ts` +
+`optionalParamterAndVariableDeclaration2_ts` (latter sets
+`@strictNullChecks: true` but emits the same diagnostic, confirming the
+optional widening is symbol-level not strict-null-mode-gated). Net delta:
+1559 → 1557 failed (8516 → 8518 passing). Zero regressions across 10078
+suite.
 
 **17.119 (2026-05-05, +1)** — TS2403 + TS6203 for parameter-shadowed-by-var
 inside function/method/constructor bodies. Pre-fix
