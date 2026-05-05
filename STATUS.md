@@ -2,6 +2,25 @@
 
 **Phase 4 — Checker buildout.** 8,502 / 10,078 tests passing (~84%).
 
+**17.109 (2026-05-05, net 0 — infra)** — Extended `emitTS2352IfNullCast`
+to fire TS2352 for `<T>null` casts where `T` is a `FunctionType`,
+`ConstructorType`, or non-empty `TypeLiteral` (in addition to the
+existing TypeReference-to-Class/Interface form). Display string built via
+the existing `formatTypeForDisplay` helper which already supports all
+three shapes (function arrow, `new` constructor arrow, brace member
+list). Empty `{}` skipped (Object-like, accepts null-like values).
+
+Test impact: `parseTypes_ts` advances from 5/9 to 8/9 expected emissions
+(the 4 new TS2352s land at lines 1/2/3/4); the test still fails on the
+single remaining missing TS2322 for `z=g` line 11 (`(s: string) => void`
+not assignable to `new () => number` with `provides no match for the
+signature 'new (): number'` chain — fn-vs-constructor-type, separate
+work). Foundation: the same `formatTypeForDisplay` extension makes
+TS2352 emission for tuple-target / union-target null casts a one-liner
+add when those tests surface.
+
+Net delta: 1573 → 1573 failed (8502 unchanged). Zero regressions.
+
 **17.108 (2026-05-05, +1)** — Cross-file enum-merge conflict detection
 (TS2567 + TS6203 related info). New `checkCrossFileEnumConflicts()`
 walker (Checker.kt ~54877) collects top-level declarations
