@@ -36763,6 +36763,38 @@ interface DataView {
                                 return
                             }
                         }
+                        // 17.112: Symmetric to 17.111 — source has constructSignatures
+                        // (clearly a constructor type) but no callSignatures; target
+                        // has callSignatures (function type) but no constructSignatures.
+                        // canUseTypeEngine returns false (Checker.kt:35170), so emit
+                        // TS2322 + "provides no match for the signature '(): T'" chain
+                        // directly via getCallableMismatchElaboration.
+                        if (tt is Type.Object && !tt.callSignatures.isNullOrEmpty() &&
+                            tt.constructSignatures.isNullOrEmpty() &&
+                            sourceType is Type.Object &&
+                            !sourceType.constructSignatures.isNullOrEmpty() &&
+                            sourceType.callSignatures.isNullOrEmpty()) {
+                            val srcCallElab = getCallableMismatchElaboration(sourceType, tt)
+                            if (srcCallElab != null) {
+                                val displaySource = typeToString(sourceType)
+                                val displayTarget = if (typeAnnotation != null)
+                                    formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt)
+                                    else typeToString(tt)
+                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = target.pos,
+                                    length = target.text.length,
+                                    messageChain = srcCallElab,
+                                ))
+                                return
+                            }
+                        }
                         val canUse = canUseTypeEngine(sourceType, tt)
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
                         // Excess property check for object literal assignments (TS2353)

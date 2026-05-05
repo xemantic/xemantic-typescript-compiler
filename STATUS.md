@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,504 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,505 / 10,078 tests passing (~84%).
+
+**17.112 (2026-05-05, +1)** — Symmetric to 17.111: source has
+`constructSignatures` (constructor type) but no `callSignatures`; target
+has `callSignatures` (function type) but no `constructSignatures`.
+Inserted directly after the 17.111 branch in `checkAssignmentExpression`'s
+Identifier-target path. Uses `getCallableMismatchElaboration` (the
+existing helper for "non-callable source vs callable target"). Flips
+`callConstructAssignment_ts` line 5 `foo = bar` (`bar` is `new () =>
+any`, `foo` is `() => void`) → emits "Type 'new () => any' is not
+assignable to type '() => void'" + "Type 'new () => any' provides no
+match for the signature '(): void'." chain. Line 6 already fired via
+17.111. Net delta: 1571 → 1570 failed (8504 → 8505 passing). Zero
+regressions.
 
 **17.111 (2026-05-05, +1)** — TS2322 + "provides no match for the
 signature 'new ...'" chain for fn-vs-constructor-type assignment via
