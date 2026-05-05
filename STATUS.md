@@ -2,6 +2,23 @@
 
 **Phase 4 — Checker buildout.** 8,509 / 10,078 tests passing (~84%).
 
+**17.115 (2026-05-05, net-zero infra)** — TS2339 for property/element
+access on empty object literals (`{}["X"]`, `{}[N]`, `({}).x`). New
+branch in `checkMemberAccessMissing` ahead of the existing
+`NewExpression` / `CallExpression` / static-this / Identifier paths:
+when `objectExpr is ObjectLiteralExpression && properties.isEmpty()`,
+emit TS2339 with display `{}`. Squiggle uses caller-provided
+`ts2576Start/Length` so element-access form `{}["hi"]` covers the full
+expression (8 chars in the prototypical baseline) while bare property
+form `({}).hi` falls through to the bare `.hi` span. Conservative
+gate: only EMPTY literals — non-empty `{a:1}` literals have their own
+member set and continue through the standard fallthrough. RUNTIME_PROPERTIES
+filter retained. Net-zero on the 10078 suite (no test currently fails
+SOLELY on this; `noImplicitAnyIndexingSuppressed_ts` /
+`noImplicitAnyIndexing_ts` reduce from 4-missing to 2-missing,
+foundation for TS7015 / TS7053 follow-ons that would complete those
+tests + `noImplicitAnyStringIndexerOnObject_ts`).
+
 **17.114 (2026-05-05, +2)** — Three coordinated diagnostics that flip
 `interfacedeclWithIndexerErrors_ts` plus one collateral test:
 (1) **TS2840** "An interface cannot extend a primitive type like 'X'":
