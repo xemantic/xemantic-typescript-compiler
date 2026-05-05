@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,501 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,502 / 10,078 tests passing (~84%).
+
+**17.108 (2026-05-05, +1)** — Cross-file enum-merge conflict detection
+(TS2567 + TS6203 related info). New `checkCrossFileEnumConflicts()`
+walker (Checker.kt ~54877) collects top-level declarations
+(`enum`/`class`/`function`/`var`/`interface`/`namespace`) from all
+non-module (script) files into a name-keyed `byName` map. For each name
+appearing across ≥2 files where the merged group has at least one enum
+AND at least one class/function/var/interface, emits TS2567 on each
+non-namespace declaration with TS6203 related info pointing to all
+cross-file partners. Skips:
+- module files (separate scope per file via own imports/exports)
+- .d.ts files
+- declarations whose own file already has both an enum and a non-enum
+  in the same name-group — the per-file walker (Checker.kt ~12390)
+  already emits TS2567 on those positions.
+Wired into init step 73c (alongside `checkCrossFileBlockScopedDuplicates`,
+gated on `binderResults.size > 1`). Flips `duplicateIdentifierEnum_ts`:
+A.ts(22,6) `enum D` ↔ B.ts(1,10) `function D` and
+A.ts(25,7) `class E` ↔ B.ts(4,6) `enum E`. Net delta: 1574 → 1573 failed
+(8501 → 8502 passing). Zero regressions across 10078 suite.
 
 **17.107b (2026-05-04, +1)** — TS2511 now also fires for
 `[A, B, ...].map((cls) => new cls())` when any array element is an

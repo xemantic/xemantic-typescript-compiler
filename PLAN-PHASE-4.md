@@ -2619,6 +2619,44 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.108, 8501 → 8502, +1) — Cross-file enum-merge
+  conflict detection (TS2567 + TS6203):** Continuation /loop after 17.107b.
+  `find_candidates.py --fresh` returned 0/1/0 (only `classImplementsClass6_ts`
+  MISS, attempted-and-reverted earlier). Custom 4-10 line bucket scan with
+  `--fresh` filter surfaced `duplicateIdentifierEnum_ts` (+4 missing TS2567
+  emissions, all cross-file). Test source: A.ts has `enum D`/`class E` plus
+  same-file conflicts (lines 1-19 already pass via per-file walker); B.ts
+  has `function D`/`enum E`. The 4 missing emissions are at A.ts(22,6),
+  A.ts(25,7), B.ts(1,10), B.ts(4,6) — each needs TS2567 + TS6203 pointing
+  to the cross-file partner.
+
+  **Implementation:** New `checkCrossFileEnumConflicts()` walker
+  (Checker.kt ~54877) following the same pattern as the pre-existing
+  `checkCrossFileBlockScopedDuplicates` (TS2451). Collects top-level
+  declarations (enum/class/function/var/interface/namespace) from
+  non-module (script) files only into a `byName: Map<String, List<XInfo>>`.
+  For each cross-file name-group where the merged kind set contains both
+  an enum AND a class/function/var/interface, emits TS2567 on each
+  non-namespace declaration with TS6203 related info pointing to all
+  cross-file partners. **Dedup against per-file walker:** skips emission
+  for declarations whose own file ALREADY has both an enum and a
+  conflicting non-enum kind — that case is fully handled by the existing
+  per-file `checkDuplicateDeclarations` walker (Checker.kt ~12390), so
+  cross-file emission would double-fire. Wired into init step 73c next to
+  the cross-file block-scoped check, gated on `binderResults.size > 1`.
+
+  **Test results:** Net delta: 1574 → 1573 failed (8501 → 8502 passing).
+  Zero regressions across 10078 suite. `duplicateIdentifierEnum_ts` flips
+  with all 4 cross-file TS2567 emissions correct (squiggle position +
+  TS6203 related info pointing to partner file/line/char).
+
+  **Foundation:** The walker pattern (collect top-level decls across
+  script files, group by name, gate on cross-file presence) is reusable
+  for other cross-file conflict diagnostics that the per-file walkers
+  don't currently catch — e.g. cross-file class+function (TS2440-style)
+  or cross-file class+interface conflicts. None gated solely on this in
+  the current failing-tests pool.
+
   **Session 2026-05-04 (17.107b, 8500 → 8501, +1) — TS2511 for `[A, B].map((cls) => new cls())` pattern:** Continuation of same /loop after 17.107a. The 17.107a foundation enables this by providing `typeofAbstractVars` plumbing through the existing TS2511 walker; 17.107b extends `checkAbstractInExpr`'s `CallExpression` branch to recognize the array-literal-`.map`-callback pattern and inject the callback's first-parameter name into a per-call extended `typeofAbstractVars`.
 
   Implementation pattern (Checker.kt:42463+):

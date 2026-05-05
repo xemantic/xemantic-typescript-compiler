@@ -786,6 +786,10 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileBlockScopedDuplicates()
         }
+        // 73c. Check cross-file enum-merge conflicts (TS2567 + TS6203)
+        if (binderResults.size > 1) {
+            checkCrossFileEnumConflicts()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -54868,6 +54872,117 @@ interface DataView {
                     character = character,
                     start = info.nameStart,
                     length = info.nameLength,
+                    relatedInformation = relatedInfo,
+                ))
+            }
+        }
+    }
+
+    /**
+     * 17.108: Cross-file detection of enum-merge conflicts (TS2567).
+     *
+     * The per-file [checkDuplicateDeclarations] walker only sees declarations
+     * within a single file's top-level. When two non-module (script) files
+     * share global scope and one declares `enum X` while another declares
+     * `class X` / `function X` / `var X` / `interface X`, the merged group
+     * is invalid and TS2567 must fire on each non-namespace declaration with
+     * TS6203 related info pointing to the cross-file partner(s).
+     *
+     * Skip:
+     *  - module files (separate scope per file)
+     *  - .d.ts files (per-file walker also skips them)
+     *  - declarations whose own file ALREADY has an enum + non-enum/non-namespace
+     *    pair — the per-file walker already emits TS2567 on those positions.
+     */
+    private fun checkCrossFileEnumConflicts() {
+        data class XInfo(
+            val name: String, val kind: String,
+            val nameNode: Node, val fileName: String, val source: String,
+        )
+        val byName = mutableMapOf<String, MutableList<XInfo>>()
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is EnumDeclaration -> byName.getOrPut(stmt.name.text) { mutableListOf() }
+                        .add(XInfo(stmt.name.text, "enum", stmt.name, fileName, source))
+                    is ClassDeclaration -> stmt.name?.let {
+                        byName.getOrPut(it.text) { mutableListOf() }
+                            .add(XInfo(it.text, "class", it, fileName, source))
+                    }
+                    is FunctionDeclaration -> stmt.name?.let {
+                        byName.getOrPut(it.text) { mutableListOf() }
+                            .add(XInfo(it.text, "function", it, fileName, source))
+                    }
+                    is InterfaceDeclaration -> byName.getOrPut(stmt.name.text) { mutableListOf() }
+                        .add(XInfo(stmt.name.text, "interface", stmt.name, fileName, source))
+                    is ModuleDeclaration -> {
+                        val n = stmt.name as? Identifier ?: continue
+                        byName.getOrPut(n.text) { mutableListOf() }
+                            .add(XInfo(n.text, "namespace", n, fileName, source))
+                    }
+                    is VariableStatement -> {
+                        if (stmt.declarationList.flags != SyntaxKind.VarKeyword) continue
+                        for (decl in stmt.declarationList.declarations) {
+                            val n = decl.name as? Identifier ?: continue
+                            if (n.text.isEmpty()) continue
+                            byName.getOrPut(n.text) { mutableListOf() }
+                                .add(XInfo(n.text, "var", n, fileName, source))
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        for ((_, infos) in byName) {
+            if (infos.size < 2) continue
+            // Need cross-file presence
+            if (infos.map { it.fileName }.toSet().size < 2) continue
+            // Need an enum + non-enum/non-namespace partner across the global merged group
+            val hasEnum = infos.any { it.kind == "enum" }
+            val nonEnumKinds = setOf("class", "function", "var", "interface")
+            val hasNonEnum = infos.any { it.kind in nonEnumKinds }
+            if (!(hasEnum && hasNonEnum)) continue
+
+            for (info in infos) {
+                if (info.kind == "namespace") continue
+                // Skip if the per-file walker already emits for this position:
+                // its own file's local group has both enum and non-enum.
+                val sameFile = infos.filter { it.fileName == info.fileName }
+                val sameFileHasEnum = sameFile.any { it.kind == "enum" }
+                val sameFileHasNonEnum = sameFile.any { it.kind in nonEnumKinds }
+                if (sameFileHasEnum && sameFileHasNonEnum) continue
+
+                val others = infos.filter { it.fileName != info.fileName && it.kind != "namespace" }
+                if (others.isEmpty()) continue
+                val relatedInfo = others.map { other ->
+                    val (oLine, oChar) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
+                    Diagnostic(
+                        message = "'${other.name}' was also declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 6203,
+                        fileName = other.fileName,
+                        line = oLine,
+                        character = oChar,
+                        start = other.nameNode.pos,
+                        length = other.name.length,
+                    )
+                }
+                val (line, character) = getLineAndCharacterOfPosition(info.source, info.nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Enum declarations can only merge with namespace or other enum declarations.",
+                    category = DiagnosticCategory.Error,
+                    code = 2567,
+                    fileName = info.fileName,
+                    line = line,
+                    character = character,
+                    start = info.nameNode.pos,
+                    length = info.name.length,
                     relatedInformation = relatedInfo,
                 ))
             }
