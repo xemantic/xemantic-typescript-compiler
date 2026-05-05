@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,502 / 10,078 tests passing (~84%).
+**Phase 4 — Checker buildout.** 8,503 / 10,078 tests passing (~84%).
+
+**17.110 (2026-05-05, +1)** — Extended `emitTS2352IfNullCast` to also fire
+for `<T[]>null` (`ArrayType`) and `<[A, B]>null` (`TupleType`) targets.
+Display string built via the existing `formatTypeForDisplay` helper.
+Flips `castTest_ts`: both expected emissions now fire — the new ArrayType
+branch lands `<any[]>null` line 9, and the FunctionType branch from
+17.109 lands `<(res: number) => void>null` line 11. Net delta: 1573 →
+1572 failed (8502 → 8503 passing). Zero regressions.
 
 **17.109 (2026-05-05, net 0 — infra)** — Extended `emitTS2352IfNullCast`
 to fire TS2352 for `<T>null` casts where `T` is a `FunctionType`,
