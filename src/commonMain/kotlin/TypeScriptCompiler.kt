@@ -943,11 +943,18 @@ class TypeScriptCompiler {
                 val sourceFile = parser.parse()
                 parsedSourceFiles[file.fileName] = sourceFile
 
+                // Collect parser diagnostics from .d.ts files too (e.g. TS1540 for `module X {}`).
+                // Skip node_modules files — they are third-party and never reported on.
+                val isNodeModulesFile = file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")
+
                 // .d.ts files are parsed and bound (for checker globals) but not emitted
-                if (isDtsFile) continue
+                if (isDtsFile) {
+                    if (!isNodeModulesFile) diagnostics.addAll(parser.getDiagnostics())
+                    continue
+                }
 
                 // node_modules files are never re-emitted by TypeScript (they're third-party code)
-                if (file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")) continue
+                if (isNodeModulesFile) continue
 
                 diagnostics.addAll(parser.getDiagnostics())
 

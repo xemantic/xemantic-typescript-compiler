@@ -1,6 +1,33 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,521 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,522 / 10,078 tests passing (~85%).
+
+**17.123 (2026-05-05, +1)** — TS1540 per dotted-segment + parser
+diagnostic forwarding for `.d.ts` files. Two-piece change in service of
+`moduleKeywordDeprecated_ts`:
+1. **Parser** (`parseModuleDeclaration`): the existing TS1540 emission
+   only fired once per `module` keyword, but TypeScript emits TS1540
+   for each segment of a dotted name (`module not.ok` → 2 emissions, at
+   `not` and `ok`). Captured the emit decision in `emitTs1540` and
+   added a re-emit inside the dotted-name `while (parseOptional(Dot))`
+   loop, before each `parseIdentifier()` call — at that point scanner
+   position is already on the next segment, so default
+   `reportError`-span (tokenPos..pos) covers the segment text exactly.
+2. **TypeScriptCompiler** multi-file path: `if (isDtsFile) continue`
+   short-circuited past `diagnostics.addAll(parser.getDiagnostics())`,
+   so any parser-level diagnostic emitted while parsing a `.d.ts` file
+   was silently dropped (TS1540 was the visible case but the same path
+   would mask any future parser-side `.d.ts` diagnostic). Hoisted the
+   diagnostic collection ahead of the `.d.ts` continue, with a
+   node_modules guard preserved (third-party files are still excluded
+   from diagnostics). Closes the +8 missing-diags gap on
+   `moduleKeywordDeprecated_ts` (decl.d.ts had 6 missing because none
+   of its parser-side TS1540s were forwarded; foo.ts had 2 missing
+   because the dotted-segment second emission was absent). Net delta:
+   1554 → 1553 failed (8521 → 8522 passing). Zero regressions across
+   10078 suite — the broader `.d.ts` parser-diagnostic forwarding turned
+   out to be safe (no other parser-side diagnostics fire on the corpus's
+   `.d.ts` files).
 
 **17.122 (2026-05-05, +1)** — Lib-aware DOM/host global filter in
 file-level scope construction. When `@lib` is non-empty AND every entry

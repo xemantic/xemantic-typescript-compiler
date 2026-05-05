@@ -2619,6 +2619,41 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.123, 8521 → 8522, +1) — TS1540 per dotted
+  segment + `.d.ts` parser-diagnostic forwarding (`moduleKeywordDeprecated_ts`
+  flip):** Continuation /loop after 17.122. `find_candidates.py --fresh`
+  returned 0/1/0 (single MISSING `aliasUsageInOrExpression_ts`,
+  architectural). Custom 4-10 line PURE-MISS scan (extends past
+  `find_candidates.py`'s ≤3 cap) surfaced `moduleKeywordDeprecated_ts`
+  with 8 missing TS1540 — 6 from `decl.d.ts` (zero emitted) and 2 from
+  `foo.ts` (dotted-segment second emission absent). Two
+  independently-localized gaps:
+  (1) **Parser**: `parseModuleDeclaration` emitted TS1540 once per
+  `module` keyword regardless of dotted-name shape, but TypeScript
+  emits per-segment (`module not.ok` → emissions at `not` and `ok`).
+  Captured the original guard as `emitTs1540` and added a second
+  emission inside the `while (parseOptional(Dot))` loop, BEFORE the
+  `parseIdentifier()` for the next segment — at that point the
+  scanner has advanced past the `.` and is positioned on the next
+  identifier, so the default `reportError`-span (tokenPos..pos) covers
+  the segment text exactly. The dedup guard in `reportError`
+  (skip when last diagnostic shares the same start) is fine here:
+  successive segments have distinct positions.
+  (2) **TypeScriptCompiler** multi-file path:
+  `if (isDtsFile) continue` short-circuited PAST
+  `diagnostics.addAll(parser.getDiagnostics())`, so any parser-level
+  diagnostic emitted while parsing a `.d.ts` file was silently dropped.
+  TS1540 was the visible case but the same path would have masked
+  every future parser-side `.d.ts` diagnostic. Hoisted the collection
+  ahead of the `.d.ts` continue, with the node_modules guard preserved
+  (third-party files are still excluded). The broader-than-strictly-
+  needed forwarding (every parser-side `.d.ts` diagnostic, not just
+  TS1540) turned out to be regression-free across the 10078-test suite,
+  meaning no other parser-side diagnostic fires on the corpus's `.d.ts`
+  files today — but the door is open for future surgical wins on
+  `.d.ts`-only patterns. Net delta: 1554 → 1553 failed (8521 → 8522
+  passing). Zero regressions.
+
   **Session 2026-05-05 (17.122, 8520 → 8521, +1) — Lib-aware DOM/host
   global filter (`recursiveNamedLambdaCall_ts` flip):** Continuation
   /loop after the unknownSymbols1 revert. `find_candidates.py --fresh`
