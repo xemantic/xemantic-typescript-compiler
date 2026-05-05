@@ -28913,6 +28913,7 @@ interface DataView {
                 if (typeNode.members.isEmpty()) return
                 formatTypeForDisplay(typeNode) ?: return
             }
+            is ArrayType, is TupleType -> formatTypeForDisplay(typeNode) ?: return
             else -> return
         }
 

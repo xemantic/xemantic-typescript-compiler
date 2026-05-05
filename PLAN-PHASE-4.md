@@ -2619,6 +2619,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.110, 8502 → 8503, +1) — TS2352 for
+  `<T[]>null` and `<[A,B]>null` casts:** Continuation /loop after 17.109.
+  `find_candidates.py --fresh` now showed `castTest_ts` (MISS:
+  TS2352 @ (9,10) for `<any[]>null`) — the array-target case foreshadowed
+  by 17.109's session note. Extended the type-shape gate in
+  `emitTS2352IfNullCast` to also accept `ArrayType` and `TupleType`.
+  Display string still routes through `formatTypeForDisplay`. The test's
+  second expected emission `<(res: number) => void>null` line 11 lands
+  via 17.109's FunctionType branch — both flip together as 17.110. Net
+  delta: 1573 → 1572 failed (8502 → 8503 passing). Zero regressions
+  across 10078 suite.
+
   **Session 2026-05-05 (17.109, 8502 unchanged — net-zero infra) —
   TS2352 for `<FunctionType|ConstructorType|TypeLiteral>null` casts:**
   Continuation /loop after 17.108. Custom 5-6 line bucket scan surfaced
