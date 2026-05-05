@@ -2619,6 +2619,25 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (17.118, 8514 → 8515, +1) — Object-literal
+  accessors registered as Property symbols (`gettersAndSetters_ts`
+  flip):** Continuation /loop after 17.117. Custom diff scan surfaced
+  `gettersAndSetters_ts` with 1 EXTRA TS2741 at (29,5) on
+  `var o : {Foo:number;} = {get Foo() {return 0;}, set Foo(val:number){val}}`
+  — the assignment's source object literal had `Foo` accessor pair
+  but was being typed as `{}` (empty), so TS2741 said `Foo` was
+  missing. Root cause: `getTypeOfObjectLiteral` (Checker.kt:39524)
+  had `is GetAccessor, is SetAccessor -> continue // accessors not
+  yet supported` — accessors were silently dropped. Replaced with two
+  proper branches: each registers a single Property symbol per
+  accessor name; getter+setter pairs share the same entry (existing
+  member is reused, declarations list grows, valueDeclaration is
+  first-write-wins). Type assigned: getter's declared return type if
+  present, else setter's first-parameter type if present, else
+  `anyType`. Sufficient for the failing test since the target
+  `{Foo:number}` accepts `anyType` via the bidirectional relation.
+  Net delta: 1561 → 1560 (+1). Zero regressions.
+
   **Session 2026-05-05 (17.117, 8511 → 8514, +3) — TS2339 for
   class-instance receiver missing-property:** Continuation /loop
   after 17.116. `find_candidates.py --fresh` returned 0/2/0 — the 2
