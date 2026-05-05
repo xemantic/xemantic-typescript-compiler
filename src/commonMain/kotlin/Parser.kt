@@ -2182,7 +2182,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val usedModuleKeyword = token == SyntaxKind.ModuleKeyword
         nextToken() // skip namespace/module/global
         // TS1540: using 'module' keyword for namespace (identifier name, not string literal)
-        if (usedModuleKeyword && token != SyntaxKind.StringLiteral) {
+        val emitTs1540 = usedModuleKeyword && token != SyntaxKind.StringLiteral
+        if (emitTs1540) {
             reportError("A 'namespace' declaration should not be declared using the 'module' keyword. Please use the 'namespace' keyword instead.", code = 1540)
         }
         val name: Expression = if (isGlobal) {
@@ -2193,6 +2194,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         } else {
             var ident: Expression = parseIdentifier()
             while (parseOptional(SyntaxKind.Dot)) {
+                if (emitTs1540) {
+                    // Each dotted segment uses the deprecated keyword; emit TS1540 per segment.
+                    reportError("A 'namespace' declaration should not be declared using the 'module' keyword. Please use the 'namespace' keyword instead.", code = 1540)
+                }
                 val right = parseIdentifier()
                 ident = PropertyAccessExpression(expression = ident, name = right, pos = pos, end = getEnd())
             }
