@@ -2619,6 +2619,33 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-05 (post-17.121 unknownSymbols1 attempt — REVERTED,
+  net 0):** Continuation /loop after 17.121. `find_candidates.py
+  --fresh` showed `unknownSymbols1_ts` (1 EXTRA: TS2355 at (4,35) for
+  `function foo(x: asdf, y: number): asdf { }` where `asdf` is
+  undeclared). Attempted fix: in `getTypeNodeName` (Checker.kt:34457),
+  when the resolved `getTypeFromTypeNode(TypeReference)` returns
+  `errorType`, return "any" so the return-type classifier picks the
+  void-like branch and suppresses TS2355. The single test flipped, but
+  full-suite re-run revealed 3 regressions: `returnTypeParameter_ts`
+  (`function f<T>(): T` — T is a function-level typeParam not pushed
+  into `currentTypeParamScope` at this check site, so resolves to
+  errorType and TS2355 is wrongly suppressed), `arrayAssignmentTest5_ts`
+  (TS2366 for `IAction` return type — IAction IS declared as an
+  interface in the same file but resolves to errorType in this check
+  context, suggesting `getTypeFromTypeNode` is too context-sensitive
+  here), and `functionsWithImplicitReturnTypeAssignableToUndefined_ts`
+  (similar TS2366 case). Net -2. Reverted. Root cause: errorType is
+  emitted for many reasons beyond "name is unresolved" — specifically
+  function-level + class-level typeParameters not in scope when
+  `checkBodyForImplicitReturn` runs, and possibly local interfaces
+  whose resolution depends on file-level scope state. The right fix
+  would push enclosing typeParameters + ensure file-level type symbols
+  are available before calling `getTypeNodeName`, but that's a refactor
+  with broader risk than warranted by this single-test win. SKIPPED
+  for this session — log entry below to prevent re-attempts without
+  the scope-aware refactor.
+
   **Session 2026-05-05 (17.121, 8518 → 8520, +2) — TS2339 chain-walker
   for class-instance receivers with safely-resolvable extends
   (`bases_ts` flip):** Continuation /loop after 17.120. A custom 4-line
@@ -5719,6 +5746,9 @@ the live plan focused. Quick reference:
 ### Explored-but-skipped tests (2026-04-17, 8186 passing)
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
+
+**Return-type implicit-return checks — needs scope-aware refactor:**
+- `unknownSymbols1_ts`: 1 EXTRA TS2355 at (4,35) for `function foo(...): asdf { }` where `asdf` is undeclared (TS2304 already fires for the unresolved name; TS2355 is a downstream FP because we treat `asdf` as a non-void name in `getTypeNodeName`). Attempted 2026-05-05 (post-17.121): when `getTypeFromTypeNode(TypeReference)` returns `errorType`, return "any" → suppresses TS2355. Single test flipped, but full-suite re-run revealed -3 regressions: `returnTypeParameter_ts` (`function f<T>(): T` — function-level T not in `currentTypeParamScope` at this check site, resolves to errorType), `arrayAssignmentTest5_ts` (TS2366 for `IAction` return type — local interface but resolves to errorType in this context), and `functionsWithImplicitReturnTypeAssignableToUndefined_ts` (similar). Net -2. Reverted. Root cause: errorType is emitted for many reasons beyond "name unresolved" — function/class typeParameters not pushed into scope when `checkBodyForImplicitReturn` runs, plus file-level type symbols not always resolvable from this call site. Right fix would push enclosing typeParameters into `currentTypeParamScope` (and ensure file-level scope is set) before calling `getTypeNodeName`, but that's a refactor across 5 callers (FunctionDeclaration / MethodDeclaration / FunctionExpression / ArrowFunction / GetAccessor) with broader risk than the single-test win warrants.
 
 **Cross-cutting `new NS.Class()` typing — needs careful regression handling:**
 - `vararg_ts`: 4 missing TS2345 on `x.f(x,3,3)` etc. where `x: M.C` namespace-scoped class instance. Root cause: `getReturnTypeOfNewExpression` only handles callee=Identifier, returns anyType for `new M.C()` PropertyAccess callee. Attempted 2026-05-03 (post-17.100): two-part fix (PropertyAccess resolution + relax rest-arg gate when elementType is Type.Intrinsic) made vararg_ts pass individually but full-suite was net 0 (-3 elsewhere even with PropertyAccess fix alone). Once `var x = new NS.Class()` types `x` as the class instead of anyType, every downstream `x.method()` enters the type-check pipeline and triggers FPs in places where overload resolution / generic substitution is incomplete. Reverted both changes. Future fix needs to either narrow the PropertyAccess-resolution gate (e.g., only when downstream usage looks safe — but that's hard to know) or audit and fix the downstream FPs that fire once the type resolves.
