@@ -2619,6 +2619,54 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.129, 8533 → 8534, +1) — TS1292 for
+  `export default <type-only-import>` under `isolatedModules` + TS2440
+  extension for type-alias / interface local conflicts with type-only
+  named imports (`isolatedModulesExportDeclarationType_ts` flip):**
+  Continuation /loop after 17.128. `find_candidates.py --fresh`
+  surfaced `isolatedModulesExportDeclarationType_ts` with `+3` missing:
+  TS2440 at test2.ts(1,10), TS1292 at test2.ts(3,16), TS1292 at
+  test3.ts(2,16). The test exercises four files: test1.ts has
+  `import { T }; const T = 0; export default T;` (already flips via
+  17.128's TS2865); test2.ts has `import { T }; type T = number;
+  export default T;` (needs TS2440 for type-vs-type conflict + TS1292
+  at export); test3.ts has `import { T }; export default T;` (needs
+  TS1292 only); test4.ts has `// @ts-expect-error` + unresolved import
+  + export default unresolved (no errors expected, our checker
+  correctly emits none). Three required diagnostics had to land
+  together for the test to flip — single-piece increments wouldn't
+  show suite-level gain. **Two-piece change**:
+  1. **TS2440 type-alias-conflict extension**: `checkImportConflictsWithLocal`
+     now collects a third name set `typeOnlyNames` (`TypeAliasDeclaration` /
+     `InterfaceDeclaration`). The NamedImports loop adds a new branch
+     ahead of the existing varNames branch: when `localAlias in
+     typeOnlyNames` AND `isExportedNameTypeOnly(sourceName, moduleSpec)`
+     (the helper introduced in 17.128 — type-only in source), emit TS2440
+     at the same span as the value-conflict path. The narrow source-side
+     gate is critical — without it, valid augmentation patterns like
+     `import { Promise }` + `interface Promise<T>` (where lib exports
+     Promise as value+type) would FP-fire TS2440. The new branch ends in
+     `continue` so the loop falls through cleanly to the next element.
+  2. **TS1292 walker**: new `checkIsolatedModulesExportDefaultIsType`
+     gated on `options.isolatedModules && !options.verbatimModuleSyntax`
+     (under verbatimModuleSyntax a different diagnostic family fires).
+     For each `ExportAssignment` excluding `export = X` form: if the
+     expression is an Identifier matching three conditions —
+     (a) resolves to a type-only named import in the current file (via
+     either syntactic `import type {}` / `import { type X }` OR
+     `isExportedNameTypeOnly` on the source module), (b) is NOT shadowed
+     by a local value declaration (`varNames` + class / function / enum) —
+     emit TS1292 at the expression span with the message ending
+     "Consider using 'export type { X as default }'." The walker uses
+     a local helper `isImportedAsTypeOnly` that walks the file's
+     ImportDeclarations once per ExportAssignment expression. Wired into
+     init pipeline as step 68a, immediately after `checkImportConflictsWithLocal`.
+     Net delta: 1542 → 1541 failed (8533 → 8534 passing). Zero
+     regressions across 10078 suite. Foundation: the `typeOnlyNames`
+     set + `isImportedAsTypeOnly` helper can be reused for future
+     TS1484 / TS1295 emission sites if those land for the
+     `verbatimModuleSyntax` variants.
+
   **Session 2026-05-06 (17.128, 8532 → 8533, +1) — TS2865 for
   type-only-source named import vs local-value collision under
   `isolatedModules` + FP suppression for type-only import clauses

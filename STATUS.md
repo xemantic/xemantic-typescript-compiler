@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,533 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,534 / 10,078 tests passing (~85%).
+
+**17.129 (2026-05-06, +1)** — TS1292 for `export default <type-only-import>`
+under `isolatedModules`, plus TS2440 extension for type-alias / interface
+local conflicts with type-only named imports. Two-piece change in service
+of `isolatedModulesExportDeclarationType_ts`:
+1. **TS2440 extension**: `checkImportConflictsWithLocal` now collects a
+   third name set `typeOnlyNames` (TypeAliasDeclaration /
+   InterfaceDeclaration). New branch in the NamedImports loop emits TS2440
+   when `localAlias in typeOnlyNames` AND the imported name resolves
+   type-only in source (via the same `isExportedNameTypeOnly` helper from
+   17.128). Narrow gate avoids FPs against valid `import { Class }` +
+   `interface Class` augmentation patterns where Class is value+type in
+   source. Catches the test2.ts pattern `import { T } from "./type"; type
+   T = number;` where T is type-only in source.
+2. **TS1292 emission**: new walker `checkIsolatedModulesExportDefaultIsType`
+   gated on `options.isolatedModules && !options.verbatimModuleSyntax`.
+   For each `ExportAssignment` (excluding `export = X`), if the
+   expression is an Identifier resolving to a type-only import (covers
+   `import type {}`, `import { type X }`, AND `import { X }` where source
+   exports X type-only) and there's no shadowing local value declaration,
+   emit TS1292 ("'X' resolves to a type and must be marked type-only in
+   this file before re-exporting when 'isolatedModules' is enabled.
+   Consider using 'export type { X as default }'.") at the expression
+   span. Net delta: 1542 → 1541 failed (8533 → 8534 passing). Zero
+   regressions across 10078 suite.
 
 **17.128 (2026-05-06, +1)** — TS2865 for type-only-source named import vs
 local-value collision under `isolatedModules`, plus FP suppression for
