@@ -2501,6 +2501,79 @@ rationale, yield estimates, and risk notes — those long-form descriptions are
 the source of truth; the queue items below are pointers + smallest-substep
 decompositions.
 
+---
+
+**Active blocker substeps — pick from here FIRST** (added 2026-05-06 after
+post-17.133 confirmation that `find_candidates.py --fresh` returned 0/0/0
+yet again; per protocol promote-unblocker policy, surgical pool is exhausted
+and the only path to gains is architectural-blocker substeps). Ranked by
+yield ÷ risk; each item is sized as a single-commit substep landing +1 to
++5 tests when it works:
+
+- [ ] **B1.1. Blocker #1 — `&&`-chain narrowing of identifiers (~2-5 tests,
+  MEDIUM risk).** Extend `applyConditionNarrowing` / `narrowByExpr` to
+  handle binary `&&` chains where each operand narrows subsequent operands:
+  `if (perf && perf.measure)` should narrow `perf` from `T | undefined` to
+  `T` when checking the right operand. 17.4b landed `&&`-chain WALKING for
+  TS2774 emission but does not yet NARROW types through the chain. Targets
+  `uncalledFunctionChecksInConditional2_ts` (full flip needs `window` lib
+  resolution as a separate piece — narrowing alone is independent). See
+  "Known architectural blockers" §1.
+
+- [ ] **B2.1. Blocker #2 — Generic argument inference for single-TypeParam,
+  single-arg signatures (~5-10 tests, MEDIUM risk).** In
+  `checkArgumentsAgainstSignature`, when `sig.typeParameters.size == 1` and
+  the param-type references the TypeParam, infer `T = widen(argType)`,
+  then substitute T into paramType and run the relation check. Conservative
+  gate: skip when arg-type is errorType/anyType/Union-with-errors. Targets
+  `widenToAny1/2_ts`, `recursiveTypeRelations_ts`-adjacents,
+  `noStrictGenericChecks_ts` (latter needs the multi-TypeParam form too).
+  See "Known architectural blockers" §2.
+
+- [ ] **B5.1. Blocker #5 — JSDoc `@param {T}` type extraction (~2-3 tests,
+  LOW risk).** Extend 17.71's `checkJSDocParamTags()` walker (Checker.kt
+  ~7959) to also EXTRACT the `{T}` type expression and bridge it to the
+  parameter's resolved type — 17.71 only validates name-match today. Use
+  the same sub-Parser pattern as 17.58/17.65
+  (`parsePropertyTypeFromJSDoc`); gate to JS-like files. See "Known
+  architectural blockers" §5.
+
+- [ ] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
+  type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).**
+  We currently suppress TS7006 for ANY param marked
+  `contextuallyTyped=true`. TypeScript only suppresses when the contextual
+  signature actually resolves a non-`any` type for that specific param
+  position. Track per-param which positions the context resolves; emit
+  TS7006 for un-resolved ones. Targets
+  `subtypeReductionWithAnyFunctionType_ts`,
+  `intraBindingPatternReferences_ts`,
+  `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`. See
+  "Known architectural blockers" §6.
+
+- [ ] **B1.2. Blocker #1 — Flow-graph definite-assignment recursing into
+  `IfStatement` body (1-2 tests, MEDIUM risk; tread carefully).** 17.30a's
+  `checkDefiniteAssignmentViaFlowGraph` walker doesn't recurse into
+  `IfStatement` then/else blocks (skip-log on `nestedLoopTypeGuards_ts`
+  was flipped 17.30a but adjacent patterns remain). Extend the walker to
+  descend into branch bodies, restricting to `antecedents[0]` for OR-
+  semantics walks per the FlowLoopLabel back-edge invariant (CLAUDE.md
+  "FlowLoopLabel.antecedents[1+]" gotcha — 17.1c snapshot/restore
+  attempt regressed -7). Test coverage: rewrite + full-suite verify
+  before declaring safe.
+
+- [ ] **B3.1. Blocker #3 — Per-file scope construction helper, NO behavior
+  change yet (0 tests, LOWEST risk for prep step).** First step of the
+  multi-session rollout for cross-file global scope conflation. Add a
+  helper `getPerFileScope(fileName)` that constructs scope = script-file
+  locals + lib + KNOWN_GLOBALS + this file's explicit imports, WITHOUT
+  merging OTHER module-files' locals. Don't wire into any check yet —
+  verify by spot-checking sample files against the existing `globals`.
+  Subsequent substeps migrate specific check sites. **Risk for the full
+  blocker is HIGHEST**, but this prep substep is read-only. See "Known
+  architectural blockers" §3.
+
+---
+
 - [x] **17.71. TS8024 — JSDoc `@param` tag with non-matching name in JS files (+1 — flips `jsdocParamTagInvalid_ts`).** **DONE 2026-05-01.** New `checkJSDocParamTags()` walker (Checker.kt ~7959) emits TS8024 ("JSDoc '@param' tag has name 'X', but there is no parameter with that name.") when a `/** @param {T} name */` comment names an identifier that's not in the function's parameter list. Walks all FunctionDeclaration / FunctionExpression / ArrowFunction / MethodDeclaration / Constructor in JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`). Per-tag parsing handles whitespace/`*`/line breaks between `@param`, the optional `{Type}` brace expression, optional `[name]` brackets, and the identifier name. Squiggle position computed via `comment.pos + nameStartInCommentText`. Skips nested-name cases (`@param obj.foo`) since those don't add to the param-name set being checked. Net delta: 1628 → 1627 failed (8447 → 8448 passing). Zero regressions across 10078-test suite. Foundation: the same `walkJSDocParamTagsInStmts` infrastructure is reusable for future JSDoc walkers (`@returns`, `@type` extraction for parameters, etc.).
 
 - [x] **17.70. Extend contextual literal preservation to return-statement source (net-zero infra).** **DONE 2026-05-01.** Mirror of 17.66/17.67 for `checkReturnAssignability`. Wraps `getTypeOfExpression(expr)` in `if (propTypeContainsLiteral(targetType)) literalTypeOfExpression(expr) ?: widened else widened`. Same gate, same fallback. Net delta: 1628 → 1628 failed (8447 unchanged). Closes the literal-preservation pattern across all source-type computation sites: var-decl init (17.66), assignment RHS (17.66), call arg (17.67), return statement (17.70). No currently-failing test gates SOLELY on this; foundation for future tests with literal-typed return annotations.
