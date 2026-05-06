@@ -55901,6 +55901,44 @@ interface DataView {
     // TS2440: Import declaration conflicts with local declaration
     // -----------------------------------------------------------------------
 
+    /**
+     * Returns true if [name] is exported from [moduleSpecifier] only via a type-only declaration
+     * (`export type X = ...`, `export interface X {}`). Walks the target file's top-level
+     * statements and inspects each export form.
+     */
+    private fun isExportedNameTypeOnly(name: String, moduleSpecifier: String): Boolean {
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        var hasTypeOnly = false
+        var hasValue = false
+        for (stmt in targetResult.sourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration ->
+                    if (stmt.name.text == name && ModifierFlag.Export in stmt.modifiers) hasTypeOnly = true
+                is InterfaceDeclaration ->
+                    if (stmt.name.text == name && ModifierFlag.Export in stmt.modifiers) hasTypeOnly = true
+                is ClassDeclaration ->
+                    if (stmt.name?.text == name && ModifierFlag.Export in stmt.modifiers) hasValue = true
+                is FunctionDeclaration ->
+                    if (stmt.name?.text == name && ModifierFlag.Export in stmt.modifiers) hasValue = true
+                is EnumDeclaration ->
+                    if (stmt.name.text == name && ModifierFlag.Export in stmt.modifiers) hasValue = true
+                is VariableStatement ->
+                    if (ModifierFlag.Export in stmt.modifiers &&
+                        stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) hasValue = true
+                is ExportDeclaration -> {
+                    val clause = stmt.exportClause as? NamedExports ?: continue
+                    for (spec in clause.elements) {
+                        if (spec.name.text != name) continue
+                        if (stmt.isTypeOnly || spec.isTypeOnly) hasTypeOnly = true else hasValue = true
+                    }
+                }
+                else -> {}
+            }
+        }
+        return hasTypeOnly && !hasValue
+    }
+
     private fun checkImportConflictsWithLocal() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -55967,7 +56005,10 @@ interface DataView {
                         // Rule: fires when there's a var with the same name AFTER the import AND
                         // NO var with the same name BEFORE the import (first occurrence determines the slot).
                         val clause = stmt.importClause ?: continue
+                        // `import type { X }` / `import type X` create no runtime binding, so no conflict.
+                        if (clause.isTypeOnly) continue
                         val importPos = stmt.pos
+                        val moduleSpecifierText = (stmt.moduleSpecifier as? StringLiteralNode)?.text
 
                         // Helper: check if name conflicts (var after import, no var before import)
                         fun hasVarConflict(name: String): Boolean {
@@ -56027,6 +56068,8 @@ interface DataView {
                         // Named specifiers: import { x } or { x as localAlias }
                         if (nb is NamedImports) {
                             for (element in nb.elements) {
+                                // Per-specifier `import { type X }` creates no runtime binding.
+                                if (element.isTypeOnly) continue
                                 val localAlias = element.name.text
                                 if (localAlias in varNames) {
                                     if (hasVarConflict(localAlias)) {
@@ -56041,16 +56084,38 @@ interface DataView {
                                             localAlias.length
                                         }
                                         val (line, character) = getLineAndCharacterOfPosition(source, startPos)
-                                        diagnostics.add(Diagnostic(
-                                            message = "Import declaration conflicts with local declaration of '$localAlias'.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 2440,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = startPos,
-                                            length = spanLen,
-                                        ))
+                                        // TS2865: under isolatedModules, when the imported name resolves to a
+                                        // type-only export in the source module, the import should have been
+                                        // `import type { X }`. Emit TS2865 in place of TS2440 to direct the
+                                        // user to the right fix. verbatimModuleSyntax routes through TS1484.
+                                        val sourceName = (element.propertyName ?: element.name).text
+                                        val isTypeOnlyInSource = options.isolatedModules &&
+                                            !options.verbatimModuleSyntax &&
+                                            moduleSpecifierText != null &&
+                                            isExportedNameTypeOnly(sourceName, moduleSpecifierText)
+                                        if (isTypeOnlyInSource) {
+                                            diagnostics.add(Diagnostic(
+                                                message = "Import '$localAlias' conflicts with local value, so must be declared with a type-only import when 'isolatedModules' is enabled.",
+                                                category = DiagnosticCategory.Error,
+                                                code = 2865,
+                                                fileName = fileName,
+                                                line = line,
+                                                character = character,
+                                                start = startPos,
+                                                length = spanLen,
+                                            ))
+                                        } else {
+                                            diagnostics.add(Diagnostic(
+                                                message = "Import declaration conflicts with local declaration of '$localAlias'.",
+                                                category = DiagnosticCategory.Error,
+                                                code = 2440,
+                                                fileName = fileName,
+                                                line = line,
+                                                character = character,
+                                                start = startPos,
+                                                length = spanLen,
+                                            ))
+                                        }
                                     }
                                 }
                             }
