@@ -6227,7 +6227,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - ~~`aliasUsageInGenericFunction_ts`~~ → TS2352 ("Conversion of type X to Y may be a mistake…"). Not implemented (type-assertion compatibility check).
 - ~~`argumentsObjectIterator02_ES5_ts`~~ → TS2802 ("can only be iterated through when using `--downlevelIteration`"). Not implemented.
 - `promiseDefinitionTest_ts__target_es5__` → TS2300 duplicate identifier against lib. Needs class-vs-lib-var conflict detection at binder level.
-- ~~`simpleRecursionWithBaseCase1_ts`~~ / `trivialSubtypeReductionNoStructuralCheck_ts` → TS7023 (recursive function needs return-type annotation). Not implemented.
+- ~~`simpleRecursionWithBaseCase1_ts`~~ / `trivialSubtypeReductionNoStructuralCheck_ts` / `conflictingDeclarationsImportFromNamespace1_ts` / `conflictingDeclarationsImportFromNamespace2_ts` → TS7023 (recursive function needs return-type annotation). Not implemented. The `conflictingDeclarations*` pair ALSO needs TS2497 at the module specifier — TypeScript fires this when `import * as X from "./m"` references a module with `export = X` AND `esModuleInterop` defaults to false for the current `module` setting (e.g. CJS). Our default `esModuleInterop = true` regardless of module setting (CLAUDE.md gotcha) blocks this — would need per-module-default logic that risks broad regressions across CJS-targeted tests.
 - ~~`narrowByEquality_ts`~~ → TS2839 ("This condition will always return 'false'…"). Narrowing (blocker-adjacent).
 - ~~`nestedLoopTypeGuards_ts`~~ → flipped 17.30a (flow-graph definite-assignment via `checkDefiniteAssignmentViaFlowGraph`).
 - ~~`typeGuardConstructorDerivedClass_ts`~~ → flipped 17.5a (`x.constructor === Class` narrowing).
