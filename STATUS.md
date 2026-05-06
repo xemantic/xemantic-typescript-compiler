@@ -1,6 +1,45 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,535 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,537 / 10,078 tests passing (~85%).
+
+**17.131 (2026-05-06, +2)** — TS1295 / TS1484 emission for
+`verbatimModuleSyntax` + TS2440/TS2865 routing under verbatim. New
+walker `checkVerbatimModuleSyntax` (Checker.kt ~56313) emits two
+diagnostics per non-type-only import element under verbatimModuleSyntax:
+1. **TS1295** ("ECMAScript imports and exports cannot be written in a
+   CommonJS file under 'verbatimModuleSyntax'.") fires for every
+   non-type-only named import / default import / namespace import in a
+   CJS file. CJS detection via `!isESModuleFormat(effectiveModule,
+   fileName)`. Position: at the imported name (default name, `*` alias,
+   or specifier name).
+2. **TS1484** ("'X' is a type and must be imported using a type-only
+   import when 'verbatimModuleSyntax' is enabled.") fires for non-type-only
+   named imports of names that are type-only exports in the source
+   module (reuses `isExportedNameTypeOnly` from 17.128). Skip type-only
+   `import type {}` clauses and per-element `import { type X }`. Default/
+   namespace imports skip TS1484 (default-as-type rare;
+   namespace import brings both types+values).
+
+Updated existing `checkImportConflictsWithLocal` (TS2440/TS2865 branch):
+- TS2865 gate widened to fire under both `isolatedModules+!verbatim`
+  AND `isolatedModules+verbatim` (was `!verbatim`-only). Routes through
+  the same diagnostic: "Import 'X' conflicts with local value, so must
+  be declared with a type-only import when 'isolatedModules' is enabled."
+- TS2440 suppressed when `verbatimModuleSyntax && type-only-in-source`
+  (TS1484 from new walker covers this surface). Still fires for
+  non-type-only-source conflicts under verbatim, and for all conflicts
+  outside of verbatim.
+
+Flips `isolatedModulesSketchyAliasLocalMerge_ts__isolatedmodules_false_verbatimmodulesyntax_true`
+and `__isolatedmodules_true_verbatimmodulesyntax_true` variants. Net:
+1540 → 1538 failed (8535 → 8537 passing). Zero regressions across 10078
+suite. Foundation: extending the walker to handle export declarations
+(TS1295 for `export {} from`, `export *`), import-equals, side-effect
+imports, and namespace-import-of-type-only-mod (TS1484) would unlock
+additional `verbatimModuleSyntax`-family tests
+(`isolatedModulesShadowGlobalTypeNotValue` variants need TS2866 too,
+`noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues` needs TS5102
++ TS1287). Out of scope for this substep.
 
 **17.130 (2026-05-06, +1)** — Module-augmentation export-required mode +
 TS2339 for `Class.prototype.X` and instance-receiver class missing
