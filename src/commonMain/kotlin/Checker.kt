@@ -1382,8 +1382,40 @@ class Checker(
             // Resolve the specifier to a target file
             val targetFile = resolveModuleSpecifier(specifier, stmt)
 
+            // 17.130: TypeScript distinguishes "global augmentations" (no top-level export
+            // statements inside the augmentation body — declarations implicitly merge) from
+            // true "module augmentations" (has export statement — declarations must carry an
+            // explicit `export` modifier to merge with the target module's exports). When the
+            // body has top-level export statements, filter `augExports` to symbols whose
+            // declarations are explicitly exported. import statements alone don't trigger
+            // the strict mode (verified against `moduleAugmentationImportsAndExports3` baseline:
+            // import-only augmentation still implicitly merges all declarations).
+            val augHasModuleSyntax = if (body is ModuleBlock) {
+                body.statements.any {
+                    it is ExportDeclaration || it is ExportAssignment
+                }
+            } else false
+
+            fun shouldAugmentSymbol(augSymbol: Symbol): Boolean {
+                if (!augHasModuleSyntax) return true
+                // Has module-syntax: only declarations with `export` modifier augment.
+                // Detected via `ExportValue` flag (set by the binder when `Export` modifier
+                // is present on the declaration). Aliases without module-export propagation
+                // (`import X = require`, plain `import {X}`, `export {X} from`) are skipped.
+                if (augSymbol.flags.hasAny(SymbolFlags.ExportValue)) return true
+                // Nested string-literal module declarations augment globally without requiring
+                // `export` — `declare module "Outer" { module "Target" { interface T { foo() } } }`
+                // augments globals["Target"] via the outer merge, regardless of `export` on the
+                // inner `module "Target"`. The binder doesn't set ExportValue on these without
+                // an explicit `export`, but they're still augmenting symbols.
+                val firstDecl = augSymbol.declarations.firstOrNull()
+                if (firstDecl is ModuleDeclaration && firstDecl.name is StringLiteralNode) return true
+                return false
+            }
+
             // Merge each augmented export into the corresponding global symbol.
             for ((exportName, augSymbol) in augExports) {
+                if (!shouldAugmentSymbol(augSymbol)) continue
                 val globalSymbol = globals[exportName]
                 if (globalSymbol != null) {
                     if (augSymbol.exports != null) {
@@ -1409,6 +1441,7 @@ class Checker(
                 val targetResult = fileResults[targetFile]
                 if (targetResult != null) {
                     for ((exportName, augSymbol) in augExports) {
+                        if (!shouldAugmentSymbol(augSymbol)) continue
                         val localSymbol = targetResult.locals[exportName]
                         if (localSymbol != null) {
                             if (augSymbol.exports != null) {
@@ -46758,7 +46791,33 @@ interface DataView {
             // covered the narrowed-to-never / single-Object / Union-with-missing cases;
             // the remaining identifier-symbol lookup paths don't generalize to
             // dotted-path receivers (no `globals["A._a"]` lookup makes sense).
-            if (objectExpr !is Identifier) return
+            if (objectExpr !is Identifier) {
+                // 17.130: `ClassIdent.prototype.X` — `Class.prototype` doesn't resolve to
+                // the class's instance type in our checker (no `prototype` member on the
+                // static side), so the receiver type is anyType and the standard checks bail.
+                // Detect the syntactic shape and route to `tryEmitClassInstanceMissingTs2339`
+                // with the class symbol's declared instance type so missing-property emission
+                // fires on `A.prototype.foo` when `foo` isn't on A's instance shape.
+                if (objectExpr is PropertyAccessExpression &&
+                    objectExpr.name.text == "prototype" &&
+                    objectExpr.expression is Identifier
+                ) {
+                    val classIdent = objectExpr.expression as Identifier
+                    val rawSym = currentFileLocals?.get(classIdent.text) ?: globals[classIdent.text]
+                    val classSym = rawSym?.let {
+                        if (it.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(it) else it
+                    }
+                    if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
+                        try {
+                            val classType = getDeclaredTypeOfSymbol(classSym)
+                            if (classType is Type.Interface) {
+                                tryEmitClassInstanceMissingTs2339(classSym, classType, propName, objectExpr, diagStart, diagLength, source, fileName)
+                            }
+                        } catch (_: StackOverflowError) { /* fall through */ }
+                    }
+                }
+                return
+            }
             val identName = objectExpr.text
             val identSymbol = globals[identName]
 
@@ -47429,8 +47488,17 @@ interface DataView {
     ) {
         if (propName.isEmpty()) return
         if (propName in RUNTIME_PROPERTIES) return
-        if (typeSym.declarations.size != 1) return
-        val classDecl = typeSym.declarations.firstOrNull() as? ClassDeclaration ?: return
+        // 17.130: Count only "shape-defining" declarations (Class/Interface/TypeAlias/Module).
+        // Import-specifier and alias declarations are appended via `mergeSymbolTable` at init's
+        // global merge step (see CLAUDE.md "ALL file locals merged into globals" gotcha), but
+        // they don't contribute members to the class shape. Pre-fix: `declarations.size != 1`
+        // bailed whenever a class was imported into any file, over-suppressing TS2339.
+        val shapeDecls = typeSym.declarations.count { d ->
+            d is ClassDeclaration || d is InterfaceDeclaration ||
+                d is TypeAliasDeclaration || d is ModuleDeclaration
+        }
+        if (shapeDecls != 1) return
+        val classDecl = typeSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return
         if (!classDecl.typeParameters.isNullOrEmpty()) return
         // Walk own + extends chain. The helper itself bails on IndexSignature
         // and `declare class` (in this class OR any base), so those gates need

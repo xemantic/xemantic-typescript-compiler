@@ -2619,6 +2619,62 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.130, 8534 → 8535, +1) — Module-augmentation
+  export-required mode + TS2339 for `Class.prototype.X` /
+  instance-receiver class missing property
+  (`moduleAugmentationImportsAndExports2_ts` flip):** Continuation
+  /loop after 17.129. `find_candidates.py --fresh` surfaced
+  `moduleAugmentationImportsAndExports2_ts` with `+2` missing TS2339
+  at f3.ts(3,13) and f4.ts(5,11). The test pattern: f3.ts has `import
+  {A} from "./f1"` plus `declare module "./f1" { import {B} from
+  "./f2"; export {B} from "./f2"; interface A { foo(): B } }` — the
+  augmentation has both an `import` AND an `export` statement (along
+  with the `interface A` without `export` modifier). TypeScript's rule:
+  when an augmentation body contains a top-level export statement, it
+  switches to "module augmentation" mode where only declarations
+  carrying `export` modifier merge with the target. Without this rule,
+  our merger pulled `interface A` (no export) into `globals["A"]`, so
+  `a.foo()` resolved cleanly and no TS2339 fired. Sister test
+  `moduleAugmentationImportsAndExports3_ts` (identical except no
+  `export {B}` line) does NOT expect TS2339 — confirming TypeScript's
+  trigger is the export statement, not the import.
+
+  Three-piece change in Checker.kt:
+  1. **Aug body export-mode gate** (~line 1382): new local
+     `augHasModuleSyntax` set true iff body contains
+     `ExportDeclaration` or `ExportAssignment`. New
+     `shouldAugmentSymbol` helper: when augHasModuleSyntax is true,
+     only symbols with `SymbolFlags.ExportValue` augment, EXCEPT
+     nested string-literal `module "X"` declarations (which
+     unconditionally augment via outer-merge). Both globals merge and
+     per-file-locals merge sites filter through `shouldAugmentSymbol`.
+  2. **`tryEmitClassInstanceMissingTs2339` shape-decl count**
+     (~line 47490): replaces `declarations.size != 1` bail with
+     `count { ClassDecl|InterfaceDecl|TypeAliasDecl|ModuleDecl }`. The
+     prior gate over-suppressed TS2339 whenever a class was imported
+     into any other file (init's global merge appends ImportSpecifier
+     declarations to the merged class symbol — see CLAUDE.md "ALL file
+     locals merged into globals" gotcha).
+  3. **`Class.prototype.X` TS2339 branch** (~line 46787): in the
+     `if (objectExpr !is Identifier)` fall-through, detect
+     `ClassIdent.prototype` shape and route to
+     `tryEmitClassInstanceMissingTs2339` with the class's declared
+     instance type (resolving alias if `A` is imported). Without this,
+     `A.prototype.foo` resolves to `anyType` (no `prototype` member on
+     the static side) and TS2339 silently drops.
+
+  **Iterations to land:** First attempt (broader filter — ANY of
+  `import|importEquals|export|exportAssignment` triggers strict mode)
+  regressed -19 tests. Narrowed-attempt (only export statements
+  trigger; nested string-literal modules exempt) regressed -3 tests
+  (the four `moduleAugmentationInAmbientModule*_ts` tests + one other
+  use the nested-module pattern but Aliases were filtered out — fixed
+  with the nested-module exemption). Final form: zero regressions.
+
+  Net delta: 1541 → 1540 failed (8534 → 8535 passing). Zero
+  regressions. Foundation for follow-on tests in the
+  `moduleAugmentationImportsAndExports*_ts` family.
+
   **Session 2026-05-06 (17.129, 8533 → 8534, +1) — TS1292 for
   `export default <type-only-import>` under `isolatedModules` + TS2440
   extension for type-alias / interface local conflicts with type-only

@@ -1,6 +1,43 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,534 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,535 / 10,078 tests passing (~85%).
+
+**17.130 (2026-05-06, +1)** — Module-augmentation export-required mode +
+TS2339 for `Class.prototype.X` and instance-receiver class missing
+property. Three-piece change in service of
+`moduleAugmentationImportsAndExports2_ts`:
+1. **Aug body export-mode gate** in `collectModuleAugmentations`
+   (Checker.kt ~1382): when the augmentation body has a top-level
+   `ExportDeclaration` or `ExportAssignment`, switches to "module
+   augmentation" mode where only declarations carrying
+   `SymbolFlags.ExportValue` augment the target. `import` statements
+   alone don't trigger the strict mode (verified against
+   `moduleAugmentationImportsAndExports3` baseline). Nested
+   string-literal `module "X"` declarations are exempted from the
+   rule via a `firstDecl is ModuleDeclaration` check (their
+   augmentation propagates without explicit export). Filters at both
+   the globals merge and the per-file-locals merge sites.
+2. **`tryEmitClassInstanceMissingTs2339` shape-decl count**
+   (Checker.kt ~47490): replaces `declarations.size != 1` bail with a
+   count of "shape-defining" declarations (Class/Interface/TypeAlias/
+   Module). Import specifiers and aliases are appended to the symbol's
+   declarations during init's global merge (CLAUDE.md "ALL file locals
+   merged into globals" gotcha) but don't contribute to the class's
+   instance shape — the prior gate over-suppressed TS2339 whenever a
+   class was imported into any file.
+3. **`Class.prototype.X` TS2339 branch** (Checker.kt ~46787): in the
+   PropertyAccess-receiver fall-through, detect the `ClassIdent.prototype`
+   shape and route to `tryEmitClassInstanceMissingTs2339` with the
+   class's declared instance type. Without this, `A.prototype.foo`
+   resolves to `anyType` (no `prototype` member on the static side)
+   and TS2339 silently drops. Resolves the alias if `A` is imported
+   (e.g. `import {A} from "./f1"`).
+
+Net delta: 1541 → 1540 failed (8534 → 8535 passing). Zero regressions
+across 10078 suite. Foundation for follow-on: tests of the same family
+(`moduleAugmentationImportsAndExports*_ts`) where the augmentation has
+mixed shapes can now be tackled without re-discovering the
+strict-mode-via-export rule.
 
 **17.129 (2026-05-06, +1)** — TS1292 for `export default <type-only-import>`
 under `isolatedModules`, plus TS2440 extension for type-alias / interface
