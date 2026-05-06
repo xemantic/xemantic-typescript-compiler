@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,538 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,539 / 10,078 tests passing (~85%).
+
+**17.134 (2026-05-06, +1)** — Cross-file TS2448 walker now recurses
+into `BinaryExpression` (and `ParenthesizedExpression`) within top-level
+`ExpressionStatement`s, with a JS-source-file gate to match TypeScript's
+behavior (TS2448 fires only when the use site is `.ts`/`.tsx`). Flips
+`jsFileCompilationLetDeclarationOrder2_ts` whose use-before-decl is
+`a = 10` (assignment-LHS) where `a` is `let`-declared in a later file.
+Pre-fix the walker only handled bare-`Identifier` ExprStmts (`c;`)
+across files. Pre-builds a single `firstDeclByName` map of cross-file
+block-scoped decls (let/const, non-`declare`) keyed by name, then
+walks each file's top-level expression statements via a small
+recursive helper. Confirmed zero regressions across the 10078 suite
+via diff against pre-fix baseline. The JS-source gate avoids the
+companion test `jsFileCompilationLetDeclarationOrder_ts` (use is in
+`b.js`, decl in later `a.ts`) which expects 0 errors.
 
 **17.133 (2026-05-06, +1)** — TS5102 unconditional emission for
 removed options (`importsNotUsedAsValues`, `preserveValueImports`).

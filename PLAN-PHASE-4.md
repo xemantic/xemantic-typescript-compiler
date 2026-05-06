@@ -2696,6 +2696,71 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.134, 8538 → 8539, +1) — Cross-file TS2448
+  walker extended to BinaryExpression-rooted ExpressionStatements with
+  JS-source gate.** Continuation /loop after the 17.133 + queue-maint
+  iteration. The 8538 baseline confirmed via fresh full-suite (1537
+  failed, 3 skipped) and `find_candidates.py --fresh` returned 0/0/0
+  (filtered from 7/78/19). Per the anti-loop rule's diagnostic signal
+  (3 of last 10 commits were docs/queue commits — queue mis-structured),
+  the prior session's recon already characterized all 6 active blocker
+  substeps (B1.1, B2.1, B5.1, B6.1, B1.2; B3.1 done) as either
+  closed-by-prior-work or genuinely multi-file architectural. So this
+  session pivoted to a small surgical extension that targeted a SKIP'd
+  test from the MISS bucket: `jsFileCompilationLetDeclarationOrder2_ts`
+  (TS2448 missing on `a = 10` in a.ts where `a` is `let`-declared
+  later in b.js).
+
+  **Root cause:** `checkCrossFileUseBeforeDeclaration` (Checker.kt
+  ~26299) handled ONLY `ExpressionStatement` whose expression is a
+  bare `Identifier` (`c;` style — covered by the existing
+  `constDeclarations-useBeforeDefinition2_ts` baseline, which uses
+  `c;`). Any `a = 10` style top-level assignment whose LHS or RHS
+  references a cross-file `let`/`const` was silently dropped because
+  `BinaryExpression` wasn't walked.
+
+  **Implementation:** Restructured the walker into a two-pass
+  build-then-walk pattern:
+  1. Pre-build `firstDeclByName: Map<String, CrossFileBlockDecl>` of
+     all cross-file block-scoped decls (let/const, non-`declare`),
+     keyed by name with first-occurrence semantics (file order =
+     binderResults order).
+  2. Walk each non-d.ts file's top-level ExpressionStatement
+     expressions via new recursive `checkCrossFileUBDInExpr` helper
+     handling `Identifier` (cross-file lookup + emit), `BinaryExpression`
+     (recurse into both sides), and `ParenthesizedExpression` (unwrap).
+     Other expression shapes (CallExpression / NewExpression etc.) are
+     not walked — TypeScript's existing baselines don't cover those at
+     top level and widening risks regressions.
+
+  **JS-source gate:** Initial implementation produced a +1/-1 swap
+  (`jsFileCompilationLetDeclarationOrder2_ts` flipped IN, but
+  companion `jsFileCompilationLetDeclarationOrder_ts` regressed — the
+  latter has b.js (FIRST) `let a = 10; b = 30;` + a.ts (SECOND)
+  `let b = 30; a = 10;` and expects 0 errors). TypeScript baseline
+  shows TS2448 fires only when the USE site is in a `.ts`/`.tsx` file;
+  JS use sites do not error even with `--allowJs` and even when the
+  later-file decl IS visible at runtime. Added an early `continue`
+  when the use file's name ends with `.js` / `.jsx` / `.cjs` / `.mjs`.
+  Both baselines now pass.
+
+  **Test results:** 1537 → 1536 failed (8538 → 8539 passing). Verified
+  zero regressions via Python diff against pre-fix XML snapshot — only
+  `jsFileCompilationLetDeclarationOrder2_ts has expected errors` flipped.
+
+  **Foundation:** The `firstDeclByName` map structure (data class
+  `CrossFileBlockDecl`) is reusable for any future cross-file
+  use-before-declaration check (e.g. extending to CallExpression
+  callee positions or PropertyAccessExpression receivers if a baseline
+  surfaces). The JS-source gate codifies TypeScript's actual cross-file
+  behavior — same gate would apply to any future expansion of cross-
+  file diagnostics that should be TS-only.
+
+  **Anti-loop check:** Pool empty (`find_candidates.py --fresh`:
+  0/0/0). Lands real code per protocol option (a) "feature commit
+  landing real code". Counters the 3-of-10 docs/queue-commit signal
+  in the last commit window.
+
   **Session 2026-05-06 (queue maint, 8538 unchanged — B3.1 marked
   already-done) — Surgical pool exhausted (`find_candidates.py --fresh`
   returned 0/0/0, filtered from 7/78/19); per anti-loop rule, must
