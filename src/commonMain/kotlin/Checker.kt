@@ -770,6 +770,8 @@ class Checker(
         checkExportSpecifierLocality()
         // 68. Check import declaration conflicts with local (TS2440)
         checkImportConflictsWithLocal()
+        // 68a. Check `export default X` where X is a type-only import under isolatedModules (TS1292)
+        checkIsolatedModulesExportDefaultIsType()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
         // 70. Check property used before initialization (TS2729)
@@ -55950,6 +55952,7 @@ interface DataView {
             // Variables conflict with import aliases; classes/functions/interfaces can merge
             val varNames = mutableSetOf<String>()     // variable declarations
             val mergeableNames = mutableSetOf<String>() // class/function/enum — can merge with internal aliases
+            val typeOnlyNames = mutableSetOf<String>() // type alias / interface — can conflict with type-only imports
             for (stmt in stmts) {
                 when (stmt) {
                     is VariableStatement -> {
@@ -55961,6 +55964,8 @@ interface DataView {
                     is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
                     is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
                     is EnumDeclaration -> mergeableNames.add(stmt.name.text)
+                    is TypeAliasDeclaration -> typeOnlyNames.add(stmt.name.text)
+                    is InterfaceDeclaration -> typeOnlyNames.add(stmt.name.text)
                     else -> {}
                 }
             }
@@ -56071,6 +56076,36 @@ interface DataView {
                                 // Per-specifier `import { type X }` creates no runtime binding.
                                 if (element.isTypeOnly) continue
                                 val localAlias = element.name.text
+                                val sourceNameForElt = (element.propertyName ?: element.name).text
+                                // Type-only-vs-type-only conflict: `import { T }` (where T is a type-only
+                                // export in source) + local `type T` / `interface T` declaration. Both
+                                // declare T as a type, so they collide. Emit TS2440 (NOT TS2865 — local
+                                // is a type, not a value). The narrow gate (isExportedNameTypeOnly) avoids
+                                // FPs against valid `import { Class }` + `interface Class` augmentation
+                                // patterns (where Class is a value+type in source).
+                                if (localAlias in typeOnlyNames &&
+                                    moduleSpecifierText != null &&
+                                    isExportedNameTypeOnly(sourceNameForElt, moduleSpecifierText)) {
+                                    val startNode = element.propertyName ?: element.name
+                                    val startPos = startNode.pos
+                                    val spanLen = if (element.propertyName != null) {
+                                        element.name.pos + element.name.text.length - startPos
+                                    } else {
+                                        localAlias.length
+                                    }
+                                    val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Import declaration conflicts with local declaration of '$localAlias'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2440,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = startPos,
+                                        length = spanLen,
+                                    ))
+                                    continue
+                                }
                                 if (localAlias in varNames) {
                                     if (hasVarConflict(localAlias)) {
                                         // Position at the start of the element (propertyName if aliased, otherwise name)
@@ -56123,6 +56158,79 @@ interface DataView {
                     }
                     else -> {}
                 }
+            }
+        }
+    }
+
+    // TS1292: 'X' resolves to a type and must be marked type-only when re-exporting under isolatedModules
+    // -----------------------------------------------------------------------
+
+    /**
+     * Under `isolatedModules`, `export default X` where X resolves to a type-only import
+     * (and there's no local value declaration named X) requires `export type { X as default }`
+     * because the transpiler can't know whether to elide the export at runtime. Emits TS1292
+     * at the expression's position. Skipped when `verbatimModuleSyntax` is enabled (different
+     * diagnostic family fires there).
+     */
+    private fun checkIsolatedModulesExportDefaultIsType() {
+        if (!options.isolatedModules || options.verbatimModuleSyntax) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+
+            // Collect names declared as values in this file (used to short-circuit when the
+            // exported identifier is shadowed by a same-name local value declaration).
+            val localValueNames = mutableSetOf<String>()
+            for (stmt in stmts) {
+                when (stmt) {
+                    is VariableStatement ->
+                        for (decl in stmt.declarationList.declarations) {
+                            (decl.name as? Identifier)?.text?.let { localValueNames.add(it) }
+                        }
+                    is FunctionDeclaration -> stmt.name?.let { localValueNames.add(it.text) }
+                    is ClassDeclaration -> stmt.name?.let { localValueNames.add(it.text) }
+                    is EnumDeclaration -> localValueNames.add(stmt.name.text)
+                    else -> {}
+                }
+            }
+
+            // Returns true when [name] is imported and resolves to a type-only export in the source
+            // module — covers both syntactic `import type { X }` / `import { type X }` AND
+            // `import { X }` where X happens to be a type-only export in the source module.
+            fun isImportedAsTypeOnly(name: String): Boolean {
+                for (stmt in stmts) {
+                    if (stmt !is ImportDeclaration) continue
+                    val clause = stmt.importClause ?: continue
+                    val nb = clause.namedBindings as? NamedImports ?: continue
+                    val element = nb.elements.firstOrNull { it.name.text == name } ?: continue
+                    if (clause.isTypeOnly || element.isTypeOnly) return true
+                    val moduleSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val sourceName = (element.propertyName ?: element.name).text
+                    if (isExportedNameTypeOnly(sourceName, moduleSpec)) return true
+                }
+                return false
+            }
+
+            for (stmt in stmts) {
+                if (stmt !is ExportAssignment) continue
+                if (stmt.isExportEquals) continue // `export = X` is a separate diagnostic family
+                val expr = stmt.expression as? Identifier ?: continue
+                val name = expr.text
+                if (name in localValueNames) continue
+                if (!isImportedAsTypeOnly(name)) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                diagnostics.add(Diagnostic(
+                    message = "'$name' resolves to a type and must be marked type-only in this file before re-exporting when 'isolatedModules' is enabled. Consider using 'export type { $name as default }'.",
+                    category = DiagnosticCategory.Error,
+                    code = 1292,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = expr.pos,
+                    length = name.length,
+                ))
             }
         }
     }
