@@ -26292,46 +26292,104 @@ interface DataView {
         }
     }
 
+    private data class CrossFileBlockDecl(
+        val fileIdx: Int,
+        val pos: Int,
+        val name: String,
+        val source: String,
+        val fileName: String,
+    )
+
     /**
      * Cross-file TS2448: when file1 uses identifier `x` at top level,
      * and `x` is declared with let/const in a later file2, emit TS2448.
+     *
+     * Pre-builds a map of first-occurrence block-scoped decls across all
+     * non-d.ts files (file order = binderResults order = build.gradle test
+     * harness order — the same order TypeScript's test framework uses).
+     * Then walks each file's top-level statements collecting identifier
+     * uses; for any use whose name has a cross-file decl in a LATER file
+     * AND is not a local of the using file, emits TS2448.
+     *
+     * Walks bare `Identifier` ExpressionStatements (`c;`), assignment-LHS /
+     * RHS in BinaryExpressions (`a = 10`, `x.p = a + b`), and
+     * ParenthesizedExpressions. Other expression shapes
+     * (CallExpression / NewExpression etc.) are not walked here — TS2448
+     * for those at top level isn't covered by the existing baselines and
+     * widening risks regressing tests not yet investigated.
      */
     private fun checkCrossFileUseBeforeDeclaration() {
+        val firstDeclByName = HashMap<String, CrossFileBlockDecl>()
         for ((fileIdx, result) in binderResults.withIndex()) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            val localNames = result.locals.keys
             for (stmt in result.sourceFile.statements) {
-                if (stmt is ExpressionStatement && stmt.expression is Identifier) {
-                    val ident = stmt.expression as Identifier
-                    val name = ident.text
-                    // Skip if locally declared in this file (same-file checks handle it)
-                    if (name in localNames) continue
-                    // Check if declared as block-scoped in a later file
-                    for (i in fileIdx + 1 until binderResults.size) {
-                        val laterResult = binderResults[i]
-                        val laterFileName = laterResult.sourceFile.fileName
-                        if (isDtsFile(laterFileName)) continue
-                        val laterSource = laterResult.sourceFile.text
-                        for (laterStmt in laterResult.sourceFile.statements) {
-                            if (laterStmt is VariableStatement &&
-                                ModifierFlag.Declare !in laterStmt.modifiers) {
-                                val kind = laterStmt.declarationList.flags
-                                if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
-                                    for (d in laterStmt.declarationList.declarations) {
-                                        val nameNode = d.name
-                                        if (nameNode is Identifier && nameNode.text == name) {
-                                            emitCrossFileTS2448(ident, name, source, fileName,
-                                                nameNode.pos, nameNode.text, laterSource, laterFileName)
-                                        }
-                                    }
-                                }
+                if (stmt is VariableStatement && ModifierFlag.Declare !in stmt.modifiers) {
+                    val kind = stmt.declarationList.flags
+                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
+                        for (d in stmt.declarationList.declarations) {
+                            val nameNode = d.name
+                            if (nameNode is Identifier && nameNode.text !in firstDeclByName) {
+                                firstDeclByName[nameNode.text] = CrossFileBlockDecl(
+                                    fileIdx, nameNode.pos, nameNode.text, source, fileName,
+                                )
                             }
                         }
                     }
                 }
             }
+        }
+        if (firstDeclByName.isEmpty()) return
+        for ((fileIdx, result) in binderResults.withIndex()) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // TypeScript only emits cross-file TS2448 when the use site is
+            // a TS file. JS use sites (`b = 30` in b.js referencing `let b`
+            // in a later a.ts) do not error, even with `--allowJs` (see
+            // baseline `jsFileCompilationLetDeclarationOrder`).
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".cjs") || fileName.endsWith(".mjs")) continue
+            val source = result.sourceFile.text
+            val localNames = result.locals.keys
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ExpressionStatement) {
+                    checkCrossFileUBDInExpr(
+                        stmt.expression, fileIdx, localNames, source, fileName, firstDeclByName,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun checkCrossFileUBDInExpr(
+        expr: Expression,
+        useFileIdx: Int,
+        localNames: Set<String>,
+        source: String,
+        fileName: String,
+        firstDeclByName: Map<String, CrossFileBlockDecl>,
+    ) {
+        when (expr) {
+            is Identifier -> {
+                val name = expr.text
+                if (name in localNames) return
+                val decl = firstDeclByName[name] ?: return
+                if (decl.fileIdx > useFileIdx) {
+                    emitCrossFileTS2448(
+                        expr, name, source, fileName,
+                        decl.pos, decl.name, decl.source, decl.fileName,
+                    )
+                }
+            }
+            is BinaryExpression -> {
+                checkCrossFileUBDInExpr(expr.left, useFileIdx, localNames, source, fileName, firstDeclByName)
+                checkCrossFileUBDInExpr(expr.right, useFileIdx, localNames, source, fileName, firstDeclByName)
+            }
+            is ParenthesizedExpression -> checkCrossFileUBDInExpr(
+                expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName,
+            )
+            else -> {}
         }
     }
 
