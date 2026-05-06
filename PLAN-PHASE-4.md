@@ -2561,16 +2561,20 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   attempt regressed -7). Test coverage: rewrite + full-suite verify
   before declaring safe.
 
-- [ ] **B3.1. Blocker #3 — Per-file scope construction helper, NO behavior
-  change yet (0 tests, LOWEST risk for prep step).** First step of the
-  multi-session rollout for cross-file global scope conflation. Add a
-  helper `getPerFileScope(fileName)` that constructs scope = script-file
-  locals + lib + KNOWN_GLOBALS + this file's explicit imports, WITHOUT
-  merging OTHER module-files' locals. Don't wire into any check yet —
-  verify by spot-checking sample files against the existing `globals`.
-  Subsequent substeps migrate specific check sites. **Risk for the full
-  blocker is HIGHEST**, but this prep substep is read-only. See "Known
-  architectural blockers" §3.
+- [x] **B3.1. Blocker #3 — Per-file scope construction helper, NO behavior
+  change yet (0 tests, LOWEST risk for prep step). ALREADY DONE in
+  17.32a-e (2026-04-27).** `buildPerFileScopes()` at Checker.kt:1713
+  populates `perFileScope: MutableMap<String, SymbolTable>` keyed by
+  fileName; scope = lib globals + script-file locals (first-write-wins) +
+  this file's own locals (override). Module-file locals from OTHER files
+  are deliberately excluded. Four call sites already migrated (17.32b–e):
+  TS2663-vs-TS2301 disambiguation, TS2552 spelling-suggestion candidate
+  set, `resolveExpressionToSymbol` Identifier branch, and TS2304 file-
+  scope. ~12 remaining `globals[X]` lookups in identifier-resolution
+  contexts could be migrated for further cross-file leak fixes
+  (next-session: pick one such call site as a B3.2 substep). The queue
+  promotion in 64ec09a was made without cross-checking 17.32a-e session
+  notes — the description was stale.
 
 ---
 
@@ -2691,6 +2695,87 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-06 (queue maint, 8538 unchanged — B3.1 marked
+  already-done) — Surgical pool exhausted (`find_candidates.py --fresh`
+  returned 0/0/0, filtered from 7/78/19); per anti-loop rule, must
+  attack a Blocker substep. Spot-checked all 6 active blocker substeps
+  (B1.1, B2.1, B5.1, B6.1, B1.2, B3.1 from the 64ec09a queue promotion).
+  Findings:**
+
+  - **B3.1 — already done** in 17.32a-e (2026-04-27).
+    `buildPerFileScopes()` exists at Checker.kt:1713 and 4 call sites
+    are migrated (TS2663-vs-TS2301 disambiguation, TS2552 spelling
+    suggestions, `resolveExpressionToSymbol` Identifier branch, TS2304
+    file-scope). The 64ec09a queue promotion described it as needing
+    construction, but that's stale. ~12 remaining `globals[X]` lookups
+    in identifier-resolution contexts could be migrated in follow-up
+    substeps; not all are candidates (e.g. `globals["Array"]` at line
+    399 is legitimate lib lookup, augmentation merge at line 1421 is
+    cross-file by design).
+  - **B1.1 — primary target test (`uncalledFunctionChecksInConditional2_ts`)
+    needs `window` / DOM lib resolution.** Without lib, `perf` resolves
+    to `any` and the TS2774 walker bails at `if (type === errorType ||
+    type === anyType) return`. `applyConditionNarrowing` already
+    threads narrowing through `&&` chains (Checker.kt:39248-39257),
+    and `getNarrowedTypeForReference` consumes the flow graph for
+    Identifier/PropertyAccess paths. The gap is that TS2774's
+    `resolveUncalledOperandType` doesn't consult flow narrowing — but
+    even fixing that wouldn't flip the target test. Other tests
+    benefiting from this are also lib-gated.
+  - **B2.1 — closed by prior 17.31a-f / 17.37 / 17.38 work**;
+    `widenToAny1`, `widenToAny2`, `inferentiallyTypingAnEmptyArray`
+    flipped. Remaining target `subtypeReductionWithAnyFunctionType`
+    needs context-sensitive arrow inference through `useMemo<T>(() =>
+    ...)`'s nested arrows — substantial multi-piece infrastructure.
+    `noStrictGenericChecks` needs full TypeParam-vs-TypeParam
+    bipartition (Blocker #4 territory, demoted to LOW yield).
+  - **B5.1 — requires Parser change + new Parameter field.** The
+    queue description says "extend 17.71's `checkJSDocParamTags()`
+    walker", but Parameter is an immutable AST node. Bridging
+    `@param {T} name` types requires either (a) Parser-time pre-parsing
+    of FunctionDeclaration's leading JSDoc to extract param type
+    annotations + adding `typeFromJSDoc` field to `Parameter`, or
+    (b) a side-map keyed on parameter Symbol. Both are non-trivial
+    changes touching multiple files. No tractable simple-target test
+    without these.
+  - **B6.1 — per-position contextual typing tracker.** Current
+    `checkImplicitAnyInExpr` uses a binary `contextuallyTyped: Boolean`
+    flag that suppresses TS7006 for ANY param of a contextually-typed
+    arrow/function expression. The 3 candidate tests
+    (`subtypeReductionWithAnyFunctionType_ts`,
+    `intraBindingPatternReferences_ts`,
+    `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`)
+    each need TypeScript's per-parameter resolution: `intraBinding...`
+    needs object-literal-RHS contextual typing from destructuring LHS
+    + intra-binding-pattern reference handling for fn2 = fn1 default;
+    others need different per-position dispatch. Not surgical.
+  - **B1.2 — premise needs verification.** Code review at
+    Checker.kt:6413-6416 shows `walkStmtForFlowTS2454` DOES recurse
+    into IfStatement.thenStatement and elseStatement with
+    `inUncheckedBody = true`. And `isAssignedAtFlow` (Checker.kt:6636)
+    already implements the antecedents[0]-only restriction for
+    FlowLoopLabel per the CLAUDE.md gotcha. The B1.2 description
+    ("walker doesn't recurse into IfStatement body") appears stale.
+    A more concrete description of the missing-case pattern is needed
+    before this can be worked on.
+
+  **Action this session:** Marked B3.1 as already done in the queue
+  with a back-pointer to 17.32a-e. Did NOT mark B1.2 done — needs a
+  more careful verification with a concrete missing-case test. The
+  remaining 4 unchecked blocker substeps (B1.1, B2.1, B5.1, B6.1)
+  are all genuinely architectural and out of scope for a single-commit
+  surgical fix per the autonomous-decision policy.
+
+  **Recommended next session:** Either (a) take on B5.1 properly
+  (multi-file change: Parameter field + Parser pre-parse + Checker
+  bridge), targeting a specific test like
+  `contextuallyTypedParametersOptionalInJSDoc` after pinning down
+  what the smallest tractable shape is; or (b) decompose B1.2 by
+  finding a concrete failing test where TS2454 is missing despite
+  the existing recursive walker, and characterize the missing-case
+  pattern; or (c) investigate one of the ~12 remaining `globals[X]`
+  call sites for a B3.2 follow-up migration.
 
   **Session 2026-05-06 (post-17.133 attempt, 8538 unchanged — reverted
   regressing change) — BaselineFormatter multi-line squiggle truncation
