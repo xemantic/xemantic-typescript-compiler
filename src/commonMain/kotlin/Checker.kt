@@ -34285,6 +34285,29 @@ interface DataView {
         // truly-void and pure-undefined return types suppress all implicit-return checks
         if (retTypeClass == "truly-void" || retTypeClass == "pure-undefined") return
 
+        // 17.135: suppress all implicit-return checks when the return type
+        // annotation is a bare `TypeReference` with an `Identifier` name, AND
+        // we have already emitted a TS2304 ("Cannot find name") diagnostic for
+        // that same identifier position. TypeScript treats unresolved-name
+        // annotations as any-like for implicit-return purposes — adding
+        // TS2355/TS2366 on top of an existing TS2304 would be redundant noise
+        // pointing to the same span. Using the existing-diagnostic probe (vs.
+        // a name-resolution probe) avoids regressions for namespace-internal
+        // type names that aren't in `globals` but aren't actually unresolved
+        // (the binder routes them through their containing namespace's
+        // exports — for those, no TS2304 fires, and this branch doesn't
+        // trigger).
+        if (retType is TypeReference && retType.typeArguments.isNullOrEmpty()) {
+            val refIdent = retType.typeName as? Identifier
+            if (refIdent != null) {
+                val refStart = refIdent.pos
+                val hasTs2304 = diagnostics.any {
+                    it.code == 2304 && it.start == refStart && it.fileName == fileName
+                }
+                if (hasTs2304) return
+            }
+        }
+
         // If the function always returns/throws on all paths, check for problematic empty returns
         val alwaysReturns = bodyAlwaysReturns(body.statements)
         if (alwaysReturns) {

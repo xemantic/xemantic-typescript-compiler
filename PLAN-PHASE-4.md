@@ -2696,6 +2696,86 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.135, 8539 → 8540, +1) — Suppress
+  TS2355/TS2366/TS7030 implicit-return checks when return type is an
+  unresolved `TypeReference` whose identifier already triggered TS2304.**
+  Continuation /loop after 17.134. Confirmed baseline 8539 via fresh
+  full-suite (1536 failed, 3 skipped) and `find_candidates.py --fresh`
+  returned 0/0/0 (filtered from 7/77/19). Per anti-loop rule, attempted
+  blocker substeps:
+
+  - **B1.1 (receiver narrowing for property access via flow graph)** —
+    implemented `getNarrowedTypeForReference` call on the receiver in
+    `computeRawTypeOfPropertyAccess` (Checker.kt ~40822). Net-zero on
+    the suite (1536 → 1536). Receiver narrowing already works at the
+    TS2339 emission site for Union receivers; broader application
+    didn't surface a flippable test. Reverted — net-zero infra without
+    a concrete consumer is overhead.
+  - **B5.1 (JSDoc `@param {T}` type extraction)** — investigated
+    target tests (`jsdocFunctionTypeFalsePositive`,
+    `jsdocClassMissingTypeArguments`, `jsdocResolveNameFailureInTypedef`,
+    `jsdocRestParameter`, `jsdocPropertyTagInvalid`). All require
+    sub-Parser TypeNode positions to land inside the JSDoc text for
+    diagnostic emission (per the 17.61 revert note: positions point to
+    the JSDoc-internal substring, not the original source). Out of
+    scope without a position-reparenting strategy.
+  - **B6.1 (TS7006 per-param contextual typing)** — `subtypeReductionWithAnyFunctionType`
+    requires generic argument inference through `useMemo<T>(() => {
+    return x => x.length > 0 })` to figure out that T = `(input: string)
+    => boolean` so the inner arrow's `x` gets contextual `string`.
+    Same blocker as B2.1.
+  - **`unknownSymbols1_ts` (1 EXTRA TS2355 from MISS bucket recon)** —
+    found tractable: TS2355 was firing for `function foo(...): asdf {}`
+    where `asdf` was unresolved (also got TS2304). TypeScript suppresses
+    TS2355 when the return type's identifier is unresolved.
+
+  **Implementation:** in `checkBodyForImplicitReturn` (Checker.kt
+  ~34286), added a probe after the existing `truly-void`/`pure-undefined`
+  early-return: if `retType is TypeReference && typeArguments.isNullOrEmpty()
+  && typeName is Identifier`, search `diagnostics` for an existing
+  TS2304 entry at the identifier's `pos` with matching `fileName`.
+  When found, return early (suppresses TS2355/TS2366/TS7030 for this
+  function's body).
+
+  **Why diagnostic-probe instead of type resolution:** Two prior
+  attempts regressed:
+  1. Globals-only lookup (`currentFileLocals?.get(name) == null && globals[name] == null`)
+     — over-suppressed namespace-internal types like `IAction` declared
+     in `namespace Test { interface IAction {} class Bug { onEnter(...): IAction {} } }`,
+     which aren't in `globals` but resolve via the namespace's exports.
+     `arrayAssignmentTest5_ts` regressed (-1 missing TS2366) plus 7+
+     other tests with namespace-internal return types lost their
+     TS2355 emission. Net -8.
+  2. `getTypeFromTypeNode(retType) === errorType` probe — same
+     regression because `getTypeFromTypeNode` for a TypeReference
+     without inference-namespace context resolves namespace-internal
+     names to `errorType` (no symbol lookup walks the AST parent
+     chain — there are no parent pointers in our AST).
+
+  The diagnostic-probe is the safe gate: TS2304 fires only for
+  genuinely unresolved names, so suppressing TS2355 when TS2304 is
+  already present at the same span correctly suppresses only the
+  redundant cases. Namespace-internal types get no TS2304, so this
+  branch correctly doesn't trigger.
+
+  **Test results:** 1536 → 1535 failed (8539 → 8540 passing). Verified
+  zero regressions across 10078-test suite via paired runs. Flips
+  `unknownSymbols1_ts has expected errors` only.
+
+  **Foundation:** The "diagnostic-probe" pattern (search existing
+  diagnostics list for matching code+span) is reusable for any future
+  "suppress B if A already fires for the same span" scenario where
+  full type resolution would be too expensive or context-sensitive.
+  Cheap O(N-diagnostics) probe; safe because it only triggers for
+  positions where another check has already established that the name
+  is unresolved.
+
+  **Anti-loop check:** Pool empty (`find_candidates.py --fresh`:
+  0/0/0). Lands real code per protocol option (a). The `unknownSymbols1`
+  candidate was already in the EXTRA bucket but skipped per the
+  finder's filter — re-examining EXTRA candidates after the recent
+  17.x narrowing/scope work surfaces this as a tractable +1.
+
   **Session 2026-05-06 (17.134, 8538 → 8539, +1) — Cross-file TS2448
   walker extended to BinaryExpression-rooted ExpressionStatements with
   JS-source gate.** Continuation /loop after the 17.133 + queue-maint
