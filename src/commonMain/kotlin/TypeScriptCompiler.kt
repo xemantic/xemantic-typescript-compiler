@@ -219,15 +219,16 @@ class TypeScriptCompiler {
                 messageChain = chain,
             ))
         }
-        // TS5102: Removed options — point to KEY position in tsconfig
-        // ignoreDeprecations suppresses TS5102 for options that were deprecated at or before the specified version
+        // TS5102: Removed options — point to KEY position in tsconfig.
+        // Removed options are NOT suppressible by ignoreDeprecations — once removed, the
+        // option no longer functions and the diagnostic fires unconditionally. Only
+        // currently-deprecated options (TS5101 path in addDeprecation5101) honor
+        // ignoreDeprecations.
         fun addRemoved5102(
             optionDesc: String,
             tsconfigKey: String? = null,
             messageChain: List<String> = emptyList(),
-            deprecationVersion: String = "5.0",
         ) {
-            if (isDeprecationSuppressed(deprecationVersion)) return
             val pos = tsconfigKey?.let { tsconfigPos[it] }
             diagnostics.add(Diagnostic(
                 message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
