@@ -2619,6 +2619,60 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.131, 8535 → 8537, +2) — TS1295 / TS1484
+  emission for `verbatimModuleSyntax`
+  (`isolatedModulesSketchyAliasLocalMerge_ts__false_true__` and
+  `__true_true__` flips):** Continuation /loop after 17.130.
+  `find_candidates.py --fresh` returned 0/2/1 — the SWAP candidate
+  matches the same test family as 17.128 (which handled TS2865 for
+  `verbatim=false`+`isolated=true`). Variant (false, true) needed
+  TS1295 + TS1484; variant (true, true) needed TS1295 + TS1484 + TS2865.
+
+  Implementation:
+  1. **New walker `checkVerbatimModuleSyntax`** (Checker.kt ~56313):
+     wired into the init pipeline at step 68b (after
+     `checkIsolatedModulesExportDefaultIsType`). Iterates all
+     non-type-only `ImportDeclaration`s in non-`.d.ts` files; for each,
+     handles default import, namespace import, and named imports.
+     Emits TS1295 in CJS files (detected via
+     `!isESModuleFormat(effectiveModule, fileName)`) for each binding
+     position. Emits TS1484 for named-import elements when the source
+     export is type-only (reuses `isExportedNameTypeOnly` from 17.128).
+     Both at the imported-name position (length = name.length).
+
+  2. **`checkImportConflictsWithLocal` re-routing**: replaced the
+     mutually-exclusive `if (isolated && !verbatim && type-only)
+     emit TS2865 else emit TS2440` with explicit branches that
+     compute `verbatimTypeOnlyInSource` and `isolatedTypeOnlyInSource`
+     separately. TS2865 fires whenever `isolated && type-only`
+     (regardless of verbatim). TS2440 fires only when neither
+     `verbatim+type-only` (TS1484 covers it) nor
+     `isolated+type-only` (TS2865 covers it). Test verification:
+     - false,false: TS2440 (preserved).
+     - false,true: TS1295 + TS1484 (new walker), no TS2440 (suppressed).
+     - true,false: TS2865 (preserved from 17.128).
+     - true,true: TS1295 + TS1484 (new walker) + TS2865 (now fires).
+
+  Why the iteration was clean: variant (true, true) was previously
+  tagged in the candidate-finder as a SKIP (not in the fresh output)
+  because the target diff was 3 missing diagnostics — too broad to
+  tackle alone. Implementing the new walker covers BOTH the
+  candidate-fresh variant AND the previously-skipped variant in a
+  single change. The other expected verbatim-family tests
+  (`isolatedModulesShadowGlobalTypeNotValue` needs TS2866 unimpl;
+  `noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues` needs
+  TS5102 + TS1287 unimpl) still fail, but these are ADDITIONAL missing
+  diagnostics — my walker correctly emits TS1295/TS1484 for them
+  without regression.
+
+  Net delta: 1540 → 1538 failed (8535 → 8537 passing). Zero
+  regressions. Foundation: extending the walker to ExportDeclaration /
+  ExportAssignment / ImportEqualsDeclaration / side-effect imports
+  would handle the remaining verbatim-family tests; TS2866 (global-value
+  conflict under isolated) and TS1287 (top-level export modifier in
+  CJS+verbatim) and TS5102 deprecation messages are independent
+  diagnostics that would unlock related tests.
+
   **Session 2026-05-06 (17.130, 8534 → 8535, +1) — Module-augmentation
   export-required mode + TS2339 for `Class.prototype.X` /
   instance-receiver class missing property

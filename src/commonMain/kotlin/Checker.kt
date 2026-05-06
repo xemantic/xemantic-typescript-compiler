@@ -772,6 +772,8 @@ class Checker(
         checkImportConflictsWithLocal()
         // 68a. Check `export default X` where X is a type-only import under isolatedModules (TS1292)
         checkIsolatedModulesExportDefaultIsType()
+        // 68b. Check verbatimModuleSyntax restrictions (TS1295 / TS1484)
+        checkVerbatimModuleSyntax()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
         // 70. Check property used before initialization (TS2729)
@@ -56192,11 +56194,15 @@ interface DataView {
                                         // `import type { X }`. Emit TS2865 in place of TS2440 to direct the
                                         // user to the right fix. verbatimModuleSyntax routes through TS1484.
                                         val sourceName = (element.propertyName ?: element.name).text
-                                        val isTypeOnlyInSource = options.isolatedModules &&
-                                            !options.verbatimModuleSyntax &&
-                                            moduleSpecifierText != null &&
+                                        val sourceIsTypeOnly = moduleSpecifierText != null &&
                                             isExportedNameTypeOnly(sourceName, moduleSpecifierText)
-                                        if (isTypeOnlyInSource) {
+                                        // 17.131: Under verbatimModuleSyntax + type-only-in-source, the new
+                                        // checkVerbatimModuleSyntax walker emits TS1484 covering the same
+                                        // diagnostic surface — suppress TS2440 here. TS2865 still fires
+                                        // alongside TS1484 when isolatedModules is also enabled.
+                                        val verbatimTypeOnlyInSource = options.verbatimModuleSyntax && sourceIsTypeOnly
+                                        val isolatedTypeOnlyInSource = options.isolatedModules && sourceIsTypeOnly
+                                        if (isolatedTypeOnlyInSource) {
                                             diagnostics.add(Diagnostic(
                                                 message = "Import '$localAlias' conflicts with local value, so must be declared with a type-only import when 'isolatedModules' is enabled.",
                                                 category = DiagnosticCategory.Error,
@@ -56207,7 +56213,8 @@ interface DataView {
                                                 start = startPos,
                                                 length = spanLen,
                                             ))
-                                        } else {
+                                        }
+                                        if (!verbatimTypeOnlyInSource && !isolatedTypeOnlyInSource) {
                                             diagnostics.add(Diagnostic(
                                                 message = "Import declaration conflicts with local declaration of '$localAlias'.",
                                                 category = DiagnosticCategory.Error,
@@ -56299,6 +56306,98 @@ interface DataView {
                     start = expr.pos,
                     length = name.length,
                 ))
+            }
+        }
+    }
+
+    // 17.131: TS1295 / TS1484 — verbatimModuleSyntax restrictions on imports/exports.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Under `verbatimModuleSyntax`, two related diagnostics fire for non-type-only imports:
+     *  - TS1295: in a CommonJS file, ECMAScript imports/exports cannot be written
+     *    (the runtime bindings would need to be transformed to require()/exports.X — but
+     *    verbatim mode preserves syntax as-written, so the file would be invalid CJS).
+     *  - TS1484: when the imported name is a type-only export in the source module, it
+     *    must be imported using a type-only form (`import type { X }` or `import { type X }`).
+     *
+     * Both fire at the imported-name position. Type-only imports (`import type {}`) are
+     * exempt from both — they're erased at compile time and have no runtime emission.
+     *
+     * Scope: named imports + default imports + namespace imports. Side-effect imports
+     * (`import "./x"`), import-equals, and export declarations are not yet handled here
+     * (deferred — additional surface that may yield more failing-test flips when added).
+     */
+    private fun checkVerbatimModuleSyntax() {
+        if (!options.verbatimModuleSyntax) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val isCjs = !isESModuleFormat(options.effectiveModule, fileName)
+
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val clause = stmt.importClause ?: continue
+                // `import type { ... }` — entirely type-only, no diagnostics fire here.
+                if (clause.isTypeOnly) continue
+                val moduleSpecifierText = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+
+                fun emitTs1295(pos: Int, length: Int) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'. Adjust the 'type' field in the nearest 'package.json' to make this file an ECMAScript module, or adjust your 'verbatimModuleSyntax', 'module', and 'moduleResolution' settings in TypeScript.",
+                        category = DiagnosticCategory.Error,
+                        code = 1295,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = length,
+                    ))
+                }
+
+                fun emitTs1484(pos: Int, length: Int, displayName: String) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'$displayName' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.",
+                        category = DiagnosticCategory.Error,
+                        code = 1484,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = length,
+                    ))
+                }
+
+                // Default binding: `import X from "./y"`
+                clause.name?.let { defaultName ->
+                    if (isCjs) emitTs1295(defaultName.pos, defaultName.text.length)
+                    // TS1484 for default imports of type-only-default exports is not yet handled
+                    // (default-as-type is rare and detection requires checking the source's
+                    // `export default X` for type-only X — out of scope for the named-imports
+                    // path we're focused on).
+                }
+
+                when (val nb = clause.namedBindings) {
+                    is NamespaceImport -> {
+                        // `import * as ns from "./y"` — namespace import is non-type-only at the binding,
+                        // so TS1295 fires in CJS+verbatim. (TS1484 doesn't apply: a namespace import
+                        // brings in both types and values, so type-only-import isn't a meaningful
+                        // alternative even when the source is mostly types.)
+                        if (isCjs) emitTs1295(nb.name.pos, nb.name.text.length)
+                    }
+                    is NamedImports -> {
+                        for (element in nb.elements) {
+                            if (element.isTypeOnly) continue  // per-element `type` qualifier
+                            val nameNode = element.propertyName ?: element.name
+                            val pos = nameNode.pos
+                            val len = nameNode.text.length
+                            val sourceName = (element.propertyName ?: element.name).text
+                            if (isCjs) emitTs1295(pos, len)
+                            if (moduleSpecifierText != null &&
+                                isExportedNameTypeOnly(sourceName, moduleSpecifierText)) {
+                                emitTs1484(pos, len, sourceName)
+                            }
+                        }
+                    }
+                    else -> {}
+                }
             }
         }
     }
