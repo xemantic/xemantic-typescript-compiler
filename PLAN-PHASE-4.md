@@ -2619,6 +2619,45 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (post-17.133 attempt, 8538 unchanged — reverted
+  regressing change) — BaselineFormatter multi-line squiggle truncation
+  attempted, regressed -8 tests:** Continuation /loop after 17.133.
+  `find_candidates.py --fresh` returns 0/0/0 (filtered from 7/78/19).
+  Spot-checked SKIP candidates — all confirmed gated on architectural
+  blockers per existing skip-log entries (`arrowFunctionErrorSpan_ts`
+  needs TS1200 + multi-line squiggle truncation; `complicatedPrivacy_ts`
+  needs TS2693-in-TypeLiteral + TS2694-in-implements-clause;
+  `varianceAnnotationValidation_ts` needs TS2636 + property-elaboration
+  chain; `interfaceImplementation1_ts` needs return-type-from-body +
+  multi-TS2420 emission; `subtypeReductionWithAnyFunctionType_ts` is
+  Blocker #6 TS7006 over-suppression; `declarationEmitInvalidExport_ts`
+  is already passing — strikethrough already applied in skip log).
+
+  Attempted: TypeScript's baseline truncates squiggles to the first line
+  of the diagnostic span, but our `BaselineFormatter.kt` (lines 580–615)
+  emits multi-line squiggle continuation. Pre-flight check: only 2 JSX
+  baselines in TypeScript's corpus have multi-line consecutive squiggles
+  (`jsxImportSourceNonPragmaComment`, `jsxAndTypeAssertion`); neither is
+  in our generated test set (`.tsx` excluded by `build.gradle.kts`'s
+  `f.extension == "ts"` filter). Removed the multi-line continuation
+  block + the now-unused `skipLines` set.
+
+  Result: full-suite 1537 → 1545 failed (-8 net regression). Stash
+  was dropped, change reverted, working tree clean. Root cause of the
+  regression NOT investigated this session — likely either (a) the
+  removed `skipLines` set was suppressing legitimate squiggles where
+  multiple diagnostics overlap on the same line and the multi-line
+  span "absorbed" sibling-emissions, or (b) the multi-line emission
+  was producing output that happened to coincide with expected
+  output for some currently-passing test pattern (less likely given
+  the search confirmed no `.ts` baselines have multi-line squiggle).
+  Pre-revert XMLs were overwritten by the post-revert baseline run, so
+  identifying the specific 8 regressed tests requires another full-suite
+  cycle on a re-applied stash. Future investigation: re-apply the change,
+  diff failure sets pre/post to identify exactly which 8 tests broke,
+  then narrow the fix (e.g. keep `skipLines` to suppress double-emission
+  on overlap, but truncate firstLineLen alone).
+
   **Session 2026-05-06 (17.133, 8537 → 8538, +1) — TS5102
   unconditional emission for removed options
   (`importsNotUsedAsValues`, `preserveValueImports`) flips
