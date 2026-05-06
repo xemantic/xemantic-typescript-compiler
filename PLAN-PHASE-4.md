@@ -2619,6 +2619,25 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.133, 8537 → 8538, +1) — TS5102
+  unconditional emission for removed options
+  (`importsNotUsedAsValues`, `preserveValueImports`) flips
+  `noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues_ts`
+  when paired with 17.132's TS1287 walker:** Continuation of 17.132.
+  Per TypeScript's behavior: removed options (TS5102) are NOT
+  suppressible by `ignoreDeprecations`. Only currently-deprecated
+  options (TS5101) honor `ignoreDeprecations`. Removed the
+  `isDeprecationSuppressed(deprecationVersion)` check from
+  `addRemoved5102` (TypeScriptCompiler.kt ~224); also dropped the
+  now-unused `deprecationVersion` parameter. Both callers
+  (`importsNotUsedAsValues`, `preserveValueImports`) only need the
+  unconditional path. Verified safe across the 10078 suite — only 2
+  tests in the corpus use these options (`preserveUnusedImports.ts`
+  has no `@ignoreDeprecations` so was unaffected;
+  `noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues_ts` has
+  `@ignoreDeprecations: 5.0` and now correctly fires TS5102).
+  Net delta: 1538 → 1537 failed (8537 → 8538 passing). Zero regressions.
+
   **Session 2026-05-06 (17.132, 8537 → 8537, net-zero infra) —
   TS1287 emission for `verbatimModuleSyntax` + CJS + top-level
   `export` modifier on value declarations:** Continuation /loop after

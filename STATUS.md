@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,537 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,538 / 10,078 tests passing (~85%).
+
+**17.133 (2026-05-06, +1)** — TS5102 unconditional emission for
+removed options (`importsNotUsedAsValues`, `preserveValueImports`).
+Removed options are NOT suppressible by `ignoreDeprecations` — once
+removed, the option no longer functions and TS5102 fires regardless
+of `ignoreDeprecations` value. Only currently-deprecated options
+(TS5101 path) honor `ignoreDeprecations`. Removed the
+`isDeprecationSuppressed(deprecationVersion)` check from
+`addRemoved5102` (TypeScriptCompiler.kt ~224); also dropped the now-unused
+`deprecationVersion` parameter.
+
+Pairs with 17.132's TS1287 walker to flip
+`noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues_ts`. Net delta:
+1538 → 1537 failed (8537 → 8538 passing). Zero regressions across
+10078 suite.
 
 **17.132 (2026-05-06, net-zero infra)** — TS1287 emission for
 `verbatimModuleSyntax` + CJS + top-level `export` modifier on value
