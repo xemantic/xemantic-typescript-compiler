@@ -56336,64 +56336,111 @@ interface DataView {
             val source = result.sourceFile.text
             val isCjs = !isESModuleFormat(options.effectiveModule, fileName)
 
+            fun emitTs1295(pos: Int, length: Int) {
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'. Adjust the 'type' field in the nearest 'package.json' to make this file an ECMAScript module, or adjust your 'verbatimModuleSyntax', 'module', and 'moduleResolution' settings in TypeScript.",
+                    category = DiagnosticCategory.Error,
+                    code = 1295,
+                    fileName = fileName, line = line, character = character,
+                    start = pos, length = length,
+                ))
+            }
+
+            fun emitTs1484(pos: Int, length: Int, displayName: String) {
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "'$displayName' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.",
+                    category = DiagnosticCategory.Error,
+                    code = 1484,
+                    fileName = fileName, line = line, character = character,
+                    start = pos, length = length,
+                ))
+            }
+
+            fun emitTs1287(pos: Int) {
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "A top-level 'export' modifier cannot be used on value declarations in a CommonJS module when 'verbatimModuleSyntax' is enabled.",
+                    category = DiagnosticCategory.Error,
+                    code = 1287,
+                    fileName = fileName, line = line, character = character,
+                    start = pos, length = 6,  // "export"
+                ))
+            }
+
             for (stmt in result.sourceFile.statements) {
-                if (stmt !is ImportDeclaration) continue
-                val clause = stmt.importClause ?: continue
-                // `import type { ... }` — entirely type-only, no diagnostics fire here.
-                if (clause.isTypeOnly) continue
-                val moduleSpecifierText = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                when (stmt) {
+                    is ImportDeclaration -> {
+                        val clause = stmt.importClause ?: continue
+                        // `import type { ... }` — entirely type-only, no diagnostics fire here.
+                        if (clause.isTypeOnly) continue
+                        val moduleSpecifierText = (stmt.moduleSpecifier as? StringLiteralNode)?.text
 
-                fun emitTs1295(pos: Int, length: Int) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                    diagnostics.add(Diagnostic(
-                        message = "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'. Adjust the 'type' field in the nearest 'package.json' to make this file an ECMAScript module, or adjust your 'verbatimModuleSyntax', 'module', and 'moduleResolution' settings in TypeScript.",
-                        category = DiagnosticCategory.Error,
-                        code = 1295,
-                        fileName = fileName, line = line, character = character,
-                        start = pos, length = length,
-                    ))
-                }
+                        // Default binding: `import X from "./y"`
+                        clause.name?.let { defaultName ->
+                            if (isCjs) emitTs1295(defaultName.pos, defaultName.text.length)
+                            // TS1484 for default imports of type-only-default exports is not yet handled
+                            // (default-as-type is rare and detection requires checking the source's
+                            // `export default X` for type-only X — out of scope for the named-imports
+                            // path we're focused on).
+                        }
 
-                fun emitTs1484(pos: Int, length: Int, displayName: String) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                    diagnostics.add(Diagnostic(
-                        message = "'$displayName' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.",
-                        category = DiagnosticCategory.Error,
-                        code = 1484,
-                        fileName = fileName, line = line, character = character,
-                        start = pos, length = length,
-                    ))
-                }
-
-                // Default binding: `import X from "./y"`
-                clause.name?.let { defaultName ->
-                    if (isCjs) emitTs1295(defaultName.pos, defaultName.text.length)
-                    // TS1484 for default imports of type-only-default exports is not yet handled
-                    // (default-as-type is rare and detection requires checking the source's
-                    // `export default X` for type-only X — out of scope for the named-imports
-                    // path we're focused on).
-                }
-
-                when (val nb = clause.namedBindings) {
-                    is NamespaceImport -> {
-                        // `import * as ns from "./y"` — namespace import is non-type-only at the binding,
-                        // so TS1295 fires in CJS+verbatim. (TS1484 doesn't apply: a namespace import
-                        // brings in both types and values, so type-only-import isn't a meaningful
-                        // alternative even when the source is mostly types.)
-                        if (isCjs) emitTs1295(nb.name.pos, nb.name.text.length)
-                    }
-                    is NamedImports -> {
-                        for (element in nb.elements) {
-                            if (element.isTypeOnly) continue  // per-element `type` qualifier
-                            val nameNode = element.propertyName ?: element.name
-                            val pos = nameNode.pos
-                            val len = nameNode.text.length
-                            val sourceName = (element.propertyName ?: element.name).text
-                            if (isCjs) emitTs1295(pos, len)
-                            if (moduleSpecifierText != null &&
-                                isExportedNameTypeOnly(sourceName, moduleSpecifierText)) {
-                                emitTs1484(pos, len, sourceName)
+                        when (val nb = clause.namedBindings) {
+                            is NamespaceImport -> {
+                                // `import * as ns from "./y"` — namespace import is non-type-only at the binding,
+                                // so TS1295 fires in CJS+verbatim. (TS1484 doesn't apply: a namespace import
+                                // brings in both types and values, so type-only-import isn't a meaningful
+                                // alternative even when the source is mostly types.)
+                                if (isCjs) emitTs1295(nb.name.pos, nb.name.text.length)
                             }
+                            is NamedImports -> {
+                                for (element in nb.elements) {
+                                    if (element.isTypeOnly) continue  // per-element `type` qualifier
+                                    val nameNode = element.propertyName ?: element.name
+                                    val pos = nameNode.pos
+                                    val len = nameNode.text.length
+                                    val sourceName = (element.propertyName ?: element.name).text
+                                    if (isCjs) emitTs1295(pos, len)
+                                    if (moduleSpecifierText != null &&
+                                        isExportedNameTypeOnly(sourceName, moduleSpecifierText)) {
+                                        emitTs1484(pos, len, sourceName)
+                                    }
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                    // TS1287: top-level `export` modifier on value declaration in CJS+verbatim.
+                    // Value-shape declarations: class / function / var-statement (let/const/var) / enum.
+                    // Type-shape declarations (interface, type alias) are exempt — type-only erases at compile time.
+                    // `declare`-prefixed declarations are ambient (type-only at runtime) — exempt.
+                    is ClassDeclaration -> {
+                        if (isCjs && ModifierFlag.Export in stmt.modifiers &&
+                            ModifierFlag.Declare !in stmt.modifiers) {
+                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            if (exportPos >= 0) emitTs1287(exportPos)
+                        }
+                    }
+                    is FunctionDeclaration -> {
+                        if (isCjs && ModifierFlag.Export in stmt.modifiers &&
+                            ModifierFlag.Declare !in stmt.modifiers) {
+                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            if (exportPos >= 0) emitTs1287(exportPos)
+                        }
+                    }
+                    is VariableStatement -> {
+                        if (isCjs && ModifierFlag.Export in stmt.modifiers &&
+                            ModifierFlag.Declare !in stmt.modifiers) {
+                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            if (exportPos >= 0) emitTs1287(exportPos)
+                        }
+                    }
+                    is EnumDeclaration -> {
+                        if (isCjs && ModifierFlag.Export in stmt.modifiers &&
+                            ModifierFlag.Declare !in stmt.modifiers) {
+                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            if (exportPos >= 0) emitTs1287(exportPos)
                         }
                     }
                     else -> {}
