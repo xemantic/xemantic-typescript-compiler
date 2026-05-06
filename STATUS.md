@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,532 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,533 / 10,078 tests passing (~85%).
+
+**17.128 (2026-05-06, +1)** — TS2865 for type-only-source named import vs
+local-value collision under `isolatedModules`, plus FP suppression for
+`import type {}` / `import { type X }` clauses in
+`checkImportConflictsWithLocal`. Two-piece change in service of
+`isolatedModulesSketchyAliasLocalMerge_ts(isolatedmodules=true,verbatimmodulesyntax=false)`:
+1. **TS2440 FP suppression**: the existing walker emitted TS2440 even
+   for `import type { FC }` (and per-specifier `import { type X }`)
+   forms, which create no runtime binding and therefore can't conflict
+   with a local `let` of the same name. Added an early `continue` on
+   `clause.isTypeOnly` and a per-element `if (element.isTypeOnly)
+   continue` in the NamedImports loop.
+2. **TS2865 emission**: new helper `isExportedNameTypeOnly(name,
+   moduleSpecifier)` walks the target file's top-level statements
+   looking for type-only exports of `name` (TypeAlias / Interface /
+   `export type { X }`) without a competing value export
+   (Class/Function/Enum/Variable/`export { X }`). When a NamedImport
+   element with a same-name local conflict resolves type-only AND
+   `options.isolatedModules == true && !options.verbatimModuleSyntax`,
+   emit TS2865 ("Import 'X' conflicts with local value, so must be
+   declared with a type-only import when 'isolatedModules' is
+   enabled.") in place of TS2440 at the same span. The
+   `verbatimModuleSyntax=true` variants route through a different
+   diagnostic family (TS1295/TS1484) so are excluded from the gate.
+   Net delta: 1543 → 1542 failed (8532 → 8533 passing). Zero
+   regressions across 10078 suite.
 
 **17.127 (2026-05-05, +1)** — TS2395 narrow default-import-vs-exported-var
 emission + skip TS2451 for import-merge groups. Two-piece change in

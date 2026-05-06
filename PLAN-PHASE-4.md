@@ -2619,6 +2619,56 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.128, 8532 → 8533, +1) — TS2865 for
+  type-only-source named import vs local-value collision under
+  `isolatedModules` + FP suppression for type-only import clauses
+  (`isolatedModulesSketchyAliasLocalMerge_ts(isolatedmodules=true,verbatimmodulesyntax=false)`
+  flip):** Continuation /loop after 17.127. `find_candidates.py
+  --fresh` returned 0/3/1 — the SWAP was the target test (expected
+  TS2865, actual TS2440 at the FC import span). Test source: in bad.ts,
+  `import { FC } from "./types"; let FC: FC | null = null;` where types.ts
+  has `export type FC = () => void;`. Pre-fix our checker emitted TS2440
+  at the FC name (treating the value-let-FC as conflicting with the
+  imported binding's runtime presence) — TypeScript instead emits
+  TS2865 ("Import 'X' conflicts with local value, so must be declared
+  with a type-only import when 'isolatedModules' is enabled.") to
+  direct the user toward `import type { FC }`. The same test also has
+  a good.ts variant: `import type { FC } from "./types"; let FC: FC | null = null;`
+  which our checker FP-emitted TS2440 on (good.ts should have 0 errors
+  per baseline because the `import type` clause creates no runtime
+  binding). Both gaps fixed in `checkImportConflictsWithLocal`
+  (Checker.kt ~55965). **Two-piece change**:
+  1. **FP suppression**: added `if (clause.isTypeOnly) continue` ahead
+     of the per-binding loop so `import type { ... }` exits before any
+     conflict-check (covers default + namespace + named bindings).
+     Added per-element `if (element.isTypeOnly) continue` inside the
+     NamedImports loop so `import { type X }` per-specifier syntax also
+     skips the check.
+  2. **TS2865 emission**: new private helper
+     `isExportedNameTypeOnly(name, moduleSpecifier)` walks the target
+     file's top-level statements looking for `export type X = ...` /
+     `export interface X {}` / `export type { X }` / `export { X }
+     from` (with `isTypeOnly=true` flag) — without competing value
+     forms (`export class/function/enum/const X` / `export { X }`).
+     Returns `hasTypeOnly && !hasValue`. In the NamedImports conflict
+     branch, when `options.isolatedModules == true && !options.verbatimModuleSyntax
+     && isExportedNameTypeOnly(sourceName, moduleSpecifier)`, emit
+     TS2865 instead of TS2440 at the same span. The
+     `verbatimModuleSyntax=true` variants route through a different
+     diagnostic family (TS1295 / TS1484) per TypeScript's behavior, so
+     `!options.verbatimModuleSyntax` is part of the gate. **Note on
+     helper choice**: existing `isValueExport` returns symbol-flag-based
+     "is value" but we need "is *only* type-only" — the negation isn't
+     equivalent because `isValueExport` returns `true` (safe default)
+     for many lookup-failure paths. The new direct AST-walk helper is
+     conservative (returns false when the resolution fails) and
+     symmetric (tracks both type-only and value forms separately).
+     Net delta: 1543 → 1542 failed (8532 → 8533 passing). Zero
+     regressions across 10078 suite. Foundation: the helper can be
+     reused by future TS2865/TS1484-family wiring at other emission
+     sites (default import, namespace import, etc.) when source-side
+     type-only resolution becomes relevant.
+
   **Session 2026-05-05 (17.127, 8531 → 8532, +1) — TS2395 narrow
   default-import-vs-exported-var emission + skip TS2451 for
   import-merge groups (`exportAssignmentImportMergeNoCrash_ts` flip):**
