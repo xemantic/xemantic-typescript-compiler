@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,539 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,540 / 10,078 tests passing (~85%).
+
+**17.135 (2026-05-06, +1)** — Suppress TS2355/TS2366/TS7030 implicit-return
+checks when the return type annotation is a bare `TypeReference` whose
+identifier already triggered TS2304 ("Cannot find name") at the same span.
+TypeScript treats unresolved-name annotations as any-like for implicit-return
+purposes — adding TS2355 on top of an existing TS2304 produces redundant
+diagnostics pointing to the same span. Implementation in
+`checkBodyForImplicitReturn` (Checker.kt ~34286) probes
+`diagnostics.any { code == 2304 && start == refIdent.pos && fileName matches }`
+to detect already-emitted unresolved-name diagnostics at the return-type
+position. Conservative gates: only fires for bare `TypeReference` with
+`Identifier` name (skips `QualifiedName` and parameterized types like
+`Promise<asdf>` where the parent name does resolve). Uses the existing-
+diagnostic probe rather than a name-resolution probe — namespace-internal
+type names (e.g. `IAction` declared in `namespace Test`) aren't in `globals`
+but the binder routes them through their containing namespace's `exports`,
+so no TS2304 fires for them and this branch correctly doesn't suppress their
+implicit-return checks. Flips `unknownSymbols1_ts` (was emitting EXTRA TS2355
+for `function foo(x: asdf, y: number): asdf { }` where `asdf` already had
+TS2304). Net delta: 1536 → 1535 failed (8539 → 8540 passing). Zero
+regressions across 10078-test suite.
 
 **17.134 (2026-05-06, +1)** — Cross-file TS2448 walker now recurses
 into `BinaryExpression` (and `ParenthesizedExpression`) within top-level
