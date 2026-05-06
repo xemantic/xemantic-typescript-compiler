@@ -2,6 +2,29 @@
 
 **Phase 4 — Checker buildout.** 8,537 / 10,078 tests passing (~85%).
 
+**17.132 (2026-05-06, net-zero infra)** — TS1287 emission for
+`verbatimModuleSyntax` + CJS + top-level `export` modifier on value
+declarations. Extends 17.131's `checkVerbatimModuleSyntax` walker
+(Checker.kt ~56313) with new branches for `ClassDeclaration` /
+`FunctionDeclaration` / `VariableStatement` / `EnumDeclaration`. Emits
+TS1287 ("A top-level 'export' modifier cannot be used on value
+declarations in a CommonJS module when 'verbatimModuleSyntax' is
+enabled.") when (a) `isCjs`, (b) statement has `ModifierFlag.Export`,
+(c) statement does NOT have `ModifierFlag.Declare` (ambient declarations
+exempt — type-only at runtime). Type-shape declarations (Interface,
+TypeAlias) are also exempt. Position: located via
+`source.lastIndexOf("export", stmt.pos)` since `stmt.pos` points to the
+keyword AFTER modifiers (e.g. `class` for `export class A {}`).
+Length = 6 ("export"). Lifted `emitTs1295` / `emitTs1484` helpers out
+of the inner loop body and restructured `if (stmt !is ImportDeclaration) continue`
+to a `when (stmt)` dispatcher. Net delta: 1538 / 1538 unchanged
+(net-zero — `noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues_ts`
+needs both TS1287 + TS5102 fix to flip; only TS1287 piece landed here).
+Zero regressions across 10078 suite. Foundation for follow-on substeps:
+(i) TS5102 fix for `importsNotUsedAsValues` (removed-option suppression);
+(ii) TS1287 for `export default class C {}`; (iii) TS1287 for
+instantiated namespaces.
+
 **17.131 (2026-05-06, +2)** — TS1295 / TS1484 emission for
 `verbatimModuleSyntax` + TS2440/TS2865 routing under verbatim. New
 walker `checkVerbatimModuleSyntax` (Checker.kt ~56313) emits two

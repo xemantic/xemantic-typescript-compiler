@@ -2619,6 +2619,42 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (17.132, 8537 → 8537, net-zero infra) —
+  TS1287 emission for `verbatimModuleSyntax` + CJS + top-level
+  `export` modifier on value declarations:** Continuation /loop after
+  17.131. `find_candidates.py --fresh` returned 0/3/0 — all 3
+  candidates require multiple new diagnostics each. Picked
+  `noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues_ts` which
+  needs both TS1287 and TS5102 (suppressed by `@ignoreDeprecations: 5.0`).
+  Landing TS1287 alone is net-zero; the test will flip when paired with
+  the TS5102 fix in 17.133.
+
+  Implementation: extended `checkVerbatimModuleSyntax` walker
+  (Checker.kt ~56313) to also handle export-modifier value declarations.
+  Restructured the inner `for stmt` loop from `if (stmt !is ImportDeclaration) continue`
+  to a `when (stmt)` dispatcher; lifted `emitTs1295`/`emitTs1484`
+  helpers out of the loop body and added `emitTs1287` helper.
+  New branches for `ClassDeclaration` / `FunctionDeclaration` /
+  `VariableStatement` / `EnumDeclaration`: emits TS1287 when (a) `isCjs`,
+  (b) `ModifierFlag.Export in stmt.modifiers`, (c) `ModifierFlag.Declare !in stmt.modifiers`.
+  Position: located via `source.lastIndexOf("export", stmt.pos)` —
+  `stmt.pos` points to the keyword AFTER modifiers (e.g. `class` for
+  `export class A {}` lands at pos=7); searching backwards finds the
+  modifier's "export" at pos 0. Length = 6 ("export"). Type-shape
+  declarations (Interface, TypeAlias) and ambient (`declare`-prefixed)
+  declarations are exempt — type-only erases at compile time / runtime.
+
+  Foundation for follow-on substeps:
+  (i) TS5102 fix for `importsNotUsedAsValues`/`preserveValueImports` —
+  removing the `isDeprecationSuppressed` check in `addRemoved5102` since
+  removed options aren't suppressible by ignoreDeprecations (only
+  deprecated ones are);
+  (ii) TS1287 for `export default class C {}` / `export default function f() {}`
+  (currently routed through different paths);
+  (iii) TS1287 for instantiated namespaces (`export namespace Values { ... }`).
+
+  Net delta: 1538 / 1538 unchanged. Zero regressions across 10078 suite.
+
   **Session 2026-05-06 (17.131, 8535 → 8537, +2) — TS1295 / TS1484
   emission for `verbatimModuleSyntax`
   (`isolatedModulesSketchyAliasLocalMerge_ts__false_true__` and
