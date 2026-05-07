@@ -1,6 +1,29 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,541 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,542 / 10,078 tests passing (~85%).
+
+**17.137 (2026-05-07, +1)** — Extend `isTypeNodeCompatible` (the
+overload-vs-implementation TS2394 gate, Checker.kt ~41535) to handle three
+new TypeNode shape pairs that previously fell through to the conservative
+"unknown / compatible" default: (a) `LiteralType` vs `LiteralType` — compare
+wrapped literal expressions via new `literalExpressionEquals` (StringLiteral,
+NumericLiteral, BigIntLiteral, Identifier-mapped true/false/null/undefined,
+PrefixUnaryExpression for negative numerics); (b) `LiteralType` vs
+`KeywordTypeNode` — assignable when shape matches via new
+`literalAssignableToKeyword` (e.g. `"hi"` → `string`, `42` → `number`,
+`true` → `boolean`); (c) `KeywordTypeNode` vs `LiteralType` — NOT assignable
+unless source is `any` or `never`; (d) `FunctionType` vs `FunctionType` —
+recursive comparison with parameter contravariance + return covariance.
+Plus added `break` after first incompatible overload emission in both
+`checkOverloadsInStatements` and `checkMethodOverloadsInClass` to match
+TypeScript's "first incompatible per group" reporting cadence — without
+this, multi-incompatible-overload groups (e.g. `constructorsWith
+SpecializedSignatures`'s class D with overloads `"hi"`/`"foo"`/`number`
+against impl `"hi"`) would over-emit. Flips
+`overloadOnConstNoAnyImplementation_ts` (overload `(cb: (x: 'hi') => number)`
+vs impl `(cb: (x: string) => number)` — the inner `string` is NOT
+assignable to `'hi'` under contravariance). Net delta: 1534 → 1533 failed
+(8541 → 8542 passing). Zero regressions across 10078-test suite.
 
 **17.136 (2026-05-07, +1)** — Add `interface PropertyDescriptor` to
 `BUILTIN_LIB_SOURCE` and update `Object.defineProperty` signature to
