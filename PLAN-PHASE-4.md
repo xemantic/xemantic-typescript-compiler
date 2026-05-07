@@ -2510,15 +2510,29 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
-- [ ] **B1.1. Blocker #1 — `&&`-chain narrowing of identifiers (~2-5 tests,
-  MEDIUM risk).** Extend `applyConditionNarrowing` / `narrowByExpr` to
-  handle binary `&&` chains where each operand narrows subsequent operands:
-  `if (perf && perf.measure)` should narrow `perf` from `T | undefined` to
-  `T` when checking the right operand. 17.4b landed `&&`-chain WALKING for
-  TS2774 emission but does not yet NARROW types through the chain. Targets
-  `uncalledFunctionChecksInConditional2_ts` (full flip needs `window` lib
-  resolution as a separate piece — narrowing alone is independent). See
-  "Known architectural blockers" §1.
+- [x] **B1.1. Blocker #1 — `&&`-chain narrowing of identifiers (FOUNDATION
+  DONE 2026-05-07 in 17.139, net-zero infra; queue yield estimate of
+  ~2-5 tests was overstated, see session note).** `computeRawTypeOfPropertyAccess`
+  (Checker.kt ~40837) now narrows Union receivers via `getNarrowedTypeForReference`
+  when the receiver is a pure path. Inside `if (x && x.foo) { ... }` the
+  binder's `bindBinaryExpression` sets `currentFlow = newCondition(true,
+  expr.left, preRight)` before binding the RHS — so the receiver Identifier
+  inside `x.foo` records that FlowCondition, and narrowing drops `undefined`
+  / falsy members so `getPropertyOfType` succeeds on the refined receiver
+  instead of bailing on the Union. **Narrowing through `&&` operands was
+  ALREADY working** in `applyConditionNarrowing`'s BinaryExpression branch
+  (Checker.kt ~39337) — the gap was that `getTypeOfPropertyAccess`'s
+  receiver compute didn't consult the flow graph. The named target
+  `uncalledFunctionChecksInConditional2_ts` was already firing all 3
+  expected TS2774s post-17.60; the test's residual gap is 4 missing
+  TS7006s (Guardrails — `noImplicitAny` default-on policy). No other
+  failing test in the corpus gates SOLELY on receiver narrowing — verified
+  via clean full-suite run. Foundation for follow-on substeps that consume
+  narrowed receiver types in additional emission sites (TS2532
+  object-possibly-undefined, TS2339 narrowed-to-never extensions, etc.).
+  Closes B1.1 with the actual scope landed; remaining `&&`-chain narrowing
+  follow-ons should be filed as new substeps (B1.3+) when a specific test
+  needs them. See "Known architectural blockers" §1.
 
 - [x] **B2.1. Blocker #2 — Generic argument inference for single-TypeParam,
   single-arg signatures (~5-10 tests, MEDIUM risk). MAIN PIECE DONE in
@@ -2720,6 +2734,66 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (17.139, 8544 unchanged — B1.1 foundation, net-zero)
+  — Narrow Union receivers in `computeRawTypeOfPropertyAccess` via
+  flow-graph state.** Per anti-loop rule: `find_candidates.py --fresh`
+  returned 0/0/0 (filtered from 6/74/19) post-17.138, queue had unchecked
+  Blocker substep B1.1 at top → started architectural work.
+
+  **B1.1 task analysis.** The queue item said "extend
+  `applyConditionNarrowing` / `narrowByExpr` to handle binary `&&` chains
+  where each operand narrows subsequent operands" with target
+  `uncalledFunctionChecksInConditional2_ts` (~2-5 tests, MEDIUM risk).
+  Inspection revealed:
+  - `applyConditionNarrowing` ALREADY handles `&&` in its BinaryExpression
+    branch (Checker.kt ~39337) — narrows by both operands transitively.
+  - Flow.kt's `bindBinaryExpression` for `&&` ALREADY creates a
+    `FlowCondition(true, expr.left, preRight)` before binding the RHS,
+    and `bindExpression(PropertyAccessExpression)` calls
+    `bindExpression(receiver)` which `recordFlow`s the receiver Identifier
+    at that condition.
+  - The queue item's named target had its 3 expected TS2774s already
+    firing post-17.60; the residual gap is 4 missing TS7006s (noImplicitAny
+    Guardrails issue, not narrowing).
+
+  The actual gap was at the property-access RECEIVER lookup site:
+  `computeRawTypeOfPropertyAccess` called `getTypeOfExpression(expr.expression)`
+  which returns the un-narrowed Union receiver type. So `getApparentType` +
+  `getPropertyOfType` would fail on `Performance | undefined` even when
+  flow-graph state at the receiver position reflected the truthy LHS of
+  `&&`.
+
+  **Implementation (Checker.kt ~40837):** added a Union-only narrow at
+  the receiver compute step:
+
+      val rawObjectType = getTypeOfExpression(expr.expression)
+      val objectType: Type =
+          if (rawObjectType is Type.Union && getReferencePath(expr.expression) != null) {
+              getNarrowedTypeForReference(rawObjectType, expr.expression)
+          } else rawObjectType
+
+  Conservative gates: only Union receivers (non-Unions can't be refined
+  by condition-based narrowing); only pure paths (calls/parens/element-access
+  return null path → no-op). Mirror of 17.34d's wrapper-level narrowing
+  but at the RECEIVER position so property lookup succeeds on the refined
+  type.
+
+  **Verification.** Full-suite run: 10078 tests, 1531 failed, 3 skipped —
+  identical to baseline. Net-zero infra. The queue's yield estimate of
+  ~2-5 tests was overstated: no failing test in the current corpus gates
+  SOLELY on receiver narrowing. The pieces that originally motivated B1.1
+  (`uncalledFunctionChecksInConditional2_ts` flip) had already landed
+  separately via 17.59/17.60's TS2774-walker fixes; the residual is a
+  Guardrails issue.
+
+  **B1.1 marked done (foundation landed).** Future follow-ons should be
+  filed as new substeps (B1.3+) when a specific test demands them — e.g.
+  TS2532 "Object is possibly 'undefined'" at non-narrowed receiver
+  positions, TS2339 narrowed-to-never on property access through
+  PropertyAccess receivers, etc. The infrastructure is now in place; the
+  next yield-yielding piece is finding emission sites that consume the
+  narrowed receiver type to produce visible diagnostics.
 
   **Session 2026-05-07 (17.138, 8543 → 8544, +1) — Emit TS17019 / TS17020
   / TS8020 for JSDoc nullable `?` recovery in type-argument context.**

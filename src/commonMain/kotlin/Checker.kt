@@ -40851,7 +40851,19 @@ interface DataView {
     }
 
     private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
-        val objectType = getTypeOfExpression(expr.expression)
+        val rawObjectType = getTypeOfExpression(expr.expression)
+        // B1.1: Narrow Union receivers via flow-graph state. Inside
+        // `if (x && x.foo)`, the binder records the receiver `x` of `x.foo`
+        // (RHS of `&&`) at a FlowCondition that asserts `x` is truthy — so
+        // narrowing drops `undefined`/`null`/falsy members and `getPropertyOfType`
+        // succeeds on the refined receiver instead of bailing on the Union.
+        // Conservative gates: receiver must be a pure Identifier-or-PropertyAccess
+        // chain (so [getReferencePath] is non-null), and only Union receivers are
+        // narrowed — non-Unions can't be refined by condition-based narrowing.
+        val objectType: Type =
+            if (rawObjectType is Type.Union && getReferencePath(expr.expression) != null) {
+                getNarrowedTypeForReference(rawObjectType, expr.expression)
+            } else rawObjectType
         val propName = expr.name.text
         // If object resolved, check its apparent type for the property
         if (objectType !== anyType && objectType !== errorType) {
