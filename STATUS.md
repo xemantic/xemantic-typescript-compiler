@@ -1,6 +1,29 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,543 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,544 / 10,078 tests passing (~85%).
+
+**17.138 (2026-05-07, +1)** — Emit TS17019 / TS17020 / TS8020 for JSDoc
+nullable `?` recovery in type-argument context. Parser-level diagnostic
+emissions added to `parseNonUnionType` (Parser.kt ~5081-5215): leading `?`
+followed by a type → TS17020 covering `?TYPE`; bare `?` (no following type) →
+TS8020 (1-char squiggle); trailing `?` with non-type-start follower →
+TS17019 covering `TYPE?`. All three gated on `inTypeArgsDepth > 0` (new
+counter incremented in `tryParseTypeArguments`), so existing silent recovery
+in non-type-args contexts (regular annotations, tuple elements via
+`parseTupleType`'s `parseOptional(Question)` path) is preserved. TS17019
+additionally gated on `inTupleTypeDepth == 0` (new counter incremented in
+`parseTupleType`) so nested-in-type-args tuples like `foo<[number, string?]>`
+don't FP-fire on legitimate optional tuple elements. Type text for the
+diagnostic message is captured via `source.substring(type.pos,
+scanner.getPrevTokenEnd())` BEFORE any trailing `!`/`?` consumption — uses
+`getPrevTokenEnd` rather than node `end` because `node.end` overshoots
+(per CLAUDE.md "node.end overshoots by one token"). Squiggle spans:
+TS17020 covers leading-? through end of type+modifiers; TS17019 covers
+type-start through end of trailing-?; TS8020 just the bare `?`. Flips
+`expressionWithJSDocTypeArguments_ts` (errors-baseline; the parameterized
+JS-emit test for the same file remains failing — pre-existing, drops type
+args entirely from emit). Net delta: 1532 → 1531 failed (8543 → 8544
+passing).
 
 **17.137a (2026-05-07, +1)** — Gate TS2793 ("call would have succeeded
 against this implementation") on `allArgumentsMatch(args, implSig)` in

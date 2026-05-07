@@ -27,6 +27,8 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private var inAsyncContext = topLevelAwait
     private var disallowIn = false
     private var classBodyDepth = 0
+    private var inTypeArgsDepth = 0
+    private var inTupleTypeDepth = 0
 
     /** Stack of opening token positions for related-info on missing close tokens. */
     private val openTokenStack = mutableListOf<Int>()
@@ -4858,30 +4860,35 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     }
 
     private fun tryParseTypeArguments(): List<TypeNode>? {
-        return scanner.tryScan {
-            if (token != SyntaxKind.LessThan) return@tryScan null
-            nextToken()
-            // Empty type argument list: <>
-            if (token == SyntaxKind.GreaterThan) {
+        inTypeArgsDepth++
+        try {
+            return scanner.tryScan {
+                if (token != SyntaxKind.LessThan) return@tryScan null
                 nextToken()
-                return@tryScan emptyList()
-            }
-            val args = mutableListOf<TypeNode>()
-            do {
-                // Handle missing type arguments (e.g., `Foo<a,,b>`)
-                if (token == SyntaxKind.Comma || token == SyntaxKind.GreaterThan) {
-                    // TS1110: Type expected — empty type argument position
-                    reportError("Type expected.", code = 1110, overrideLength = 1)
-                    args.add(KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = getPos(), end = getEnd()))
-                } else {
-                    args.add(parseType())
+                // Empty type argument list: <>
+                if (token == SyntaxKind.GreaterThan) {
+                    nextToken()
+                    return@tryScan emptyList()
                 }
-            } while (parseOptional(SyntaxKind.Comma))
-            // Handle nested generics: Array<Fn<T>> produces '>>' token — rescan to single '>'
-            token = scanner.reScanGreaterToken()
-            if (token != SyntaxKind.GreaterThan) return@tryScan null
-            nextToken()
-            args
+                val args = mutableListOf<TypeNode>()
+                do {
+                    // Handle missing type arguments (e.g., `Foo<a,,b>`)
+                    if (token == SyntaxKind.Comma || token == SyntaxKind.GreaterThan) {
+                        // TS1110: Type expected — empty type argument position
+                        reportError("Type expected.", code = 1110, overrideLength = 1)
+                        args.add(KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = getPos(), end = getEnd()))
+                    } else {
+                        args.add(parseType())
+                    }
+                } while (parseOptional(SyntaxKind.Comma))
+                // Handle nested generics: Array<Fn<T>> produces '>>' token — rescan to single '>'
+                token = scanner.reScanGreaterToken()
+                if (token != SyntaxKind.GreaterThan) return@tryScan null
+                nextToken()
+                args
+            }
+        } finally {
+            inTypeArgsDepth--
         }
     }
 
@@ -5078,9 +5085,22 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         }
         // Error recovery: leading ? in type position (JSDoc nullable, e.g. ?string) — skip it.
         // Bare ? with no following type (e.g. <?>) is treated as JSDoc unknown → any.
+        // In type-args context emit TS17020 (?TYPE) or TS8020 (bare ?) — JSDoc nullable
+        // is not valid TS syntax. Other contexts (regular annotations, tuple elements)
+        // remain silently recovered to avoid regressing valid syntax shapes.
+        var leadingQuestionPos: Int = -1
         if (token == SyntaxKind.Question) {
+            leadingQuestionPos = getPos()
             nextToken()
             if (!isStartOfType(token)) {
+                if (inTypeArgsDepth > 0) {
+                    reportError(
+                        message = "JSDoc types can only be used inside documentation comments.",
+                        code = 8020,
+                        overrideStart = leadingQuestionPos,
+                        overrideLength = 1,
+                    )
+                }
                 return KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = pos, end = getEnd())
             }
         }
@@ -5159,6 +5179,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
         }
 
+        // Capture end of type proper (before any trailing modifier consumption) for
+        // diagnostic span construction.
+        val typeProperEnd = scanner.getPrevTokenEnd()
+
         // Error recovery: trailing ! in type position (e.g. string!) — skip it
         if (token == SyntaxKind.Exclamation) {
             nextToken()
@@ -5167,10 +5191,33 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Error recovery: trailing ? in type position (JSDoc nullable, e.g. string?) — skip it.
         // Must NOT consume ? when followed by a type-start token, as that indicates a
         // conditional type (T extends U ? X : Y) where ? belongs to the outer context.
+        // In type-args context (and outside tuple, where `?` is a legitimate optional
+        // marker), emit TS17019 — JSDoc trailing-? is not valid TS syntax.
         if (token == SyntaxKind.Question
             && !scanner.lookAhead { scanner.scan(); isStartOfType(scanner.getToken()) }
         ) {
+            val questionEnd = scanner.getPos()
             nextToken()
+            if (inTypeArgsDepth > 0 && inTupleTypeDepth == 0) {
+                val typeText = source.substring(type.pos, typeProperEnd)
+                reportError(
+                    message = "'?' at the end of a type is not valid TypeScript syntax. Did you mean to write '$typeText | undefined'?",
+                    code = 17019,
+                    overrideStart = type.pos,
+                    overrideLength = questionEnd - type.pos,
+                )
+            }
+        }
+
+        if (leadingQuestionPos >= 0 && inTypeArgsDepth > 0) {
+            val combinedEnd = scanner.getPrevTokenEnd()
+            val typeText = source.substring(type.pos, typeProperEnd)
+            reportError(
+                message = "'?' at the start of a type is not valid TypeScript syntax. Did you mean to write '$typeText | null | undefined'?",
+                code = 17020,
+                overrideStart = leadingQuestionPos,
+                overrideLength = combinedEnd - leadingQuestionPos,
+            )
         }
 
         return type
@@ -5321,27 +5368,32 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBracket)
         val elements = mutableListOf<TypeNode>()
-        while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
-            // Labeled tuple elements: `name: Type` or `name?: Type` or `...name: Type`
-            val isRest = parseOptional(SyntaxKind.DotDotDot)
-            val isLabeledElement = isIdentifier() && lookAhead {
-                nextToken()
-                when {
-                    token == SyntaxKind.Colon -> true
-                    token == SyntaxKind.Question -> { nextToken(); token == SyntaxKind.Colon }
-                    else -> false
+        inTupleTypeDepth++
+        try {
+            while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
+                // Labeled tuple elements: `name: Type` or `name?: Type` or `...name: Type`
+                val isRest = parseOptional(SyntaxKind.DotDotDot)
+                val isLabeledElement = isIdentifier() && lookAhead {
+                    nextToken()
+                    when {
+                        token == SyntaxKind.Colon -> true
+                        token == SyntaxKind.Question -> { nextToken(); token == SyntaxKind.Colon }
+                        else -> false
+                    }
                 }
+                if (isLabeledElement) {
+                    // Skip label (identifier) and optional `?`
+                    nextToken() // consume identifier (label)
+                    parseOptional(SyntaxKind.Question) // optional `?`
+                    parseExpected(SyntaxKind.Colon) // consume `:`
+                }
+                val elementType = parseType()
+                parseOptional(SyntaxKind.Question) // optional tuple element: string?, number?
+                elements.add(if (isRest) RestType(type = elementType, pos = pos, end = getEnd()) else elementType)
+                if (!parseOptional(SyntaxKind.Comma)) break
             }
-            if (isLabeledElement) {
-                // Skip label (identifier) and optional `?`
-                nextToken() // consume identifier (label)
-                parseOptional(SyntaxKind.Question) // optional `?`
-                parseExpected(SyntaxKind.Colon) // consume `:`
-            }
-            val elementType = parseType()
-            parseOptional(SyntaxKind.Question) // optional tuple element: string?, number?
-            elements.add(if (isRest) RestType(type = elementType, pos = pos, end = getEnd()) else elementType)
-            if (!parseOptional(SyntaxKind.Comma)) break
+        } finally {
+            inTupleTypeDepth--
         }
         parseExpected(SyntaxKind.CloseBracket)
         return TupleType(elements = elements, pos = pos, end = getEnd())
