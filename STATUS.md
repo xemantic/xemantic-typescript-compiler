@@ -2,6 +2,20 @@
 
 **Phase 4 — Checker buildout.** 8,549 / 10,078 tests passing (~85%).
 
+**17.147 (2026-05-07, net-zero, B5.4 foundation)** — Wire
+`parseJSDocTemplateTypeParams` into `parseFunctionDeclarationOrExpression`
+(JS-like files only, fallback when no TS-level `<T>` parsed). Mirror of
+17.146's ClassDeclaration wiring. Net-zero on the 10078-test suite —
+no failing test flipped: the natural target
+`unusedTypeParameters_templateTag_ts` needs TS6133 with custom JSDoc
+squiggle covering the entire `@template T` span (12 chars at col 5),
+but our standard TS6133 type-param emission squiggles on the
+identifier name itself (1 char on `T` at col 15). That custom-span
+emission is a separate substep. Foundation lands so any future test
+that gates only on `function`-side `@template` parsing (e.g.
+generic-call-arg checking with TS2314 on a JSDoc-only-typed generic
+function) flips automatically without re-wiring.
+
 **17.146 (2026-05-07, +1, closes B5.3)** — JSDoc `@template T` parser
 bridge for ClassDeclaration in JS-like files. Stacks on 17.145's B5.2
 to flip `jsdocClassMissingTypeArguments_ts`. New

@@ -1427,7 +1427,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
             null
         }
-        val typeParams = parseTypeParametersOpt()
+        val parsedTypeParams = parseTypeParametersOpt()
+        // 17.147 / B5.4: in JS-like files, fall back to JSDoc `@template T`
+        // when no TS-level `<T>` was parsed. Mirror of B5.3 for ClassDeclaration.
+        val typeParams = parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)
         val rawParams = parseParameterList()
         // 17.140: in JS-like files, bridge JSDoc `@param {primitive} name` tags
         // to parameter types when the parameter is un-annotated.

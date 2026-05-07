@@ -2847,6 +2847,47 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.147, 8549 unchanged — B5.4 foundation, net-zero)
+  — Wire `parseJSDocTemplateTypeParams` into
+  `parseFunctionDeclarationOrExpression`.** Continuation after 17.146
+  closed B5.3 for ClassDeclaration. Pre-session recon: full suite
+  8549/1526/3 baseline, `find_candidates.py --fresh` returns 0/0/0.
+  Per the anti-loop rule, must promote a new substep.
+
+  **Substep B5.4.** Mirror of 17.146 for `function f() {}` form. Single
+  call-site flip: `parseTypeParametersOpt()` result is used if non-null,
+  otherwise falls back to `parseJSDocTemplateTypeParams(comments)`.
+  Local var renamed to `parsedTypeParams` to disambiguate.
+
+  **Target hunt.** Searched failing JSDoc tests for `function`-side
+  `@template`. Candidates: `unusedTypeParameters_templateTag_ts`
+  (`/** @template T */ function f() {}`), but expected TS6133 squiggle
+  spans `@template T` (12 chars at col 5) which our standard type-param
+  unused walker emits at the identifier position only (1 char on `T`).
+  Custom-span emission would be a separate substep. Other candidates
+  (`arrowExpressionBodyJSDoc_ts`, `jsdocCallbackAndType_ts`,
+  `unmetTypeConstraintInJSDocImportCall_ts`,
+  `unusedTypeParameters_templateTag2_ts`) all need additional infrastructure
+  beyond `@template` wiring (`@typedef`, `@callback`, multi-line
+  `@template`, TS6205, JSDoc cast type assignability).
+
+  **Verification.** Full-suite run: 10078 tests, 1526 failed, 3 skipped —
+  identical to 17.146 baseline. Net-zero. Foundation only.
+
+  **Next promotable substeps:**
+  - **B5.5**: TS6133 with custom JSDoc squiggle for unused `@template`
+    type params (target: `unusedTypeParameters_templateTag_ts`,
+    `unusedTypeParameters_templateTag2_ts`). Needs custom span
+    computation in TS6133 walker for `fromJSDoc` type params: walk
+    leading comments to find the `@template T` text and use the full
+    tag span as the squiggle.
+  - **B5.6**: TS6205 "All type parameters are unused" for class /
+    function with all unused JSDoc type params (target half of
+    `unusedTypeParameters_templateTag2_ts`).
+  - **B5.7**: Wire `@template` into InterfaceDeclaration and
+    TypeAliasDeclaration (mirror of B5.3/B5.4). No known failing target
+    today but completes the family.
+
   **Session 2026-05-07 (17.146, 8548 → 8549, +1 — closes B5.3) — JSDoc
   `@template T` parser bridge for ClassDeclaration.** Stacks on 17.145's
   B5.2 bridge in the same session. After 17.145 landed B5.2 as foundation
