@@ -5119,6 +5119,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
                 }
                 // Read one or more comma-separated bare identifiers on this line.
+                // Buffer (name, absStart, absEnd) so we can attach the tag span (computed
+                // after the loop) to every identifier in this tag.
+                val tagIds = mutableListOf<Triple<String, Int, Int>>()
                 while (i < ct.length && ct[i] != '\n' && ct[i] != '\r') {
                     while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == ',')) i++
                     if (i >= ct.length || ct[i] == '\n' || ct[i] == '\r') break
@@ -5127,20 +5130,51 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
                     val tpName = ct.substring(nameStart, i)
                     if (tpName.isNotEmpty()) {
-                        val absStart = comment.pos + nameStart
-                        val absEnd = absStart + tpName.length
-                        val ident = Identifier(text = tpName, pos = absStart, end = absEnd)
-                        if (out == null) out = mutableListOf()
-                        if (out.none { it.name.text == tpName }) {
-                            out.add(TypeParameter(
-                                name = ident, fromJSDoc = true,
-                                pos = absStart, end = absEnd,
-                            ))
-                        }
+                        tagIds.add(Triple(tpName, comment.pos + nameStart, comment.pos + i))
                     }
                     // Stop after the name unless the next non-ws char is a comma.
                     while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
                     if (i >= ct.length || ct[i] != ',') break
+                }
+                // Compute tag span end: scan from `i` for either `*/` (comment close)
+                // or a following JSDoc `@<tag>` at the start of a new line.
+                var tagEndOffset = ct.length
+                var j = i
+                while (j < ct.length) {
+                    val c = ct[j]
+                    if (c == '*' && j + 1 < ct.length && ct[j + 1] == '/') {
+                        tagEndOffset = j
+                        break
+                    }
+                    if (c == '\n' || c == '\r') {
+                        // Look for next non-whitespace, optionally past a leading `*`.
+                        var k = j + 1
+                        while (k < ct.length && (ct[k] == ' ' || ct[k] == '\t')) k++
+                        if (k < ct.length && ct[k] == '*' && (k + 1 >= ct.length || ct[k + 1] != '/')) k++
+                        while (k < ct.length && (ct[k] == ' ' || ct[k] == '\t')) k++
+                        if (k < ct.length && ct[k] == '@') {
+                            var kk = k + 1
+                            while (kk < ct.length && ct[kk].isLetter()) kk++
+                            if (kk > k + 1) {
+                                tagEndOffset = k
+                                break
+                            }
+                        }
+                    }
+                    j++
+                }
+                val tagAbsPos = comment.pos + tagIdx
+                val tagAbsEnd = comment.pos + tagEndOffset
+                for ((tpName, absStart, absEnd) in tagIds) {
+                    val ident = Identifier(text = tpName, pos = absStart, end = absEnd)
+                    if (out == null) out = mutableListOf()
+                    if (out.none { it.name.text == tpName }) {
+                        out.add(TypeParameter(
+                            name = ident, fromJSDoc = true,
+                            pos = absStart, end = absEnd,
+                            jsDocTagPos = tagAbsPos, jsDocTagEnd = tagAbsEnd,
+                        ))
+                    }
                 }
                 idx = i
             }

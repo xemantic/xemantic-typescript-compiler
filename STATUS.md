@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,549 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,550 / 10,078 tests passing (~85%).
+
+**17.148 (2026-05-07, +1, closes B5.5 single-id case)** — Custom
+`@template` span for TS6133 on JSDoc-derived TypeParameters. Flips
+`unusedTypeParameters_templateTag_ts` (12-char squiggle covering
+`@template T ` at col 5 instead of 3-char squiggle covering ` T ` at
+col 14). Three-piece change:
+- **Ast.kt** (`TypeParameter`): two new fields
+  `jsDocTagPos: Int = -1` / `jsDocTagEnd: Int = -1` carrying the
+  absolute source positions of the `@template` keyword's `@` and the
+  end of the tag content (next JSDoc tag start or comment-close `*/`,
+  whichever comes first).
+- **Parser.kt** (`parseJSDocTemplateTypeParams` ~5089): refactored to
+  buffer per-tag identifiers (`tagIds`) before constructing
+  `TypeParameter`s, then computes the tag's end offset by scanning
+  forward from the last identifier for either `*/` or a following
+  `@<tag>` at a new line. Each TP in the same tag receives the same
+  `jsDocTagPos` / `jsDocTagEnd`.
+- **Checker.kt** (`reportUnusedTypeParams` ~4970): groups declarations
+  by `jsDocTagPos`, computing per-tag sibling-count and unused-count.
+  When a JSDoc-derived TP's tag has exactly 1 identifier and that one
+  is unused, emits TS6133 with the full tag span (`jsDocTagPos`..
+  `jsDocTagEnd`). Multi-id tags fall through to per-identifier span
+  (deferred to B5.6 — needs TS6205 for all-unused, individual squiggles
+  for partial-unused). The pre-existing `<T>` syntax `pos-1, len+2`
+  branch is now gated `&& !tp.fromJSDoc` so synthetic JSDoc TPs don't
+  pick up the angle-bracket span.
+
+Net delta: 1526 → 1525 failed (8549 → 8550 passing). Zero regressions
+across 10078-test suite. `unusedTypeParameters_templateTag2_ts` still
+fails — needs TS6205 emission for all-unused multi-id tags + body
+usage tracking through `@type {T}` JSDoc references for proper T-used
+detection (both deferred to B5.6+).
 
 **17.147 (2026-05-07, net-zero, B5.4 foundation)** — Wire
 `parseJSDocTemplateTypeParams` into `parseFunctionDeclarationOrExpression`

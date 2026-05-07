@@ -4974,12 +4974,33 @@ class Checker(
         fileName: String,
     ) {
         val allUnused = scope.declarations.none { it.name in scope.referencedNames }
+        // For JSDoc-derived type params, group by tag start so we can decide between
+        // the full-tag span (single-id tag, or all siblings unused) and per-identifier
+        // span (multi-id tag with mixed used/unused).
+        val tagSiblingCount = mutableMapOf<Int, Int>()
+        val tagUnusedCount = mutableMapOf<Int, Int>()
+        for (tp in typeParams) {
+            if (tp.fromJSDoc && tp.jsDocTagPos >= 0) {
+                tagSiblingCount[tp.jsDocTagPos] = (tagSiblingCount[tp.jsDocTagPos] ?: 0) + 1
+                if (tp.name.text !in scope.referencedNames) {
+                    tagUnusedCount[tp.jsDocTagPos] = (tagUnusedCount[tp.jsDocTagPos] ?: 0) + 1
+                }
+            }
+        }
         for (decl in scope.declarations) {
             if (decl.name in scope.referencedNames) continue
             val tp = decl.declNode as TypeParameter
             val start: Int
             val length: Int
-            if (allUnused && scope.declarations.size == 1 && typeParams.size == 1) {
+            val tagPos = tp.jsDocTagPos
+            val tagEnd = tp.jsDocTagEnd
+            val useTagSpan = tp.fromJSDoc && tagPos >= 0 && tagEnd > tagPos &&
+                (tagSiblingCount[tagPos] ?: 0) == (tagUnusedCount[tagPos] ?: 0) &&
+                (tagSiblingCount[tagPos] ?: 0) == 1
+            if (useTagSpan) {
+                start = tagPos
+                length = tagEnd - tagPos
+            } else if (allUnused && scope.declarations.size == 1 && typeParams.size == 1 && !tp.fromJSDoc) {
                 start = tp.pos - 1
                 length = decl.name.length + 2
             } else {
