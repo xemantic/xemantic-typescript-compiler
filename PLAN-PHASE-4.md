@@ -2520,15 +2520,31 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   resolution as a separate piece — narrowing alone is independent). See
   "Known architectural blockers" §1.
 
-- [ ] **B2.1. Blocker #2 — Generic argument inference for single-TypeParam,
-  single-arg signatures (~5-10 tests, MEDIUM risk).** In
-  `checkArgumentsAgainstSignature`, when `sig.typeParameters.size == 1` and
-  the param-type references the TypeParam, infer `T = widen(argType)`,
-  then substitute T into paramType and run the relation check. Conservative
-  gate: skip when arg-type is errorType/anyType/Union-with-errors. Targets
-  `widenToAny1/2_ts`, `recursiveTypeRelations_ts`-adjacents,
-  `noStrictGenericChecks_ts` (latter needs the multi-TypeParam form too).
-  See "Known architectural blockers" §2.
+- [x] **B2.1. Blocker #2 — Generic argument inference for single-TypeParam,
+  single-arg signatures (~5-10 tests, MEDIUM risk). MAIN PIECE DONE in
+  17.31a–f / 17.37 / 17.38 (2026-04-26 to 2026-04-27, +8 cumulative
+  tests).** `tryInferSingleTypeParamFromArgs` (Checker.kt ~36617) wired
+  into both `checkArgumentsAgainstSignature` (instantiates sig before
+  the loop so subsequent T-typed args check against substituted T) and
+  `getReturnTypeOfCallExpression` single-sig branch (substitutes T into
+  return type for downstream var-decl / property-access). Targets that
+  flipped: `widenToAny1_ts` (17.38), `widenToAny2_ts` (17.31f),
+  `inferentiallyTypingAnEmptyArray_ts` (17.37),
+  `fixTypeParameterInSignatureWithRestParameters_ts` (17.31a),
+  `typeArgumentInferenceWithConstraintAsCommonRoot_ts` (17.31a),
+  `typeInferenceConflictingCandidates_ts` (17.31b),
+  `genericRestArgs_ts` + 2 adjacent (17.31c). The 17.31 series also
+  extended to multi-tp inference (17.31d), Array<T> arg inference
+  (17.31e), Union-element widening (17.31f), Object-literal-of-T
+  shape (17.38). Residual targets: `recursiveTypeRelations_ts` needs
+  `keyof S` substitution AND graceful unresolved-name TypeRef display
+  (separate substep family); `noStrictGenericChecks_ts` needs
+  multi-TypeParam-bipartition for `<S>(x:S, y:S)` vs `<T,U>(x:T, y:U)`
+  — explicitly out of scope per autonomous-decision policy and
+  attempted+abandoned in 2026-05-06 session note. The B2.1 single-
+  TypeParam single-arg substep itself is fully landed; remaining
+  Blocker #2 work belongs in follow-on substeps (B2.2 etc., not
+  promoted to queue yet pending tractability assessment).
 
 - [ ] **B5.1. Blocker #5 — JSDoc `@param {T}` type extraction (~2-3 tests,
   LOW risk).** Extend 17.71's `checkJSDocParamTags()` walker (Checker.kt
