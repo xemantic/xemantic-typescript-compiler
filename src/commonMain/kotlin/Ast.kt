@@ -1534,6 +1534,10 @@ data class Parameter(
     /** When true, this parameter is a comment-only placeholder for an empty parameter list. */
     val isCommentPlaceholder: Boolean = false,
     val dotDotDotTrailingComments: List<Comment>? = null,
+    /** 17.140: when true, [type] was synthesized from a JSDoc `@param {T} name` tag
+     *  (sub-Parser positions point into the JSDoc text rather than the original source).
+     *  Walkers that emit position-bearing diagnostics on the type node should skip when set. */
+    val typeFromJSDoc: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
