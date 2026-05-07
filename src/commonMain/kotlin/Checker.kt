@@ -17233,7 +17233,7 @@ interface ObjectConstructor {
     getPrototypeOf(o: any): any;
     getOwnPropertyNames(o: any): string[];
     create(o: any, properties?: any): any;
-    defineProperty(o: any, p: string, attributes: any): any;
+    defineProperty(o: any, p: string, attributes: PropertyDescriptor & ThisType<any>): any;
     defineProperties(o: any, properties: any): any;
     seal(o: any): any;
     freeze(o: any): any;
@@ -17656,6 +17656,14 @@ interface Iterator<T> {
 interface IterableIterator<T> { }
 interface AsyncIterable<T> { }
 interface ThisType<T> { }
+interface PropertyDescriptor {
+    configurable?: boolean;
+    enumerable?: boolean;
+    value?: any;
+    writable?: boolean;
+    get?(): any;
+    set?(v: any): void;
+}
 interface AsyncIterator<T> {
     next(value?: any): any;
     return?(value?: any): any;
@@ -49416,6 +49424,19 @@ interface DataView {
             // 16.0a: excess property check for object literal arguments passed
             // to typed object parameters. Emits TS2353 and stops further arg checks.
             // Skip rest parameters — param type is an array wrapper, not the element type.
+            // Intersection paramType: `attributes: PropertyDescriptor & ThisType<any>` — flatten
+            // member-name set across constituents via collectTargetPropertyNames; emit TS2353
+            // for ObjectLiteral excess props using the intersection's display name.
+            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Intersection &&
+                argType is Type.Object) {
+                for (constituent in paramType.types) {
+                    if (constituent is Type.Object) resolveStructuredTypeMembers(constituent)
+                }
+                val displayTarget = typeToString(paramType)
+                if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName)) {
+                    break // TS2353 emitted — one error per call
+                }
+            }
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
                 try {
                     resolveStructuredTypeMembers(paramType)
