@@ -2,6 +2,36 @@
 
 **Phase 4 — Checker buildout.** 8,544 / 10,078 tests passing (~85%).
 
+**17.140 (2026-05-07, net-zero — B5.1 foundation)** — JSDoc `@param {primitive}
+name` bridge for parameters in JS-like files. Mirror of 17.62's primitive-only
+`@type` bridge for var-decls. New `parseJSDocParamPrimitiveTypeMap` walker
+in Parser.kt builds a `name → KeywordTypeNode(pos=-1, end=-1)` map by walking
+function leading comments for `@param {T} name` tags where T is one of
+`string`/`number`/`boolean`/`any`/`unknown`/`never`/`void`/`undefined`/`null`/
+`bigint`/`symbol`/`object` (allowlist via existing `primitiveKeywordKindFor`).
+Companion helper `applyJSDocParamPrimitiveTypes(params, comments)` returns
+parameters with `type = KeywordTypeNode` set on un-annotated Identifier-named
+params whose name matches a JSDoc tag — and a new `typeFromJSDoc: Boolean`
+flag on Parameter (Ast.kt) marks the synthetic origin so future walkers can
+skip position-bearing diagnostics on it. Wired into `parseFunctionDeclarationOrExpression`,
+`parseFunctionExpression`, `parseConstructor`, and the MethodDeclaration
+branch of class-member parsing. Conservative gate (primitive-only) avoids
+17.61's revert risk: synthetic `KeywordTypeNode` has no name to resolve, so
+TS2503/TS2304 with garbled positions can't fire.
+
+Net-zero on the 10078-test suite (1531 / 3 unchanged). The candidate target
+`jsdocTypeCast_ts` lights 2 of 3 expected TS2322s post-bridge (the `@param
+{string} x` makes `x: string`, so `let a: 'a'|'b' = (x)` and `let b: 'a'|'b' =
+(((x)))` correctly fail) but adds 1 FP on `let c = /** @type {'a'|'b'} */ (x)`
+where the inner JSDoc type-cast pattern needs separate handling
+(ParenthesizedExpression with leading `@type {T}` JSDoc — would override the
+inner expression's type). 0 of 3 → 2 of 3 with 1 FP on a still-failing test
+is net-zero pass count but moves the test closer to a flip; the JSDoc
+type-cast piece is deferred to a follow-on substep (B5.2 or similar).
+Foundation also unblocks future Parameter-side JSDoc work (full sub-Parser
+extension once `typeFromJSDoc` gates are added at param-type resolution
+sites that emit position-bearing diagnostics).
+
 **17.139 (2026-05-07, net-zero — B1.1 foundation)** — Narrow Union receivers in
 `computeRawTypeOfPropertyAccess` via flow-graph state. Inside
 `if (x && x.foo) { x.foo() }` the binder's `bindBinaryExpression` for `&&`

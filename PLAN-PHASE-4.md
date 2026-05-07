@@ -2560,13 +2560,29 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   Blocker #2 work belongs in follow-on substeps (B2.2 etc., not
   promoted to queue yet pending tractability assessment).
 
-- [ ] **B5.1. Blocker #5 — JSDoc `@param {T}` type extraction (~2-3 tests,
-  LOW risk).** Extend 17.71's `checkJSDocParamTags()` walker (Checker.kt
-  ~7959) to also EXTRACT the `{T}` type expression and bridge it to the
-  parameter's resolved type — 17.71 only validates name-match today. Use
-  the same sub-Parser pattern as 17.58/17.65
-  (`parsePropertyTypeFromJSDoc`); gate to JS-like files. See "Known
-  architectural blockers" §5.
+- [x] **B5.1. Blocker #5 — JSDoc `@param {T}` type extraction (FOUNDATION
+  DONE 2026-05-07 in 17.140, net-zero infra; queue yield estimate of ~2-3
+  tests was overstated — see session note).** Mirror of 17.62's primitive-only
+  `@type` bridge for var-decls. New `parseJSDocParamPrimitiveTypeMap`
+  walker (Parser.kt) builds a `name → KeywordTypeNode(pos=-1, end=-1)` map
+  by walking function leading comments for `@param {T} name` tags where T
+  is one of `string`/`number`/`boolean`/...; companion
+  `applyJSDocParamPrimitiveTypes(params, comments)` populates un-annotated
+  Identifier-named params, marking with new `typeFromJSDoc: Boolean` flag
+  on Parameter (Ast.kt). Wired into `parseFunctionDeclarationOrExpression`,
+  `parseFunctionExpression`, `parseConstructor`, and the MethodDeclaration
+  branch of class-member parsing. Spec called for full sub-Parser
+  (`parsePropertyTypeFromJSDoc`) but primitive-only is the safer first
+  substep — it avoids 17.61's position-rewriting revert risk (synthetic
+  `KeywordTypeNode` has no name to resolve, no TS2503/TS2304 with garbled
+  positions). The candidate target `jsdocTypeCast_ts` lights 2 of 3
+  expected TS2322s post-bridge but adds 1 FP on the inner
+  `/** @type {T} */ (expr)` JSDoc cast pattern — this requires a separate
+  ParenthesizedExpression bridge (B5.2 or similar follow-on, deferred).
+  Foundation for full sub-Parser extension: would need `typeFromJSDoc`
+  gates wherever `param.type` is walked for unresolved-name diagnostics
+  (mirror of 17.65's `decl.typeFromJSDoc` gate in
+  `checkUnresolvedInStatement`). See "Known architectural blockers" §5.
 
 - [ ] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
   type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).**
@@ -2734,6 +2750,68 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (17.140, 8544 unchanged — B5.1 foundation, net-zero)
+  — JSDoc `@param {primitive} name` bridge for parameters in JS-like files.**
+  Continuation after 17.139. Picked B5.1 as next unchecked blocker substep.
+
+  **Target hunt.** Searched the failure XMLs for tests with `@param
+  {primitive}` patterns; only `jsdocTypeCast_ts` matched the narrow gate.
+  Source: `/** @param {string} x */ function f(x) { /** @type {'a'|'b'} */
+  let a = (x); /** @type {'a'|'b'} */ let b = (((x))); /** @type {'a'|'b'} */
+  let c = /** @type {'a'|'b'} */ (x); }`. Expected 2 TS2322s on lines
+  6 and 10 (no inner cast → string vs literal-union mismatch); line 14
+  has an inner `/** @type {T} */ (x)` JSDoc cast suppressing the outer
+  error (TypeScript flow). Currently producing zero diagnostics because
+  `x` resolves to anyType (no `@param` bridge yet — that's B5.1).
+
+  **Implementation.** Mirror of 17.62's primitive-only `@type` bridge for
+  VariableDeclaration but applied to Parameter:
+  - `parseJSDocParamPrimitiveTypeMap(comments)` (Parser.kt ~4933): walks
+    each `MultiLineComment` starting with `/**`, parses `@param` tags
+    with brace-balanced `{T}` content, optional `[name]` brackets, and
+    Identifier name. Returns null when no primitive-typed entries match.
+    Allowlist via existing `primitiveKeywordKindFor` —
+    `string`/`number`/`boolean`/`any`/`unknown`/`never`/`void`/`undefined`/
+    `null`/`bigint`/`symbol`/`object`. Each entry maps to a synthetic
+    `KeywordTypeNode(pos=-1, end=-1)` (same shape as 17.62 var-decls).
+  - `applyJSDocParamPrimitiveTypes(params, comments)` (Parser.kt ~5005):
+    returns `params.map { p -> if p.type==null && p.name is Identifier &&
+    map[p.name.text]!=null) p.copy(type=..., typeFromJSDoc=true) else p }`.
+    First-write-wins: if multiple `@param` tags name the same parameter,
+    only the first applies.
+  - New `typeFromJSDoc: Boolean = false` flag on Parameter data class
+    (Ast.kt) — marks the synthetic origin so position-bearing diagnostic
+    walkers skip the type. TS8010 walker is already gated by `length <=
+    0` (synthetic pos=-1/end=-1 → length=0), so no explicit gate needed.
+  - Wired into `parseFunctionDeclarationOrExpression` (Parser.kt ~1432),
+    `parseFunctionExpression` (~4416), `parseConstructor` (~1742), and
+    the MethodDeclaration branch of class-member parsing (~1684).
+    `parseArrowFunction` not wired — its leading comments aren't readily
+    available at the entry (would need a separate `comments` parameter
+    threaded from parent).
+
+  **Verification.**
+  - Targeted run on `jsdocTypeCast_ts`: produced 3 diagnostics (2 expected
+    + 1 FP at line 14). The line-14 FP is from the inner
+    `/** @type {'a'|'b'} */ (x)` JSDoc type-cast pattern: with `x: string`
+    (B5.1 bridge), the inner `(x)` evaluates to `string`, the outer
+    `let c: 'a'|'b'` rejects it. TypeScript suppresses the outer error
+    because the inner JSDoc cast retypes `(x)` to `'a'|'b'`. Implementing
+    this requires a ParenthesizedExpression-level bridge (B5.2 or
+    similar) — out of scope for B5.1's "primitive @param" decomposition.
+    Test still fails (was failing before; was producing 0 of 2 expected,
+    now 2 of 3 expected with 1 FP) — net-zero on pass count.
+  - Full-suite run after wiring all 4 sites: 10078 tests, 1531 failed,
+    3 skipped — identical to baseline. Zero regressions.
+
+  **B5.1 marked done (foundation landed).** The full sub-Parser extension
+  (handling `'a'|'b'` literal unions, named refs, function types, etc.)
+  needs `typeFromJSDoc` gates wherever `param.type` is walked for
+  position-bearing diagnostics — mirror of 17.65's
+  `decl.typeFromJSDoc` gate in `checkUnresolvedInStatement`. Future
+  substep should do this incrementally, validating each gate addition
+  doesn't FP.
 
   **Session 2026-05-07 (17.139, 8544 unchanged — B1.1 foundation, net-zero)
   — Narrow Union receivers in `computeRawTypeOfPropertyAccess` via

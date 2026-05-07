@@ -1428,7 +1428,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             null
         }
         val typeParams = parseTypeParametersOpt()
-        val params = parseParameterList()
+        val rawParams = parseParameterList()
+        // 17.140: in JS-like files, bridge JSDoc `@param {primitive} name` tags
+        // to parameter types when the parameter is un-annotated.
+        val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val savedAsync = inAsyncContext
         inAsyncContext = ModifierFlag.Async in modifiers
@@ -1678,7 +1681,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         return if (token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan) {
             // Method
             val typeParams = parseTypeParametersOpt()
-            val params = parseParameterList()
+            val rawParams = parseParameterList()
+            // 17.140: JSDoc `@param {primitive} name` bridge for class MethodDeclaration.
+            val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
             val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             val savedAsync = inAsyncContext
             inAsyncContext = ModifierFlag.Async in modifiers
@@ -1735,7 +1740,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                     code = 1092, overrideStart = ltPos + 1, overrideLength = 0)
             }
         }
-        val params = parseParameterList()
+        val rawParams = parseParameterList()
+        // 17.140: JSDoc `@param {primitive} name` bridge for Constructor.
+        val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
         }
@@ -4409,7 +4416,9 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val asterisk = parseOptional(SyntaxKind.Asterisk)
         val name = if (isIdentifier()) parseIdentifier() else null
         val typeParams = parseTypeParametersOpt()
-        val params = parseParameterList()
+        val rawParams = parseParameterList()
+        // 17.140: JSDoc `@param {primitive} name` bridge for FunctionExpression.
+        val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val savedAsync = inAsyncContext
         inAsyncContext = ModifierFlag.Async in modifiers
@@ -4928,6 +4937,95 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             return KeywordTypeNode(kind = kind, pos = -1, end = -1)
         }
         return null
+    }
+
+    // 17.140: JSDoc `@param {T} name` extraction for parameters in JS-like files.
+    // Mirrors 17.62's primitive-only `@type` bridge for var-decls — only primitive
+    // keyword types (`string`/`number`/`boolean`/...) yield a synthetic
+    // `KeywordTypeNode(pos=-1, end=-1)`. Non-primitive types (named refs, unions,
+    // function types) bail to null. Returns a name → TypeNode map; callers apply
+    // each entry to the matching Parameter when its `type` field is null.
+    //
+    // Conservative gate (primitive-only) avoids 17.61's revert risk: a sub-Parser
+    // TypeNode pointing at JSDoc-internal positions would emit name-resolution
+    // diagnostics with garbled squiggles. Primitives have no name — no risk.
+    private fun parseJSDocParamPrimitiveTypeMap(comments: List<Comment>?): Map<String, TypeNode>? {
+        if (!isJsLikeFile || comments.isNullOrEmpty()) return null
+        var map: MutableMap<String, TypeNode>? = null
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (idx < ct.length) {
+                val tagIdx = ct.indexOf("@param", idx)
+                if (tagIdx < 0) break
+                val afterTag = if (tagIdx + 6 < ct.length) ct[tagIdx + 6] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') {
+                    idx = tagIdx + 6
+                    continue
+                }
+                var i = tagIdx + 6
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '\n' || ct[i] == '\r' || ct[i] == '*')) i++
+                // Optional `{T}` brace-balanced type expression.
+                var typeText: String? = null
+                if (i < ct.length && ct[i] == '{') {
+                    val typeStart = i + 1
+                    var depth = 1; i++
+                    while (i < ct.length && depth > 0) {
+                        when (ct[i]) {
+                            '{' -> depth++
+                            '}' -> depth--
+                        }
+                        if (depth == 0) break
+                        i++
+                    }
+                    if (i < ct.length && ct[i] == '}') {
+                        typeText = ct.substring(typeStart, i).trim()
+                        i++
+                    }
+                }
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                // Optional `[name]` brackets.
+                val hasBrackets = i < ct.length && ct[i] == '['
+                if (hasBrackets) i++
+                val nameStart = i
+                while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                val name = ct.substring(nameStart, i)
+                idx = i
+                if (name.isEmpty() || typeText == null) continue
+                // Skip nested name (`@param obj.foo`) — not a top-level parameter binding.
+                if (i < ct.length && ct[i] == '.') continue
+                val kind = primitiveKeywordKindFor(typeText) ?: continue
+                if (map == null) map = mutableMapOf()
+                if (name !in map!!) {
+                    map[name] = KeywordTypeNode(kind = kind, pos = -1, end = -1)
+                }
+            }
+        }
+        return map
+    }
+
+    /** Apply JSDoc `@param {primitive} name` types to params whose `type` is null,
+     *  matched by Identifier name. Non-Identifier param names (destructuring) are
+     *  preserved unchanged. Returns the original list when no JSDoc primitives match. */
+    private fun applyJSDocParamPrimitiveTypes(
+        params: List<Parameter>, comments: List<Comment>?,
+    ): List<Parameter> {
+        val map = parseJSDocParamPrimitiveTypeMap(comments) ?: return params
+        var changed = false
+        val out = params.map { p ->
+            if (p.type != null) p
+            else {
+                val name = (p.name as? Identifier)?.text
+                val t = name?.let { map[it] }
+                if (t != null) {
+                    changed = true
+                    p.copy(type = t, typeFromJSDoc = true)
+                } else p
+            }
+        }
+        return if (changed) out else params
     }
 
     private fun primitiveKeywordKindFor(typeText: String): SyntaxKind? = when (typeText) {
