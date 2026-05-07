@@ -1,6 +1,35 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,550 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,551 / 10,078 tests passing (~85%).
+
+**17.149 (2026-05-07, +1, closes B5.6)** — TS6205 for all-unused multi-id
+JSDoc `@template` tags + body `@type {T}` JSDoc usage tracking. Flips
+`unusedTypeParameters_templateTag2_ts`. Two-piece change in Checker.kt:
+- **Piece 1 (TS6205)**: `reportUnusedTypeParams` now records each tag's
+  span end (`tagSpanEnd[tagPos]`) alongside sibling/unused counts. Before
+  the per-identifier emission loop, walks tag groups with
+  `siblingCount >= 2 && unusedCount == siblingCount` and emits a single
+  TS6205 ("All type parameters are unused.") with the full tag span
+  (e.g. `@template T,V`). The covered tags are recorded in
+  `coveredByTs6205: MutableSet<Int>` so the per-identifier loop skips
+  declarations whose `jsDocTagPos` is in that set — no double emission.
+- **Piece 2 (body `@type {T}`)**: new
+  `collectTypeRefsFromJSDoc(comments, scope)` helper walks
+  `MultiLineComment` entries starting with `/**` for `@type` tags
+  (rejecting partial-identifier matches like `@typedef`), then for each
+  tag scans the brace-balanced content adding every identifier-like
+  token to `scope.referencedNames`. Wired in two places: per-class-member
+  iteration in `checkUnusedInClass` (covers PropertyDeclaration `@type`)
+  and inside `collectTypeRefsInStatement` (covers `@type` on body
+  statements like `/** @type {T} */ this.p;`). Helper is tpScope-only by
+  call-site discipline — non-TP unused-decl scopes don't traverse it.
+
+Net delta: 1525 → 1524 failed (8550 → 8551 passing). Zero regressions.
+Closes the B5.x JSDoc `@template` family for the named targets — the
+remaining wider patterns (`@template T extends Constraint`, `@template
+T = Default`, InterfaceDeclaration / TypeAliasDeclaration sites,
+constraint TypeNode synthesis) are deferred until a specific failing
+test demands them.
 
 **17.148 (2026-05-07, +1, closes B5.5 single-id case)** — Custom
 `@template` span for TS6133 on JSDoc-derived TypeParameters. Flips
