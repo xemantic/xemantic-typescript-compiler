@@ -2550,16 +2550,25 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`. See
   "Known architectural blockers" §6.
 
-- [ ] **B1.2. Blocker #1 — Flow-graph definite-assignment recursing into
-  `IfStatement` body (1-2 tests, MEDIUM risk; tread carefully).** 17.30a's
-  `checkDefiniteAssignmentViaFlowGraph` walker doesn't recurse into
-  `IfStatement` then/else blocks (skip-log on `nestedLoopTypeGuards_ts`
-  was flipped 17.30a but adjacent patterns remain). Extend the walker to
-  descend into branch bodies, restricting to `antecedents[0]` for OR-
-  semantics walks per the FlowLoopLabel back-edge invariant (CLAUDE.md
-  "FlowLoopLabel.antecedents[1+]" gotcha — 17.1c snapshot/restore
-  attempt regressed -7). Test coverage: rewrite + full-suite verify
-  before declaring safe.
+- [x] **B1.2. Blocker #1 — Flow-graph definite-assignment recursing into
+  `IfStatement` body (1-2 tests, MEDIUM risk; tread carefully). ALREADY
+  DONE in 17.30a (2026-04-26).** `walkStmtForFlowTS2454` (Checker.kt:6413)
+  already recurses into `IfStatement.thenStatement` and `elseStatement`
+  with `inUncheckedBody = true` since the original 17.30a commit; the
+  flow-graph walker `walkExprForFlowTS2454` then queries `isAssignedAtFlow`
+  per identifier. The 17.30a flip of `nestedLoopTypeGuards_ts` itself
+  required the IfStatement-body recursion to work. Top-level extension
+  via `runFlowTS2454OnTopLevel` was added in 17.46d. The B1.2 description
+  was stale at the time of the 64ec09a queue restructure (which promoted
+  blockers without cross-checking implementation status — the same
+  pattern as B3.1, marked done in 13a1e19). Adjacent IfStatement-body
+  TS2454 patterns that still fail today are blocked on either type-guard
+  recognition gaps (instanceof/Array.isArray/x.constructor — 17.46a
+  installed several patterns; 17.45 reverted as -9 net regression) or
+  separate Blocker #1 substeps (FlowLoopLabel back-edge invariant per
+  CLAUDE.md gotcha; 17.1c regression confirmed the snapshot/restore
+  approach is wrong, hence the antecedents[0]-only conservatism in
+  current code).
 
 - [x] **B3.1. Blocker #3 — Per-file scope construction helper, NO behavior
   change yet (0 tests, LOWEST risk for prep step). ALREADY DONE in
@@ -2695,6 +2704,123 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (queue-maint + skip-log audit, 8540 unchanged
+  — 0 code changes; queue + audit-trail bookkeeping only):**
+  Continuation /loop after the 17.135 + 3-revert session. Confirmed
+  baseline 8540 via fresh full-suite (1535 failed, 3 skipped). Per
+  anti-loop rule on 0/0/0 from `find_candidates.py --fresh` (filtered
+  from 6/77/19), audited the 6 promoted blocker substeps in QUEUE
+  before attempting:
+
+  1. **B1.2 already done in 17.30a** — verified `walkStmtForFlowTS2454`
+     (Checker.kt:6413) recurses into IfStatement.thenStatement /
+     elseStatement with `inUncheckedBody = true` since the original
+     17.30a commit. The B1.2 description was stale at the time of the
+     64ec09a queue restructure (same pattern as B3.1, marked done in
+     13a1e19). Marked B1.2 `[x]` with retrospective note pointing at
+     17.30a + 17.46d; remaining adjacent IfStatement-body TS2454
+     patterns are gated on type-guard recognition gaps (17.46a installed
+     several; 17.45 reverted as -9 net) or the FlowLoopLabel back-edge
+     invariant per CLAUDE.md gotcha.
+
+  2. **B1.1 / B2.1 / B5.1 / B6.1 — confirmed all attempted/blocked**
+     across the 17.135 + post-17.135 sessions. Per the post-17.135
+     session note: B1.1's `&&`-narrowing isn't needed in our checker
+     (`getTypeOfBinaryExpression` returns RHS for `&&` — verified per
+     17.30c session note); B2.1's main piece landed in 17.31a-f / 17.37
+     / 17.38, residual is multi-TypeParam-bipartition (out of scope
+     per autonomous-decision policy); B5.1 needs sub-Parser TypeNode
+     position-reparenting (per 17.61 revert); B6.1 needs B2.1's
+     contextual-typing-through-generics infrastructure. None of these
+     have a tractable single-substep path forward in this session's
+     budget without re-treading reverted work.
+
+  3. **Spot-checked individual MISS / SWAP candidates from
+     `find_candidates.py` (without --fresh)** to ensure the [SKIP]
+     filtering wasn't masking new tractable wins:
+     - `arrayAssignmentTest4_ts` (SWAP "and 25 more" vs "and 29 more")
+       — confirmed lib-version drift per existing skip-log entry at
+       L6651. `Array<T>` in our embedded lib has 33 named props
+       (post-OBJECT_PROTOTYPE filter); ES2015 baseline expects 29.
+       Removing 4 ES2016+ methods (includes/flat/flatMap/at/findLast/
+       findLastIndex) would risk regressing every test that uses them.
+     - `intraBindingPatternReferences_ts` (EXTRA TS7006 @ (18,54)) —
+       requires propagating contextual type from object-literal binding-
+       pattern's `fn1 = (x:number)=>0` default through to the matching
+       initializer's `fn1: x => x+1` arrow. Same family as B6.1 — the
+       TS7006 over-fire is structural, not surgical.
+     - `errorMessageOnIntersectionsWithDiscriminants01_ts` (SWAP TS2322
+       display) — needs alias-name display for type aliases AND
+       discriminant-narrowing during error elaboration AND intersection-
+       vs-intersection property elaboration AND TS2728 related info.
+       Multi-piece, blocker-adjacent.
+     - `nodeNextModuleResolution1_ts` (MISS TS2307) — requires
+       NodeNext-aware resolver that rejects `node_modules/foo.d.ts`
+       lookups without a proper `package.json` exports/main field.
+       Architectural at moduleResolution layer.
+     - `isolatedDeclarationsAllowJs_ts` (MISS TS5053 + TS9010 + TS9027)
+       — TS5053 alone is a single-line config-conflict check (tractable),
+       but TS9010 ("Variable must have an explicit type annotation
+       with --isolatedDeclarations") is a new diagnostic family the
+       checker hasn't implemented. Adding only TS5053 wouldn't flip
+       the test (still missing TS9010). Logged for future implementation
+       grouped with other TS9xxx isolated-declarations diagnostics.
+
+  4. **Skip-log audit (MAINT-1, ad-hoc spot via cross-XML script)**:
+     audit script identified 54 skip-log entries that correspond to
+     CURRENTLY-PASSING tests (no failing variants in the suite):
+     `aliasDoesNotDuplicateSignatures_ts`, `arrayAssignmentTest5_ts`,
+     `assignmentCompatWithOverloads_ts`,
+     `assignmentCompatability35/36/45_ts`,
+     `circularConstraintYieldsAppropriateError_ts`,
+     `contextualSignatureInstatiationContravariance_ts`,
+     `contextualTyping11_ts`, `declarationEmitInvalidExport_ts`,
+     `discriminantOrderIndependence_ts`,
+     `discriminantPropertyCheck_ts`, `functionArgShadowing_ts`,
+     `functionSignatureAssignmentCompat1_ts`,
+     `functionTypeArgumentAssignmentCompat_ts`,
+     `functionsWithImplicitReturnTypeAssignableToUndefined_ts`,
+     `genericCloneReturnTypes/2_ts`,
+     `genericConstraintSatisfaction1_ts`,
+     `genericFunctionCallSignatureReturnTypeMismatch_ts`,
+     `genericFunctionsWithOptionalParameters2_ts`,
+     `genericSpecializations2/3_ts`,
+     `genericTypeAssertions1/2_ts`, `generics4_ts`,
+     `implicitAnyCastedValue_ts`,
+     `instanceofWithStructurallyIdenticalTypes_ts`,
+     `interfaceImplementation8_ts`,
+     `jsFileCompilationLetDeclarationOrder2_ts`,
+     `narrowingByDiscriminantInLoop_ts`,
+     `narrowingTypeofDiscriminant_ts`,
+     `narrowingUnionToNeverAssigment_ts`, `nativeToBoxedTypes_ts`,
+     `nestedLoopTypeGuards_ts`, `nonexistentPropertyOnUnion_ts`,
+     `partiallyDiscriminantedUnions_ts`, `returnTypeParameter_ts`,
+     `signatureLengthMismatchCall_ts`,
+     `simpleRecursionWithBaseCase1_ts`, `superCallArgsMustMatch_ts`,
+     `superWithTypeArgument2_ts`,
+     `truthinessCallExpressionCoercion/1/2_ts`,
+     `typeArgumentConstraintResolution1_ts`,
+     `typeAssertionToGenericFunctionType_ts`,
+     `typeGuardConstructorClassAndNumber/DerivedClass/NarrowPrimitivesInUnion/PrimitiveTypes_ts`,
+     `uncalledFunctionChecksInConditional_ts`, `unknownSymbols1_ts`,
+     `widenToAny1_ts`. **Practical impact: ZERO** — `find_candidates.py`
+     only iterates `tc.find("failure") is not None`, so passing tests
+     never appear in the candidate list regardless of skip-log status;
+     the [SKIP] tag is irrelevant for them. The 118 partially-passing
+     entries (some parameterized variants pass, others fail) ARE
+     potentially worth auditing per-variant for stale-reason masking,
+     but the per-test re-run cost (~10s × 118 = 20+ min) exceeds this
+     session's budget and likely value. NOT applying strikethroughs to
+     the 54 stale entries this session — the cleanup is cosmetic and
+     would be a large diff with no behavioral effect; deferring to a
+     future dedicated session if warranted.
+
+  Net delta this session: 0 tests, 0 code changes. Queue maintenance:
+  B1.2 marked `[x]` with retrospective note. Remaining unchecked
+  blocker substeps (B1.1, B2.1, B5.1, B6.1) all have documented
+  attempts/blockers in prior session notes. Findings preserved here
+  so future sessions don't re-tread the same paths.
 
   **Session 2026-05-06 (post-17.135 attempts, 8540 unchanged — three
   reverted approaches documented):** Continuation /loop after 17.135.
