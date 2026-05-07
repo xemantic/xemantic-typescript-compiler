@@ -2600,11 +2600,19 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   FunctionExpression → ctx=false`) preserves union-ambiguity emissions
   while suppressing object-literal-wrapped callbacks.
 
+  **17.143 (2026-05-07) — closes test 2 (+1, flips
+  `intraBindingPatternReferences_ts`).** Specialized destructuring-default
+  walker for `VariableDeclaration` whose name is `ObjectBindingPattern` and
+  initializer is `ObjectLiteralExpression`. Binding elements whose
+  initializer is a typed function (all params annotated, checked via new
+  `isTypedFunctionExpr` helper) supply a contextual signature for the
+  matched RHS property — those PropertyAssignments walk with `ctx=true`,
+  others stay `ctx=false`. Untyped defaults (bare-identifier references
+  like `fn2 = fn1`, or arrows without annotated params) deliberately
+  remain `ctx=false` to preserve TypeScript's intra-pattern reference
+  semantics. Zero regressions.
+
   **Remaining B6.1 work** (deferred — needs broader infrastructure):
-  - `intraBindingPatternReferences_ts` (1 over-fire on `fn1: x => x + 1`):
-    needs destructuring default `fn1 = (x: number) => 0` to propagate its
-    type into the RHS object literal's `fn1` property — i.e.
-    binding-pattern-default → property contextual typing. Architectural.
   - `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`
     (3 over-fires on `validate: (_t,_p,_s) => false` + 1 expected-but-
     suppressed-by-blanket-fix on `match`): needs full union-with-primitive

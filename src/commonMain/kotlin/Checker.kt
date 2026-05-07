@@ -8442,7 +8442,35 @@ class Checker(
                         }
                         // Check function type annotation: `var f: (x) => string` → TS7006 for `x`
                         checkImplicitAnyInTypeAnnotation(decl.type, source, fileName)
-                        decl.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                        val declName = decl.name
+                        val declInit = decl.initializer
+                        if (declName is ObjectBindingPattern && declInit is ObjectLiteralExpression) {
+                            // Destructuring with a default value that is a typed function:
+                            // `const { fn1 = (x: number) => 0 } = { fn1: x => x + 1 }`.
+                            // The default supplies a contextual signature for the matched
+                            // RHS property — walk those properties with ctx=true so the
+                            // inner arrow's params escape TS7006. Other properties walk
+                            // normally with ctx=false (matches TypeScript's intra-pattern
+                            // reference semantics — e.g. `fn2 = fn1` resolves to any).
+                            val typedDefaults = mutableSetOf<String>()
+                            for (be in declName.elements) {
+                                val beInit = be.initializer ?: continue
+                                if (!isTypedFunctionExpr(beInit)) continue
+                                val key = ((be.propertyName as? Identifier)?.text)
+                                    ?: ((be.name as? Identifier)?.text)
+                                    ?: continue
+                                typedDefaults.add(key)
+                            }
+                            for (prop in declInit.properties) {
+                                if (prop is PropertyAssignment) {
+                                    val propName = (prop.name as? Identifier)?.text
+                                    val ctx = propName != null && propName in typedDefaults
+                                    checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped = ctx)
+                                }
+                            }
+                        } else {
+                            declInit?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                        }
                     }
                 }
                 is ExpressionStatement -> {
@@ -8698,6 +8726,28 @@ class Checker(
         if (currentFileLocals?.containsKey(name) == true) return true
         if (name in KNOWN_GLOBALS) return true
         return false
+    }
+
+    /**
+     * True when `expr` is an arrow / function expression whose parameters all carry
+     * type annotations (or are rest / `this` placeholders). Used by the destructuring-
+     * default branch to decide whether a binding-element's default value supplies a
+     * contextual signature for the matched RHS property.
+     */
+    private fun isTypedFunctionExpr(expr: Expression): Boolean {
+        val params: List<Parameter> = when (expr) {
+            is ArrowFunction -> expr.parameters
+            is FunctionExpression -> expr.parameters
+            else -> return false
+        }
+        for (p in params) {
+            if (p.type != null) continue
+            if (p.dotDotDotToken) continue
+            val pname = p.name
+            if (pname is Identifier && pname.text == "this") continue
+            return false
+        }
+        return true
     }
 
     private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String, contextuallyTyped: Boolean = false) {
