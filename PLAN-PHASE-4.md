@@ -2721,6 +2721,53 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.137a, 8542 → 8543, +1) — Gate TS2793 on
+  `allArgumentsMatch(impl)` in single-overload path + extend
+  `getImplementationSignature` to handle MethodDeclaration + treat free
+  `Type.TypeParam` params as accepting in `allArgumentsMatch`.**
+  Follow-up to 17.137 — `overloadOnConstantsInvalidOverload1_ts` flipped
+  TS2394 in 17.137 but still failed because of an extra TS2793 dangling
+  on `foo("HI")` (impl is `function foo(name: "DIV"): Derived2 {}` which
+  ALSO rejects "HI" since `"HI"` is not assignable to `"DIV"`). Three
+  coordinated changes:
+
+  1. **`checkSingleCallExpressionTypes` `signatures.size == 1` path
+     (Checker.kt ~48361):** added the TS2793 gate that was previously
+     only applied in the generic (~48347) and multi-overload (~48974)
+     paths — see CLAUDE.md "TS2793 conditional on implementation match".
+     Now: `implRelated` is set only when `getImplementationSignature`
+     returns non-null AND `allArgumentsMatch(expr.arguments, implSig)`
+     returns true.
+
+  2. **`getImplementationSignature` (Checker.kt ~48783):** added a
+     `MethodDeclaration` branch using the same `findImplementationInStatements`
+     walker that `getOverloadImplementationRelated` already uses. Without
+     this, the gate above would silently always evaluate to "null implSig
+     → no implRelated" for class methods like
+     `class EventAggregator { publish(event: string, data?: any): void;
+     publish<T>(event: T): void {} }`, regressing
+     `overloadErrorMatchesImplementationElaboaration_ts` (TS2793 expected
+     to fire because the generic impl DOES accept the arg).
+
+  3. **`allArgumentsMatch` (Checker.kt ~49354):** added
+     `if (paramType is Type.TypeParam) continue` after the existing
+     anyType/errorType skip. Without this, generic impls like
+     `<T>(event: T)` would have `paramType = Type.TypeParam(T)` (since
+     17.11c caches this in `symbolTypes` after pushing T into
+     `currentTypeParamScope` during method type construction), and
+     `checkTypeRelatedTo(arrayType, TypeParam(T), assignableRelation)`
+     returns false (Checker.kt:50586 default), making the gate think
+     the impl rejects when in fact TypeScript would have inferred
+     `T = number[]`. Mirrors TypeScript's "free TypeParam matches
+     anything" semantic for the TS2793 gate use case.
+
+  **Test impact:** Flips `overloadOnConstantsInvalidOverload1_ts`
+  (TS2793 no longer dangles on the TS2345). Preserves
+  `overloadErrorMatchesImplementationElaboaration_ts` behavior (TS2793
+  still fires correctly because the impl's free `T` param accepts).
+  Net delta: 1533 → 1532 failed (8542 → 8543 passing). Verified zero
+  regressions via paired-XML diff: exactly +1 / -0.
+
   **Session 2026-05-07 (17.137, 8541 → 8542, +1) — Extend TS2394
   overload-vs-impl compatibility to LiteralType + FunctionType cases +
   "first incompatible per group" cadence.** Continuation /loop after

@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,542 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,543 / 10,078 tests passing (~85%).
+
+**17.137a (2026-05-07, +1)** — Gate TS2793 ("call would have succeeded
+against this implementation") on `allArgumentsMatch(args, implSig)` in
+the single-overload path of `checkSingleCallExpressionTypes`
+(Checker.kt ~48361). Mirrors the existing gate in the generic-overload
+path (~48347) and the multi-overload path (~48974) — see CLAUDE.md
+"TS2793 conditional on implementation match". Three coordinated
+changes: (a) the new gate itself; (b) extend `getImplementationSignature`
+to handle `MethodDeclaration` (previously only handled `FunctionDeclaration`
++ `Constructor`, returning null for methods which would have left the
+gate without enough info to decide); (c) `allArgumentsMatch` now treats
+free `Type.TypeParam` params as accepting (matches TypeScript's
+inference semantics — a generic impl `<T>(event: T)` accepts any arg
+because T would be inferred from the arg type). Flips
+`overloadOnConstantsInvalidOverload1_ts` (call `foo("HI")` against
+`function foo(name: "SPAN"); function foo(name: "DIV") {}` — both
+overload AND impl reject "HI", so TS2793 was a FP); preserves
+`overloadErrorMatchesImplementationElaboaration_ts` behavior (impl is
+`<T>(event: T)` which DOES accept any arg, so TS2793 still fires
+correctly). Net delta: 1533 → 1532 failed (8542 → 8543 passing). Zero
+regressions across 10078-test suite.
 
 **17.137 (2026-05-07, +1)** — Extend `isTypeNodeCompatible` (the
 overload-vs-implementation TS2394 gate, Checker.kt ~41535) to handle three
