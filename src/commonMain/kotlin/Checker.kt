@@ -48357,8 +48357,21 @@ interface DataView {
             }
         }
         if (signatures.size == 1) {
-            // Check if this is an overload with an implementation signature (TS2793)
-            val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
+            // TS2793: only attach "implementation would have succeeded" when the
+            // implementation signature actually accepts these args. Without this
+            // gate, calls like `foo("HI")` against `function foo(name: "SPAN");
+            // function foo(name: "DIV") {}` would dangle a TS2793 hint pointing at
+            // an impl that rejects "HI" too. Mirrors the gate already in place for
+            // the generic-overload path (~48347) and the multi-overload path
+            // (~48974) — see CLAUDE.md "TS2793 conditional on implementation match".
+            var implRelated: Diagnostic? = null
+            val implRelatedCandidate = getOverloadImplementationRelated(signatures[0], source, fileName)
+            if (implRelatedCandidate != null) {
+                val implSig = getImplementationSignature(signatures[0], source, fileName)
+                if (implSig != null && allArgumentsMatch(expr.arguments, implSig)) {
+                    implRelated = implRelatedCandidate
+                }
+            }
             checkTs2554ForPropertyAccessCall(expr, signatures[0], source, fileName)
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
@@ -48759,6 +48772,30 @@ interface DataView {
                     !it.questionToken && !it.dotDotDotToken && it.initializer == null
                 },
             )
+        }
+        // 17.137a: Method overloads — find the impl among sibling methods of the
+        // same class. Mirrors the existing `findImplementationInStatements` walker
+        // used by `getOverloadImplementationRelated`. Used as the TS2793 gate so
+        // tests like `overloadErrorMatchesImplementationElaboaration` (impl is
+        // generic `<T>(event: T)`) get a non-null implSig — the existing fallback
+        // returned null for methods, leaving the TS2793 gate without enough info.
+        if (overloadDecl is MethodDeclaration) {
+            val methodName = (overloadDecl.name as? Identifier)?.text ?: return null
+            for (result in binderResults) {
+                if (result.sourceFile.fileName != fileName) continue
+                val implDecl = findImplementationInStatements(
+                    result.sourceFile.statements, methodName, overloadDecl,
+                ) ?: continue
+                val returnType = implDecl.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                return Signature(
+                    declaration = implDecl,
+                    parameters = getParameterSymbols(implDecl.parameters),
+                    resolvedReturnType = returnType,
+                    minArgumentCount = implDecl.parameters.count {
+                        !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                    },
+                )
+            }
         }
         // 17.91: Constructor overloads — find the FIRST impl among sibling constructors
         // in the containing class. Used as the TS2793 "would have succeeded" gate.
@@ -49365,6 +49402,16 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
+            // 17.137a: Free Type.TypeParam accepts any arg under TypeScript's
+            // inference semantics (T would simply be inferred as the arg type).
+            // Used by TS2793 gates that ask "would the impl signature have
+            // accepted these args?" — the impl `<T>(event: T)` accepts anything.
+            // Constrained TypeParams ALSO accept here conservatively; the relation
+            // engine doesn't return useful results for `Source vs TypeParam(C)`
+            // without a full instantiation pass, so erring toward "match" matches
+            // pre-17.137a behavior for the TS2793 path (always emit) for generic
+            // impls.
+            if (paramType is Type.TypeParam) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
