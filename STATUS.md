@@ -1,6 +1,40 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,548 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,549 / 10,078 tests passing (~85%).
+
+**17.146 (2026-05-07, +1, closes B5.3)** — JSDoc `@template T` parser
+bridge for ClassDeclaration in JS-like files. Stacks on 17.145's B5.2
+to flip `jsdocClassMissingTypeArguments_ts`. New
+`parseJSDocTemplateTypeParams(comments)` helper (Parser.kt) walks
+`/** @template T */` (or comma-separated `@template T,U`) tags from a
+declaration's leading comments and returns synthetic
+`TypeParameter(name=Identifier, fromJSDoc=true)` nodes with absolute
+source positions: `comment.pos + offset_within_comment_text` for the
+identifier name. Also handles the optional `{Constraint}` brace block
+(skipped, not parsed). Wired into `parseClassDeclaration` (uses JSDoc
+template params only when no TS-level `<T>` was parsed).
+
+Companion: new `fromJSDoc: Boolean = false` flag on `TypeParameter`
+data class (Ast.kt). Updated 2 of the 4 TS8004 emission sites
+(`is FunctionDeclaration` and `is ClassDeclaration` branches in
+`checkTsSyntaxInStatementCore`) to skip JSDoc-derived type params via
+`firstOrNull { !it.fromJSDoc }`. Without this, the synthetic `T` would
+fire spurious "Type parameter declarations can only be used in
+TypeScript files" inside the JSDoc comment.
+
+For the candidate test, `getTypeParamInfo("C")` now returns
+`(1, 1, "C<T>")` (was `(0, 0, "C")` per 17.145's debug println), so
+when 17.145's B5.2 bridge produces `@param {C} p` →
+`TypeReference(C, no type args)`, `checkTypeArgCount` finds
+`providedCount=0 != maxTotal=1` and emits TS2314 at (4,13). Net delta:
+1527 → 1526 failed (8548 → 8549 passing). Zero regressions across
+10078-test suite. Closes B5.3 with the named target flipped.
+
+Wider B5.3 patterns (constraints, defaults, MethodDeclaration,
+InterfaceDeclaration, TypeAliasDeclaration, FunctionDeclaration in JS
+files) and the other 2 TS8004 sites (MethodDeclaration / ClassExpression)
+remain on the bare-identifier scope only — extending requires another
+substep with regression budget for each new wiring point.
 
 **17.145 (2026-05-07, net-zero, B5.2 foundation)** — JSDoc `@param {T}`
 non-primitive single-Identifier bridge. Extends 17.140's primitive-only

@@ -2610,22 +2610,39 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   QualifiedName, function types in `@param {T}`) are deferred — each needs
   position rewriting on nested TypeNodes which 17.61 showed is invasive.
 
-- [ ] **B5.3. Blocker #5 — JSDoc `@template T` parser bridge (target ~1-3
-  tests, MEDIUM risk).** Stacks on B5.2 to flip
-  `jsdocClassMissingTypeArguments_ts`. Walks `/** @template T */` (or
-  `/** @template T,U */` / `/** @template {Constraint} T */`) in a
-  declaration's leadingComments, builds `List<TypeParameterDeclaration>`
-  with absolute positions (mirror of 17.140's bridge), copies onto the
-  class / interface / type alias / function declaration's `typeParameters`
-  list. JS-like files only. Conservative gate: simple `@template Identifier`
-  pattern; constraints / defaults / multiple-on-one-line are follow-on
-  scope. Test target: `jsdocClassMissingTypeArguments_ts` — expected
-  TS2314 at (4,13) requires class C to have 1 type param so
-  `getTypeParamInfo("C")` returns `(1, 1, "C<T>")` instead of `(0, 0, "C")`
-  and the count-mismatch (provided=0, max=1) fires TS2314. Verified path
-  via debug println in 17.145 session (B5.2 lookup path is correct;
-  `getTypeParamInfo` returns null type-param count without `@template`
-  parsing).
+- [x] **B5.3. Blocker #5 — JSDoc `@template T` parser bridge for
+  ClassDeclaration (DONE 2026-05-07 in 17.146, +1 — flips
+  `jsdocClassMissingTypeArguments_ts`).** Stacks on B5.2's `@param {C} p`
+  bridge to provide the matching class-side type-parameter declaration.
+  Implementation:
+  - **Parser.kt** (`parseJSDocTemplateTypeParams`): walks `/** @template T */`
+    or `@template T,U` tags from leading comments. Skips a possible
+    `{Constraint}` brace block (not parsed — out of scope). Returns synthetic
+    `TypeParameter(name=Identifier, fromJSDoc=true, pos=ABS, end=ABS)`
+    nodes with absolute source positions. JS-like files only.
+  - **Parser.kt** (`parseClassDeclaration`): uses JSDoc template params via
+    `parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)` when no
+    TS-level `<T>` is present.
+  - **Ast.kt** (`TypeParameter`): new `fromJSDoc: Boolean = false` flag.
+  - **Checker.kt** (`checkTsSyntaxInStatementCore`): TS8004 emission for
+    FunctionDeclaration and ClassDeclaration now uses `firstOrNull
+    { !it.fromJSDoc }` so synthetic type params from JSDoc don't fire
+    "Type parameter declarations can only be used in TypeScript files."
+    Without this, the test failed with EXTRA TS8004 at (1,15) before
+    landing.
+
+  **Verification.** Targeted test passes; full-suite 10078/1526/3 (was
+  10078/1527/3, +1 net). Zero regressions. Closes B5.3 for the named
+  target. Wider patterns deferred:
+  - `@template T extends Constraint` parsing (constraint TypeNode synthesis)
+  - `@template T = Default` parsing
+  - InterfaceDeclaration / TypeAliasDeclaration / FunctionDeclaration sites
+  - The other 2 TS8004 emission sites (MethodDeclaration ~57096,
+    ClassExpression ~57216) — currently still emit TS8004 for any
+    typeParameters; those declaration kinds don't yet receive synthetic
+    JSDoc type params (`parseClassExpression` doesn't bridge JSDoc), so
+    no regression today, but if a future substep wires a method-level
+    bridge those sites also need the `fromJSDoc` filter.
 
 - [x] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
   type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).
@@ -2829,6 +2846,53 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (17.146, 8548 → 8549, +1 — closes B5.3) — JSDoc
+  `@template T` parser bridge for ClassDeclaration.** Stacks on 17.145's
+  B5.2 bridge in the same session. After 17.145 landed B5.2 as foundation
+  (the `jsdocClassMissingTypeArguments_ts` target needed BOTH `@param {C} p`
+  AND `@template T` parsing to flip), continued with the natural follow-on.
+
+  **Implementation.**
+  - **Parser.kt** new `parseJSDocTemplateTypeParams(comments)` (~5092 in
+    Parser.kt): walks `/** @template T */` or `@template T,U` tags. Per
+    tag, skips an optional `{Constraint}` brace block (not parsed — out of
+    scope), then reads one or more comma-separated bare identifiers on the
+    same line. For each identifier produces a `TypeParameter(name=Identifier,
+    fromJSDoc=true, pos=ABS, end=ABS)` with absolute source positions
+    (`comment.pos + offset_of_name_in_comment_text`). JS-like files only.
+  - **Parser.kt** `parseClassDeclaration` (~1460): when no TS-level `<T>`
+    is parsed (`parsedTypeParams == null`), uses `parseJSDocTemplateTypeParams(comments)`
+    instead. Renamed local var to `parsedTypeParams` to disambiguate.
+  - **Ast.kt** `TypeParameter`: new `fromJSDoc: Boolean = false` flag.
+  - **Checker.kt** TS8004 emission gated: 2 of 4 sites
+    (`is FunctionDeclaration` ~56951 and `is ClassDeclaration` ~56984)
+    now use `typeParameters?.firstOrNull { !it.fromJSDoc }` so synthetic
+    type params don't fire "Type parameter declarations can only be used
+    in TypeScript files" inside JSDoc comments. The other 2 sites
+    (MethodDeclaration ~57096, ClassExpression ~57216) don't yet receive
+    JSDoc type params from the parser, so no regression today but they
+    need the same filter when wired in future.
+
+  **Trace through.** `jsdocClassMissingTypeArguments_ts` source:
+  `/** @template T */ class C {}` then `/** @param {C} p */ function f(p) {}`.
+  After B5.2 (17.145): `param.type = TypeReference(name=Identifier("C", pos=43))`.
+  Walker calls `checkTypeArgCount` → `getTypeParamInfo("C")`. Pre-17.146:
+  returned `TypeParamInfo(0, 0, "C")` because class C had no typeParameters.
+  Post-17.146: returns `TypeParamInfo(1, 1, "C<T>")`, count-mismatch
+  fires TS2314 at (4,13). Test flips clean.
+
+  **Verification.** Full-suite run: 10078 tests, 1526 failed, 3 skipped.
+  Net delta 1527 → 1526 (+1 — flips `jsdocClassMissingTypeArguments_ts`).
+  Zero regressions.
+
+  **Cumulative session yield.** 17.145 (B5.2 foundation, net-zero) +
+  17.146 (B5.3, +1) — landed two architectural-blocker substeps in one
+  session. B5.4-B5.7 candidates promoted as follow-ons via the B5.3
+  queue note: extending `@template` to InterfaceDeclaration /
+  TypeAliasDeclaration / FunctionDeclaration / MethodDeclaration sites,
+  plus `{Constraint}` parsing, plus broader B5.2 patterns (Union types,
+  `Array<T>` syntax, QualifiedName).
 
   **Session 2026-05-07 (17.145, 8548 unchanged — B5.2 foundation, net-zero)
   — JSDoc `@param {T}` non-primitive single-Identifier bridge.** Continuation

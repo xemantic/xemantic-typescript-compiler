@@ -56948,10 +56948,10 @@ interface DataView {
                         emitTs8xxx(nameNode, "Signature declarations can only be used in TypeScript files.", 8017, source, fileName)
                     }
                 } else {
-                    // Check type parameters (TS8004)
-                    if (!stmt.typeParameters.isNullOrEmpty()) {
-                        val typeParam = stmt.typeParameters!!.first()
-                        emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                    // Check type parameters (TS8004) — skip JSDoc-derived ones (B5.3)
+                    val firstTsTp = stmt.typeParameters?.firstOrNull { !it.fromJSDoc }
+                    if (firstTsTp != null) {
+                        emitTs8xxx(firstTsTp.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
                     }
                     // Check parameter types (TS8010), optional params (TS8009)
                     checkTsSyntaxInParams(stmt.parameters, source, fileName)
@@ -56981,10 +56981,10 @@ interface DataView {
                         ))
                     }
                 }
-                // Check type parameters (TS8004)
-                if (!stmt.typeParameters.isNullOrEmpty()) {
-                    val typeParam = stmt.typeParameters!!.first()
-                    emitTs8xxx(typeParam.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                // Check type parameters (TS8004) — skip JSDoc-derived ones (B5.3)
+                val firstClassTsTp = stmt.typeParameters?.firstOrNull { !it.fromJSDoc }
+                if (firstClassTsTp != null) {
+                    emitTs8xxx(firstClassTsTp.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
                 }
                 // Check implements clause (TS8005)
                 val hasImplements = stmt.heritageClauses?.any { it.token == SyntaxKind.ImplementsKeyword } == true
