@@ -41319,8 +41319,6 @@ interface DataView {
             val overloads = decls.filter { it.body == null }
             if (overloads.isEmpty()) continue
 
-            // Track reported overloads to skip duplicates
-            val reported = mutableSetOf<Int>()
             for ((idx, overload) in overloads.withIndex()) {
                 // Skip duplicate overloads (same param types as a previously-reported one)
                 if (idx > 0 && isDuplicateOverload(overload, overloads[idx - 1])) continue
@@ -41352,6 +41350,10 @@ interface DataView {
                             length = implNameNode.text.length,
                         )),
                     ))
+                    // TypeScript reports TS2394 once per overload group, on the first
+                    // incompatible signature. Subsequent overloads in the same group
+                    // (whether same root cause or different) are not flagged.
+                    break
                 }
             }
         }
@@ -41460,6 +41462,8 @@ interface DataView {
                             length = implText.length,
                         )),
                     ))
+                    // Match TypeScript's "first incompatible only" behavior per group.
+                    break
                 }
             }
         }
@@ -41530,10 +41534,43 @@ interface DataView {
 
     /**
      * Check if overload return type is compatible with implementation return type.
-     * Conservative: only flag clearly incompatible intrinsic types.
+     * Conservative: returns true unless [overloadType] is clearly NOT assignable to
+     * [implType]. Recognizes:
+     *   - Keyword↔Keyword (different intrinsics → false; any/never escape clauses)
+     *   - LiteralType↔LiteralType (different literal values → false)
+     *   - LiteralType→KeywordType (e.g. `"hi"` is assignable to `string`)
+     *   - KeywordType→LiteralType (e.g. `string` is NOT assignable to `"hi"`)
+     *   - FunctionType↔FunctionType (recursive: contravariant params + covariant return)
      */
     private fun isTypeNodeCompatible(overloadType: TypeNode, implType: TypeNode): Boolean {
-        // Only compare keyword types (number, string, boolean, void, etc.)
+        // LiteralType vs LiteralType: compare wrapped literal values.
+        if (overloadType is LiteralType && implType is LiteralType) {
+            return literalExpressionEquals(overloadType.literal, implType.literal)
+        }
+        // LiteralType (narrower) vs KeywordType (broader): assignable when the literal's
+        // shape matches the keyword (e.g. string-literal → string keyword).
+        if (overloadType is LiteralType && implType is KeywordTypeNode) {
+            return literalAssignableToKeyword(overloadType.literal, implType.kind)
+        }
+        // KeywordType (broader) vs LiteralType (narrower): NOT assignable, unless
+        // the source is `any` or `never` which escape both directions.
+        if (overloadType is KeywordTypeNode && implType is LiteralType) {
+            return overloadType.kind == SyntaxKind.AnyKeyword ||
+                overloadType.kind == SyntaxKind.NeverKeyword
+        }
+        // FunctionType↔FunctionType: recurse with parameter contravariance + return covariance.
+        if (overloadType is FunctionType && implType is FunctionType) {
+            val commonCount = minOf(overloadType.parameters.size, implType.parameters.size)
+            for (i in 0 until commonCount) {
+                val overloadInner = overloadType.parameters[i].type ?: continue
+                val implInner = implType.parameters[i].type ?: continue
+                // Contravariance: impl's inner param must be assignable to overload's inner.
+                if (!isTypeNodeCompatible(implInner, overloadInner)) return false
+            }
+            if (!isTypeNodeCompatible(overloadType.type, implType.type)) return false
+            return true
+        }
+        // Keyword vs Keyword (existing keyword-only logic)
         if (overloadType !is KeywordTypeNode || implType !is KeywordTypeNode) return true
         val overloadKind = overloadType.kind
         val implKind = implType.kind
@@ -41556,6 +41593,43 @@ interface DataView {
     private fun isParamTypeCompatible(overloadType: TypeNode, implType: TypeNode): Boolean {
         // Same logic as return type compatibility for keyword types
         return isTypeNodeCompatible(overloadType, implType)
+    }
+
+    /**
+     * Compare two literal-type expressions for equality. Returns true only when the
+     * AST shapes are the same and their text representations match. The parser maps
+     * `true`/`false`/`null`/`undefined` literals to `Identifier` (see [parsePrimaryExpression]),
+     * and negative numerics to `PrefixUnaryExpression(Minus, NumericLiteralNode)`.
+     */
+    private fun literalExpressionEquals(a: Expression, b: Expression): Boolean {
+        return when {
+            a is StringLiteralNode && b is StringLiteralNode -> a.text == b.text
+            a is NoSubstitutionTemplateLiteralNode && b is NoSubstitutionTemplateLiteralNode -> a.text == b.text
+            a is StringLiteralNode && b is NoSubstitutionTemplateLiteralNode -> a.text == b.text
+            a is NoSubstitutionTemplateLiteralNode && b is StringLiteralNode -> a.text == b.text
+            a is NumericLiteralNode && b is NumericLiteralNode -> a.text == b.text
+            a is BigIntLiteralNode && b is BigIntLiteralNode -> a.text == b.text
+            a is Identifier && b is Identifier -> a.text == b.text
+            a is PrefixUnaryExpression && b is PrefixUnaryExpression ->
+                a.operator == b.operator && literalExpressionEquals(a.operand, b.operand)
+            else -> false
+        }
+    }
+
+    /** Whether a literal-type expression value is assignable to the given keyword type. */
+    private fun literalAssignableToKeyword(literal: Expression, keyword: SyntaxKind): Boolean {
+        return when (keyword) {
+            SyntaxKind.AnyKeyword, SyntaxKind.UnknownKeyword -> true
+            SyntaxKind.StringKeyword ->
+                literal is StringLiteralNode || literal is NoSubstitutionTemplateLiteralNode
+            SyntaxKind.NumberKeyword ->
+                literal is NumericLiteralNode ||
+                (literal is PrefixUnaryExpression && literal.operand is NumericLiteralNode)
+            SyntaxKind.BooleanKeyword ->
+                literal is Identifier && (literal.text == "true" || literal.text == "false")
+            SyntaxKind.BigIntKeyword -> literal is BigIntLiteralNode
+            else -> true // unknown — conservative
+        }
     }
 
     // -----------------------------------------------------------------------

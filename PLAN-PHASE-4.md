@@ -2721,6 +2721,78 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.137, 8541 → 8542, +1) — Extend TS2394
+  overload-vs-impl compatibility to LiteralType + FunctionType cases +
+  "first incompatible per group" cadence.** Continuation /loop after
+  17.136. Confirmed baseline 8541 via fresh full-suite (1534 failed,
+  3 skipped) and `find_candidates.py --fresh` returned 0/0/0 (filtered
+  from 6/76/19). Per anti-loop rule, audited the [SKIP] candidates and
+  spotted `overloadOnConstNoAnyImplementation_ts` (MISS TS2394 single)
+  + `overloadOnConstantsInvalidOverload1_ts` (MISS TS2394, partially-fixable).
+
+  **Implementation (Checker.kt ~41535):**
+  1. `isTypeNodeCompatible(overload, impl)` — extended beyond keyword-only
+     comparison to recognize: `LiteralType` ↔ `LiteralType` (different
+     literal values → false via new `literalExpressionEquals`);
+     `LiteralType` → `KeywordTypeNode` (e.g. `"hi"` is assignable to
+     `string` via new `literalAssignableToKeyword`); `KeywordTypeNode`
+     → `LiteralType` (broader to narrower → false unless source is
+     `any`/`never`); `FunctionType` ↔ `FunctionType` (recursive: each
+     common-position param is contravariant via swapped-arg recursive
+     call, return type is covariant). Default: conservative true.
+  2. `checkOverloadsInStatements` (Checker.kt ~41324) and
+     `checkMethodOverloadsInClass` (~41424) — added `break` after first
+     emission per group to match TypeScript's reporting cadence (verified
+     against `constructorsWithSpecializedSignatures` baseline expecting
+     1 emission per class even with 2 incompatible overloads).
+
+  **Helper functions:**
+  - `literalExpressionEquals(a, b)`: AST-level equality for literal-type
+    expressions. Handles StringLiteralNode / NoSubstitutionTemplateLiteralNode
+    cross-pair, NumericLiteralNode, BigIntLiteralNode, Identifier (which
+    the parser uses for true/false/null/undefined per `parsePrimaryExpression`,
+    Parser.kt ~3958), and PrefixUnaryExpression (for negative numerics —
+    matches the parser's `Minus → LiteralType(PrefixUnaryExpression(...))`
+    construction at Parser.kt:5217).
+  - `literalAssignableToKeyword(literal, kind)`: maps StringLiteral →
+    StringKeyword, NumericLiteral (or unary-minus NumericLiteral) →
+    NumberKeyword, Identifier("true"/"false") → BooleanKeyword,
+    BigIntLiteral → BigIntKeyword, AnyKeyword/UnknownKeyword → true.
+
+  **Test impact:** Flips `overloadOnConstNoAnyImplementation_ts` —
+  overload `(a: number, cb: (x: 'hi') => number)` vs impl
+  `(a: number, cb: (x: string) => number)`. The inner-cb FunctionType
+  comparison recurses contravariantly: impl's `(x: string)` param must
+  be assignable to overload's `(x: 'hi')` param (contravariance flip).
+  `string` is NOT a literal `"hi"`, so `KeywordTypeNode` vs `LiteralType`
+  returns false → TS2394 fires at the first overload. The duplicate-
+  overload check (`isDuplicateOverload`) skips overload 2 (`'bye'`)
+  because both overloads have the same `[NumberKeyword, FunctionType]`
+  shape. Net delta: 1534 → 1533 failed (8541 → 8542 passing).
+
+  **Why `overloadOnConstantsInvalidOverload1_ts` did NOT flip:** Test
+  has 3 bugs per the skip-log entry. TS2394 now fires (one bug fixed),
+  but the test still has an extra TS2793 ("implementation would have
+  succeeded") attached to the TS2345 at `foo("HI")`. The single-overload
+  path in `checkSingleCallExpressionTypes` (Checker.kt ~48361) doesn't
+  gate `implRelated` on `allArgumentsMatch(args, implSig)` — unlike the
+  generic path (~48347) which does. Adding that gate is a separate
+  surgical follow-up.
+
+  **Regression analysis:** `constructorsWithSpecializedSignatures_ts`
+  was already failing (currently emits 0/2 expected TS2394s); my changes
+  would over-emit (4 instead of 2) without the `break`, hence the
+  break addition. With break: emits 2 of the 2 expected. But the test
+  uses Constructor declarations (not FunctionDeclaration or
+  MethodDeclaration), and our checker doesn't run TS2394 on
+  Constructor — so this test stays at 0/2 (no change). Other tests
+  with overload signatures involving keyword-only types (e.g.
+  `overloadAssignmentCompat`'s `function foo():number; function
+  foo():string {}`) keep their existing TS2394 emissions because the
+  break only triggers AFTER the first emission, not before.
+
+  Zero regressions across 10078-test suite.
+
   **Session 2026-05-07 (17.136, 8540 → 8541, +1) — `Object.defineProperty`
   attributes intersection paramType + lib `interface PropertyDescriptor`:**
   Continuation /loop after the queue-maint session. Confirmed baseline
