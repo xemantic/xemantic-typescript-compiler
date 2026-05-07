@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,546 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,547 / 10,078 tests passing (~85%).
+
+**17.143 (2026-05-07, +1, B6.1 partial)** — Destructuring-default contextual
+typing for object-bind-pattern var-decls with object-literal initializer.
+Pattern target: `const { fn1 = (x: number) => 0, fn2 = fn1 } = { fn1: x => x+1, fn2: x => x+2 }`
+— TypeScript suppresses TS7006 on `fn1`'s `x` (default `(x: number) => 0`
+supplies a contextual signature for the matched RHS property) but fires it
+on `fn2`'s `x` (default `fn1` is an intra-pattern reference that resolves
+to `any`). Implementation: when var-decl name is `ObjectBindingPattern` and
+initializer is `ObjectLiteralExpression`, scan binding elements for those
+whose `initializer` is a typed function (all params annotated, via new
+`isTypedFunctionExpr` helper); collect their property names into a set;
+walk the RHS `PropertyAssignment`s with `contextuallyTyped=true` for
+matched names and `false` otherwise. Untyped-default cases (default is a
+bare identifier reference like `fn1`, or an arrow without annotated params)
+are deliberately NOT propagated — preserving TypeScript's intra-pattern-
+reference semantics. Net delta: 1529 → 1528 failed (8546 → 8547 passing).
+Zero regressions across 10078-test suite. Closes test 2 of B6.1.
 
 **17.142 (2026-05-07, +1, B6.1 partial)** — Propagate contextually-typed flag
 through `ArrayLiteralExpression` for non-arrow elements only. Pattern target:
