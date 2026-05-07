@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,545 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,546 / 10,078 tests passing (~85%).
+
+**17.142 (2026-05-07, +1, B6.1 partial)** — Propagate contextually-typed flag
+through `ArrayLiteralExpression` for non-arrow elements only. Pattern target:
+`compact([makeFooer(), { foo: (v) => v }])` — the inner object literal carries
+function-typed properties whose contextual type comes from the generic call's
+inferred T. Without propagation, our TS7006 walker hit `(v)` with
+`contextuallyTyped=false` (since arrays previously dropped the flag) and
+emitted a false-positive. Propagating fixes this BUT regresses 2 tests
+(`contextualSignatureInArrayElementLibEs5/Es2015`) where the contextual array
+type is itself a union (`Record<string,F1> | Array<F2>`) — TypeScript correctly
+fires TS7006 there because it cannot resolve which constituent's signature
+provides param types. Compromise: only propagate to non-arrow elements.
+ObjectLiteralExpression/CallExpression-shaped elements get ctx, bare
+`ArrowFunction`/`FunctionExpression` elements stay ctx=false. Net delta:
+1530 → 1529 failed (8545 → 8546 passing). Zero regressions across 10078-test
+suite. Closes the test 1 piece of B6.1; the remaining 2 targets
+(`intraBindingPatternReferences_ts` destructuring-default propagation, and
+`contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts` union-with-
+primitive contextual sig) need broader infrastructure.
 
 **17.141 (2026-05-07, +1)** — JSDoc type-cast `/** @type {T} */ (expr)` bridge
 for ParenthesizedExpression in JS-like files. Stacks on 17.140's primitive

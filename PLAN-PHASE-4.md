@@ -2585,16 +2585,34 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   `checkUnresolvedInStatement`). See "Known architectural blockers" §5.
 
 - [ ] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
-  type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).**
-  We currently suppress TS7006 for ANY param marked
-  `contextuallyTyped=true`. TypeScript only suppresses when the contextual
-  signature actually resolves a non-`any` type for that specific param
-  position. Track per-param which positions the context resolves; emit
-  TS7006 for un-resolved ones. Targets
-  `subtypeReductionWithAnyFunctionType_ts`,
-  `intraBindingPatternReferences_ts`,
-  `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`. See
-  "Known architectural blockers" §6.
+  type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).
+  PARTIALLY DONE 2026-05-07 in 17.142 (+1, flips
+  `subtypeReductionWithAnyFunctionType_ts`).** Recon revealed the queue's
+  framing was inverted — the actual bug is OVER-FIRE, not over-suppress.
+  All three targets emit EXTRA TS7006s where TypeScript suppresses. 17.142
+  closes test 1 by propagating the `contextuallyTyped` flag through
+  `ArrayLiteralExpression` for non-arrow elements only (object literals
+  carrying function-typed properties). Bare arrow elements remain
+  un-propagated because the regressing case
+  (`contextualSignatureInArrayElementLibEs5/Es2015`) has bare arrows in an
+  array whose contextual type is a union — TypeScript correctly fires
+  TS7006 there. The narrow gate (`el is ArrowFunction || el is
+  FunctionExpression → ctx=false`) preserves union-ambiguity emissions
+  while suppressing object-literal-wrapped callbacks.
+
+  **Remaining B6.1 work** (deferred — needs broader infrastructure):
+  - `intraBindingPatternReferences_ts` (1 over-fire on `fn1: x => x + 1`):
+    needs destructuring default `fn1 = (x: number) => 0` to propagate its
+    type into the RHS object literal's `fn1` property — i.e.
+    binding-pattern-default → property contextual typing. Architectural.
+  - `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`
+    (3 over-fires on `validate: (_t,_p,_s) => false` + 1 expected-but-
+    suppressed-by-blanket-fix on `match`): needs full union-with-primitive
+    contextual signature calculation — extract function constituents from
+    a union, intersect their signatures by param position, emit TS7006
+    only for positions where the result is `any`. Architectural — touches
+    contextual-typing pipeline broadly. See "Known architectural
+    blockers" §6.
 
 - [x] **B1.2. Blocker #1 — Flow-graph definite-assignment recursing into
   `IfStatement` body (1-2 tests, MEDIUM risk; tread carefully). ALREADY
