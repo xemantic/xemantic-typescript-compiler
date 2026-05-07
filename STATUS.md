@@ -1,6 +1,34 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,547 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,548 / 10,078 tests passing (~85%).
+
+**17.144 (2026-05-07, +1, closes B6.1)** — Union-with-primitive contextual
+TS7006 suppression for arrow values in property slots whose contextual type
+is a union containing both a function constituent AND a non-nullish
+non-function constituent (string/number/RegExp/etc.). Mirrors TypeScript's
+"overload list from union with primitive" rule. Pattern target:
+`const obj: {field: Rule} = { field: { validate: (_t,_p,_s) => false, normalize: match => match.x } }`
+where `Rule = string | FullRule` and `FullRule.validate: string | RegExp | Validate`.
+TypeScript suppresses TS7006 on `validate`'s `_t/_p/_s` (slot type is a union
+with primitives + function `Validate`) but emits TS7006 on `normalize`'s `match`
+(slot type is just a function or `function | undefined`, no non-nullish
+primitive). Implementation: new `contextualType: Type? = null` parameter on
+`checkImplicitAnyInExpr`, threaded through `ObjectLiteralExpression`'s
+`PropertyAssignment` walker via a new soft `lookupPropertyTypeForCtx` helper
+(walks Type.Object members + Type.Union constituents, picks first match,
+StackOverflow-safe). The `ArrowFunction` / `FunctionExpression` branches
+suppress when `unionHasFunctionAndPrimitive(contextualType) == true` — gated
+strictly on Union with at least one non-undefined/null/void constituent and
+at least one Type.Object with non-empty `callSignatures`. Pure
+`function | undefined` does NOT qualify (no non-nullish primitive →
+`hasNonNullishNonFunction = false`), preserving TS7006 emission for optional
+function-valued properties. Wired into the VariableStatement walker for
+Identifier-named decls with type annotation + `ObjectLiteralExpression`
+initializer via `getTypeFromTypeNodeSafe`. Net delta: 1528 → 1527 failed
+(8547 → 8548 passing). Zero regressions across 10078-test suite. Closes
+B6.1 — only the `contextualOverloadListFromUnionWithPrimitive*` test of the
+remaining 3 needed this rule; the other 2 (`subtypeReductionWithAnyFunctionType`,
+`intraBindingPatternReferences`) were closed in 17.142/17.143.
 
 **17.143 (2026-05-07, +1, B6.1 partial)** — Destructuring-default contextual
 typing for object-bind-pattern var-decls with object-literal initializer.

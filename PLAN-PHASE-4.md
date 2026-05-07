@@ -2584,10 +2584,9 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   (mirror of 17.65's `decl.typeFromJSDoc` gate in
   `checkUnresolvedInStatement`). See "Known architectural blockers" §5.
 
-- [ ] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
+- [x] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
   type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).
-  PARTIALLY DONE 2026-05-07 in 17.142 (+1, flips
-  `subtypeReductionWithAnyFunctionType_ts`).** Recon revealed the queue's
+  CLOSED 2026-05-07 in 17.142 + 17.143 + 17.144 (+3 cumulative).** Recon revealed the queue's
   framing was inverted — the actual bug is OVER-FIRE, not over-suppress.
   All three targets emit EXTRA TS7006s where TypeScript suppresses. 17.142
   closes test 1 by propagating the `contextuallyTyped` flag through
@@ -2612,15 +2611,26 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   remain `ctx=false` to preserve TypeScript's intra-pattern reference
   semantics. Zero regressions.
 
-  **Remaining B6.1 work** (deferred — needs broader infrastructure):
-  - `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`
-    (3 over-fires on `validate: (_t,_p,_s) => false` + 1 expected-but-
-    suppressed-by-blanket-fix on `match`): needs full union-with-primitive
-    contextual signature calculation — extract function constituents from
-    a union, intersect their signatures by param position, emit TS7006
-    only for positions where the result is `any`. Architectural — touches
-    contextual-typing pipeline broadly. See "Known architectural
-    blockers" §6.
+  **17.144 (2026-05-07) — closes test 3 (+1, flips
+  `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`).**
+  Implementation came in considerably narrower than the queue had projected
+  ("Architectural — touches contextual-typing pipeline broadly"). New
+  `contextualType: Type? = null` parameter on `checkImplicitAnyInExpr`,
+  threaded through the `ObjectLiteralExpression` walker via a new
+  `lookupPropertyTypeForCtx` helper (walks Type.Object members + Type.Union
+  constituents, picks the first match — heuristic but correct for this
+  pattern, StackOverflow-safe). The `ArrowFunction` / `FunctionExpression`
+  branches add a `unionHasFunctionAndPrimitive(contextualType)` suppression
+  gate: Union containing at least one Type.Object with non-empty
+  callSignatures AND at least one non-undefined/null/void constituent.
+  Pure `function | undefined` does NOT qualify (no non-nullish primitive)
+  so optional function-valued properties (like `normalize?: (match) => void`)
+  still emit TS7006 — matches TypeScript's asymmetric behavior on the
+  target test. Wired into the VariableStatement walker for Identifier-
+  named decls with type annotation + ObjectLiteralExpression initializer
+  via `getTypeFromTypeNodeSafe`. Net delta: 1528 → 1527 failed (8547 →
+  8548 passing). Zero regressions across 10078-test suite. Closes B6.1
+  fully (3/3 named targets).
 
 - [x] **B1.2. Blocker #1 — Flow-graph definite-assignment recursing into
   `IfStatement` body (1-2 tests, MEDIUM risk; tread carefully). ALREADY

@@ -8469,7 +8469,15 @@ class Checker(
                                 }
                             }
                         } else {
-                            declInit?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                            // For Identifier-named decls with a type annotation and an
+                            // ObjectLiteralExpression initializer, resolve the annotation
+                            // type and propagate it into the literal so nested arrow values
+                            // whose slot is a union-with-primitive-and-function can suppress
+                            // TS7006 (B6.1 — `contextualOverloadListFromUnionWithPrimitive*`).
+                            val annotatedType = decl.type?.let { getTypeFromTypeNodeSafe(it) }
+                            declInit?.let {
+                                checkImplicitAnyInExpr(it, source, fileName, contextualType = annotatedType)
+                            }
                         }
                     }
                 }
@@ -8750,10 +8758,17 @@ class Checker(
         return true
     }
 
-    private fun checkImplicitAnyInExpr(expr: Expression, source: String, fileName: String, contextuallyTyped: Boolean = false) {
+    private fun checkImplicitAnyInExpr(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        contextuallyTyped: Boolean = false,
+        contextualType: Type? = null,
+    ) {
         when (expr) {
             is ArrowFunction -> {
-                if (!contextuallyTyped) {
+                val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
+                if (!contextuallyTyped && !unionSuppress) {
                     checkParamsForImplicitAny(expr.parameters, source, fileName)
                 }
                 when (val body = expr.body) {
@@ -8763,7 +8778,8 @@ class Checker(
                 }
             }
             is FunctionExpression -> {
-                if (!contextuallyTyped) {
+                val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
+                if (!contextuallyTyped && !unionSuppress) {
                     checkParamsForImplicitAny(expr.parameters, source, fileName)
                 }
                 checkImplicitAnyInStatements(expr.body.statements, source, fileName)
@@ -8783,8 +8799,15 @@ class Checker(
                             prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
                         }
                         is PropertyAssignment -> {
-                            // Propagate contextual typing to property initializers
-                            checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped)
+                            // Propagate contextual typing to property initializers.
+                            // Look up the property's type in the parent contextual type so that
+                            // arrow values whose slot is a union-with-primitive-and-function can
+                            // suppress TS7006 (TypeScript's "overload list from union" rule).
+                            val propName = (prop.name as? Identifier)?.text
+                            val propType = if (propName != null && contextualType != null) {
+                                lookupPropertyTypeForCtx(contextualType, propName)
+                            } else null
+                            checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped, propType)
                         }
                         else -> {}
                     }
@@ -8814,10 +8837,10 @@ class Checker(
                 }
                 checkImplicitAnyInExpr(current, source, fileName)
             }
-            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped)
+            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType)
             is ConditionalExpression -> {
-                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped)
-                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped)
+                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType)
+                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType)
             }
             is ArrayLiteralExpression -> {
                 // Propagate contextual typing through arrays ONLY for non-arrow elements
@@ -8831,6 +8854,59 @@ class Checker(
                 }
             }
             else -> {}
+        }
+    }
+
+    /**
+     * Returns true when [type] is a Union containing at least one function-typed
+     * constituent (Type.Object with non-empty callSignatures) AND at least one
+     * non-nullish non-function constituent (string/number/RegExp/etc — anything
+     * that isn't a function and isn't undefined/null/void).
+     *
+     * Mirrors TypeScript's "overload list from union with primitive" contextual
+     * signature rule: when an arrow's contextual type is such a union, the
+     * function-constituent supplies param types and TS7006 is suppressed. Pure
+     * `function | undefined` (only nullish as the non-function side) does NOT
+     * qualify — TypeScript still emits TS7006 there.
+     */
+    private fun unionHasFunctionAndPrimitive(type: Type): Boolean {
+        val u = type as? Type.Union ?: return false
+        var hasFunction = false
+        var hasNonNullishNonFunction = false
+        for (t in u.types) {
+            val isFn = (t is Type.Object && (t.callSignatures?.isNotEmpty() == true))
+            if (isFn) {
+                hasFunction = true
+                continue
+            }
+            if (t is Type.Intrinsic && (
+                t.flags == TypeFlags.Undefined ||
+                t.flags == TypeFlags.Null ||
+                t.flags == TypeFlags.Void
+            )) continue
+            hasNonNullishNonFunction = true
+        }
+        return hasFunction && hasNonNullishNonFunction
+    }
+
+    /**
+     * Look up the type of property [name] in the contextual type [type], walking
+     * Union constituents and returning the first match. Soft (returns null on
+     * StackOverflow or missing), used only by the TS7006 suppression walker.
+     * Differs from [getPropertyOfType] which requires the property on EVERY
+     * union constituent — this helper is heuristic and picks first hit.
+     */
+    private fun lookupPropertyTypeForCtx(type: Type, name: String): Type? {
+        return when (type) {
+            is Type.Object -> try {
+                resolveStructuredTypeMembers(type)
+                val sym = type.members?.get(name) ?: return null
+                getTypeOfSymbol(sym)
+            } catch (_: StackOverflowError) {
+                null
+            }
+            is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name) }
+            else -> null
         }
     }
 
