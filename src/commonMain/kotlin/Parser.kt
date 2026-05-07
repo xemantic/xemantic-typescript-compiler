@@ -1457,12 +1457,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // `implements` and `extends` always start heritage clauses, never class names
         val name = if (isIdentifier() && token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword) parseIdentifier() else null
         val ltPos = if (token == SyntaxKind.LessThan) getPos() else -1
-        val typeParams = parseTypeParametersOpt()
-        if (typeParams != null && typeParams.isEmpty() && ltPos >= 0) {
+        val parsedTypeParams = parseTypeParametersOpt()
+        if (parsedTypeParams != null && parsedTypeParams.isEmpty() && ltPos >= 0) {
             val gtEnd = scanner.getPrevTokenEnd()
             reportError("Type parameter list cannot be empty.", code = 1098,
                 overrideStart = ltPos, overrideLength = gtEnd - ltPos)
         }
+        // 17.146 / B5.3: in JS-like files, parse `/** @template T */` from
+        // leading comments and use as the class's type parameters when no
+        // TS-level `<T>` declaration is present.
+        val typeParams = parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)
         val heritage = parseHeritageClauses(isClass = true)
         val beforeOpenBrace = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.OpenBrace)
@@ -5071,6 +5075,74 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
         }
         return if (changed) out else params
+    }
+
+    // 17.146 / B5.3: parse `/** @template T */` (or `@template T,U`) tags from
+    // a declaration's leading comments and return synthetic TypeParameter nodes
+    // with absolute source positions. JS-like files only. Conservative pattern:
+    // a single tag line declares one or more comma-separated bare identifiers.
+    // Constraints (`@template {Constraint} T`) and `@template T = Default` are
+    // out of scope for this substep.
+    private fun parseJSDocTemplateTypeParams(comments: List<Comment>?): List<TypeParameter>? {
+        if (!isJsLikeFile || comments.isNullOrEmpty()) return null
+        var out: MutableList<TypeParameter>? = null
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (idx < ct.length) {
+                val tagIdx = ct.indexOf("@template", idx)
+                if (tagIdx < 0) break
+                val afterTag = if (tagIdx + 9 < ct.length) ct[tagIdx + 9] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') {
+                    idx = tagIdx + 9
+                    continue
+                }
+                var i = tagIdx + 9
+                // Skip whitespace, line-prefix `*`, and a possible `{Constraint}` block.
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                if (i < ct.length && ct[i] == '{') {
+                    var depth = 1; i++
+                    while (i < ct.length && depth > 0) {
+                        when (ct[i]) {
+                            '{' -> depth++
+                            '}' -> depth--
+                        }
+                        if (depth == 0) break
+                        i++
+                    }
+                    if (i < ct.length && ct[i] == '}') i++
+                    while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                }
+                // Read one or more comma-separated bare identifiers on this line.
+                while (i < ct.length && ct[i] != '\n' && ct[i] != '\r') {
+                    while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == ',')) i++
+                    if (i >= ct.length || ct[i] == '\n' || ct[i] == '\r') break
+                    if (!(ct[i].isLetter() || ct[i] == '_' || ct[i] == '$')) break
+                    val nameStart = i
+                    while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                    val tpName = ct.substring(nameStart, i)
+                    if (tpName.isNotEmpty()) {
+                        val absStart = comment.pos + nameStart
+                        val absEnd = absStart + tpName.length
+                        val ident = Identifier(text = tpName, pos = absStart, end = absEnd)
+                        if (out == null) out = mutableListOf()
+                        if (out.none { it.name.text == tpName }) {
+                            out.add(TypeParameter(
+                                name = ident, fromJSDoc = true,
+                                pos = absStart, end = absEnd,
+                            ))
+                        }
+                    }
+                    // Stop after the name unless the next non-ws char is a comma.
+                    while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                    if (i >= ct.length || ct[i] != ',') break
+                }
+                idx = i
+            }
+        }
+        return out
     }
 
     private fun primitiveKeywordKindFor(typeText: String): SyntaxKind? = when (typeText) {

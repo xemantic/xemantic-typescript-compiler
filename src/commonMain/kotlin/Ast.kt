@@ -1597,6 +1597,9 @@ data class TypeParameter(
     val constraint: TypeNode? = null,
     val default: TypeNode? = null,
     val modifiers: Set<ModifierFlag> = emptySet(),
+    /** Synthesized from a `/** @template T */` JSDoc tag (B5.3) — TS8004
+     *  should be skipped for these. */
+    val fromJSDoc: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
