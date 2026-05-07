@@ -2787,6 +2787,51 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.144, 8547 → 8548, +1) — Closes B6.1
+  (`contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`).**
+  Continuation after 17.143. Pre-session recon: full suite 8547/1528/3
+  baseline, `find_candidates.py --fresh` returns 0/0/0 (filtered from
+  3/74/19); all surgical candidates skip-classified and only B6.1's
+  `contextualOverload*` test remained as the named B6.1 target. Test
+  source review showed asymmetric expectation: TypeScript suppresses
+  TS7006 on `validate: (_t,_p,_s) => false` (slot type
+  `string | RegExp | Validate` — Union with non-nullish primitive +
+  function) but emits TS7006 on `normalize: match => match.x` (slot
+  type just `(match) => void` or `function | undefined` — only nullish
+  as the non-function side, doesn't qualify for the trick).
+
+  **Implementation came in considerably narrower than the queue's
+  "Architectural — touches contextual-typing pipeline broadly" framing.**
+  Net new: ~50 lines on `Checker.kt` adding a new `contextualType`
+  parameter to `checkImplicitAnyInExpr` plus two helpers
+  (`unionHasFunctionAndPrimitive`, `lookupPropertyTypeForCtx`). Wired
+  into ObjectLiteralExpression PropertyAssignment walker and the
+  VariableStatement walker for Identifier-named decls with type
+  annotation + ObjectLiteralExpression initializer. The narrow gate
+  (Union with at least one Type.Object with non-empty callSignatures
+  AND at least one non-undefined/null/void constituent) preserves
+  TS7006 emission for `function | undefined` slots — exactly matches
+  TypeScript's asymmetric behavior. Net delta: 1528 → 1527 failed
+  (8547 → 8548 passing). Zero regressions.
+
+  **B6.1 status:** CLOSED. All 3 named targets flipped across 17.142
+  (subtypeReductionWithAnyFunctionType), 17.143 (intraBindingPatternReferences),
+  17.144 (contextualOverloadListFromUnionWithPrimitive). All 6 active
+  blocker substeps (B1.1, B1.2, B2.1, B3.1, B5.1, B6.1) now closed.
+  Surgical pool fresh remains 0/0/0 post-17.144; 3 EXTRA / 74 MISS /
+  19 SWAP all skip-classified as architectural (Blocker #2 generic
+  inference residuals, Blocker #3 cross-file scope follow-ons,
+  parser error-recovery, lib-overload-aware structural comparison,
+  display-mismatch cases). No new active blocker substeps promoted
+  this session — the ones already promoted are all closed and the
+  remaining unsolved blocker work is per-substep too risky / too
+  bounded / too out-of-policy (B2.2 multi-tparam-bipartition, B4
+  parser error-recovery) for autonomous decomposition without user
+  guidance. Future sessions should consider promoting (a) extending
+  contextualType propagation to ArrayLiteralExpression elements
+  (potential follow-on to 17.142's ctx-flag work), or (b) Blocker #3
+  follow-on (~12 remaining `globals[X]` lookups per the B3.1 note).
+
   **Session 2026-05-07 (17.141, 8544 → 8545, +1) — JSDoc type-cast
   `/** @type {T} */ (expr)` bridge for ParenthesizedExpression.**
   Continuation after 17.140. The `jsdocTypeCast_ts` test was 2-of-3
