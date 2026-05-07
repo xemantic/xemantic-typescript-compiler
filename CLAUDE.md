@@ -266,6 +266,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Kotlin idioms
 
+- **`*/` inside KDoc terminates the comment**: A `/** ... */` doc comment ends at the first `*/`. Embedding `*/` (e.g. when documenting a JSDoc pattern) silently breaks the rest of the declaration — a data-class body following a broken doc comment surfaces as a cascade of confusing errors like "Modifier 'override' is not applicable to 'local variable'", "No parameter with name 'pos' found", "Unresolved reference 'jsDocTagEnd'". Reword to "comment-close" or escape as `*\/`.
 - **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`).
 - **Enum context resolution** (Kotlin 2.1+): When the expected type is an enum, use unqualified entry names — write `Equals`, not `SyntaxKind.Equals`. This applies to `when` branch conditions, named arguments (`operator = Equals`), comparisons (`flags == VarKeyword`), and any other position where the enum type is inferred. Caveat: if a data class has the same name as an enum entry (e.g. `LabeledStatement`), keep the `SyntaxKind.` prefix to avoid ambiguity.
 - **`in 0..<x` range checks**: Prefer `pos in 0..<end` over `pos >= 0 && end > pos` for range validation — uses Kotlin's `rangeUntil` (`..<`) operator for exclusive upper bound.

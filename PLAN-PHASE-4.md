@@ -2727,6 +2727,48 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   promotion in 64ec09a was made without cross-checking 17.32a-e session
   notes — the description was stale.
 
+- [x] **B5.5. Blocker #5 — TS6133 custom JSDoc squiggle for unused
+  `@template` type params, single-id-tag case (DONE 2026-05-07 in 17.148,
+  +1 — flips `unusedTypeParameters_templateTag_ts`).** Stacks on B5.3 /
+  B5.4 parser foundations. Implementation:
+  - **Ast.kt** (`TypeParameter`): two new fields `jsDocTagPos: Int = -1`
+    / `jsDocTagEnd: Int = -1` carrying the absolute source positions of
+    the `@template` keyword's `@` and the end of the tag content (next
+    JSDoc tag at start of new line, or comment-close).
+  - **Parser.kt** (`parseJSDocTemplateTypeParams`): buffers per-tag
+    identifiers, computes tag end via forward-scan for either
+    comment-close or following `@<tag>`. Each TP in the same tag shares
+    the tag span.
+  - **Checker.kt** (`reportUnusedTypeParams`): groups declarations by
+    `jsDocTagPos`, computes per-tag sibling/unused counts. When a
+    JSDoc-derived TP's tag has exactly 1 identifier and that one is
+    unused, emits TS6133 with full tag span. Multi-id tags fall through
+    to per-identifier span (B5.6 territory). Pre-existing `<T>` syntax
+    span branch gated `&& !tp.fromJSDoc`.
+
+  **Verification.** Targeted test `unusedTypeParameters_templateTag_ts`
+  flips clean. Full-suite re-run 10078/1525/3 (+1 net). Zero regressions.
+  Closes B5.5 for the single-id-tag case. `unusedTypeParameters_templateTag2_ts`
+  still fails — needs TS6205 for all-unused multi-id tags AND body
+  usage tracking through `@type {T}` references for proper T-used
+  detection (both deferred to B5.6+).
+
+- [ ] **B5.6. Blocker #5 — TS6205 "All type parameters are unused" for
+  JSDoc `@template T,V` all-unused case + `@type {T}` body usage
+  tracking.** Picks up the residuals of `unusedTypeParameters_templateTag2_ts`
+  after B5.5. Two pieces in coordination:
+  - TS6205 emission when ALL identifiers in a multi-id `@template`
+    tag are unused (full-tag span, replacing per-identifier TS6133s).
+    The current `reportUnusedTypeParams` already groups by `jsDocTagPos`
+    — extend the emission to detect full-group-unused and emit a
+    single TS6205 with the tag span.
+  - Body usage tracking through `@type {T}` JSDoc references: parser
+    already extracts primitive `@type` (B5.1) and full-type
+    `@type` for property declarations (17.58). Extending to record
+    `@type {T}` typeparam references in `collectTypeRefs` would let
+    `class C { constructor() { /** @type {T} */ this.p; } }` correctly
+    mark T as used.
+
 ---
 
 - [x] **17.71. TS8024 — JSDoc `@param` tag with non-matching name in JS files (+1 — flips `jsdocParamTagInvalid_ts`).** **DONE 2026-05-01.** New `checkJSDocParamTags()` walker (Checker.kt ~7959) emits TS8024 ("JSDoc '@param' tag has name 'X', but there is no parameter with that name.") when a `/** @param {T} name */` comment names an identifier that's not in the function's parameter list. Walks all FunctionDeclaration / FunctionExpression / ArrowFunction / MethodDeclaration / Constructor in JS-like files (`.js`/`.jsx`/`.cjs`/`.mjs`). Per-tag parsing handles whitespace/`*`/line breaks between `@param`, the optional `{Type}` brace expression, optional `[name]` brackets, and the identifier name. Squiggle position computed via `comment.pos + nameStartInCommentText`. Skips nested-name cases (`@param obj.foo`) since those don't add to the param-name set being checked. Net delta: 1628 → 1627 failed (8447 → 8448 passing). Zero regressions across 10078-test suite. Foundation: the same `walkJSDocParamTagsInStmts` infrastructure is reusable for future JSDoc walkers (`@returns`, `@type` extraction for parameters, etc.).
@@ -2846,6 +2888,65 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (17.148, 8549 → 8550, +1 — closes B5.5 single-id
+  case) — Custom `@template` span for TS6133 on JSDoc-derived
+  TypeParameters.** Continuation after 17.147 closed B5.4 foundation
+  (parser wiring) net-zero. The natural target
+  `unusedTypeParameters_templateTag_ts` (`/** @template T */ function f() {}`
+  with T unused) needs TS6133 with a 12-char squiggle covering
+  `@template T ` at col 5 — our standard type-param walker emitted at
+  the `<T>` syntax span (`pos-1, len+2`) which for the JSDoc-derived
+  synthetic TP put the squiggle at col 14 covering ` T ` (3 chars).
+
+  **Implementation.**
+  - **Ast.kt** (`TypeParameter`): added `jsDocTagPos: Int = -1` and
+    `jsDocTagEnd: Int = -1` fields. Carry the absolute source position
+    of the `@template` keyword's `@` and the end of the tag content
+    (next JSDoc tag start or comment-close `*/`, whichever comes first).
+    Default -1 for non-JSDoc TPs (the `<T>` syntax path is unaffected).
+  - **Parser.kt** (`parseJSDocTemplateTypeParams` ~5089): refactored the
+    per-tag identifier loop to buffer `(name, absStart, absEnd)` triples
+    in `tagIds: MutableList<Triple<...>>`, then computes the tag's end
+    offset by scanning forward from the post-identifier position for
+    either `*/` (comment close) or a following `@<tag>` at the start of
+    a new line. Each `TypeParameter` in the same tag receives the same
+    `jsDocTagPos` / `jsDocTagEnd`, so multi-id tags (`@template T,V`)
+    can later be handled as a group.
+  - **Checker.kt** (`reportUnusedTypeParams` ~4970): groups declarations
+    by `jsDocTagPos`, computing per-tag sibling-count and unused-count.
+    When a JSDoc-derived TP's tag has exactly 1 identifier and that one
+    is unused, emits TS6133 with the full tag span (`jsDocTagPos` ..
+    `jsDocTagEnd`). Multi-id tags fall through to per-identifier span
+    (B5.6 territory — needs TS6205 emission for all-unused + per-id
+    squiggles for partial-unused). Pre-existing `<T>` syntax `pos-1,
+    len+2` branch now gated `&& !tp.fromJSDoc` so synthetic JSDoc TPs
+    don't pick up the angle-bracket span.
+
+  **Verification.**
+  - Targeted: `unusedTypeParameters_templateTag_ts` produces
+    `(1,5): error TS6133: 'T' is declared but its value is never read.`
+    with a 12-char squiggle covering `@template T ` (matches baseline).
+  - Full suite: 10078 / 1525 / 3 (was 1526 / 3, +1 net). Zero regressions.
+
+  **Residual on `unusedTypeParameters_templateTag2_ts`** (still failing
+  but for unrelated reasons):
+  - C1's T (used via `/** @type {T} */ this.p` in body) is incorrectly
+    flagged unused — body usage walker doesn't track `@type {T}`
+    references on type parameters. Same gap for C3's T.
+  - C2's all-unused `@template T,V` should emit a single TS6205 (not
+    per-identifier TS6133s). TS6205 isn't currently implemented.
+
+  Both deferred to **B5.6**. Documented in skip-log + B5.6 queue item.
+
+  **Surfaced gotcha.** `*/` inside Kotlin KDoc (`/** ... */`) terminates
+  the comment. Initial AST docstring `/** ... next tag or `*/` ... */`
+  caused a cascade of compile errors ("Modifier 'override' is not
+  applicable to 'local variable'", "No parameter with name 'pos' found.")
+  because the data-class declaration was parsed as broken. Fixed by
+  rewording to "next tag or comment-close". A future agent encountering
+  similar cascade errors after editing AST docstrings should check for
+  unintentional `*/` inside KDoc.
 
   **Session 2026-05-07 (17.147, 8549 unchanged — B5.4 foundation, net-zero)
   — Wire `parseJSDocTemplateTypeParams` into

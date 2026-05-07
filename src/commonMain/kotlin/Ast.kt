@@ -1600,6 +1600,10 @@ data class TypeParameter(
     /** Synthesized from a `/** @template T */` JSDoc tag (B5.3) — TS8004
      *  should be skipped for these. */
     val fromJSDoc: Boolean = false,
+    /** Absolute source position of the `@template` keyword's `@`. -1 when not from JSDoc. */
+    val jsDocTagPos: Int = -1,
+    /** Absolute source position of the `@template` tag end (next tag or comment-close). -1 when not from JSDoc. */
+    val jsDocTagEnd: Int = -1,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
