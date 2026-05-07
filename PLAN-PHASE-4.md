@@ -2584,6 +2584,49 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   (mirror of 17.65's `decl.typeFromJSDoc` gate in
   `checkUnresolvedInStatement`). See "Known architectural blockers" §5.
 
+- [x] **B5.2. Blocker #5 — JSDoc `@param {T}` non-primitive single-Identifier
+  bridge (FOUNDATION DONE 2026-05-07 in 17.145, net-zero infra).** Extends
+  17.140's primitive-only `parseJSDocParamPrimitiveTypeMap` to also accept a
+  bare-identifier name (e.g. `@param {C} p`) — restricted to a single
+  identifier matching `[A-Za-z_$][\w$]*` (no QualifiedName, no type args, no
+  unions). Constructs a `TypeReference(typeName=Identifier, pos=ABS, end=ABS)`
+  with absolute source positions: walks back from the matched `@param` tag
+  to find the opening `{`, computes the trimmed identifier's offset within
+  the brace span, then `comment.pos + brace_open + 1 + leading_ws` gives the
+  absolute position. Companion fix: TS8010 walker (`checkTsSyntaxInParams`)
+  now skips synthetic `param.type` when `param.typeFromJSDoc` is true,
+  matching the 17.65 pattern for var-decls. Net-zero on the 10078-test
+  suite (1527 / 1527 unchanged). The candidate target
+  `jsdocClassMissingTypeArguments_ts` does NOT flip with this alone —
+  expected TS2314 requires `@template T` on the class side, which our
+  parser doesn't yet recognize as a type-parameter declaration. The class
+  `C` is bound with `maxTotal=0` type params (verified via debug print),
+  so `checkTypeArgCount` exits early and TS2314 doesn't fire. Foundation
+  for follow-on B5.3 (parse `/** @template T */` on classes / interfaces /
+  type aliases / functions in JS-like files, populate `typeParameters`
+  with synthetic `TypeParameterDeclaration(name=Identifier(T))` nodes).
+  Once B5.3 lands, this test plus likely 1-3 adjacent tests should flip
+  automatically. Wider B5.2 patterns (Union types, Array `<T>`,
+  QualifiedName, function types in `@param {T}`) are deferred — each needs
+  position rewriting on nested TypeNodes which 17.61 showed is invasive.
+
+- [ ] **B5.3. Blocker #5 — JSDoc `@template T` parser bridge (target ~1-3
+  tests, MEDIUM risk).** Stacks on B5.2 to flip
+  `jsdocClassMissingTypeArguments_ts`. Walks `/** @template T */` (or
+  `/** @template T,U */` / `/** @template {Constraint} T */`) in a
+  declaration's leadingComments, builds `List<TypeParameterDeclaration>`
+  with absolute positions (mirror of 17.140's bridge), copies onto the
+  class / interface / type alias / function declaration's `typeParameters`
+  list. JS-like files only. Conservative gate: simple `@template Identifier`
+  pattern; constraints / defaults / multiple-on-one-line are follow-on
+  scope. Test target: `jsdocClassMissingTypeArguments_ts` — expected
+  TS2314 at (4,13) requires class C to have 1 type param so
+  `getTypeParamInfo("C")` returns `(1, 1, "C<T>")` instead of `(0, 0, "C")`
+  and the count-mismatch (provided=0, max=1) fires TS2314. Verified path
+  via debug println in 17.145 session (B5.2 lookup path is correct;
+  `getTypeParamInfo` returns null type-param count without `@template`
+  parsing).
+
 - [x] **B6.1. Blocker #6 — TS7006: distinguish "context provides param
   type" from "context exists but lacks it" (~3-5 tests, MEDIUM risk).
   CLOSED 2026-05-07 in 17.142 + 17.143 + 17.144 (+3 cumulative).** Recon revealed the queue's
@@ -2786,6 +2829,60 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (17.145, 8548 unchanged — B5.2 foundation, net-zero)
+  — JSDoc `@param {T}` non-primitive single-Identifier bridge.** Continuation
+  after 17.144 closed B6.1. Pre-session recon: full suite 8548/1527/3 baseline,
+  `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/74/19). All 6
+  active blocker substeps closed (B1.1, B1.2, B2.1, B3.1, B5.1, B6.1). Per
+  the anti-loop rule, must promote a new substep rather than commit recon-only.
+
+  **Substep B5.2 promotion + implementation.** The 17.144 session note
+  flagged two follow-on options: (a) extend contextualType propagation to
+  ArrayLiteralExpression, or (b) Blocker #3 follow-on (~12 remaining
+  `globals[X]` lookups). Picked a third path that leveraged the JSDoc
+  bridge family (17.58 / 17.62 / 17.65 / 17.140 / 17.141): extend the
+  primitive-only `@param` map to also handle a bare-identifier named ref
+  (e.g. `@param {C} p`).
+
+  **Implementation.** Two-piece change:
+  - **Parser.kt** (`parseJSDocParamPrimitiveTypeMap` ~5011): when type-text
+    isn't a primitive but matches `[A-Za-z_$][\w$]*` (single identifier,
+    no nesting, no <>, no |), construct a `TypeReference(typeName=Identifier,
+    pos=ABS, end=ABS)` with absolute source positions. Walks back from the
+    matched `@param` tag to find the opening `{`, computes the trimmed
+    identifier's offset within the brace span: `comment.pos + brace_open + 1
+    + leading_ws`. The synthetic Identifier and its containing TypeReference
+    share the same absolute pos/end, so downstream diagnostics (TS2304,
+    TS2314) fire at the right column.
+  - **Checker.kt** (`checkTsSyntaxInParams` ~57170): added `&& !param.typeFromJSDoc`
+    gate to TS8010 emission. Mirrors 17.65's var-decl pattern. Without this,
+    JSDoc-derived param types fire TS8010 ("Type annotations can only be
+    used in TypeScript files") since the `param.type` field is set.
+
+  **Target test investigation.** `jsdocClassMissingTypeArguments_ts` was
+  the candidate target — expected TS2314 at (4,13) for `@param {C} p`
+  where `C` is `/** @template T */ class C {}`. Verified via debug println
+  that the bridge fires correctly: `param.type` is set to
+  `TypeReference(name=Identifier("C", pos=43))`, the walker
+  `checkUnresolvedInTypeCore` calls `checkTypeArgCount`, which finds
+  `scope.has("C") == true` and reaches `getTypeParamInfo("C")`. But
+  `getTypeParamInfo` returns `TypeParamInfo(minRequired=0, maxTotal=0,
+  displayName=C)` because our parser doesn't recognize `/** @template T */`
+  as a type-parameter declaration on the class. Test still fails — needs
+  B5.3 (`@template` parser bridge) on top of B5.2.
+
+  **Verification.** Full-suite run: 10078 tests, 1527 failed, 3 skipped —
+  identical to baseline. Zero regressions. B5.2 lands as foundation only.
+  Promoted B5.3 (`@template` parser bridge) to the queue with explicit
+  link to this session's `getTypeParamInfo` finding so future agents
+  don't re-debug.
+
+  **Next.** B5.3 is the natural follow-on (~1-3 tests). Other unblocking
+  options remain: (b) Blocker #3 follow-on globals migrations,
+  (c) extending B5.2 patterns to include simple Union types `string | undefined`
+  or `Array<T>` syntax, (d) implementing TypeParameterDeclaration parser
+  for `@template`.
 
   **Session 2026-05-07 (17.144, 8547 → 8548, +1) — Closes B6.1
   (`contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`).**
