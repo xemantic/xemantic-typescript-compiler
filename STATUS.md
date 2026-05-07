@@ -2,6 +2,31 @@
 
 **Phase 4 — Checker buildout.** 8,544 / 10,078 tests passing (~85%).
 
+**17.139 (2026-05-07, net-zero — B1.1 foundation)** — Narrow Union receivers in
+`computeRawTypeOfPropertyAccess` via flow-graph state. Inside
+`if (x && x.foo) { x.foo() }` the binder's `bindBinaryExpression` for `&&`
+sets `currentFlow = newCondition(true, expr.left, preRight)` before binding
+the RHS, and `bindExpression(PropertyAccessExpression)` calls
+`bindExpression(receiver)` which `recordFlow`s the receiver Identifier at
+that condition — so `getFlowAt(receiver)` now returns a `FlowCondition`
+that narrows. The new branch (Checker.kt ~40837) calls
+`getNarrowedTypeForReference(rawObjectType, expr.expression)` when the
+raw receiver type is a `Type.Union` AND the receiver is a pure path
+(`getReferencePath != null`). Narrowed receiver flows into
+`getApparentType` + `getPropertyOfType`, so e.g. `Performance | undefined`
+narrows to `Performance` and the `.foo` lookup succeeds instead of bailing
+on the Union. Conservative gates: only Union receivers (non-Unions can't
+be refined by condition-based narrowing); only pure paths (calls/parens/
+element-access return null path → no-op). Net-zero on the 10078-test suite
+(1531 / 3 unchanged) — the queue's named target
+`uncalledFunctionChecksInConditional2_ts` had its 3 expected TS2774s
+already firing post-17.60; the residual gap is 4 missing TS7006s
+(noImplicitAny default-on policy — Guardrails). No other failing test in
+the corpus gates SOLELY on receiver narrowing; foundation for follow-on
+substeps that consume narrowed receiver types in additional emission
+sites (TS2532 object-possibly-undefined, TS2339 narrowed-to-never on
+property access, etc.).
+
 **17.138 (2026-05-07, +1)** — Emit TS17019 / TS17020 / TS8020 for JSDoc
 nullable `?` recovery in type-argument context. Parser-level diagnostic
 emissions added to `parseNonUnionType` (Parser.kt ~5081-5215): leading `?`
