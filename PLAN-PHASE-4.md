@@ -2721,6 +2721,102 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.138, 8543 → 8544, +1) — Emit TS17019 / TS17020
+  / TS8020 for JSDoc nullable `?` recovery in type-argument context.**
+  Continuation /loop after 17.137a. Confirmed baseline 8543 via fresh
+  full-suite (1532 failed, 3 skipped) and `find_candidates.py --fresh`
+  returned 0/0/0 (filtered from 6/74/19) per anti-loop rule. Audited
+  failing JSDoc-related tests; spotted `expressionWithJSDocTypeArguments_ts`
+  (MISS 20× TS17019/TS17020/TS8020). All errors are at JSDoc nullable `?`
+  in type-argument positions like `foo<?>`, `foo<string?>`, `foo<?string>`,
+  `foo<?string?>`, plus `typeof foo<...>` and `Bar<...>` variants.
+
+  Pre-existing parser had silent recovery for `?` in `parseNonUnionType`
+  (Parser.kt:5079-5086 leading, 5167-5174 trailing) — consumed the `?`
+  without emitting any diagnostic. The fix wires up TypeScript's three
+  JSDoc-nullable diagnostics to those existing recovery sites with
+  context gates to avoid regressing legitimate `?` usage:
+
+  **Implementation (Parser.kt):**
+  1. New parser-state counters `inTypeArgsDepth: Int = 0` and
+     `inTupleTypeDepth: Int = 0` (line 30-31). Incremented/decremented
+     via try-finally around `tryParseTypeArguments` (~4863) and
+     `parseTupleType` (~5331).
+  2. **Leading `?` recovery** (~5083): captures `leadingQuestionPos`
+     before consuming. If next token isn't a type-start (bare `?` like
+     `<?>`), emit TS8020 ("JSDoc types can only be used inside
+     documentation comments.") with 1-char squiggle when
+     `inTypeArgsDepth > 0`. Otherwise continue parsing the type.
+  3. **End-of-parseNonUnionType emission**: after `parsePrimaryType()`
+     and array-suffix loop, capture `typeProperEnd =
+     scanner.getPrevTokenEnd()` BEFORE any trailing `!`/`?` consumption
+     — needed because `node.end` overshoots by one token (per CLAUDE.md
+     gotcha). Used to compute the type text via
+     `source.substring(type.pos, typeProperEnd)`.
+  4. **Trailing `?` recovery** (~5198): captures `questionEnd =
+     scanner.getPos()` (end of `?` text) before consuming. After
+     consume, if `inTypeArgsDepth > 0 && inTupleTypeDepth == 0`, emit
+     TS17019 ("'?' at the end of a type is not valid TypeScript syntax.
+     Did you mean to write 'TYPE | undefined'?") with squiggle covering
+     `TYPE?` (length = `questionEnd - type.pos`).
+  5. **Leading-? completion**: at end of `parseNonUnionType`, if
+     `leadingQuestionPos >= 0 && inTypeArgsDepth > 0`, emit TS17020
+     ("'?' at the start of a type is not valid TypeScript syntax. Did
+     you mean to write 'TYPE | null | undefined'?") with squiggle
+     covering `?TYPE[?]` (length = `scanner.getPrevTokenEnd() -
+     leadingQuestionPos`, which includes any trailing `?` already
+     consumed).
+
+  **Why the gates:** type-args is the only context the test exercises,
+  and gating prevents two regression classes:
+  - **`inTypeArgsDepth > 0`**: type aliases like `type T = string?`,
+    parameter annotations like `(x: string?) => void`, and other
+    type-position uses currently silently recover. Emitting TS17019/
+    TS17020/TS8020 in those contexts could regress tests that don't
+    expect those emissions in their baselines.
+  - **`inTupleTypeDepth == 0` for TS17019**: tuple optional elements
+    like `[number, string?]` use trailing `?` legitimately. The
+    existing `parseNonUnionType` consumes the `?` (a pre-existing
+    bug — `parseTupleType.parseOptional(Question)` at line 5349 never
+    fires because parseNonUnionType ate the `?` first), but emitting
+    TS17019 would be a new regression. Gate skips emission when nested
+    inside a tuple, so `foo<[number, string?]>` stays clean.
+
+  **Position handling:** the squiggle bounds are computed via
+  `scanner.getPrevTokenEnd()` (Scanner.kt:186 — returns position right
+  after the last-consumed token's text, before the next token's
+  trivia). This is the canonical way to get end-of-last-token in this
+  parser per CLAUDE.md "Extending squiggle span" entry. The captured
+  `typeProperEnd` is taken AFTER `parsePrimaryType` + array-suffix
+  consumption but BEFORE trailing modifier consumption, so it's the
+  end of the type proper (e.g. end of `string` or `string[]`). For
+  TS17020 at the end, `combinedEnd = scanner.getPrevTokenEnd()` is
+  taken AFTER any trailing `?` consumption, so the leading-? squiggle
+  spans the full `?TYPE?` form when both leading and trailing `?` are
+  present.
+
+  **Test impact:** Flips `expressionWithJSDocTypeArguments_ts` errors-
+  baseline test. Verified: all 20 expected diagnostics fire in the
+  correct positions (squiggle widths and positions match TypeScript's
+  baseline). The companion JS-emit test for the same file
+  (`...compiles to JavaScript matching ...`) remains failing — was
+  failing pre-change too (drops type args entirely producing
+  `(foo);` instead of expected `foo<?>;`). That's a separate emit
+  issue not addressed here. Net delta: 1532 → 1531 failed (8543 →
+  8544 passing). Zero regressions across 10078-test suite (verified
+  via paired full-suite XML diff: same total of 1531 failed
+  testcase-name entries, with `expressionWithJSDocTypeArguments_ts has
+  expected errors` flipping from failure to pass).
+
+  **Foundation note:** the inTypeArgsDepth + inTupleTypeDepth pattern
+  is reusable for any future parser-level diagnostic that depends on
+  whether the current parsing position is inside type arguments or a
+  tuple type. Future work could widen the TS17019/TS17020/TS8020
+  emission scope to other type contexts (type aliases, parameter
+  annotations) by relaxing the `inTypeArgsDepth > 0` gate, but that
+  needs a per-context audit to avoid regressing tests with silent-
+  recovery baselines.
+
   **Session 2026-05-07 (17.137a, 8542 → 8543, +1) — Gate TS2793 on
   `allArgumentsMatch(impl)` in single-overload path + extend
   `getImplementationSignature` to handle MethodDeclaration + treat free
