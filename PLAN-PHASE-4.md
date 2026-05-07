@@ -7239,7 +7239,9 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - ~~`invalidConstraint1_ts`~~: constraint `{ a: T }` needs inter-type-arg substitution for display `{ a: string }`. Attempted `instantiateType(Type.Object, mapper)` — net-zero without the squiggle-length + property-elaboration companion fixes.
 
 **Blocker #3 — TS7006 over-suppression (contextual typing, see below):**
-- `subtypeReductionWithAnyFunctionType_ts`, `intraBindingPatternReferences_ts`, `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`: we over-emit TS7006 because we don't distinguish "context present but param-less" from "context provides param type."
+- ~~`subtypeReductionWithAnyFunctionType_ts`~~ flipped 17.142 (propagate ctx through ArrayLiteralExpression for non-arrow elements only — keeps the union-ambiguity TS7006 case working).
+- ~~`intraBindingPatternReferences_ts`~~ flipped 17.143 (specialized destructuring-default walker for ObjectBindingPattern var-decls with ObjectLiteralExpression initializer; only propagates ctx for typed-function defaults).
+- `contextualOverloadListFromUnionWithPrimitiveNoImplicitAny_ts`: we over-emit 3 TS7006 for `validate: (_t,_p,_s) => false` (contextual `Validate` constituent of `string | RegExp | Validate` should provide param types) and the test ALSO expects 1 TS7006 for `match` (because `Rule = string | FullRule` — `string`'s prototype `normalize` conflicts with `FullRule`'s `normalize`, defeating the contextual sig). Needs full union-with-primitive contextual signature calculation across union members AND across nested union-typed properties — architectural.
 
 **Blocker #2 — JSDoc `@this`/`@type` (see below):**
 - ~~`thisInFunctionCallJs_ts`: TS2683 FP inside `.js` file; needs JSDoc `@this {T}` parsing.~~ **Flipped 17.63 (2026-05-01)** — `hasJSDocThisTag` helper + FunctionExpression bridge.
