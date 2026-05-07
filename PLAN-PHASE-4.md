@@ -2696,6 +2696,60 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-06 (post-17.135 attempts, 8540 unchanged — three
+  reverted approaches documented):** Continuation /loop after 17.135.
+  Confirmed baseline 8540 via fresh full-suite (1535 failed, 3 skipped)
+  and `find_candidates.py --fresh` returned 0/0/0 (filtered from
+  6/77/19). Per anti-loop rule, attempted three approaches; all reverted
+  as net-zero with no flippable test:
+
+  1. **B1.1 retry (TS2774 walker head-identifier narrowing)** — extends
+     17.135's reverted B1.1 to a different site. In
+     `resolveUncalledOperandType` (Checker.kt ~18967), wired
+     `getNarrowedTypeForReference` into the head-identifier resolution
+     path so Union types narrow via the flow graph. The flow graph
+     already creates `FlowCondition(true, expr.left, ...)` before
+     binding the right operand of `&&` (Flow.kt:921), so an inner `perf`
+     of `perf.foo` on the right of `perf && perf.foo` would walk back
+     through the truthy-narrowed condition. Net-zero on the suite
+     (1535 → 1535) — `uncalledFunctionChecksInConditional2_ts` is gated
+     on TS7006 default-on (Guardrails issue: `noImplicitAny`), not on
+     narrowing. Per 17.30c verification, our `getTypeOfBinaryExpression`
+     already returns RHS for `&&` so `const perf = inBrowser &&
+     window.performance` resolves directly to `Performance` without
+     needing chain narrowing. Reverted — net-zero infra without a
+     concrete consumer is overhead.
+
+  2. **TS2353 excess-property-check for ObjectLiteral arg vs
+     `Type.Intersection` paramType** — targets `excessPropertyCheckWithEmptyObject_ts`
+     (1 missing TS2353 at line 4 col 58 for `Object.defineProperty(window,
+     "prop", { value: ..., readonly: false })` vs paramType `PropertyDescriptor
+     & ThisType<any>`). Added a parallel branch in
+     `checkArgumentsAgainstSignature` (Checker.kt ~49416) for `paramType
+     is Type.Intersection && argType is Type.Object` calling the
+     existing `checkExcessProperties` helper (which already supports
+     intersection targets via `collectTargetPropertyNames`). Net-zero
+     on the suite — the diagnostic still didn't fire. Root cause not
+     fully diagnosed; suspected: either (a) `Object.defineProperty<T>`'s
+     overload resolution + generic arg inference produces a `paramType`
+     that isn't `Type.Intersection` at the call-arg position (lib's
+     `defineProperty` is generic with `<T>`), or (b) `Object` (the
+     global) doesn't resolve to a callable type with the expected sig
+     in our checker. Other tests in the corpus that pass intersection
+     paramTypes via call args either don't go through this code path
+     or have already been handled. Reverted.
+
+  3. **B2.1 multi-TypeParam-bipartition for `noStrictGenericChecks_ts`** —
+     not implemented. Test wants TS2322 for `a = b` where
+     `a: <T,U>(x:T, y:U) => [T,U]` and `b: <S>(x:S, y:S) => [S,S]`.
+     Requires detecting bipartition failure: source's S can't map to
+     target's T and U in different parameter positions. Out of scope
+     for a single substep — needs a new "function-type-vs-function-type
+     TypeParam matching" pass.
+
+  Net delta this session: 0 tests, 3 attempts reverted. Findings
+  preserved here so future sessions don't re-tread the same paths.
+
   **Session 2026-05-06 (17.135, 8539 → 8540, +1) — Suppress
   TS2355/TS2366/TS7030 implicit-return checks when return type is an
   unresolved `TypeReference` whose identifier already triggered TS2304.**
