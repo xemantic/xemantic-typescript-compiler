@@ -4820,6 +4820,7 @@ class Checker(
             }
         }
         for (member in cls.members) {
+            collectTypeRefsFromJSDoc(member.leadingComments, tpScope)
             when (member) {
                 is PropertyDeclaration -> member.type?.let { collectTypeRefs(it, tpScope) }
                 is MethodDeclaration -> {
@@ -4979,17 +4980,42 @@ class Checker(
         // span (multi-id tag with mixed used/unused).
         val tagSiblingCount = mutableMapOf<Int, Int>()
         val tagUnusedCount = mutableMapOf<Int, Int>()
+        val tagSpanEnd = mutableMapOf<Int, Int>()
         for (tp in typeParams) {
             if (tp.fromJSDoc && tp.jsDocTagPos >= 0) {
                 tagSiblingCount[tp.jsDocTagPos] = (tagSiblingCount[tp.jsDocTagPos] ?: 0) + 1
+                tagSpanEnd[tp.jsDocTagPos] = tp.jsDocTagEnd
                 if (tp.name.text !in scope.referencedNames) {
                     tagUnusedCount[tp.jsDocTagPos] = (tagUnusedCount[tp.jsDocTagPos] ?: 0) + 1
                 }
             }
         }
+        // TS6205: when a multi-id JSDoc tag has ALL identifiers unused, emit a single
+        // "All type parameters are unused." with the full tag span, and skip the
+        // per-identifier TS6133 emissions for those declarations.
+        val coveredByTs6205 = mutableSetOf<Int>()
+        for ((tagPos, sibs) in tagSiblingCount) {
+            val unused = tagUnusedCount[tagPos] ?: 0
+            val tagEnd = tagSpanEnd[tagPos] ?: continue
+            if (sibs >= 2 && unused == sibs && tagEnd > tagPos) {
+                val (line, character) = getLineAndCharacterOfPosition(source, tagPos)
+                diagnostics.add(Diagnostic(
+                    message = "All type parameters are unused.",
+                    category = DiagnosticCategory.Error,
+                    code = 6205,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = tagPos,
+                    length = tagEnd - tagPos,
+                ))
+                coveredByTs6205.add(tagPos)
+            }
+        }
         for (decl in scope.declarations) {
             if (decl.name in scope.referencedNames) continue
             val tp = decl.declNode as TypeParameter
+            if (tp.fromJSDoc && tp.jsDocTagPos in coveredByTs6205) continue
             val start: Int
             val length: Int
             val tagPos = tp.jsDocTagPos
@@ -5018,6 +5044,53 @@ class Checker(
                 start = start,
                 length = length,
             ))
+        }
+    }
+
+    /**
+     * Walk JSDoc `@type {T}` (and similar) comments and add identifiers
+     * found inside the brace expression to the unused-scope's referencedNames set.
+     * Used to track type-param usage through JSDoc body annotations in JS-like files
+     * (e.g. an `@type {T}` comment on `this.p;` inside a generic class constructor).
+     */
+    private fun collectTypeRefsFromJSDoc(comments: List<Comment>?, scope: UnusedScope) {
+        if (comments.isNullOrEmpty()) return
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (idx < ct.length) {
+                val tagIdx = ct.indexOf("@type", idx)
+                if (tagIdx < 0) break
+                val afterTag = if (tagIdx + 5 < ct.length) ct[tagIdx + 5] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') {
+                    idx = tagIdx + 5
+                    continue
+                }
+                var i = tagIdx + 5
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                if (i >= ct.length || ct[i] != '{') {
+                    idx = i
+                    continue
+                }
+                i++
+                var depth = 1
+                while (i < ct.length && depth > 0) {
+                    val c = ct[i]
+                    when {
+                        c == '{' -> { depth++; i++ }
+                        c == '}' -> { depth--; if (depth > 0) i++ }
+                        c.isLetter() || c == '_' || c == '$' -> {
+                            val nameStart = i
+                            while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                            scope.referencedNames.add(ct.substring(nameStart, i))
+                        }
+                        else -> i++
+                    }
+                }
+                idx = if (i < ct.length) i + 1 else ct.length
+            }
         }
     }
 
@@ -5371,6 +5444,7 @@ class Checker(
 
     /** Recursively collect type refs from statements (for unused type param detection). */
     private fun collectTypeRefsInStatement(stmt: Statement, scope: UnusedScope) {
+        collectTypeRefsFromJSDoc(stmt.leadingComments, scope)
         when (stmt) {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {

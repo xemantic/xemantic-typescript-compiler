@@ -2753,21 +2753,30 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   usage tracking through `@type {T}` references for proper T-used
   detection (both deferred to B5.6+).
 
-- [ ] **B5.6. Blocker #5 — TS6205 "All type parameters are unused" for
+- [x] **B5.6. Blocker #5 — TS6205 "All type parameters are unused" for
   JSDoc `@template T,V` all-unused case + `@type {T}` body usage
-  tracking.** Picks up the residuals of `unusedTypeParameters_templateTag2_ts`
-  after B5.5. Two pieces in coordination:
-  - TS6205 emission when ALL identifiers in a multi-id `@template`
-    tag are unused (full-tag span, replacing per-identifier TS6133s).
-    The current `reportUnusedTypeParams` already groups by `jsDocTagPos`
-    — extend the emission to detect full-group-unused and emit a
-    single TS6205 with the tag span.
-  - Body usage tracking through `@type {T}` JSDoc references: parser
-    already extracts primitive `@type` (B5.1) and full-type
-    `@type` for property declarations (17.58). Extending to record
-    `@type {T}` typeparam references in `collectTypeRefs` would let
-    `class C { constructor() { /** @type {T} */ this.p; } }` correctly
-    mark T as used.
+  tracking (DONE 2026-05-07 in 17.149, +1 — flips
+  `unusedTypeParameters_templateTag2_ts`).** Picks up the residuals of
+  the test after B5.5. Two-piece change in Checker.kt:
+  - TS6205 emission: `reportUnusedTypeParams` records `tagSpanEnd[tagPos]`
+    alongside sibling/unused counts. For tag groups with
+    `siblingCount >= 2 && unusedCount == siblingCount`, emits a single
+    TS6205 with full tag span; declarations covered by TS6205 skip
+    per-identifier TS6133.
+  - Body `@type {T}` walker: new `collectTypeRefsFromJSDoc(comments,
+    scope)` helper scans `/**` comments for `@type` tags (rejecting
+    partial matches like `@typedef`), walks the brace-balanced content
+    adding every identifier-like token to `scope.referencedNames`.
+    Wired into per-class-member iteration in `checkUnusedInClass` and
+    into `collectTypeRefsInStatement`'s `stmt.leadingComments`.
+    tpScope-only by call-site discipline.
+
+  **Verification.** Targeted tests pass; full-suite 10078/1524/3 (+1
+  net). Zero regressions. Closes the B5.x JSDoc `@template` family for
+  the named targets. Wider patterns (`@template T extends Constraint`,
+  `@template T = Default`, InterfaceDeclaration / TypeAliasDeclaration
+  sites) remain deferred — re-promote when a specific failing test
+  demands them.
 
 ---
 
@@ -2888,6 +2897,63 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-07 (17.149, 8550 → 8551, +1 — closes B5.6) — TS6205
+  for all-unused multi-id JSDoc `@template` tags + body `@type {T}`
+  JSDoc usage tracking.** Stacks on 17.148 (B5.5 single-id case) to close
+  the JSDoc `@template` family for `unusedTypeParameters_templateTag2_ts`.
+
+  **Implementation (Checker.kt).**
+  - **Piece 1 — TS6205 emission.** `reportUnusedTypeParams` adds
+    `tagSpanEnd: MutableMap<Int, Int>` alongside the existing
+    sibling/unused counts. Before the per-identifier TS6133 loop, walks
+    the tag groups: when a group has `siblingCount >= 2 && unusedCount
+    == siblingCount`, emits a single TS6205 ("All type parameters are
+    unused.") with the full tag span and records `tagPos` in
+    `coveredByTs6205: MutableSet<Int>`. The per-identifier loop skips
+    declarations whose `tagPos` is in that set. Single-id tags (B5.5
+    case) and partial-unused multi-id tags (e.g. C3's `T,V,X` with T
+    used) keep the per-identifier path.
+  - **Piece 2 — Body `@type {T}` walker.** New
+    `collectTypeRefsFromJSDoc(comments, scope)` helper walks
+    `MultiLineComment` entries starting with `/**` for `@type` tags
+    (rejecting partial-identifier matches like `@typedef` /
+    `@typeOfX`), then for each tag scans the brace-balanced content
+    after `@type {`, adding every identifier-like token to
+    `scope.referencedNames`. Wired in two places:
+    - Per-class-member iteration in `checkUnusedInClass`:
+      `collectTypeRefsFromJSDoc(member.leadingComments, tpScope)`
+      covers PropertyDeclaration `@type`.
+    - Inside `collectTypeRefsInStatement`:
+      `collectTypeRefsFromJSDoc(stmt.leadingComments, scope)` covers
+      `@type` on body statements (e.g.
+      `constructor() { /` + `** @type {T} */ this.p; }` in C1's case).
+
+    The walker is tpScope-only by call-site discipline — every existing
+    caller of `collectTypeRefsInStatement` passes a type-param scope.
+
+  **Verification.**
+  - Targeted: `unusedTypeParameters_templateTag2_ts` produces all 4
+    expected diagnostics (V at C1's full-tag span, TS6205 at C2's
+    full-tag span, V/X per-identifier squiggles in C3) with no extras.
+  - Full suite: 10078 / 1524 / 3 (was 1525 / 3, +1 net). Zero
+    regressions across the JSDoc-template-using tests
+    (`jsFileFunctionOverloads2`, `contravariantOnlyInferenceFromAnnotatedFunctionJs`,
+    `arrowExpressionBodyJSDoc`, `unmetTypeConstraintInJSDocImportCall`,
+    `expandoFunctionContextualTypesJs`, `jsdocClassMissingTypeArguments`,
+    `jsFileMethodOverloads`, `jsFileMethodOverloads2`).
+
+  **Risk note.** The body `@type {T}` walker fires unconditionally for
+  every statement and class-member walk — TS files with stray
+  `@type {T}` JSDoc would also have T marked as used. No regression
+  observed (TS files don't use JSDoc `@type` for type params in the
+  test corpus). If a future test depends on TS-file `@type` JSDoc
+  being IGNORED, gate the walker on a JS-like-file check.
+
+  **Surfaced gotcha (re-confirmed).** `*/` inside Kotlin KDoc again bit
+  the helper's docstring — initial `/** @type {T} */ this.p` example
+  in the doc comment terminated the KDoc. Fixed by rewording to
+  prose ("an `@type {T}` comment on `this.p;`"). Same gotcha as 17.148.
 
   **Session 2026-05-07 (17.148, 8549 → 8550, +1 — closes B5.5 single-id
   case) — Custom `@template` span for TS6133 on JSDoc-derived
