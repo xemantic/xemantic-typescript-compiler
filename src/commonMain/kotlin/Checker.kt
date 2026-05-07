@@ -39024,8 +39024,11 @@ interface DataView {
             is SatisfiesExpression -> getTypeOfExpression(expr.expression)
             is NonNullExpression -> getTypeOfExpression(expr.expression) // strips null/undefined
 
-            // Parenthesized
-            is ParenthesizedExpression -> getTypeOfExpression(expr.expression)
+            // Parenthesized — honor JSDoc type cast `/** @type {T} */ (expr)` when present.
+            is ParenthesizedExpression ->
+                if (expr.jsdocCastType != null) {
+                    try { getTypeFromTypeNode(expr.jsdocCastType) } catch (_: Throwable) { anyType }
+                } else getTypeOfExpression(expr.expression)
 
             // Literals that create objects
             is ArrayLiteralExpression -> getTypeOfArrayLiteral(expr)

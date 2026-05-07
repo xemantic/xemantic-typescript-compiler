@@ -2751,6 +2751,46 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.141, 8544 → 8545, +1) — JSDoc type-cast
+  `/** @type {T} */ (expr)` bridge for ParenthesizedExpression.**
+  Continuation after 17.140. The `jsdocTypeCast_ts` test was 2-of-3
+  expected post-17.140 with 1 FP at line 14 (`let c = /** @type {T} */
+  (x)` JSDoc cast pattern). Implementing the cast bridge flips the test
+  cleanly.
+
+  **Implementation.**
+  - New `jsdocCastType: TypeNode? = null` field on ParenthesizedExpression
+    (Ast.kt:792). Existing transformer call sites use positional args so
+    the new optional field doesn't break compilation.
+  - `parsePrimaryExpression`'s OpenParen branch (Parser.kt ~3949)
+    intercepts before `parseParenthesizedOrArrow`: when `isJsLikeFile &&
+    comments != null`, calls the existing `parsePropertyTypeFromJSDoc`
+    helper (full sub-Parser pattern from 17.58) to extract `T` from
+    `/** @type {T} */`. When the parens result is actually a
+    ParenthesizedExpression (not an ArrowFunction), `.copy(jsdocCastType
+    = T)` attaches the cast. Conservative gate: ArrowFunction case
+    (params form) skipped — `parseParenthesizedOrArrow` may dispatch
+    either way, so type-narrow on result.
+  - `getTypeOfExpression(ParenthesizedExpression)` (Checker.kt ~39028)
+    now uses `getTypeFromTypeNode(jsdocCastType)` when non-null, falling
+    back to the inner expression's type otherwise. Try-catch returns
+    anyType on any type-resolution failure.
+
+  **Verification.**
+  - Targeted `jsdocTypeCast_ts`: passes clean (2 expected TS2322s fire,
+    no FP at line 14).
+  - Full-suite run: 10078 tests, 1530 failed, 3 skipped — net delta +1
+    (8544 → 8545). Zero regressions.
+
+  **17.140 + 17.141 together** form the B5.1 implementation: 17.140 the
+  `@param {primitive}` bridge for parameters, 17.141 the
+  `/** @type {T} */ (expr)` bridge for parens. Both are additive layers
+  on the existing JSDoc bridge family (17.58 PropertyDeclaration / 17.62
+  primitive var-decl / 17.65 broad var-decl / 17.71 TS8024 walker / 17.140
+  Parameter / 17.141 ParenthesizedExpression). Foundation for follow-on
+  substeps when more tests gate on additional JSDoc patterns (rest params,
+  literal-union @param types, @typedef, @template, @overload).
+
   **Session 2026-05-07 (17.140, 8544 unchanged — B5.1 foundation, net-zero)
   — JSDoc `@param {primitive} name` bridge for parameters in JS-like files.**
   Continuation after 17.139. Picked B5.1 as next unchecked blocker substep.

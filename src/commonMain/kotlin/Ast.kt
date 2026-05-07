@@ -786,6 +786,9 @@ data class ParenthesizedExpression(
      *  TS2532 squiggle position computation (covers `expr<T>` from `expr.pos` to
      *  `instantiationEnd`). */
     val instantiationEnd: Int? = null,
+    /** 17.140b: when non-null, this paren is a JSDoc type cast `/** @type {T} */ (expr)`.
+     *  The checker uses this to override the inner expression's type. JS-like files only. */
+    val jsdocCastType: TypeNode? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
