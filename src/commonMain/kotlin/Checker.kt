@@ -8770,9 +8770,15 @@ class Checker(
                 checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped)
             }
             is ArrayLiteralExpression -> {
-                // Do NOT propagate contextual typing through arrays — array element type
-                // depends on the array type parameter which may be a union (ambiguous)
-                expr.elements.forEach { checkImplicitAnyInExpr(it, source, fileName) }
+                // Propagate contextual typing through arrays ONLY for non-arrow elements
+                // (e.g. ObjectLiteralExpression whose properties have function-typed values).
+                // Bare arrows directly in arrays stay un-propagated because TypeScript itself
+                // cannot resolve their param types when the array's contextual type is a
+                // union (`Record<string,F1> | Array<F2>` — see contextualSignatureInArrayElement*).
+                expr.elements.forEach { el ->
+                    val ctx = if (el is ArrowFunction || el is FunctionExpression) false else contextuallyTyped
+                    checkImplicitAnyInExpr(el, source, fileName, ctx)
+                }
             }
             else -> {}
         }
