@@ -57170,7 +57170,9 @@ interface DataView {
     /** Check parameters for type annotations (TS8010) and optional ? modifiers (TS8009). */
     private fun checkTsSyntaxInParams(params: List<Parameter>, source: String, fileName: String) {
         for (param in params) {
-            if (param.type != null) emitTs8xxxForType(param.type!!, source, fileName)
+            // 17.140 / B5.2: skip TS8010 for params whose type was synthesized
+            // from a JSDoc `@param {T} name` tag — those are valid in JS files.
+            if (param.type != null && !param.typeFromJSDoc) emitTs8xxxForType(param.type!!, source, fileName)
             if (param.questionToken) {
                 findQuestionTokenPos(param, source)?.let { emitTs8xxxQuestionToken(it, source, fileName) }
             }

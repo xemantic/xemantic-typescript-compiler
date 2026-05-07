@@ -5008,10 +5008,43 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 if (name.isEmpty() || typeText == null) continue
                 // Skip nested name (`@param obj.foo`) — not a top-level parameter binding.
                 if (i < ct.length && ct[i] == '.') continue
-                val kind = primitiveKeywordKindFor(typeText) ?: continue
-                if (map == null) map = mutableMapOf()
-                if (name !in map!!) {
-                    map[name] = KeywordTypeNode(kind = kind, pos = -1, end = -1)
+                val kind = primitiveKeywordKindFor(typeText)
+                if (kind != null) {
+                    if (map == null) map = mutableMapOf()
+                    if (name !in map!!) {
+                        map[name] = KeywordTypeNode(kind = kind, pos = -1, end = -1)
+                    }
+                    continue
+                }
+                // B5.2: single-Identifier named ref (e.g. `@param {C} p`).
+                // Compute absolute source positions so TS2314 / TS2304 fire
+                // at the right column. Restricted to bare identifier — no
+                // QualifiedName, no type args, no unions; wider patterns
+                // would need position rewriting on nested TypeNodes.
+                val tt = typeText
+                if (tt.isNotEmpty() && (tt[0].isLetter() || tt[0] == '_' || tt[0] == '$') &&
+                    tt.all { it.isLetterOrDigit() || it == '_' || it == '$' }) {
+                    val braceOpen = ct.indexOf('{', tagIdx)
+                    if (braceOpen in 0..<i) {
+                        val braceEnd = ct.indexOf('}', braceOpen + 1)
+                        if (braceEnd > braceOpen) {
+                            val raw = ct.substring(braceOpen + 1, braceEnd)
+                            val leadingWs = raw.length - raw.trimStart().length
+                            val absStart = comment.pos + braceOpen + 1 + leadingWs
+                            val absEnd = absStart + tt.length
+                            val ident = Identifier(text = tt, pos = absStart, end = absEnd)
+                            val typeRef = TypeReference(
+                                typeName = ident,
+                                typeArguments = null,
+                                pos = absStart,
+                                end = absEnd,
+                            )
+                            if (map == null) map = mutableMapOf()
+                            if (name !in map!!) {
+                                map[name] = typeRef
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -2,6 +2,30 @@
 
 **Phase 4 — Checker buildout.** 8,548 / 10,078 tests passing (~85%).
 
+**17.145 (2026-05-07, net-zero, B5.2 foundation)** — JSDoc `@param {T}`
+non-primitive single-Identifier bridge. Extends 17.140's primitive-only
+`parseJSDocParamPrimitiveTypeMap` to also accept a bare identifier
+matching `[A-Za-z_$][\w$]*` (no QualifiedName, no `<>`, no `|`).
+Constructs a `TypeReference(typeName=Identifier, pos=ABS, end=ABS)` with
+absolute source positions: walks back from the matched `@param` tag to
+find the opening `{`, computes the trimmed identifier's offset within
+the brace span, then `comment.pos + brace_open + 1 + leading_ws` gives
+the absolute position. Companion fix in Checker.kt
+(`checkTsSyntaxInParams` ~57170): added `&& !param.typeFromJSDoc` gate
+to TS8010 emission, mirroring 17.65's var-decl pattern. Without this,
+JSDoc-derived param types fired TS8010 ("Type annotations can only be
+used in TypeScript files") since `param.type` is set.
+
+Candidate target `jsdocClassMissingTypeArguments_ts` did NOT flip with
+B5.2 alone — verified via debug println that the bridge fires correctly
+(`scope.has("C") == true`, `getTypeParamInfo("C")` reached) but returns
+`(0, 0, "C")` because our parser doesn't recognize `/** @template T */`
+as a type-parameter declaration on classes. Promoted B5.3 (`@template`
+parser bridge) to the queue with the explicit `getTypeParamInfo` finding
+so the next session can build directly on this foundation. Net delta:
+1527 → 1527 failed (8548 unchanged). Zero regressions across 10078-test
+suite.
+
 **17.144 (2026-05-07, +1, closes B6.1)** — Union-with-primitive contextual
 TS7006 suppression for arrow values in property slots whose contextual type
 is a union containing both a function constituent AND a non-nullish
