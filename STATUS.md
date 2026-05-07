@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,540 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,541 / 10,078 tests passing (~85%).
+
+**17.136 (2026-05-07, +1)** — Add `interface PropertyDescriptor` to
+`BUILTIN_LIB_SOURCE` and update `Object.defineProperty` signature to
+`(o: any, p: string, attributes: PropertyDescriptor & ThisType<any>): any`,
+plus a parallel `paramType is Type.Intersection && argType is Type.Object`
+branch in `checkArgumentsAgainstSignature` (Checker.kt ~49427) that calls
+`checkExcessProperties` after first calling `resolveStructuredTypeMembers`
+on each constituent. The previous session attempted the intersection branch
+on its own and got net-zero — the diagnostic still didn't fire because the
+lib's `defineProperty` had `attributes: any` so the paramType was anyType,
+not Intersection. With the lib signature also updated, the paramType is now
+a proper `Type.Intersection(PropertyDescriptor, Type.Reference<ThisType,
+[any]>)`. Crucially, `collectTargetPropertyNames` returns null for any
+constituent whose `members` is null — so we must call
+`resolveStructuredTypeMembers` on each Object constituent BEFORE the
+existing helper walks them, otherwise the helper bails to null and
+`checkExcessProperties` returns false. Flips `excessPropertyCheckWithEmptyObject_ts`
+(was emitting 2/3 expected TS2353 — the missing one is for `readonly: false`
+in `Object.defineProperty(window, "prop", {...})` against
+`PropertyDescriptor & ThisType<any>`). Net delta: 1535 → 1534 failed
+(8540 → 8541 passing). Zero regressions across 10078-test suite.
 
 **17.135 (2026-05-06, +1)** — Suppress TS2355/TS2366/TS7030 implicit-return
 checks when the return type annotation is a bare `TypeReference` whose

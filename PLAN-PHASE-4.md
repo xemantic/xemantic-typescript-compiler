@@ -2721,6 +2721,62 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-07 (17.136, 8540 → 8541, +1) — `Object.defineProperty`
+  attributes intersection paramType + lib `interface PropertyDescriptor`:**
+  Continuation /loop after the queue-maint session. Confirmed baseline
+  8540 via fresh full-suite (1535 failed, 3 skipped). `find_candidates.py
+  --fresh` returned 0/0/0 (filtered from 6/77/19) per anti-loop rule.
+  Audited the 6/77/19 [SKIP] candidates — most documented in skip-log as
+  architectural-blocker work. Picked `excessPropertyCheckWithEmptyObject_ts`
+  (MISS TS2353 @ (4,58)) which was 2/3 partially-fixed by 17.86's ThisType
+  addition; the 3rd was deferred at the time as "lib signature change risks
+  broader regression" but with PropertyDescriptor undeclared the regression
+  wasn't actually about excess-prop checks — it was about the param being
+  anyType.
+
+  **Two-piece fix:**
+  1. `BUILTIN_LIB_SOURCE` (Checker.kt ~17659): added `interface
+     PropertyDescriptor { configurable?: boolean; enumerable?: boolean;
+     value?: any; writable?: boolean; get?(): any; set?(v: any): void; }`
+     near ThisType. Standard lib.es5.d.ts shape with all-optional members.
+  2. `defineProperty(o: any, p: string, attributes: any): any` →
+     `defineProperty(o: any, p: string, attributes: PropertyDescriptor &
+     ThisType<any>): any` in ObjectConstructor.
+  3. `checkArgumentsAgainstSignature` (Checker.kt ~49427): added a
+     parallel branch BEFORE the existing `paramType is Type.Object` branch
+     that handles `paramType is Type.Intersection && argType is
+     Type.Object` — calls `resolveStructuredTypeMembers` on each Object
+     constituent first, then `checkExcessProperties` with the intersection
+     as target. The `collectTargetPropertyNames` helper already handles
+     `Type.Intersection` (line 50780), but the constituents must have
+     `members` populated for it to return non-null name sets.
+
+  **Why the previous session's attempt was net-zero:** session note at
+  L2865-2882 shows that 2026-05-06 attempted only the
+  `Type.Intersection` branch in `checkArgumentsAgainstSignature` without
+  also updating the lib's `defineProperty` signature. The paramType at
+  that time was `anyType` (lib had `attributes: any`), so the
+  `is Type.Intersection` check was never satisfied. With the lib update,
+  paramType resolves correctly and the branch fires.
+
+  **Critical implementation detail:** `collectTargetPropertyNames` returns
+  `null` when any constituent's `members` is null, and the new branch
+  must explicitly call `resolveStructuredTypeMembers(constituent)` for
+  each Object-typed constituent BEFORE the helper walks them. Skipping
+  this step yields a silent net-zero (no diagnostic emitted). The
+  existing `paramType is Type.Object` branch calls
+  `resolveStructuredTypeMembers(paramType)` — the new Intersection
+  branch must do the same per-constituent.
+
+  **Regression risk assessment:** 11 corpus tests use
+  `Object.defineProperty` directly; 7 reference `PropertyDescriptor` as
+  a type. Both `getterSetterNonAccessor.ts` and `objectLitGetterSetter.ts`
+  pass valid PropertyDescriptor shapes (only `get`/`set`/`configurable`)
+  so they remain unaffected. No tests regressed in the full suite re-run.
+
+  **Test count:** 1535 → 1534 failed (8540 → 8541 passing). Zero
+  regressions across 10078-test suite. Updated STATUS.md.
+
   **Session 2026-05-07 (queue-maint + skip-log audit, 8540 unchanged
   — 0 code changes; queue + audit-trail bookkeeping only):**
   Continuation /loop after the 17.135 + 3-revert session. Confirmed
@@ -7104,7 +7160,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - `unreachableDeclarations_ts` → MISS TS2454 (use-before-assigned for body const referenced in pre-return code) + TS1235 (namespace inside function body). Both new: TS1235 needs a check that ModuleDeclaration isn't nested inside a function scope; TS2454 needs use-before-declaration flow inside reachable code.
 
 **Session 2026-04-20 (16.4ed) additional explored-but-skipped:**
-- `excessPropertyCheckWithEmptyObject_ts` → MISS 2× TS2353 for excess properties against `A & ThisType<any>` and `PropertyDescriptor & ThisType<any>` intersections. Root cause: `ThisType` is NOT declared in our `BUILTIN_LIB_SOURCE`, so `getTypeFromTypeReference("ThisType", [any])` returns `errorType`. Then `getIntersectionType([A, errorType])` sees that errorType has `TypeFlags.Any` flag (`errorType = Type.Intrinsic(TypeFlags.Any, "error")`) and returns `errorType` for the whole intersection (line ~39687: `filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }`). Downstream TS2353 bails on errorType target. Fixing properly would require adding `interface ThisType<T> {}` to the embedded lib source — but 5 tests use ThisType (including `contextualTypeBasedOnIntersectionWithAnyInTheMix5` which currently passes), so this carries regression risk proportional to the +2 gain. Deferred.
+- ~~`excessPropertyCheckWithEmptyObject_ts`~~ FLIPPED 17.136 (2026-05-07) via lib `interface PropertyDescriptor` + `Object.defineProperty(attributes: PropertyDescriptor & ThisType<any>)` + `Type.Intersection` paramType branch in `checkArgumentsAgainstSignature`. → MISS 2× TS2353 for excess properties against `A & ThisType<any>` and `PropertyDescriptor & ThisType<any>` intersections. Root cause: `ThisType` is NOT declared in our `BUILTIN_LIB_SOURCE`, so `getTypeFromTypeReference("ThisType", [any])` returns `errorType`. Then `getIntersectionType([A, errorType])` sees that errorType has `TypeFlags.Any` flag (`errorType = Type.Intrinsic(TypeFlags.Any, "error")`) and returns `errorType` for the whole intersection (line ~39687: `filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }`). Downstream TS2353 bails on errorType target. Fixing properly would require adding `interface ThisType<T> {}` to the embedded lib source — but 5 tests use ThisType (including `contextualTypeBasedOnIntersectionWithAnyInTheMix5` which currently passes), so this carries regression risk proportional to the +2 gain. Deferred.
 - ~~`letConstInCaseClauses_ts__target_es5/es2015__`~~ → flipped (switch-case type-comparability for narrow-literal const subjects landed in an earlier session per session note at line ~3034).
 - `duplicateIdentifierInCatchBlock_ts` → MISS 2× TS2300 for `function w() {}` at file scope + `var w` inside a catch block. Requires binder-level var-hoisting-out-of-catch-block with function-scope collision detection. Regression risk on other declaration-merging tests.
 - ~~`baseCheck_ts` → MISS TS2554 + TS2345 for `super(this.z)` / `super("hello", this.z)` arity + type checks. Needs super-call resolution against the base-class constructor signature.~~ **STALE 2026-05-04: passing — likely flipped by 17.19/17.21 super-call work.**
