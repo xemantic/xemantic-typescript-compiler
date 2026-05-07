@@ -3946,7 +3946,19 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 }
             }
 
-            OpenParen -> parseParenthesizedOrArrow()
+            OpenParen -> {
+                // 17.140b: in JS-like files, `/** @type {T} */ (expr)` is a JSDoc
+                // type cast — the inner expression's type is overridden by T.
+                // Capture jsdoc cast BEFORE parsing so we can attach to the
+                // resulting ParenthesizedExpression. Skip when the result is an
+                // ArrowFunction (parens form arrow params, not a cast target).
+                val jsdocCastType = if (isJsLikeFile && comments != null)
+                    parsePropertyTypeFromJSDoc(comments) else null
+                val parenResult = parseParenthesizedOrArrow()
+                if (jsdocCastType != null && parenResult is ParenthesizedExpression) {
+                    parenResult.copy(jsdocCastType = jsdocCastType)
+                } else parenResult
+            }
             OpenBracket -> parseArrayLiteral()
             OpenBrace -> parseObjectLiteral()
             FunctionKeyword -> parseFunctionExpression()

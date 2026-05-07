@@ -1,6 +1,35 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,544 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,545 / 10,078 tests passing (~85%).
+
+**17.141 (2026-05-07, +1)** — JSDoc type-cast `/** @type {T} */ (expr)` bridge
+for ParenthesizedExpression in JS-like files. Stacks on 17.140's primitive
+`@param {T}` bridge to flip `jsdocTypeCast_ts` cleanly. Implementation:
+- New `jsdocCastType: TypeNode? = null` field on `ParenthesizedExpression`
+  (Ast.kt). Existing transformer call sites use positional args so the new
+  field's default-null doesn't break them.
+- `parsePrimaryExpression`'s OpenParen branch (Parser.kt ~3949) gates on
+  `isJsLikeFile && comments != null` and calls the existing
+  `parsePropertyTypeFromJSDoc(comments)` helper (full sub-Parser pattern,
+  17.58/17.65) to extract `T` from `/** @type {T} */`. When non-null AND
+  the parens result is a `ParenthesizedExpression` (NOT an ArrowFunction
+  — `parseParenthesizedOrArrow` may return either), copy the parens with
+  `jsdocCastType = T`.
+- `getTypeOfExpression(ParenthesizedExpression)` (Checker.kt ~39028) now
+  uses `getTypeFromTypeNode(jsdocCastType)` when non-null, falling back to
+  the inner expression's type otherwise. Try-catch returns anyType on any
+  type-resolution failure.
+
+For `jsdocTypeCast.js`: with 17.140 making `x: string` from
+`@param {string} x`, lines 6/10 emit TS2322 (`string` vs `'a'|'b'` literal
+union) correctly. Line 14 `let c = /** @type {'a'|'b'} */ (x)` now uses the
+inner JSDoc cast — `(x)` evaluates to `'a'|'b'`, assignment to `let c:
+'a'|'b'` is fine, no FP. All 2 expected TS2322s now fire.
+
+Net delta: 1531 → 1530 failed (8544 → 8545 passing). Zero regressions
+across 10078-test suite. Foundation for future tests with JSDoc casts on
+parens — pattern is common in `.js` files migrated from `.ts` with
+@type-style retrofitted annotations.
 
 **17.140 (2026-05-07, net-zero — B5.1 foundation)** — JSDoc `@param {primitive}
 name` bridge for parameters in JS-like files. Mirror of 17.62's primitive-only
