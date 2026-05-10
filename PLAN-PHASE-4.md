@@ -2918,6 +2918,63 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.156, 8558 → 8558, net-zero foundation) — Mirror
+  17.154's `return new C()` inference into the broader
+  `inferReturnTypeFromBody`.** Continuation after 17.155. Pre-flight: full
+  suite reproduces 8558 / 1517 / 3 (matches 17.155 baseline);
+  `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/73/17). Anti-loop
+  check: last 10 commits all real feature commits (17.146–17.155, +9 cumulative).
+  All active blocker substeps B1.1–B6.1 marked complete; surgical pool
+  exhausted post-17.155.
+
+  **Implementation (Checker.kt:45393).** Single-piece extension of
+  `inferReturnTypeFromBody` (the broader callee used by
+  `getReturnTypeOfCallable` for MethodDeclaration / FunctionDeclaration,
+  `getTypeOfMemberDecl` for GetAccessor, and `buildMethodType` for
+  inferred method return types). Added a `is NewExpression ->
+  getReturnTypeOfNewExpression(expr)` branch returning the constructed
+  instance type when non-error / non-any. Wrapped in try/catch to
+  guard against cycle-protection throws. Same fall-through-to-null
+  behavior on errorType / anyType that 17.154 used for the
+  FunctionExpression-only path.
+
+  **Verification.** Full suite: 10078 / 1517 / 3 (was 10078 / 1517 / 3,
+  net-zero). Zero regressions. Surveyed 13 failing tests with
+  method-body `return new` patterns (`returnInConstructor1`,
+  `targetTypeTest1`, `recursiveClassReferenceTest`,
+  `inferFromGenericFunctionReturnTypes3`, `newOperator`,
+  `staticAnonymousTypeNotReferencingTypeParameter`,
+  `isolatedModulesShadowGlobalTypeNotValue`, `arrayAssignmentTest1/2`,
+  `complicatedPrivacy`, `contextualTyping`, `privacyGloImportParseErrors`,
+  `privacyImportParseErrors`) — none gates SOLELY on this inference; each
+  has additional gaps (TS2409 constructor-return-type emission,
+  TS2384 ambient/non-ambient overload mismatch, lib-version Array
+  members 29-vs-25, TS7006 false positives under @strict:false,
+  cross-file privacy emissions). Foundation enables future fix
+  pairings — mirror of 17.154 → 17.155 pattern where the foundation
+  unblocked a TS2322 elaboration line that flipped
+  `interfaceImplementation1_ts`.
+
+  **Surfaced gotcha.** None new — `getReturnTypeOfNewExpression` cycle
+  protection covers the chain; the additional callsite (broader callable
+  family vs FunctionExpression-only) introduces no new recursion path
+  beyond what 17.154 already exercised.
+
+  **Next-session candidates.** Surgical pool genuinely exhausted (191 in
+  skip-log, all characterized as multi-piece or architectural). The 17.154
+  recommendation list still applies: (a) extend `inferReturnTypeFromBody`
+  family to handle Identifier returns (e.g. `return this.field` —
+  PropertyAccessExpression on `this`); (b) Blocker #2 follow-on for
+  multi-arg single-TypeParam best-common-type inference (~3-5 tests);
+  (c) Blocker #3 per-file scope expansion (~30 tests, high regression risk).
+  This session's foundation reduces (a)'s surface area — the
+  `inferReturnTypeFromBody` chain is now unified for both literal +
+  NewExpression returns, so a future Identifier branch can stack uniformly.
+
+  Anti-loop check: this session lands real code (foundation, +0 but bounded
+  blast radius). Prior session was 17.155 (+1). Commit pattern unchanged
+  (`feat(17.156): ...`).
+
   **Session 2026-05-10 (17.154, 8557 → 8557, net-zero foundation) — Extend
   `inferReturnTypeFromFunctionExpressionBody` to handle `return new C()`.**
   Continuation /loop after 17.153. Pre-flight: `find_candidates.py --fresh`
