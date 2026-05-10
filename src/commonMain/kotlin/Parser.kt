@@ -4850,6 +4850,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val nameTrailing = if (token == SyntaxKind.Colon || token == SyntaxKind.Question) {
             trailingComments()
         } else null
+        val questionPos = if (token == SyntaxKind.Question) getPos() else -1
         val question = parseOptional(SyntaxKind.Question)
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
@@ -4858,6 +4859,23 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             nameTrailing != null && trailing != null -> nameTrailing + trailing
             nameTrailing != null -> nameTrailing
             else -> trailing
+        }
+        // 17.169: TS1047 / TS1048 — rest parameter cannot be optional / cannot
+        // have an initializer. TS1047 squiggle is on the `?` itself (length 1);
+        // TS1048 squiggle is on the parameter name.
+        if (dotDotDot && name is Identifier) {
+            if (question && questionPos >= 0) {
+                reportError(
+                    "A rest parameter cannot be optional.",
+                    code = 1047, overrideStart = questionPos, overrideLength = 1,
+                )
+            }
+            if (init != null) {
+                reportError(
+                    "A rest parameter cannot have an initializer.",
+                    code = 1048, overrideStart = name.pos, overrideLength = name.text.length,
+                )
+            }
         }
         return Parameter(
             name = name, type = type, initializer = init, dotDotDotToken = dotDotDot,
