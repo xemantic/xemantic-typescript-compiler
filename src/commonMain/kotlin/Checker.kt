@@ -48122,6 +48122,43 @@ interface DataView {
             val identSymbol = globals[identName]
 
             if (identSymbol != null) {
+                // 17.194: TS2339 for `A.foo()` where A is a top-level class and
+                // `foo` is an instance method (not static). Display uses `typeof
+                // ClassName`. Conservative gate: identifier resolves to a Class
+                // symbol with EXACTLY ONE declaration that is a ClassDeclaration
+                // (no merge with namespace/var/function), valueDeclaration is
+                // also that ClassDeclaration (rules out cross-file leaks where
+                // the symbol is mostly a variable but flagged Class), no extends
+                // (heritage complicates static-member lookup), `foo` isn't a
+                // static member, isn't in RUNTIME_PROPERTIES, and isn't an
+                // exported namespace member. Also gated on PropertyAccessExpression
+                // shape (keySuggestion null or starts with `.`) — element access
+                // `C[1]` is NOT diagnosable here (could be reading a static).
+                val isPropertyAccessShape = keySuggestion == null || keySuggestion.startsWith(".")
+                if (isPropertyAccessShape &&
+                    identSymbol.flags.hasAny(SymbolFlags.Class) &&
+                    !identSymbol.flags.hasAny(SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable or SymbolFlags.Function) &&
+                    identSymbol.declarations.size == 1 &&
+                    propName !in RUNTIME_PROPERTIES &&
+                    propName.isNotEmpty() && propName[0] !in '0'..'9') {
+                    val classDecl = identSymbol.declarations.firstOrNull() as? ClassDeclaration
+                    val isPureClass = classDecl != null && identSymbol.valueDeclaration === classDecl
+                    val hasExtends = classDecl?.heritageClauses?.any {
+                        it.token == SyntaxKind.ExtendsKeyword
+                    } == true
+                    if (isPureClass && !hasExtends && !isStaticMemberOfClass(classDecl!!, propName)) {
+                        if (identSymbol.exports?.containsKey(propName) != true) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type 'typeof $identName'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
+                            return
+                        }
+                    }
+                }
                 // === Namespace/Module property access ===
                 // Skip import aliases — can't reliably resolve imported module exports
                 if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
