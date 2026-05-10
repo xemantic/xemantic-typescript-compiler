@@ -2429,6 +2429,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // as ImportEqualsDeclaration even when the name is a strict-mode reserved word.
         if ((isIdentifier() || isKeyword()) && scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Equals }) {
             val name = parseIdentifier()
+            // 17.207: TS2438 — `import string = ...` (reserved primitive type
+            // name as import alias). Squiggle on the name (length = name text).
+            if (name.text in RESERVED_TYPE_KEYWORD_NAMES) {
+                reportError(
+                    "Import name cannot be '${name.text}'.",
+                    code = 2438, overrideStart = name.pos, overrideLength = name.text.length,
+                )
+            }
             parseExpected(SyntaxKind.Equals)
             val moduleRef: Node =
                 if (token == SyntaxKind.RequireKeyword || (isIdentifier() && scanner.getTokenValue() == "require")) {
@@ -6227,6 +6235,11 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     }
 
 }
+
+private val RESERVED_TYPE_KEYWORD_NAMES = setOf(
+    "string", "number", "boolean", "any", "unknown", "never",
+    "object", "symbol", "bigint", "undefined",
+)
 
 /**
  * Compute an array of line start positions (0-based byte offsets where each line begins).

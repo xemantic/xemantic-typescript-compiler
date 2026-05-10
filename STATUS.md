@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,625 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,627 / 10,078 tests passing (~85%).
+
+**17.207 (2026-05-10, +2)** — TS2438 for import alias using a reserved
+primitive type name. Closes `reservedNameOnInterfaceImport_ts` (both
+JS-emit and errors baselines). In `parseImportEqualsDeclaration` after
+parsing the alias name, check membership in
+`RESERVED_TYPE_KEYWORD_NAMES` (string/number/boolean/any/unknown/never/
+object/symbol/bigint/undefined) and emit TS2438 at the name's position
+with length = name text.
 
 **17.206 (2026-05-10, +2)** — TS2433 for namespace split across files
 from class. Closes `cloduleSplitAcrossFiles_ts` plus one bonus. New
