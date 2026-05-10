@@ -9633,6 +9633,7 @@ class Checker(
                                 param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                             }
                             member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            checkUnusedDestructuredRenames(member.parameters, member.type, source, fileName)
                         }
                         is IndexSignature -> {
                             member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
@@ -10250,6 +10251,7 @@ class Checker(
                     param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
                 }
                 checkUnresolvedInType(type.type, fnScope, source, fileName)
+                checkUnusedDestructuredRenames(type.parameters, type.type, source, fileName)
             }
             is ConstructorType -> {
                 val ctorScope = scope.child()
@@ -10263,6 +10265,7 @@ class Checker(
                     param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
                 }
                 checkUnresolvedInType(type.type, ctorScope, source, fileName)
+                checkUnusedDestructuredRenames(type.parameters, type.type, source, fileName)
             }
             is TypeLiteral -> {
                 for (member in type.members) {
@@ -10282,6 +10285,7 @@ class Checker(
                                 param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                             }
                             member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            checkUnusedDestructuredRenames(member.parameters, member.type, source, fileName)
                         }
                         is IndexSignature -> {
                             member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
@@ -10295,6 +10299,7 @@ class Checker(
                             for (param in member.parameters) {
                                 param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
                             }
+                            checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
                         }
                         else -> {}
                     }
@@ -10818,9 +10823,14 @@ class Checker(
             is Identifier -> {
                 // `typeof <primitive-type-keyword>` (e.g. `typeof string`) — primitive type
                 // keywords have no value symbol, so they're a TS2693 unless the user shadowed
-                // the name as a runtime value (e.g. `var string = "x"`).
+                // the name as a runtime value (e.g. `var string = "x"`, or a parameter binding
+                // such as a destructured rename `({ a: string }) => typeof string`). The latter
+                // doesn't appear in `result.locals`/globals, so consult the local NameScope too;
+                // a TYPE_ONLY_KEYWORD name like `string` is never registered via `addType`, so
+                // `scope.has(name)` being true here implies a value-position binding shadowed it.
                 if (name.text in TYPE_ONLY_KEYWORD_NAMES &&
-                    !nameResolvesToValue(name.text, fileName)
+                    !nameResolvesToValue(name.text, fileName) &&
+                    !scope.has(name.text)
                 ) {
                     emitTS2693(name.text, name, source, fileName)
                     return
@@ -10868,6 +10878,203 @@ class Checker(
             if (exports != null && exports.values.any { it.flags.hasAny(SymbolFlags.Value) }) return false
         }
         return sym.flags.hasAny(SymbolFlags.Type)
+    }
+
+    /**
+     * Emit TS2842 ("'X' is an unused renaming of 'Y'. Did you intend to use it as a type
+     * annotation?") for parameter destructuring renames in function-TYPE positions whose
+     * local binding is never referenced (e.g. via `typeof <name>`). Implementation
+     * function declarations are not subject to TS2842 — those bindings are valid locals
+     * and the unused-binding case is covered by TS6133, not TS2842.
+     *
+     * Also emits TS2843 ("We can only write a type for 'X' by adding a type for the entire
+     * parameter here.") as related info when the parent parameter has no type annotation —
+     * fixing the rename would require annotating the whole parameter.
+     */
+    private fun checkUnusedDestructuredRenames(
+        params: List<Parameter>,
+        returnType: TypeNode?,
+        source: String,
+        fileName: String,
+    ) {
+        // Build the list of TypeNodes in scope where the binding could be referenced:
+        // the function-type's return type, plus other parameters' explicit type annotations.
+        val typesInScope = mutableListOf<TypeNode>()
+        returnType?.let { typesInScope.add(it) }
+        for (p in params) p.type?.let { typesInScope.add(it) }
+
+        for (param in params) {
+            val name = param.name
+            if (name !is ObjectBindingPattern) continue
+            for (element in name.elements) {
+                val propertyName = element.propertyName ?: continue
+                val localName = element.name
+                if (localName !is Identifier) continue
+                if (typesInScope.any { isNameReferencedInTypeQuery(localName.text, it) }) continue
+                emitTS2842(localName, propertyName, param, source, fileName)
+            }
+        }
+    }
+
+    /**
+     * Walks a TypeNode looking for `typeof <name>` references where the operand is the
+     * exact identifier [name]. Used to detect whether a destructured-rename binding is
+     * referenced in a function-type's type-position scope.
+     */
+    private fun isNameReferencedInTypeQuery(name: String, type: TypeNode): Boolean {
+        when (type) {
+            is TypeQuery -> {
+                val expr = type.exprName
+                if (expr is Identifier && expr.text == name) return true
+                if (expr is QualifiedName) {
+                    var current: Node = expr
+                    while (current is QualifiedName) current = current.left
+                    if (current is Identifier && current.text == name) return true
+                }
+            }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true } }
+                if (isNameReferencedInTypeQuery(name, type.type)) return true
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true } }
+                if (isNameReferencedInTypeQuery(name, type.type)) return true
+            }
+            is UnionType -> type.types.forEach { if (isNameReferencedInTypeQuery(name, it)) return true }
+            is IntersectionType -> type.types.forEach { if (isNameReferencedInTypeQuery(name, it)) return true }
+            is ParenthesizedType -> if (isNameReferencedInTypeQuery(name, type.type)) return true
+            is ArrayType -> if (isNameReferencedInTypeQuery(name, type.elementType)) return true
+            is TupleType -> type.elements.forEach {
+                if (isNameReferencedInTypeQuery(name, it)) return true
+            }
+            is OptionalType -> if (isNameReferencedInTypeQuery(name, type.type)) return true
+            is RestType -> if (isNameReferencedInTypeQuery(name, type.type)) return true
+            is NamedTupleMember -> if (isNameReferencedInTypeQuery(name, type.type)) return true
+            is ConditionalType -> {
+                if (isNameReferencedInTypeQuery(name, type.checkType)) return true
+                if (isNameReferencedInTypeQuery(name, type.extendsType)) return true
+                if (isNameReferencedInTypeQuery(name, type.trueType)) return true
+                if (isNameReferencedInTypeQuery(name, type.falseType)) return true
+            }
+            is IndexedAccessType -> {
+                if (isNameReferencedInTypeQuery(name, type.objectType)) return true
+                if (isNameReferencedInTypeQuery(name, type.indexType)) return true
+            }
+            is TypeOperator -> if (isNameReferencedInTypeQuery(name, type.type)) return true
+            is MappedType -> {
+                type.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
+                type.nameType?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
+            }
+            is TemplateLiteralType -> type.templateSpans.forEach {
+                if (isNameReferencedInTypeQuery(name, it.type)) return true
+            }
+            is TypeReference -> type.typeArguments?.forEach {
+                if (isNameReferencedInTypeQuery(name, it)) return true
+            }
+            is TypeLiteral -> {
+                for (member in type.members) {
+                    when (member) {
+                        is PropertyDeclaration -> member.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
+                        is MethodDeclaration -> {
+                            member.parameters.forEach { p -> p.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true } }
+                            member.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
+                        }
+                        is IndexSignature -> {
+                            member.parameters.forEach { p -> p.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true } }
+                            member.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
+        }
+        return false
+    }
+
+    private fun emitTS2842(
+        localName: Identifier,
+        propertyName: NameNode,
+        param: Parameter,
+        source: String,
+        fileName: String,
+    ) {
+        val displayName = formatBindingPropertyName(propertyName, source)
+        val (line, character) = getLineAndCharacterOfPosition(source, localName.pos)
+        val relatedInfo = if (param.type == null) {
+            buildTs2843RelatedInfo(displayName, param, source, fileName)
+        } else null
+        diagnostics.add(Diagnostic(
+            message = "'${localName.text}' is an unused renaming of '$displayName'. Did you intend to use it as a type annotation?",
+            category = DiagnosticCategory.Error,
+            code = 2842,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = localName.pos,
+            length = localName.text.length,
+            relatedInformation = relatedInfo?.let { listOf(it) } ?: emptyList(),
+        ))
+    }
+
+    /**
+     * Format a BindingElement.propertyName for the TS2842 diagnostic message:
+     * Identifier `a` → "a", StringLiteral `"a"` → '"a"', NumericLiteral `2` → "2",
+     * ComputedPropertyName `[expr]` → "[expr]" with the expression rendered from source.
+     */
+    private fun formatBindingPropertyName(propName: NameNode, source: String): String {
+        return when (propName) {
+            is Identifier -> propName.text
+            is StringLiteralNode -> "\"${propName.text}\""
+            is NumericLiteralNode -> propName.text
+            is ComputedPropertyName -> {
+                val expr = propName.expression
+                val text = when (expr) {
+                    is StringLiteralNode -> "\"${expr.text}\""
+                    is NumericLiteralNode -> expr.text
+                    is Identifier -> expr.text
+                    else -> source.substring(expr.pos, minOf(expr.end, source.length))
+                }
+                "[$text]"
+            }
+            else -> "?"
+        }
+    }
+
+    /**
+     * Build the TS2843 "We can only write a type for 'X' by adding a type for the entire
+     * parameter here." related info pointing to the parameter list's closing `)`. Per the
+     * `node.end` overshoots-by-one-token gotcha, [param.end] is the scanner position AFTER
+     * `nextToken()` was called past the parameter — typically already past the closing `)`
+     * and the following `=>` / `:` token. So we scan BACKWARD from `param.end - 1` for the
+     * nearest `)` (within a bounded window to avoid runaway). Forward scan from `param.end`
+     * would skip the correct `)` and hit a later parameter list's `)` instead.
+     */
+    private fun buildTs2843RelatedInfo(
+        displayName: String,
+        param: Parameter,
+        source: String,
+        fileName: String,
+    ): Diagnostic? {
+        var pos = (param.end - 1).coerceAtMost(source.length - 1)
+        val limit = param.pos
+        while (pos >= limit && pos >= 0) {
+            if (source[pos] == ')') {
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                return Diagnostic(
+                    message = "We can only write a type for '$displayName' by adding a type for the entire parameter here.",
+                    category = DiagnosticCategory.Error,
+                    code = 2843,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = pos,
+                    length = 1,
+                )
+            }
+            pos--
+        }
+        return null
     }
 
     /**
@@ -20231,11 +20438,7 @@ interface DataView {
                 // Remove parameter names — they are values, not types
                 val innerValues = valueNames.toMutableSet()
                 for (p in stmt.parameters) {
-                    val pName = p.name
-                    if (pName is Identifier) {
-                        innerTypeOnly.remove(pName.text)
-                        innerValues.add(pName.text)
-                    }
+                    addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
                 stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues) }
             }
@@ -20423,26 +20626,60 @@ interface DataView {
             // Descend into function/arrow bodies — type-as-value checks apply inside
             // IIFE-style `(function() { new ForwardLibType; })` patterns.
             is FunctionExpression -> {
+                val innerTypeOnly = typeOnlyNames.toMutableSet()
                 val innerValues = valueNames.toMutableSet()
                 for (p in expr.parameters) {
-                    val pName = p.name
-                    if (pName is Identifier) innerValues.add(pName.text)
+                    addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
-                checkTypeAsValueInStatements(expr.body.statements, source, fileName, typeOnlyNames, innerValues, namespaceOnlyNames)
+                checkTypeAsValueInStatements(expr.body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
             }
             is ArrowFunction -> {
+                val innerTypeOnly = typeOnlyNames.toMutableSet()
                 val innerValues = valueNames.toMutableSet()
                 for (p in expr.parameters) {
-                    val pName = p.name
-                    if (pName is Identifier) innerValues.add(pName.text)
+                    addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
                 when (val body = expr.body) {
-                    is Block -> checkTypeAsValueInStatements(body.statements, source, fileName, typeOnlyNames, innerValues, namespaceOnlyNames)
-                    is Expression -> checkTypeAsValueInExpr(body, source, fileName, typeOnlyNames, innerValues, namespaceOnlyNames)
+                    is Block -> checkTypeAsValueInStatements(body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
+                    is Expression -> checkTypeAsValueInExpr(body, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
                     else -> {}
                 }
             }
             is ArrayLiteralExpression -> expr.elements.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk a parameter binding (Identifier / ObjectBindingPattern / ArrayBindingPattern)
+     * and register every introduced local-name in [innerValues] so subsequent body checks
+     * don't flag them as type-as-value misuses. Each registered name is also removed from
+     * [innerTypeOnly] (the parameter binding shadows any same-named outer type-only symbol).
+     * Mirrors [addBindingName] but populates the type-as-value walker's name sets instead
+     * of a [NameScope].
+     */
+    private fun addParamBindingNamesToValues(
+        name: Node,
+        innerTypeOnly: MutableSet<String>,
+        innerValues: MutableSet<String>,
+    ) {
+        when (name) {
+            is Identifier -> {
+                innerTypeOnly.remove(name.text)
+                innerValues.add(name.text)
+            }
+            is ObjectBindingPattern -> {
+                for (element in name.elements) {
+                    addParamBindingNamesToValues(element.name, innerTypeOnly, innerValues)
+                }
+            }
+            is ArrayBindingPattern -> {
+                for (element in name.elements) {
+                    if (element is BindingElement) {
+                        addParamBindingNamesToValues(element.name, innerTypeOnly, innerValues)
+                    }
+                }
+            }
             else -> {}
         }
     }
