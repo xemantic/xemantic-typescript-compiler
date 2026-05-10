@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,636 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,637 / 10,078 tests passing (~85%).
+
+**17.214b (2026-05-10, +1)** — Fix `resolveModuleSpecifierStrictRelative`
+to preserve leading `/` from absolute contextFileName paths. Closes
+`exportAssignmentWithoutAllowSyntheticDefaultImportsError_ts` which
+17.214 had regressed (FP TS2307 for `import bar from './bar'` from
+`/foo.ts` where `/bar.ts` exists). Without the fix, the resolver
+collapsed `dir` to "" and produced `bar` instead of `/bar` as the
+candidate path, missing the `/bar.ts` key in `fileResults`.
 
 **17.214 (2026-05-10, +2)** — TS2307 for unresolved relative imports
 under ES module kinds (ES2015/ES2020/ES2022/ESNext/Preserve) with
