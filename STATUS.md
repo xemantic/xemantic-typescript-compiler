@@ -1,6 +1,34 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,593 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,600 / 10,078 tests passing (~85%).
+
+**17.186 (2026-05-10, +3)** — TS2394 for TypeLiteral overload
+mismatch. Closes `functionOverloads17_ts`, `functionOverloads18_ts`
+plus one bonus. In `isTypeNodeCompatible`, add a TypeLiteral↔
+TypeLiteral branch that compares PropertyDeclaration members by name
++ type structurally. Returns false on different name sets or
+recursively-incompatible same-named members; bails to true for non-
+PropertyDeclaration members.
+
+**17.185 (2026-05-10, +1)** — TS2796 for adjacent template literals.
+Closes `missingCommaInTemplateStringsArray_ts`. In
+`parseLeftHandSideExpression`'s NoSubstitutionTemplateLiteral/
+TemplateHead branch, when the tag is itself a template literal,
+emit TS2796 BEFORE constructing TaggedTemplateExpression. Span
+covers the tag literal, computed by walking back from `template.pos`
+to the last non-whitespace char.
+
+**17.184 (2026-05-10, +1)** — TS2407 for for-in over identifier-
+typed primitive. Closes `forInStatement2_ts`. Extended
+`simpleRhsNonObjectDisplay`'s Identifier branch to look up the
+symbol's value declaration and return a primitive display when the
+type annotation is a `KeywordTypeNode` of number/boolean/bigint/
+symbol/void/never.
+
+**17.183 (2026-05-10, +2)** — TS2452 for enum member with
+numeric/bigint name. Closes `enumWithBigint_ts` plus one bonus.
+In `parseEnumDeclaration`, after `parsePropertyName` returns, emit
+TS2452 when the name is `NumericLiteralNode` or `BigIntLiteralNode`.
 
 **17.182 (2026-05-10, +2)** — TS1317 for rest parameter as parameter
 property. Closes `restParamModifier2_ts` plus one bonus. In
