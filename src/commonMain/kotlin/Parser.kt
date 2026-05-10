@@ -2962,6 +2962,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // constructor parameter properties). Also consume export/async as modifiers for error
         // recovery, since TypeScript still emits the parameter in error cases.
         val mods = mutableSetOf<ModifierFlag>()
+        var hasAccess = false
         loop@ while (true) {
             val mod = when {
                 token == SyntaxKind.PublicKeyword -> ModifierFlag.Public
@@ -2989,6 +2990,27 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                         || token == SyntaxKind.OverrideKeyword || token == SyntaxKind.StaticKeyword
             }
             if (!nextIsBindingName) break@loop
+            // 17.192: TS1028 — duplicate access modifier on parameter property.
+            // `constructor(public public a)` / `constructor(private public a)`
+            // emits "Accessibility modifier already seen." on the SECOND
+            // access keyword.
+            val isAccess = mod == ModifierFlag.Public || mod == ModifierFlag.Private ||
+                mod == ModifierFlag.Protected
+            if (isAccess && hasAccess) {
+                val keyword = when (token) {
+                    SyntaxKind.PublicKeyword -> "public"
+                    SyntaxKind.PrivateKeyword -> "private"
+                    SyntaxKind.ProtectedKeyword -> "protected"
+                    else -> ""
+                }
+                if (keyword.isNotEmpty()) {
+                    reportError(
+                        "Accessibility modifier already seen.",
+                        code = 1028, overrideStart = getPos(), overrideLength = keyword.length,
+                    )
+                }
+            }
+            if (isAccess) hasAccess = true
             mods.add(mod)
             nextToken()
         }
