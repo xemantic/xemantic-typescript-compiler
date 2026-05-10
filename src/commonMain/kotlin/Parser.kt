@@ -2549,7 +2549,19 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
 
             FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
-            ClassKeyword -> parseClassDeclaration(modifiers, comments)
+            ClassKeyword -> {
+                val classDecl = parseClassDeclaration(modifiers, comments)
+                // 17.165: TS1211 — `export class { }` (no `default`, no name).
+                // Squiggle on the outer `export` keyword captured at this branch's
+                // outer `pos`, length=6 (length of "export").
+                if (classDecl.name == null) {
+                    reportError(
+                        "A class declaration without the 'default' modifier must have a name.",
+                        code = 1211, overrideStart = pos, overrideLength = 6,
+                    )
+                }
+                classDecl
+            }
             InterfaceKeyword -> parseInterfaceDeclaration(modifiers, comments)
             TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
             EnumKeyword -> parseEnumDeclaration(modifiers, comments)
