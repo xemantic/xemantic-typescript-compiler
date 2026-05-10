@@ -1894,6 +1894,24 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val modifiers = parseModifiers()
 
         if (token == SyntaxKind.OpenBracket) {
+            // 17.168: TS1071 — `public` / `private` / `protected` modifier
+            // cannot appear on an index signature inside an interface /
+            // type literal. The squiggle is on the modifier keyword (length
+            // 6/7/9) at the captured `pos`. Only emit for the FIRST present
+            // access modifier — TypeScript reports one diagnostic per
+            // member.
+            val accessKeyword = when {
+                ModifierFlag.Public in modifiers -> "public"
+                ModifierFlag.Private in modifiers -> "private"
+                ModifierFlag.Protected in modifiers -> "protected"
+                else -> null
+            }
+            if (accessKeyword != null) {
+                reportError(
+                    "'$accessKeyword' modifier cannot appear on an index signature.",
+                    code = 1071, overrideStart = pos, overrideLength = accessKeyword.length,
+                )
+            }
             // Index signature or computed property
             return parseIndexSignatureOrProperty(modifiers, pos)
         }
