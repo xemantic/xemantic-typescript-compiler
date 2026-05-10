@@ -11169,6 +11169,27 @@ class Checker(
                     emitTS2693(name.text, name, source, fileName)
                     return
                 }
+                // 17.212: `typeof default` — `default` is a keyword and not a
+                // valid identifier in type-query position. Even when the file
+                // has an `export default` (which creates a `default` symbol
+                // in the file's exports), referencing it as `typeof default`
+                // is not valid syntax — TypeScript emits TS2304 here.
+                // Without this check, `default` is silently skipped via the
+                // KEYWORD_IDENTIFIERS guard in `checkIdentifierResolved`.
+                if (name.text == "default") {
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find name 'default'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2304,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = name.pos,
+                        length = 7,
+                    ))
+                    return
+                }
                 checkIdentifierResolved(name.text, name, scope, source, fileName, inTypePosition = false, suppressClassSuggestion = true)
             }
             is QualifiedName -> {
