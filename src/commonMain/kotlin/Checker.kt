@@ -770,6 +770,10 @@ class Checker(
         checkSubsequentVarTypes()
         // 65c. Check `import x = require(...)` inside namespace bodies (TS1147)
         checkRequireImportInNamespace()
+        // 65d. Check BigInt exponentiation under target<ES2016 (TS2791)
+        if (options.effectiveTarget < ScriptTarget.ES2016) {
+            checkBigIntExponentiation()
+        }
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
         // 67. Check export specifiers for non-local declarations (TS2661)
@@ -12307,6 +12311,136 @@ class Checker(
             // Check function-level and namespace-level vars
             checkSubsequentVarTypesInStatements(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    /**
+     * 17.203: TS2791 — `BigInt(x) ** BigInt(y)` and `bigint **= BigInt(z)`
+     * cannot be performed when target < ES2016 (no native `**` operator).
+     * Squiggle covers the entire BinaryExpression. Conservative gate: only
+     * fires when at least one operand is a CallExpression to bare Identifier
+     * `BigInt` (definitive bigint type) — broader detection (any bigint-typed
+     * expression) would need full type resolution.
+     */
+    private fun checkBigIntExponentiation() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkBigIntExpInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkBigIntExpInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkBigIntExpInStmt(stmt, source, fileName)
+    }
+
+    private fun walkBigIntExpInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> walkBigIntExpInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkBigIntExpInExpr(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkBigIntExpInExpr(it, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { walkBigIntExpInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is Block -> walkBigIntExpInStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkBigIntExpInExpr(stmt.expression, source, fileName)
+                walkBigIntExpInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkBigIntExpInStmt(it, source, fileName) }
+            }
+            is ForStatement -> {
+                stmt.condition?.let { walkBigIntExpInExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkBigIntExpInExpr(it, source, fileName) }
+                walkBigIntExpInStmt(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                walkBigIntExpInExpr(stmt.expression, source, fileName)
+                walkBigIntExpInStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkBigIntExpInStmt(stmt.statement, source, fileName)
+                walkBigIntExpInExpr(stmt.expression, source, fileName)
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                walkBigIntExpInStmts(it.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkBigIntExpInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                val isExp = expr.operator == SyntaxKind.AsteriskAsterisk ||
+                    expr.operator == SyntaxKind.AsteriskAsteriskEquals
+                if (isExp && (isBigIntCall(expr.left) || isBigIntCall(expr.right))) {
+                    val start = expr.pos
+                    val end = expressionTrueEnd(expr)
+                    val length = (end - start).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Exponentiation cannot be performed on 'bigint' values unless the 'target' option is set to 'es2016' or later.",
+                        category = DiagnosticCategory.Error,
+                        code = 2791,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                walkBigIntExpInExpr(expr.left, source, fileName)
+                walkBigIntExpInExpr(expr.right, source, fileName)
+            }
+            is CallExpression -> {
+                walkBigIntExpInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkBigIntExpInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                walkBigIntExpInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkBigIntExpInExpr(it, source, fileName) }
+            }
+            is ParenthesizedExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                walkBigIntExpInExpr(expr.condition, source, fileName)
+                walkBigIntExpInExpr(expr.whenTrue, source, fileName)
+                walkBigIntExpInExpr(expr.whenFalse, source, fileName)
+            }
+            is PropertyAccessExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkBigIntExpInExpr(expr.expression, source, fileName)
+                walkBigIntExpInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) walkBigIntExpInExpr(el, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkBigIntExpInExpr(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkBigIntExpInExpr(prop.expression, source, fileName)
+                else -> {}
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkBigIntExpInStmts(body.statements, source, fileName)
+                is Expression -> walkBigIntExpInExpr(body, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> walkBigIntExpInStmts(expr.body.statements, source, fileName)
+            is PrefixUnaryExpression -> walkBigIntExpInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkBigIntExpInExpr(expr.operand, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** True when [expr] is a `BigInt(...)` call (bare Identifier callee). */
+    private fun isBigIntCall(expr: Expression): Boolean {
+        return expr is CallExpression && expr.expression is Identifier &&
+            (expr.expression as Identifier).text == "BigInt"
     }
 
     /**
