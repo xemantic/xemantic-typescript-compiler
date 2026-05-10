@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,627 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,630 / 10,078 tests passing (~85%).
+
+**17.208 (2026-05-10, +3)** — TS2384/TS2383/TS2386 for overload modifier
+mismatch. Closes `overloadModifiersMustAgree_ts` plus 2 bonus.
+Extended `checkOverloadsInStatements`: after locating the impl, compare
+each overload's `Declare`/`Export` modifiers to the impl's; emit TS2384
+"must all be ambient or non-ambient" / TS2383 "must all be exported or
+non-exported" on the disagreeing overload's name. Added new
+`checkInterfaceMemberOptionalOverloads` walker invoked via the same
+recursive switch — groups MethodDeclarations within an InterfaceDecl
+by name and emits TS2386 "must all be optional or required" on each
+member after the first whose `questionToken` differs from the first.
 
 **17.207 (2026-05-10, +2)** — TS2438 for import alias using a reserved
 primitive type name. Closes `reservedNameOnInterfaceImport_ts` (both

@@ -42672,6 +42672,43 @@ interface DataView {
             val overloads = decls.filter { it.body == null }
             if (overloads.isEmpty()) continue
 
+            // 17.208: TS2384 (ambient/non-ambient) and TS2383 (export/non-export)
+            // for function overload groups. Compare each overload to the impl;
+            // emit on the OVERLOAD whose modifier disagrees with the impl.
+            val implAmbient = ModifierFlag.Declare in impl.modifiers
+            val implExported = ModifierFlag.Export in impl.modifiers
+            for (overload in overloads) {
+                val nameNode = overload.name ?: continue
+                val olAmbient = ModifierFlag.Declare in overload.modifiers
+                val olExported = ModifierFlag.Export in overload.modifiers
+                if (olAmbient != implAmbient) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Overload signatures must all be ambient or non-ambient.",
+                        category = DiagnosticCategory.Error,
+                        code = 2384,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameNode.pos,
+                        length = nameNode.text.length,
+                    ))
+                }
+                if (olExported != implExported) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Overload signatures must all be exported or non-exported.",
+                        category = DiagnosticCategory.Error,
+                        code = 2383,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameNode.pos,
+                        length = nameNode.text.length,
+                    ))
+                }
+            }
+
             for ((idx, overload) in overloads.withIndex()) {
                 // Skip duplicate overloads (same param types as a previously-reported one)
                 if (idx > 0 && isDuplicateOverload(overload, overloads[idx - 1])) continue
@@ -42723,7 +42760,52 @@ interface DataView {
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                     checkOverloadsInStatements(it.statements, source, fileName)
                 }
+                is InterfaceDeclaration -> checkInterfaceMemberOptionalOverloads(stmt.members, source, fileName)
                 else -> {}
+            }
+        }
+    }
+
+    /**
+     * 17.208: TS2386 — within an interface, method overloads grouped by name
+     * must all agree on the optional `?` token. When the group spans both
+     * optional and required signatures, emit TS2386 on each member whose
+     * `questionToken` differs from the FIRST member in the group.
+     */
+    private fun checkInterfaceMemberOptionalOverloads(members: List<ClassElement>, source: String, fileName: String) {
+        val methodGroups = mutableMapOf<String, MutableList<MethodDeclaration>>()
+        for (m in members) {
+            if (m is MethodDeclaration) {
+                val name = when (val n = m.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> continue
+                }
+                methodGroups.getOrPut(name) { mutableListOf() }.add(m)
+            }
+        }
+        for ((_, decls) in methodGroups) {
+            if (decls.size < 2) continue
+            val firstOptional = decls.first().questionToken
+            for (md in decls.drop(1)) {
+                if (md.questionToken == firstOptional) continue
+                val nameNode = md.name
+                val nameText = when (nameNode) {
+                    is Identifier -> nameNode.text
+                    is StringLiteralNode -> nameNode.text
+                    else -> continue
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Overload signatures must all be optional or required.",
+                    category = DiagnosticCategory.Error,
+                    code = 2386,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = nameNode.pos,
+                    length = nameText.length,
+                ))
             }
         }
     }
