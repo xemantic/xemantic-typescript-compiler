@@ -9619,6 +9619,11 @@ class Checker(
                         // 17.163: TS2312 for `interface I<T> extends T {}` — interface
                         // can only extend an object type, not a bare type parameter.
                         emitTs2312ForInterfaceExtendsTypeParam(type.expression, ifaceScope, scope, source, fileName)
+                        // 17.172: TS2499 — interface extends expression must be an
+                        // entity name (Identifier or QualifiedName, with optional
+                        // type arguments). `interface X extends (typeof A) {}` and
+                        // similar non-entity-name expressions fire TS2499.
+                        emitTs2499ForInterfaceExtendsNonEntityName(type.expression, source, fileName)
                     }
                 }
                 for (member in stmt.members) {
@@ -9882,6 +9887,49 @@ class Checker(
             character = character,
             start = expr.pos,
             length = expr.text.length,
+        ))
+    }
+
+    /**
+     * 17.172: Emit TS2499 "An interface can only extend an identifier/qualified-name
+     * with optional type arguments." when an interface heritage clause's expression
+     * is anything other than Identifier or QualifiedName. Squiggle covers the
+     * full expression — for ParenthesizedExpression the close-paren is found by
+     * forward-scanning the source from `expr.pos` (matching parens depth) so the
+     * span doesn't depend on `node.end` overshoot.
+     */
+    private fun emitTs2499ForInterfaceExtendsNonEntityName(
+        expr: Expression, source: String, fileName: String,
+    ) {
+        // Conservative gate: only fire for ParenthesizedExpression — the
+        // narrow test-target shape `interface X extends (typeof A) {}`.
+        // Other expression shapes our parser produces for legitimate entity
+        // names (e.g. `IA<T>` may parse as a complex node depending on the
+        // type-argument resolution path) would FP-fire if we widened.
+        if (expr !is ParenthesizedExpression) return
+        if (expr.pos < 0 || expr.pos >= source.length || source[expr.pos] != '(') return
+        var depth = 0
+        var i = expr.pos
+        while (i < source.length) {
+            val c = source[i]
+            if (c == '(') depth++
+            else if (c == ')') {
+                depth--
+                if (depth == 0) { i++; break }
+            }
+            i++
+        }
+        val length = (i - expr.pos).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "An interface can only extend an identifier/qualified-name with optional type arguments.",
+            category = DiagnosticCategory.Error,
+            code = 2499,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = length,
         ))
     }
 
