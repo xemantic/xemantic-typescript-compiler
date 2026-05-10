@@ -1,6 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,631 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,632 / 10,078 tests passing (~85%).
+
+**17.211 (2026-05-10, +1)** — TS2394 (constructor overload-vs-impl
+arity) + TS2300 (duplicate parameter-property name across overload
++ impl). Closes `parameterPropertyInConstructor2_ts`. New
+`checkConstructorOverloadCompatibility` walker called from the
+ClassDeclaration branch. Mirrors the existing method overload
+arity check but for ctors. Also detects duplicate parameter-
+property names between overload and impl, emitting TS2300 on the
+impl's parameter name (matching TypeScript's "second declaration"
+position).
 
 **17.210 (2026-05-10, +0 foundation)** — TS2591 instead of TS2307 for
 `import = require('node-builtin')`. Recognizes Node.js built-in module
