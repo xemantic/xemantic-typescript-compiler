@@ -25336,7 +25336,14 @@ interface DataView {
                         body?.let { walkForIllegalSuperCalls(it.statements, source, fileName) }
                     }
                 }
-                is FunctionDeclaration -> stmt.body?.let { walkForIllegalSuperCalls(it.statements, source, fileName) }
+                is FunctionDeclaration -> stmt.body?.let { body ->
+                    // 17.197: top-level FunctionDeclaration bodies cannot
+                    // contain `super(...)` calls. Walk for direct super
+                    // calls (treat as `inNestedFn = true`) AND continue the
+                    // class-search recursion via walkForIllegalSuperCalls.
+                    findNestedSuperCalls(body.statements, source, fileName, inNestedFn = true)
+                    walkForIllegalSuperCalls(body.statements, source, fileName)
+                }
                 is ModuleDeclaration -> {
                     val body = stmt.body
                     if (body is ModuleBlock) walkForIllegalSuperCalls(body.statements, source, fileName)
