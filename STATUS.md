@@ -1,6 +1,47 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,556 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,557 / 10,078 tests passing (~85%).
+
+**17.153 (2026-05-10, +1)** — Push interface typeParameters into scope for
+call/construct signature resolution + TS2345 for null/undefined arg vs
+concrete `Type.Reference` parameter. Flips
+`inheritedGenericCallSignature_ts` (1 test).
+
+The bug was two-fold:
+
+(1) `resolveInterfaceMembers`'s call-signature branch (Checker.kt ~39141) did
+NOT push the enclosing interface's `typeParameters` into
+`currentTypeParamScope` before resolving the signature's return type and
+parameter type annotations. For `interface I1<T> { (a: T): T; }`, both `T`
+references resolved through `getTypeFromTypeNode(T_ref) →
+getTypeFromTypeReference` where `currentTypeParamScope` was null →
+fell through globals lookup → returned `errorType`. The errorType was
+then cached in `nodeTypes` (cacheable when scope is null). Downstream
+`instantiateSignature` calls (e.g. `resolveReferenceMembers(I1<T[]>)`'s
+`I1.callSignatures.map { instantiateSignature(it, mapper={I1.T → I2.T[]}) }`)
+were no-ops on errorType — so `I2<Date>`'s inherited callSig param ended
+up as errorType instead of `Date[]`.
+
+Fix: in the call/construct sig branch, push the interface's `typeParameters`
+(plus any signature-own `typeParameters`) into scope, pre-resolve param
+types into `symbolTypes[paramSym.id]` so later `getTypeOfSymbol(paramSym)`
+returns the in-scope-resolved type even after scope restoration. Mirrors
+the named-method branch in `getTypeOfSymbolWorker` (line ~38876). Both
+empty-name (call sig) and `"new"`-name (construct sig) member kinds share
+the same logic in a unified branch.
+
+(2) Even with paramType correctly resolved to `Date[]` (Type.Reference),
+the existing `checkArgumentsAgainstSignature` simple-checkable gate
+(Checker.kt ~50528) skipped the TS2345 emission because paramType is a
+Reference, not a named Interface. Extended the existing 17.11c
+null/undefined-vs-Reference branch (Checker.kt ~50246) to also fire when
+the Reference is fully concrete (no sig-side TPs in
+`resolvedTypeArguments`) — falls back to plain `typeToString(paramType)`
+display ("Date[]") instead of the unknown-substituted display used when
+sig TPs are present.
+
+Net delta: 1519 → 1518 failed (8556 → 8557 passing). Zero regressions
+across 10078-test suite.
 
 **17.152 (2026-05-10, +1)** — TS1146 + TS1005 for `{` after access modifier in
 class body (parser error recovery). Flips `classMemberWithMissingIdentifier_ts`
