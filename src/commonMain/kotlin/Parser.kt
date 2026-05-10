@@ -1692,6 +1692,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         }
 
         val name = parsePropertyName()
+        // 17.167: TS1248 — class members cannot have the `const` keyword.
+        // `parseModifiers` accepts Const; emit at the member name position
+        // with length = name text length when Const is present.
+        if (ModifierFlag.Const in modifiers && name is Identifier) {
+            reportError(
+                "A class member cannot have the 'const' keyword.",
+                code = 1248, overrideStart = name.pos, overrideLength = name.text.length,
+            )
+        }
         val question = parseOptional(SyntaxKind.Question)
         val excl = parseOptional(SyntaxKind.Exclamation)
 
