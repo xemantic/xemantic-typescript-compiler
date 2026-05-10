@@ -2918,6 +2918,48 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.210, 8631 → 8631, +0 foundation) — TS2591
+  for `import = require('<node-builtin>')`.** New `NODE_BUILTIN_MODULES`
+  set on Checker companion (fs, path, http, …, plus `node:` prefix
+  variant) with the unresolved-import path in `emitTS2307` checking
+  membership and emitting TS2591 with the `@types/node` install hint
+  message instead of the generic TS2307. Net 0 tests because every
+  currently-failing test that benefits from the swap (`undeclaredModuleError`,
+  `importAliasInModuleAugmentation`, `elidedJSImport1`) ALSO needs
+  one of: (a) TS2667 imports-in-augmentation emission for
+  `declare global { import f = require("fs"); }`; (b) TS2345
+  elaboration on call-arg fn-mismatch; (c) JS-file checking
+  (.js with checkJs). Foundation: when (a) lands the
+  `importAliasInModuleAugmentation` test gains the second of its two
+  expected diagnostics, and combined with future cross-augmentation
+  symbol visibility (`declare global { export import x = ... }`
+  visible in the surrounding file scope) the test would flip green.
+
+  **Discovery process this session.** `find_candidates.py --fresh`
+  returned the same 4 MISSING + 1 SWAP candidates as the prior
+  session — `importInsideModule` (TS2307 bare-specifier in node mode,
+  blocked on resolver scope), `duplicatePackage_globalMerge`
+  (TS2306 multi-package), `objectCreationOfElementAccessExpression`
+  (TS2538 type-as-index, needs index-type analysis),
+  `noCrashOnMixin2` (3-feature stack: TS2370 type-walker into
+  TypeAliasDecl + TS2545 mixin-class + TS2674 protected-ctor),
+  `contextualTyping` (TS2741 declaring-vs-displayed name swap —
+  attempted in last session, regressed). Surveyed the SKIP-marked
+  candidates too: most need infrastructure (cross-aug visibility,
+  generic instantiation, JS file checking, complex spreads/
+  iterators). The TS2591 import-equals slice was the only fully
+  surgical-shaped wedge of the session that landed CORRECT code
+  with zero regressions.
+
+  **Anti-loop check.** Per CLAUDE.md "recon-only sessions are a
+  protocol failure," landing the foundation TS2591 commit (correct
+  behavior, zero regressions, sets up TS2667 next-stack) instead of
+  ending session with no commit. Three reverts taken cleanly during
+  the session (TS2370 needed TypeAliasDecl walker, TS2741
+  declaring-vs-displayed swap regressed -1, TS1200 net 0 with no
+  enabling potential — unlike TS2591 which has a clear next-stack
+  unlock).
+
   **Session 2026-05-10 (17.209, 8630 → 8631, +1) — TS2422 swap for
   `class C<T> implements T`.** Closes `typeParameterAsBaseClass_ts`.
   Currently emits TS2304 "Cannot find name 'T'" because

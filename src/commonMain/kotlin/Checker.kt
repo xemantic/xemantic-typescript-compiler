@@ -15294,7 +15294,20 @@ class Checker(
         val isNodeResolution = effectiveModuleRes in setOf("node", "node10", "node16", "nodenext", "bundler")
         val code: Int
         val message: String
-        if (isNodeResolution) {
+        // 17.210: When the unresolved module specifier names a Node.js
+        // built-in (`fs`, `path`, `http`, …, also `node:`-prefixed forms),
+        // emit TS2591 with an @types/node hint instead of the generic
+        // TS2307 — TypeScript's standard guidance for "you probably forgot
+        // @types/node". The diagnostic uses "name" not "module" to match
+        // baseline format.
+        val barenameForNodeCheck = moduleName.removePrefix("node:")
+        val isNodeBuiltin = isNodeResolution && (
+            moduleName.startsWith("node:") || barenameForNodeCheck in NODE_BUILTIN_MODULES
+        )
+        if (isNodeBuiltin) {
+            code = 2591
+            message = "Cannot find name '$moduleName'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig."
+        } else if (isNodeResolution) {
             code = 2307
             message = "Cannot find module '$moduleName' or its corresponding type declarations."
         } else {
@@ -17670,6 +17683,23 @@ class Checker(
         private val PREDEFINED_TYPE_NAMES = setOf(
             "any", "number", "boolean", "string", "void", "never", "object",
             "unknown", "undefined", "null", "bigint", "symbol",
+        )
+
+        /** 17.210: Node.js built-in module names. Unresolved imports of these
+         *  (without `@types/node`) get TS2591 with the standard "install
+         *  @types/node" hint instead of generic TS2307. The `node:` prefix
+         *  variant is checked separately at the call site. */
+        private val NODE_BUILTIN_MODULES = setOf(
+            "assert", "async_hooks", "buffer", "child_process", "cluster",
+            "console", "constants", "crypto", "dgram", "diagnostics_channel",
+            "dns", "domain", "events", "fs", "fs/promises", "http", "http2",
+            "https", "inspector", "module", "net", "os", "path",
+            "path/posix", "path/win32", "perf_hooks", "process", "punycode",
+            "querystring", "readline", "readline/promises", "repl", "stream",
+            "stream/consumers", "stream/promises", "stream/web",
+            "string_decoder", "sys", "test", "timers", "timers/promises",
+            "tls", "trace_events", "tty", "url", "util", "util/types", "v8",
+            "vm", "wasi", "worker_threads", "zlib",
         )
 
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
