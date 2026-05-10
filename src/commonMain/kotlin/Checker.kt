@@ -774,6 +774,9 @@ class Checker(
         if (options.effectiveTarget < ScriptTarget.ES2016) {
             checkBigIntExponentiation()
         }
+        // 65e. Check namespace declarations split across files from
+        // their merged class/function (TS2433)
+        checkNamespaceSplitAcrossFiles()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
         // 67. Check export specifiers for non-local declarations (TS2661)
@@ -12311,6 +12314,60 @@ class Checker(
             // Check function-level and namespace-level vars
             checkSubsequentVarTypesInStatements(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    /**
+     * 17.206: TS2433 — `namespace X` declared in a different file from a
+     * `class X` (or `function X`) it merges with. Squiggle on the namespace
+     * name. Conservative gate: only fires when the namespace's name resolves
+     * via globals to a Class or Function symbol whose `valueDeclaration` is
+     * in a DIFFERENT file from the namespace declaration.
+     */
+    private fun checkNamespaceSplitAcrossFiles() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                walkNamespaceSplit(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun walkNamespaceSplit(stmt: Statement, source: String, fileName: String) {
+        if (stmt !is ModuleDeclaration) return
+        val nameNode = stmt.name as? Identifier ?: return
+        if (nameNode.text == "global") return  // global augmentation, special-cased elsewhere
+        // Skip ambient namespaces (declare keyword): TypeScript allows ambient
+        // declarations to be split across files.
+        if (ModifierFlag.Declare in stmt.modifiers) return
+        val mergedSym = globals[nameNode.text] ?: return
+        if (!mergedSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function)) return
+        // Find the class/function declaration's source file.
+        val mergedDecl = mergedSym.declarations.firstOrNull {
+            it is ClassDeclaration || it is FunctionDeclaration
+        } ?: return
+        // Skip when the class/function is ambient (declare): split is allowed.
+        val mergedModifiers = when (mergedDecl) {
+            is ClassDeclaration -> mergedDecl.modifiers
+            is FunctionDeclaration -> mergedDecl.modifiers
+            else -> emptySet()
+        }
+        if (ModifierFlag.Declare in mergedModifiers) return
+        val (mergedFileName, _) = resolveDeclarationSourceFile(mergedDecl.pos)
+        if (mergedFileName == null) return
+        if (mergedFileName == fileName) return  // same file — no error
+        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "A namespace declaration cannot be in a different file from a class or function with which it is merged.",
+            category = DiagnosticCategory.Error,
+            code = 2433,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = nameNode.pos,
+            length = nameNode.text.length,
+        ))
     }
 
     /**
