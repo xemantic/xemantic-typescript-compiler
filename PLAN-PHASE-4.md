@@ -2918,6 +2918,59 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.187 → 17.188, 8600 → 8603, +3 cumulative)
+  — Two new diagnostic emissions extending existing checker walkers
+  for related-but-uncovered cases.** Continuation /loop after
+  17.183-17.186. All targets came from the previous session's flagged
+  next-session list (TS2669, TS2558, TS2741, TS2677); the latter two
+  were skipped as architectural (lib type resolution / type predicate
+  structural inference).
+
+  **17.187 (8600 → 8602, +2) — TS2669 for `declare global` in
+  non-module file.** Closes `moduleAugmentationGlobal6_ts` plus
+  `moduleAugmentationGlobal6_1_ts`. Extended
+  `checkInvalidGlobalAugmentations` to compute `isModule =
+  isModuleFile(...)` per file and propagate via a new `fileIsModule`
+  parameter to `checkGlobalAugNested`. Top-level `declare global` in
+  a non-module file now triggers the same TS2669 emission as the
+  namespace-nested case (squiggle on `global` keyword, length 6).
+  The `insideRegularNamespace` gate remains for the original
+  namespace-nested path.
+
+  **17.188 (8602 → 8603, +1) — TS2558 for Array.map with multiple
+  type args.** Closes `thisExpressionInCallExpressionWithTypeArguments_ts`.
+  `[1,2,3].map<any,any>((x) => ...)` was emitting nothing because
+  the existing TS2558 walker only handled bare-Identifier callees.
+  Added a PropertyAccessExpression branch to
+  `checkCallOrNewTypeArgCount`. Conservative gate: only fires when
+  the receiver is an `ArrayLiteralExpression` AND the property name
+  is a hardcoded fixed-arity Array method (`map` / `flatMap`, both
+  1 type param). Other receivers / methods would need lib type
+  resolution we don't yet thread through this site.
+
+  **Discovery process.** Both targets came from the previous
+  session's next-session list. Skipped:
+  - `mappedTypeWithAsClauseAndLateBoundProperty_ts` (TS2741) — needs
+    structural property-missing with full Array<number> apparent
+    type display; very large baseline span.
+  - `typeInferenceTypePredicate_ts` (TS2677) — type predicate
+    structural check requires inferring `T` from the parameter type
+    and comparing against the predicate's type.
+
+  Anti-loop check: this session lands real code (2 commits with test
+  flips, +3 cumulative). Prior session was 17.183-17.186 (+7).
+  Commit pattern unchanged (`feat(17.187)`, `feat(17.188)`).
+
+  **Next-session candidates.** The (0,0) bucket continues to yield
+  small wins; survey for more 1-3 line tests with single-code
+  baselines. Pattern is sustainable across:
+  - Parser-level error recovery diagnostics (similar to TS1172 /
+    TS1175 / TS1176 / TS1313 / TS1248 / TS1071 / TS1047 / TS1048
+    landed in recent sessions).
+  - Checker-level walker extensions (similar to TS2538 / TS2407 /
+    TS2452 / TS2796 / TS2394 / TS2669 / TS2558 landed in recent
+    sessions).
+
   **Session 2026-05-10 (17.183 → 17.186, 8593 → 8600, +7 cumulative)
   — Four new diagnostic emissions, crossing the 8600-passing
   milestone.** Continuation /loop after 17.177-17.182. All four came
