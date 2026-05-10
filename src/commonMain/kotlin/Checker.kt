@@ -48200,6 +48200,38 @@ interface DataView {
                 return
             }
         }
+        // 17.178: TS2538 — array-typed index. `arr2[arr1[0]]` where `arr1` is
+        // `(string | string[])[]` makes the indexer `string | string[]`, and
+        // the `string[]` constituent is invalid as an index. TypeScript reports
+        // the FIRST invalid constituent. Conservative gate: only fire when the
+        // arg is an ElementAccessExpression (the targeted shape) whose computed
+        // type is a Union with at least one Array `Type.Reference` constituent.
+        // Squiggle covers the full arg expression via expressionTrueEnd.
+        if (arg is ElementAccessExpression) {
+            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { null }
+            if (argType is Type.Union) {
+                val arrayConstituent = argType.types.firstOrNull { t ->
+                    t is Type.Reference && t.target.symbol?.name == "Array"
+                }
+                if (arrayConstituent != null) {
+                    val display = typeToString(arrayConstituent)
+                    val argEnd = expressionTrueEnd(arg)
+                    val length = (argEnd - arg.pos).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$display' cannot be used as an index type.",
+                        category = DiagnosticCategory.Error,
+                        code = 2538,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = arg.pos,
+                        length = length,
+                    ))
+                    return
+                }
+            }
+        }
         // 17.116: TS7053 "Element implicitly has an 'any' type because expression of
         // type 'any' can't be used to index type 'X'." Fires when the key expression
         // resolves to `any` AND the receiver is an empty `{}`-typed value (Type.Object
