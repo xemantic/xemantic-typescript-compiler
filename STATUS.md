@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,610 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,614 / 10,078 tests passing (~85%).
+
+**17.196 (2026-05-10, +1)** — TS1163 for yield outside generator
+function. Closes `yieldStringLiteral_ts`. New `walkYieldInStmts`/
+`walkYieldInStmt`/`walkYieldInExpr` walker hooked into
+`checkUndefinedNamesInStmts`'s FunctionDeclaration branch. Each
+function/method body's generator state propagates from `asteriskToken`;
+arrow functions are always non-generator; accessor / property-
+initializer bodies likewise.
+
+**17.195 (2026-05-10, +3)** — TS2457 for type alias with reserved
+name. Closes `undefinedTypeAssignment1_ts` plus 2 bonus. Added a
+TypeAliasDeclaration branch to `checkUndefinedNamesInStmts` reusing
+the existing `PREDEFINED_TYPE_NAMES` companion-set.
 
 **17.194 (2026-05-10, +1)** — TS2339 for instance-method access on
 class identifier. Closes `staticInstanceResolution4_ts`. In

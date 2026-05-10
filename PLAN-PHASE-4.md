@@ -2918,6 +2918,63 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.195 → 17.196, 8610 → 8614, +4 cumulative)
+  — Two new diagnostic emissions: TS2457 reserved-name type alias and
+  TS1163 yield-context tracking.** Continuation /loop after
+  17.192-17.194. The previous session noted that the (0,0) "none
+  produced" bucket was thinning at the simple-walker-extension level;
+  this session validates that hypothesis by tackling two flagged
+  next-session items, one of which (TS1163) needed new walker
+  infrastructure (yield-context propagation).
+
+  **17.195 (8610 → 8613, +3) — TS2457 for type alias with reserved
+  name.** Closes `undefinedTypeAssignment1_ts` plus 2 bonus.
+  `type undefined = string;` and similar were silently parsed.
+  Added a `TypeAliasDeclaration` branch to `checkUndefinedNamesInStmts`
+  (Checker.kt ~31971), alongside the existing ClassDeclaration
+  (TS2414) and InterfaceDeclaration (TS2427) branches. Reuses
+  `PREDEFINED_TYPE_NAMES` companion-set. Squiggle on alias name with
+  length matching its text. Two bonuses surfaced because other tests
+  in the corpus had non-targeted reserved-name aliases not previously
+  flagged.
+
+  **17.196 (8613 → 8614, +1) — TS1163 for yield outside generator
+  function.** Closes `yieldStringLiteral_ts`. `function yieldString()
+  { yield 'literal'; }` (no asterisk) was emitting nothing because
+  the parser parses `yield expr` as YieldExpression unconditionally;
+  the checker never tracked generator context. Added new
+  `walkYieldInStmts`/`walkYieldInStmt`/`walkYieldInExpr` walker
+  hooked into `checkUndefinedNamesInStmts`'s top-level
+  FunctionDeclaration branch. Generator state propagates per
+  function/method body via `asteriskToken`. Arrow functions, accessor
+  bodies (get/set/constructor), and property initializers are
+  unconditionally non-generator. ClassDeclaration/Expression members
+  walk through with their own asterisk state. ~150 lines of mirror
+  walker code (similar shape to `checkAwaitContext`'s walker).
+
+  **Discovery process.** Both targets came from the previous session's
+  next-session list. Other surveyed candidates skipped:
+  - `superCallFromFunction1_ts` (TS2337) — `super(...)` outside
+    constructor; would need similar enclosing-function-class
+    tracking, but the relationship is more complex (must check
+    enclosing class derivation) than yield/await.
+  - `exportAsNamespaceConflict_ts` (TS2303) — multi-file scenario
+    requiring augmentation tracking.
+
+  Anti-loop check: this session lands real code (2 commits with test
+  flips, +4 cumulative). Prior session was 17.192-17.194 (+4).
+  Commit pattern unchanged (`feat(17.195)`, `feat(17.196)`).
+
+  **Next-session candidates.** With TS1163 yield-context infrastructure
+  now in place, similar pattern applies to:
+  - TS2337 `super(...)` outside constructor — needs enclosing-class
+    tracking + super-call detection. Mirror of `walkYieldInStmts`.
+  - TS2335 `super.foo()` outside class.
+  - Ongoing (0,0) survey — pattern continues to yield 1-3 wins per
+    iteration but increasingly relies on infrastructure additions
+    (walker-tracking for context) rather than pure single-spot
+    diagnostic insertion.
+
   **Session 2026-05-10 (17.192 → 17.194, 8606 → 8610, +4 cumulative,
   one FP regression caught and gated) — Three new diagnostic
   emissions across parser (TS1028, TS1051) and checker (TS2339)
