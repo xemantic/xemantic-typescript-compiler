@@ -43213,6 +43213,40 @@ interface DataView {
                         it.token == SyntaxKind.ExtendsKeyword
                     } ?: continue
                     val baseExpr = extendsClause.types.firstOrNull()?.expression ?: continue
+                    // 17.199: TS2507 for `extends Ns.x` where Ns is a namespace
+                    // and x is a primitive var. PropertyAccessExpression with
+                    // Identifier receiver, look up Ns in globals as a Module
+                    // symbol, find x in exports, infer type from its
+                    // declaration.
+                    if (baseExpr is PropertyAccessExpression && baseExpr.expression is Identifier) {
+                        val nsIdent = baseExpr.expression as Identifier
+                        val nsSym = globals[nsIdent.text]
+                        if (nsSym != null && nsSym.flags.hasAny(SymbolFlags.Module) &&
+                            !nsSym.flags.hasAny(SymbolFlags.Class)) {
+                            val memberSym = nsSym.exports?.get(baseExpr.name.text)
+                            val memberDecl = memberSym?.valueDeclaration as? VariableDeclaration
+                            if (memberDecl != null) {
+                                val typeName = inferSimpleVarType(memberDecl)
+                                if (typeName != null) {
+                                    val start = baseExpr.pos
+                                    // Span includes Ns.x — from receiver pos to property name end.
+                                    val length = (baseExpr.name.pos + baseExpr.name.text.length - start).coerceAtLeast(1)
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Type '$typeName' is not a constructor function type.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2507,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                    ))
+                                    continue
+                                }
+                            }
+                        }
+                    }
                     val baseName = (baseExpr as? Identifier)?.text ?: continue
                     // Only flag if this scope has a variable with this name (shadowing any outer class)
                     val varDecl = varDecls[baseName] ?: continue
