@@ -436,6 +436,10 @@ class Checker(
         if (options.noUnusedLocals || options.noUnusedParameters) {
             checkUnusedParameterProperties()
         }
+        // 4c. Check for unused `infer T` parameters in conditional types (TS6133)
+        if (options.noUnusedParameters) {
+            checkUnusedInferParameters()
+        }
         // 5. Check for variables used before assignment (TS2454)
         // Requires strictNullChecks (either via strict: true or strictNullChecks: true).
         // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
@@ -2900,6 +2904,150 @@ class Checker(
             }
             is FunctionExpression -> collectThisPropertyAccesses(expr.body.statements, result)
             is ParenthesizedExpression -> collectThisAccessInExpr(expr.expression, result)
+            else -> {}
+        }
+    }
+
+    /**
+     * 17.189: TS6133 for unused `infer T` parameters in conditional types.
+     * E.g. `type Length<T> = T extends ArrayLike<infer U> ? number : never`
+     * — `U` is declared by `infer U` but never used in the true branch.
+     * Squiggle covers `infer U` (length = `infer ` + name).
+     */
+    private fun checkUnusedInferParameters() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            walkUnusedInferInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkUnusedInferInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is TypeAliasDeclaration -> walkUnusedInferInTypeNode(stmt.type, source, fileName)
+            is InterfaceDeclaration -> {
+                for (m in stmt.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    is MethodDeclaration -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                walkUnusedInferInStmts(it.statements, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkUnusedInferInTypeNode(type: TypeNode, source: String, fileName: String) {
+        when (type) {
+            is ConditionalType -> {
+                // Collect infer-declared names from extendsType, then check
+                // whether each is referenced as a TypeReference in trueType.
+                val inferNames = mutableMapOf<String, InferType>()
+                collectInferDecls(type.extendsType, inferNames)
+                if (inferNames.isNotEmpty()) {
+                    val refs = mutableSetOf<String>()
+                    collectTypeReferenceNames(type.trueType, refs)
+                    for ((name, inferNode) in inferNames) {
+                        if (name in refs) continue
+                        // Squiggle covers `infer U` — from inferNode.pos to the
+                        // typeParameter name's end.
+                        val start = inferNode.pos
+                        val nameEnd = inferNode.typeParameter.name.pos + inferNode.typeParameter.name.text.length
+                        val length = (nameEnd - start).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "'$name' is declared but its value is never read.",
+                            category = DiagnosticCategory.Error,
+                            code = 6133,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+                // Recurse into nested conditionals
+                walkUnusedInferInTypeNode(type.checkType, source, fileName)
+                walkUnusedInferInTypeNode(type.extendsType, source, fileName)
+                walkUnusedInferInTypeNode(type.trueType, source, fileName)
+                walkUnusedInferInTypeNode(type.falseType, source, fileName)
+            }
+            is UnionType -> type.types.forEach { walkUnusedInferInTypeNode(it, source, fileName) }
+            is IntersectionType -> type.types.forEach { walkUnusedInferInTypeNode(it, source, fileName) }
+            is ParenthesizedType -> walkUnusedInferInTypeNode(type.type, source, fileName)
+            is ArrayType -> walkUnusedInferInTypeNode(type.elementType, source, fileName)
+            is TupleType -> type.elements.forEach { walkUnusedInferInTypeNode(it, source, fileName) }
+            is TypeOperator -> walkUnusedInferInTypeNode(type.type, source, fileName)
+            is IndexedAccessType -> {
+                walkUnusedInferInTypeNode(type.objectType, source, fileName)
+                walkUnusedInferInTypeNode(type.indexType, source, fileName)
+            }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) } }
+                walkUnusedInferInTypeNode(type.type, source, fileName)
+            }
+            is TypeReference -> type.typeArguments?.forEach { walkUnusedInferInTypeNode(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun collectInferDecls(type: TypeNode, out: MutableMap<String, InferType>) {
+        when (type) {
+            is InferType -> out[type.typeParameter.name.text] = type
+            is UnionType -> type.types.forEach { collectInferDecls(it, out) }
+            is IntersectionType -> type.types.forEach { collectInferDecls(it, out) }
+            is ParenthesizedType -> collectInferDecls(type.type, out)
+            is ArrayType -> collectInferDecls(type.elementType, out)
+            is TupleType -> type.elements.forEach { collectInferDecls(it, out) }
+            is TypeReference -> type.typeArguments?.forEach { collectInferDecls(it, out) }
+            is IndexedAccessType -> {
+                collectInferDecls(type.objectType, out)
+                collectInferDecls(type.indexType, out)
+            }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { collectInferDecls(it, out) } }
+                collectInferDecls(type.type, out)
+            }
+            else -> {}
+        }
+    }
+
+    private fun collectTypeReferenceNames(type: TypeNode, out: MutableSet<String>) {
+        when (type) {
+            is TypeReference -> {
+                val n = type.typeName
+                if (n is Identifier) out.add(n.text)
+                type.typeArguments?.forEach { collectTypeReferenceNames(it, out) }
+            }
+            is UnionType -> type.types.forEach { collectTypeReferenceNames(it, out) }
+            is IntersectionType -> type.types.forEach { collectTypeReferenceNames(it, out) }
+            is ParenthesizedType -> collectTypeReferenceNames(type.type, out)
+            is ArrayType -> collectTypeReferenceNames(type.elementType, out)
+            is TupleType -> type.elements.forEach { collectTypeReferenceNames(it, out) }
+            is TypeOperator -> collectTypeReferenceNames(type.type, out)
+            is IndexedAccessType -> {
+                collectTypeReferenceNames(type.objectType, out)
+                collectTypeReferenceNames(type.indexType, out)
+            }
+            is ConditionalType -> {
+                collectTypeReferenceNames(type.checkType, out)
+                collectTypeReferenceNames(type.extendsType, out)
+                collectTypeReferenceNames(type.trueType, out)
+                collectTypeReferenceNames(type.falseType, out)
+            }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { collectTypeReferenceNames(it, out) } }
+                collectTypeReferenceNames(type.type, out)
+            }
+            is MappedType -> {
+                type.type?.let { collectTypeReferenceNames(it, out) }
+                type.nameType?.let { collectTypeReferenceNames(it, out) }
+                type.typeParameter.constraint?.let { collectTypeReferenceNames(it, out) }
+            }
             else -> {}
         }
     }
