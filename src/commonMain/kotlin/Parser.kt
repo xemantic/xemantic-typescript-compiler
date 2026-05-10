@@ -1875,6 +1875,25 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private fun parseSetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int, decorators: List<Decorator>? = null): SetAccessor {
         val name = parsePropertyName()
         val params = parseParameterList()
+        // 17.193: TS1051 — setter cannot have an optional parameter. Squiggle on
+        // the `?` token. We can't easily recover the `?` position from the
+        // Parameter node (consumed by parseOptional), so search forward in the
+        // source from the param name's end for the first `?`.
+        if (params.size == 1) {
+            val p = params[0]
+            if (p.questionToken && p.name is Identifier) {
+                val nm = p.name as Identifier
+                val searchStart = nm.pos + nm.text.length
+                var i = searchStart
+                while (i < source.length && source[i] != '?' && source[i] != ':' && source[i] != ')' && source[i] != '=') i++
+                if (i < source.length && source[i] == '?') {
+                    reportError(
+                        "A 'set' accessor cannot have an optional parameter.",
+                        code = 1051, overrideStart = i, overrideLength = 1,
+                    )
+                }
+            }
+        }
         // Setters cannot have a return type annotation, but parse it for error recovery (preserved in emit).
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
