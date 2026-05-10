@@ -4973,6 +4973,29 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             }
         }
         parseExpected(SyntaxKind.CloseParen)
+        // 17.200: TS1016 — required parameter cannot follow `?`-optional.
+        // (`= initializer` does NOT trigger this — TypeScript's quirk: an
+        // initializer with a following required param implicitly makes the
+        // initializer required too, so no error.) Squiggle on the required
+        // param's name; length = name text length for Identifier names.
+        run {
+            var sawOptional = false
+            for (param in params) {
+                if (param.questionToken) {
+                    sawOptional = true
+                    continue
+                }
+                if (sawOptional && !param.dotDotDotToken && param.initializer == null) {
+                    val nm = param.name
+                    if (nm is Identifier) {
+                        reportError(
+                            "A required parameter cannot follow an optional parameter.",
+                            code = 1016, overrideStart = nm.pos, overrideLength = nm.text.length,
+                        )
+                    }
+                }
+            }
+        }
         // If no parameters but there are inline comments between ( and ), create a placeholder.
         if (params.isEmpty() && !openParenComments.isNullOrEmpty()) {
             return listOf(Parameter(
