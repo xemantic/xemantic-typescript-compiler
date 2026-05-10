@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,617 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,619 / 10,078 tests passing (~85%).
+
+**17.201 (2026-05-10, +1)** — TS1209 for `new A?.b()` (optional chain
+on new expression with no parens). Closes
+`invalidOptionalChainFromNewExpression_ts`. In `checkSinglePropertyAccess`,
+when `expr.questionDotToken && recv is NewExpression && recv.arguments
+== null`, emit TS1209 with "Did you mean to call '<ctor>()'?" hint.
+Search backward from `expr.name.pos` for `?` to locate the `?.` token.
+
+**17.200 (2026-05-10, +1)** — TS1016 for required parameter after
+optional. Closes `fatarrowfunctionsOptionalArgsErrors1_ts`. In
+`parseParameterList`, after CloseParen, walk parameters tracking
+`sawOptional`; emit TS1016 on subsequent required params (no `?`,
+no `...`, no initializer). Only `?`-optional triggers; `=`-initializer
+does not (TypeScript treats it as implicitly required when followed
+by required).
 
 **17.199 (2026-05-10, +1)** — TS2507 for class extends `Ns.var`.
 Closes `qualifiedName_entity-name-resolution-does-not-affect-class-heritage_ts`.
