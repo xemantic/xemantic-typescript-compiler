@@ -1516,6 +1516,12 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
                 reportError("'implements' clause already seen.", code = 1175,
                     overrideStart = getPos(), overrideLength = "implements".length)
             }
+            // 17.179: TS1176 — interface declarations cannot have `implements`.
+            // Squiggle on the `implements` keyword (length 10).
+            if (clauseToken == SyntaxKind.ImplementsKeyword && !isClass && !hasImplements) {
+                reportError("Interface declaration cannot have 'implements' clause.",
+                    code = 1176, overrideStart = getPos(), overrideLength = "implements".length)
+            }
             if (clauseToken == SyntaxKind.ExtendsKeyword) hasExtends = true
             if (clauseToken == SyntaxKind.ImplementsKeyword) hasImplements = true
             if (clauseToken == SyntaxKind.ExtendsKeyword && hasImplements) {
