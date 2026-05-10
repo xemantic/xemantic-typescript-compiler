@@ -2918,6 +2918,19 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.215, 8637 → 8637, +0 foundation) — Add `?`
+  to optional method declarations in TypeLiteral display.** In
+  `formatTypeForDisplay`'s TypeLiteral → MethodDeclaration branch
+  (Checker.kt ~55796), include `?` when the method has
+  `questionToken=true`. Display becomes `name?(args): retType`
+  instead of `name(args): retType`, matching TypeScript's
+  convention. Net 0 because the named test
+  (`assignmentCompatBug2_ts`) ALSO needs contextual typing of arrow
+  function expressions in object literals — the source-side display
+  still shows `(n: any) => any` instead of `(n: number) => number`,
+  preventing full pass. Foundation: future contextual-typing fix
+  for arrow expressions in object literals would tip the test.
+
   **Session 2026-05-10 (17.214b, 8636 → 8637, +1) — Fix resolver
   for absolute contextFileName paths.** Closes
   `exportAssignmentWithoutAllowSyntheticDefaultImportsError_ts` which
