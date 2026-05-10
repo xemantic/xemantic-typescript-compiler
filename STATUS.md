@@ -2,6 +2,17 @@
 
 **Phase 4 — Checker buildout.** 8,631 / 10,078 tests passing (~85%).
 
+**17.210 (2026-05-10, +0 foundation)** — TS2591 instead of TS2307 for
+`import = require('node-builtin')`. Recognizes Node.js built-in module
+specifiers (fs, path, http, …, plus `node:`-prefixed forms) in the
+`emitTS2307` helper and swaps the diagnostic to TS2591 with the
+standard `@types/node` install hint. Net 0 tests this commit because
+every currently-failing test that benefits from the swap also needs
+additional pieces (TS2345 elaboration, TS2667 imports-in-augmentation,
+or cross-augmentation symbol visibility). Foundation for follow-on
+substeps that stack TS2667 / TS2666 emission for `declare global`
+augmentations on top.
+
 **17.209 (2026-05-10, +1)** — TS2422 instead of TS2304 for `class
 C<T> implements T`. Closes `typeParameterAsBaseClass_ts`. In the
 ClassDeclaration heritage walk (Checker.kt ~9758), check
