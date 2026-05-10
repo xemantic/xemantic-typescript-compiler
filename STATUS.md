@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,600 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,603 / 10,078 tests passing (~85%).
+
+**17.188 (2026-05-10, +1)** — TS2558 for Array.map with multiple
+type args. Closes `thisExpressionInCallExpressionWithTypeArguments_ts`.
+In `checkCallOrNewTypeArgCount`, add a PropertyAccessExpression branch
+BEFORE the existing Identifier-only path; fires when receiver is an
+ArrayLiteralExpression AND property name is a hardcoded fixed-arity
+Array method (`map` / `flatMap`, both 1 type param).
+
+**17.187 (2026-05-10, +2)** — TS2669 for `declare global` in
+non-module file. Closes `moduleAugmentationGlobal6_ts` plus
+`moduleAugmentationGlobal6_1_ts`. Extended `checkInvalidGlobalAugmentations`
+to compute `isModuleFile` per file and propagate via a new
+`fileIsModule` parameter; top-level `declare global` in a non-module
+file now triggers the same TS2669 emission as the namespace-nested
+case.
 
 **17.186 (2026-05-10, +3)** — TS2394 for TypeLiteral overload
 mismatch. Closes `functionOverloads17_ts`, `functionOverloads18_ts`
