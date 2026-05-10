@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,638 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,641 / 10,078 tests passing (~85%).
+
+**17.218 (2026-05-10, +3)** — TS2495 "Type 'X' is not an array type or
+a string type." for `for-of <expr>` when `@lib` excludes ES2015+
+iterables. Closes all 3 `arrayIterationLibES5TargetDifferent_ts__nolib_false_*`
+variants (target=es5/es2015/esnext). New `checkForOfNonIterable`
+walker gated on: `noLib == false` AND `options.lib.isNotEmpty()` AND
+none of the libs start with "es2"/"esnext". Conservative type
+detection: fires only for `Type.Intrinsic` (excluding string/any/
+unknown/never) and anonymous `Type.Object` without symbol/sigs/
+tuple. Excludes `Type.Reference` and `Type.Interface` to avoid
+firing on Array<T>, named interfaces with iterators, etc.
 
 **17.217 (2026-05-10, +0 correctness)** — Skip TS6133 for declarations
 inside `declare global { ... }` blocks. Variables declared in such

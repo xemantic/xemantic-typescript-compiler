@@ -469,6 +469,10 @@ class Checker(
         // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
         // (syntactic type-shape error, not an implicit-any diagnostic).
         checkNonArrayRestParameters()
+        // 17.218: TS2495 — `for-of <expr>` where expr is non-iterable. Only fires
+        // when the user's `@lib` excludes es2015+ (es2015.iterable provides
+        // Symbol.iterator); without it, only Array and string are iterable.
+        checkForOfNonIterable()
         // 7b''. TS7033: Abstract get accessor with no return type annotation → implicit any.
         // Gated on noImplicitAny/strict.
         if (options.noImplicitAny || options.strict) {
@@ -8095,6 +8099,113 @@ class Checker(
             val source = result.sourceFile.text
             checkNonArrayRestInStatements(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    /**
+     * 17.218: TS2495 "Type 'X' is not an array type or a string type."
+     *
+     * Fires for `for (... of <expr>)` when the iterable expression's type
+     * isn't a known iterable (Array, string, any) AND the user's `@lib`
+     * configuration excludes es2015.iterable. Under es5-only lib, only
+     * Array and string are iterable; bare object types and primitive
+     * non-string types fail with TS2495.
+     *
+     * Conservative gate: only fire for clearly non-iterable types
+     * (Type.Intrinsic non-string/any, anonymous Type.Object without a
+     * symbol). Skip everything else to avoid FP regressions.
+     */
+    private fun checkForOfNonIterable() {
+        // Skip entirely when @noLib — no types are loaded, so iterability
+        // checks make no sense (TS2318 fires for missing globals instead).
+        if (options.noLib) return
+        // Only fires when @lib explicitly excludes ES2015+ iterables.
+        val libExcludesIterable = options.lib.isNotEmpty() &&
+            options.lib.none { lname ->
+                lname.startsWith("es2", ignoreCase = true) ||
+                    lname.equals("esnext", ignoreCase = true)
+            }
+        if (!libExcludesIterable) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForOfNonIterable(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForOfNonIterable(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            walkForOfNonIterableStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun walkForOfNonIterableStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ForOfStatement -> {
+                checkForOfExprNonIterable(stmt.expression, source, fileName)
+                walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            }
+            is Block -> walkForOfNonIterable(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkForOfNonIterableStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkForOfNonIterableStmt(it, source, fileName) }
+            }
+            is ForStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in stmt.members) when (member) {
+                    is MethodDeclaration -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is Constructor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForOfNonIterable(it.statements, source, fileName) }
+            is TryStatement -> {
+                walkForOfNonIterable(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.statements?.let { walkForOfNonIterable(it, source, fileName) }
+                stmt.finallyBlock?.statements?.let { walkForOfNonIterable(it, source, fileName) }
+            }
+            is LabeledStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkForOfExprNonIterable(expr: Expression, source: String, fileName: String) {
+        val exprType = try { getTypeOfExpression(expr) } catch (_: StackOverflowError) { return }
+        // Determine "definitely non-iterable":
+        // - Type.Intrinsic with non-string/any/never/unknown name
+        // - Anonymous Type.Object with no symbol, no callSig, no construct
+        //   sig (rules out function types and named interfaces)
+        val display: String? = when {
+            exprType is Type.Intrinsic && exprType.intrinsicName !in NON_ITERABLE_SAFE_INTRINSIC_BAILOUT -> {
+                exprType.intrinsicName
+            }
+            exprType is Type.Object &&
+                exprType !is Type.Reference &&
+                exprType !is Type.Interface &&
+                exprType.symbol == null &&
+                exprType.callSignatures.isNullOrEmpty() &&
+                exprType.constructSignatures.isNullOrEmpty() &&
+                exprType.tupleElementTypes == null -> {
+                typeToString(exprType)
+            }
+            else -> null
+        } ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        val length = expressionTrueEnd(expr) - expr.pos
+        diagnostics.add(Diagnostic(
+            message = "Type '$display' is not an array type or a string type.",
+            category = DiagnosticCategory.Error,
+            code = 2495,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = length.coerceAtLeast(1),
+        ))
     }
 
     private fun checkNonArrayRestInStatements(statements: List<Statement>, source: String, fileName: String) {
@@ -17743,6 +17854,14 @@ class Checker(
         private val PREDEFINED_TYPE_NAMES = setOf(
             "any", "number", "boolean", "string", "void", "never", "object",
             "unknown", "undefined", "null", "bigint", "symbol",
+        )
+
+        /** 17.218: Intrinsic type names that should NOT trigger TS2495 even
+         *  when iterables are unavailable. `string` IS iterable (chars).
+         *  `any`/`unknown` could be anything. `never` represents impossible
+         *  values; for-of over never is unreachable, not "non-iterable". */
+        private val NON_ITERABLE_SAFE_INTRINSIC_BAILOUT = setOf(
+            "string", "any", "unknown", "never",
         )
 
         /** 17.214: ES module kinds (excluding Node16+ which use richer node
