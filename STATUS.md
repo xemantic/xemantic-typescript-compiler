@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,606 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,610 / 10,078 tests passing (~85%).
+
+**17.194 (2026-05-10, +1)** — TS2339 for instance-method access on
+class identifier. Closes `staticInstanceResolution4_ts`. In
+`checkMemberAccessMissing`, added a class-identifier branch before
+existing module/var paths with a 7-condition conservative gate
+(property-access shape, pure class via `valueDeclaration ===
+classDecl`, no merges, no extends, no static, no runtime / namespace
+exports, valid identifier propName).
+
+**17.193 (2026-05-10, +1)** — TS1051 for optional setter parameter.
+Closes `optionalSetterParam_ts`. In `parseSetAccessor`, after
+parameter list parsing, when single parameter has `questionToken`,
+search forward in source from name end to find `?` and emit TS1051.
+
+**17.192 (2026-05-10, +2)** — TS1028 for duplicate access modifier
+on parameter property. Closes `constructorArgsErrors3_ts` and
+`constructorArgsErrors4_ts`. In `parseParameterModifiers`, track
+`hasAccess` flag; when seeing a new access modifier with `hasAccess`
+true, emit TS1028 at the current token position with length matching
+the keyword name.
 
 **17.191 (2026-05-10, +1)** — TS2411 for numeric-name property vs
 number index signature. Closes `numericIndexerConstraint_ts`. Added
