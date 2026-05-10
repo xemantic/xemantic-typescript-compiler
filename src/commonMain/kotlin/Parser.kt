@@ -2031,6 +2031,22 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         }
 
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+        // 17.180: TS1246 — interface property cannot have an initializer.
+        // When `=` follows the type annotation, consume the initializer
+        // (so subsequent members parse cleanly) and emit TS1246 at the
+        // initializer's first character (matches TypeScript's baseline
+        // squiggle position of the value, length 1).
+        if (token == SyntaxKind.Equals) {
+            nextToken()
+            val initStart = scanner.getTokenPos()
+            // Consume the initializer expression so parsing of subsequent
+            // interface members is unaffected.
+            parseAssignmentExpression()
+            reportError(
+                "An interface property cannot have an initializer.",
+                code = 1246, overrideStart = initStart, overrideLength = 1,
+            )
+        }
         return PropertyDeclaration(
             name = name,
             type = type,
