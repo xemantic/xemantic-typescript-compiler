@@ -8123,19 +8123,31 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            checkGlobalAugNested(result.sourceFile.statements, source, fileName, insideRegularNamespace = false)
+            // 17.187: TS2669 also fires when `declare global { ... }` appears at
+            // top level of a non-module file (no imports/exports). The original
+            // `insideRegularNamespace` gate handled the namespace-nested case;
+            // this propagates the file's module status down to top-level
+            // recursion so a non-module top-level `declare global` triggers the
+            // same diagnostic.
+            val isModule = isModuleFile(result.sourceFile.statements)
+            checkGlobalAugNested(result.sourceFile.statements, source, fileName,
+                insideRegularNamespace = false, fileIsModule = isModule)
         }
     }
 
     private fun checkGlobalAugNested(
         stmts: List<Statement>, source: String, fileName: String,
         insideRegularNamespace: Boolean,
+        fileIsModule: Boolean = true,
     ) {
         for (stmt in stmts) {
             if (stmt is ModuleDeclaration) {
                 val nameNode = stmt.name
                 val isGlobalBlock = nameNode is Identifier && nameNode.text == "global"
-                if (isGlobalBlock && insideRegularNamespace) {
+                // 17.187: also fires for top-level `declare global` in a
+                // non-module file (no imports/exports).
+                val nonModuleTopLevel = isGlobalBlock && !insideRegularNamespace && !fileIsModule
+                if (isGlobalBlock && (insideRegularNamespace || nonModuleTopLevel)) {
                     val start = nameNode.pos
                     val length = 6  // "global"
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -8168,8 +8180,8 @@ class Checker(
                 // (not a StringLiteralNode for `declare module "X"`).
                 val nowInsideRegular = insideRegularNamespace || (nameNode is Identifier && !isGlobalBlock)
                 when (val body = stmt.body) {
-                    is ModuleBlock -> checkGlobalAugNested(body.statements, source, fileName, nowInsideRegular)
-                    is ModuleDeclaration -> checkGlobalAugNested(listOf(body), source, fileName, nowInsideRegular)
+                    is ModuleBlock -> checkGlobalAugNested(body.statements, source, fileName, nowInsideRegular, fileIsModule)
+                    is ModuleDeclaration -> checkGlobalAugNested(listOf(body), source, fileName, nowInsideRegular, fileIsModule)
                     else -> {}
                 }
             }
