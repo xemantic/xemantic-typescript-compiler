@@ -42204,6 +42204,42 @@ interface DataView {
         }
 
         for ((name, decls) in methodGroups) {
+            // 17.177: TS2385 — overload signatures must agree on access
+            // modifier (public/private/protected). Compute the access flag
+            // for each declaration; treat absence as "public" (the implicit
+            // default). When the group spans more than one access level,
+            // emit TS2385 on the FIRST overload's name. Fires regardless of
+            // whether an implementation exists in the group.
+            if (decls.size >= 2) {
+                fun accessOf(md: MethodDeclaration): String = when {
+                    ModifierFlag.Private in md.modifiers -> "private"
+                    ModifierFlag.Protected in md.modifiers -> "protected"
+                    else -> "public"
+                }
+                val distinctAccess = decls.map { accessOf(it) }.toSet()
+                if (distinctAccess.size > 1) {
+                    val first = decls.first()
+                    val nameNode = first.name
+                    val nameText = when (nameNode) {
+                        is Identifier -> nameNode.text
+                        is StringLiteralNode -> nameNode.text
+                        else -> null
+                    }
+                    if (nameText != null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Overload signatures must all be public, private or protected.",
+                            category = DiagnosticCategory.Error,
+                            code = 2385,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = nameText.length,
+                        ))
+                    }
+                }
+            }
             val impl = decls.firstOrNull { it.body != null } ?: continue
             val overloads = decls.filter { it.body == null }
             if (overloads.isEmpty()) continue
