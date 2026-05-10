@@ -47281,6 +47281,30 @@ interface DataView {
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
 
+        // 17.161: String literal receiver — `"".bogus` / `"foo".missing`. Resolves
+        // to the String apparent type and emits TS2339 with the literal value displayed
+        // verbatim ("\"\"" / "\"foo\"") when the property isn't a String wrapper member.
+        // Used by patterns like `class C extends "".bogus {}` where the heritage
+        // expression is a PropertyAccessExpression on a StringLiteralNode receiver.
+        if (objectExpr is StringLiteralNode && propName !in RUNTIME_PROPERTIES) {
+            val apparent = try { getApparentType(stringType) } catch (_: StackOverflowError) { return }
+            if (apparent is Type.Object) {
+                try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
+                val hasProp = try { getPropertyOfType(apparent, propName) } catch (_: StackOverflowError) { return } != null
+                if (!hasProp) {
+                    val display = "\"" + (objectExpr.text) + "\""
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                }
+            }
+            return
+        }
+
         // 17.115: Empty `{}` literal element/property access — emit TS2339 with display
         // `{}`. Squiggle uses the caller-provided ts2576SquiggleStart/Length (which covers
         // the full element-access expression for `{}["X"]` / `{}[N]`); for property-access
