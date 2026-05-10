@@ -1796,15 +1796,33 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val rawParams = parseParameterList()
         // 17.140: JSDoc `@param {primitive} name` bridge for Constructor.
         val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
-        // 17.181: TS2398 — `constructor(public constructor: string)` — name
-        // `constructor` is reserved on parameter properties (would conflict
-        // with the synthesized class member named `constructor`).
+        // 17.181 + 17.182: parameter-property diagnostics for the constructor's
+        // parameter list. A "parameter property" is a constructor param with
+        // one of the access/readonly modifiers (public/private/protected/readonly).
+        // - TS2398 (17.181): `public constructor: string` — name `constructor`
+        //   is reserved (conflicts with synthesized class member).
+        // - TS1317 (17.182): `public ...rest: string[]` — rest params can't be
+        //   parameter properties.
         for (param in params) {
             val isParamProperty = ModifierFlag.Public in param.modifiers ||
                 ModifierFlag.Private in param.modifiers ||
                 ModifierFlag.Protected in param.modifiers ||
                 ModifierFlag.Readonly in param.modifiers
             if (!isParamProperty) continue
+            if (param.dotDotDotToken) {
+                // `param.end` overshoots by one token (scanner has advanced past
+                // the next token's leading trivia + the next token itself).
+                // Walk backward through source from `param.end - 1` to find the
+                // last non-whitespace character of the parameter's text.
+                var endChar = (param.end - 1).coerceAtLeast(param.pos)
+                while (endChar > param.pos && source[endChar].isWhitespace()) endChar--
+                val lengthRest = (endChar - param.pos).coerceAtLeast(1)
+                reportError(
+                    "A parameter property cannot be declared using a rest parameter.",
+                    code = 1317, overrideStart = param.pos, overrideLength = lengthRest,
+                )
+                continue
+            }
             val nm = param.name
             if (nm is Identifier && nm.text == "constructor") {
                 reportError(
