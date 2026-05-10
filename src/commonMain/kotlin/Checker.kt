@@ -36895,6 +36895,21 @@ interface DataView {
                 if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
                     chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                    // 17.155: When fn-vs-fn call signature matches but target ALSO has
+                    // construct signatures that source lacks, the relation engine still
+                    // returned `false` (construct sigs unsatisfied). Emit the construct-
+                    // sig elaboration line so the chain is non-empty. Covers
+                    // `var a: I4 = function(){...}` where I4 has both call and construct
+                    // signatures and the function expression matches the call sig but
+                    // not the construct sig. Skip for class/interface instance targets
+                    // (their construct sigs belong to the static side).
+                    if (chain.isEmpty() &&
+                        !targetType.constructSignatures.isNullOrEmpty() &&
+                        sourceType.constructSignatures.isNullOrEmpty() &&
+                        !isClassOrInterfaceInstanceType(targetType)) {
+                        getNonConstructibleElaboration(sourceType, targetType)
+                            ?.let { chain.addAll(it) }
+                    }
                 } else if (sourceType is Type.Union) {
                     // Union source: find the failing constituent for elaboration.
                     // For `never` targets, TypeScript picks the FIRST failing
@@ -43718,7 +43733,7 @@ interface DataView {
         }
 
         for (clause in implementsClauses) {
-            for (typeExpr in clause.types) {
+            typeExprLoop@ for (typeExpr in clause.types) {
                 val baseIfaceName = when (val tn = typeExpr.expression) {
                     is Identifier -> tn.text
                     is PropertyAccessExpression -> (tn.name as? Identifier)?.text
@@ -43837,7 +43852,11 @@ interface DataView {
                         messageChain = chain,
                         relatedInformation = relatedInfo,
                     ))
-                    return // One TS2420/TS2720 per class is enough (TypeScript only reports first mismatch)
+                    // 17.155: One TS2420/TS2720 per implements TARGET, not per class.
+                    // `class C implements I1, I2` may emit a separate TS2420 for each
+                    // failing interface. Continue to the next typeExpr in the same
+                    // clause (and into subsequent clauses) instead of returning.
+                    continue@typeExprLoop
                 }
                 // Check each existing property
                 for (ifaceProp in ifaceProps) {
@@ -43917,7 +43936,7 @@ interface DataView {
                                 length = classNameRaw.length,
                                 messageChain = chain,
                             ))
-                            return
+                            continue@typeExprLoop
                         }
                     }
                 }
@@ -43945,7 +43964,7 @@ interface DataView {
                         length = classNameRaw.length,
                         messageChain = chain,
                     ))
-                    return
+                    continue@typeExprLoop
                 }
                 if (ifaceStringIdx != null && !hasStringIndex) {
                     val classNameNode = classDecl.name ?: continue
@@ -43962,7 +43981,7 @@ interface DataView {
                         length = classNameRaw.length,
                         messageChain = chain,
                     ))
-                    return
+                    continue@typeExprLoop
                 }
             }
         }
