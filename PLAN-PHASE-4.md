@@ -2918,6 +2918,94 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.177 → 17.182, 8586 → 8593, +7 cumulative,
+  one squiggle-length fix caught) — Six new diagnostic emissions
+  across parser-level (TS1176, TS1246, TS2398, TS1317) and
+  checker-level (TS2385, TS2538) sites.** Continuation /loop after
+  17.172-17.176. All six came from re-survey of the (0,0) "none
+  produced" bucket ≤ 8 source lines with ≤ 2 codes, filtering
+  Guardrails (TS7006/TS7041/TS7039/TS7022/TS2352) and previously-
+  attempted architectural codes (TS2589/TS6053/TS2304/TS2554/TS2345/
+  TS2322/TS2403/TS5009).
+
+  **17.177 (8586 → 8587, +1) — TS2385 for overloads with different
+  access modifiers.** Closes `functionOverloads5_ts`. In
+  `checkMethodOverloadsInClass`, before the existing impl/overload
+  pairing logic, compute access-level set for the group; emit TS2385
+  on the first overload's name when set size > 1.
+
+  **17.178 (8587 → 8588, +1) — TS2538 for array-typed index
+  expression.** Closes `arrayIndexWithArrayFails_ts`. Extended the
+  existing TS2538 walker to handle `arg is ElementAccessExpression`
+  whose computed type is a Union containing an Array `Type.Reference`.
+  Emits with first such constituent's display, squiggle covers full
+  arg via `expressionTrueEnd`.
+
+  **17.179 (8588 → 8589, +1) — TS1176 for interface implements
+  clause.** Closes `interfaceWithImplements1_ts`. In
+  `parseHeritageClauses`, when `clauseToken == ImplementsKeyword
+  && !isClass && !hasImplements`, emit TS1176 at the keyword
+  position (length 10).
+
+  **17.180 (8589 → 8590, +1) — TS1246 for initializer on interface
+  property.** Closes `errorOnInitializerInInterfaceProperty_ts`. In
+  `parseTypeMember`'s PropertyDeclaration construction, when `=`
+  follows the type annotation, consume `=`, capture value position,
+  parse the initializer (so subsequent members parse cleanly), then
+  emit TS1246 at the value position (length 1).
+
+  **17.181 (8590 → 8591, +1) — TS2398 for parameter property named
+  'constructor'.** Closes `parameterPropertyInConstructor3_ts`. In
+  `parseConstructor`, after `parseParameterList` returns, iterate
+  parameters; emit TS2398 when the param has any access/readonly
+  modifier and name is `Identifier("constructor")`.
+
+  **17.182 (8591 → 8593, +2) — TS1317 for rest parameter as
+  parameter property.** Closes `restParamModifier2_ts` plus one bonus.
+  In `parseConstructor`'s parameter-property loop, when the param has
+  `dotDotDotToken`, emit TS1317 spanning from `param.pos` to the last
+  non-whitespace character before `param.end`. The walk-backward is
+  essential because `param.end` overshoots by one token (scanner has
+  advanced past the closing `)` or `,` plus its leading trivia) —
+  naive `param.end - param.pos` length is one char too long (caught
+  by initial test run before commit).
+
+  **Discovery process.** All six targets came from the same survey
+  approach as 17.172-17.176. Other surveyed candidates skipped:
+  - `destructuringFromUnionSpread_ts` (TS2339) — needs spread + union
+    + destructuring analysis pipeline.
+  - `topLevelLambda4_ts` (TS2532) — needs noImplicitThis-default-on
+    or strictNullChecks + this.X narrowing (Guardrails).
+  - `implicitAnyNewExprLackConstructorSignature_ts` (TS2683 + TS7009)
+    — needs noimplicitany-default-on (Guardrails).
+  - `prototypes_ts` (TS2339 on `new Object().prototype`) — needs
+    instance vs static resolution distinguishing.
+  - `numericIndexerConstraint_ts` (TS2411) — partial, needs more
+    structural comparison.
+
+  Anti-loop check: this session lands real code (6 commits with test
+  flips, +7 cumulative). Prior session was 17.172-17.176 (+7).
+  Commit pattern unchanged (`feat(17.177)` … `feat(17.182)`).
+
+  **Next-session candidates.** From the same (0,0) survey, still
+  tractable parser/checker-level small-yield diagnostics:
+  - `enumWithBigint_ts` (TS2452) — bigint enum member name.
+  - `forInStatement2_ts` (TS2407) — `for (var a in expr)` with
+    non-object expr type.
+  - `functionOverloads17_ts` / `functionOverloads18_ts` (TS2394) —
+    overload return type / param mismatch (likely both flip with one
+    fix).
+  - `mappedTypeWithAsClauseAndLateBoundProperty_ts` (TS2741) — needs
+    structural property-missing on mapped type result.
+  - `missingCommaInTemplateStringsArray_ts` (TS2796) — adjacent
+    template literals in array.
+  - `moduleAugmentationGlobal6_ts` (TS2669) — augmenting global
+    interface from module.
+  - `thisExpressionInCallExpressionWithTypeArguments_ts` (TS2558) —
+    type argument count check.
+  - `typeInferenceTypePredicate_ts` (TS2677) — type predicate
+    structural check.
+
   **Session 2026-05-10 (17.172 → 17.176, 8579 → 8586, +7 cumulative,
   one initial regression caught + gated) — Five new diagnostic
   emissions.** Continuation /loop after 17.167-17.171. All five came
