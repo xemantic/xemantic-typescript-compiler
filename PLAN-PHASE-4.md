@@ -2918,6 +2918,17 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.214b, 8636 → 8637, +1) — Fix resolver
+  for absolute contextFileName paths.** Closes
+  `exportAssignmentWithoutAllowSyntheticDefaultImportsError_ts` which
+  17.214 regressed. The pattern: `/foo.ts` imports `./bar` and
+  `/bar.ts` exists in the compilation. Our `resolveModuleSpecifierStrictRelative`
+  collapsed `dir` to `""` (because `/foo.ts`.substringBeforeLast('/')
+  returns "") and produced candidate path `bar`/`bar.ts` instead of
+  `/bar`/`/bar.ts`, missing the `/bar.ts` key in `fileResults`. Fix:
+  when contextFileName starts with `/` and `rawDir` is empty, prefix
+  the basePath with `/` instead of using the bare specifier.
+
   **Session 2026-05-10 (17.214, 8634 → 8636, +2) — TS2307 for
   unresolved relative imports under ES module kinds.** Closes both
   `shorthand-property-es5-es6_ts__target_es5__` and

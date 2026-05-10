@@ -2714,8 +2714,15 @@ class Checker(
      */
     private fun resolveModuleSpecifierStrictRelative(specifier: String, contextFileName: String): String? {
         if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null
-        val dir = contextFileName.substringBeforeLast('/', "")
-        val basePath = if (dir.isEmpty()) specifier else "$dir/${specifier.removePrefix("./")}"
+        // 17.214: Preserve a leading `/` from absolute contextFileName paths
+        // (test fixtures often use `/foo.ts` style). Without this, dir
+        // collapses to "" and basePath drops the leading slash so files
+        // keyed in fileResults as `/bar.ts` aren't found.
+        val rawDir = contextFileName.substringBeforeLast('/', "")
+        val dir = if (rawDir.isEmpty() && contextFileName.startsWith("/")) "" else rawDir
+        val basePath = if (dir.isEmpty()) {
+            if (contextFileName.startsWith("/")) "/${specifier.removePrefix("./")}" else specifier
+        } else "$dir/${specifier.removePrefix("./")}"
         val normalized = normalizePath(basePath)
         // Strip .js/.jsx extensions to allow TypeScript to resolve .ts/.tsx instead
         val withoutJs = when {
