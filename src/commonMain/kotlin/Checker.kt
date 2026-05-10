@@ -39138,28 +39138,57 @@ interface DataView {
                         val name = getMemberName(member.name) ?: continue
                         // Call signatures (empty name) and construct signatures ("new") are
                         // tracked as signatures, not as named properties.
-                        if (name.isEmpty()) {
+                        if (name.isEmpty() || name == "new") {
+                            // 17.153: Push the enclosing interface's typeParameters into scope
+                            // so that `T` references in the call/construct signature's return
+                            // type and parameter type annotations resolve to the interface's
+                            // TypeParam (instead of falling through to errorType). Pre-resolve
+                            // param types into [symbolTypes] so later instantiation through
+                            // `getTypeOfSymbol(paramSym)` returns the in-scope-resolved type.
+                            // Mirrors the named-method branch in `getTypeOfSymbolWorker`
+                            // (line ~38876), but uses the enclosing interface's TPs since
+                            // call/construct sigs don't declare their own typeParameters.
+                            val savedSigScope = currentTypeParamScope
+                            val ifaceTps = type.typeParameters
+                            val sigOwnTps = member.typeParameters?.map { tp ->
+                                val tpType = Type.TypeParam()
+                                tpType.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                                tpType
+                            }
+                            if (!ifaceTps.isNullOrEmpty() || !sigOwnTps.isNullOrEmpty()) {
+                                val scope = (savedSigScope?.toMutableMap() ?: mutableMapOf())
+                                ifaceTps?.forEach { tp -> tp.symbol?.name?.let { scope[it] = tp } }
+                                sigOwnTps?.forEachIndexed { i, tp ->
+                                    scope[member.typeParameters!![i].name.text] = tp
+                                }
+                                currentTypeParamScope = scope
+                            }
+                            // Resolve sig-own TP constraints/defaults under combined scope
+                            sigOwnTps?.forEachIndexed { i, tp ->
+                                member.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                                member.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                            }
                             val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                            ownCallSignatures.add(Signature(
+                            val paramSymbols = getParameterSymbols(member.parameters)
+                            for ((pi, param) in paramSymbols.withIndex()) {
+                                if (pi < member.parameters.size) {
+                                    member.parameters[pi].type?.let { typeNode ->
+                                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                                    }
+                                }
+                            }
+                            currentTypeParamScope = savedSigScope
+                            val newSig = Signature(
                                 declaration = member,
-                                parameters = getParameterSymbols(member.parameters),
+                                typeParameters = sigOwnTps,
+                                parameters = paramSymbols,
                                 resolvedReturnType = returnType,
                                 minArgumentCount = member.parameters.count {
                                     !it.questionToken && !it.dotDotDotToken && it.initializer == null
                                 },
-                            ))
-                            continue
-                        }
-                        if (name == "new") {
-                            val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                            ownConstructSignatures.add(Signature(
-                                declaration = member,
-                                parameters = getParameterSymbols(member.parameters),
-                                resolvedReturnType = returnType,
-                                minArgumentCount = member.parameters.count {
-                                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                                },
-                            ))
+                            )
+                            if (name.isEmpty()) ownCallSignatures.add(newSig)
+                            else ownConstructSignatures.add(newSig)
                             continue
                         }
                         // 16.4l: If the name came from a base type, this is an override —
@@ -50252,15 +50281,27 @@ interface DataView {
             // Skip when the relation actually accepts null (e.g. paramType happens to
             // include null in a constraint) so we don't regress tests where null is
             // compatible.
+            // 17.153: When the Reference is fully concrete (no sig-side TPs in
+            // resolvedTypeArguments — e.g. inherited generic call sigs `interface
+            // I2<T> extends I1<T[]>; var x: I2<Date>; x(undefined)` where
+            // I2<Date>'s callSig param resolves to `Date[]`), still emit TS2345
+            // with the plain display. Without this branch, the simple-checkable
+            // gate downstream skips the case (paramType is Reference, not
+            // Interface, so paramIsNamedType=false and the
+            // `argIsPrimitive && paramIsNamedType` allowlist doesn't match).
             if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
                 paramType is Type.Reference) {
                 val sigTps = sig.typeParameters
                 val refArgs = paramType.resolvedTypeArguments
                 val hasSigTp = !sigTps.isNullOrEmpty() && refArgs != null &&
                     refArgs.any { sourceContainsTypeParam(it, sigTps) }
-                if (hasSigTp && !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
-                    val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
-                    val displayParam = typeToStringWithMapper(paramType, mapper)
+                if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                    val displayParam = if (hasSigTp) {
+                        val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
+                        typeToStringWithMapper(paramType, mapper)
+                    } else {
+                        typeToString(paramType)
+                    }
                     val argTypeStr = typeToString(argType)
                     val start = arg.pos
                     val length = expressionTrueEnd(arg) - start
