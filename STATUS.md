@@ -1,6 +1,37 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,557 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,558 / 10,078 tests passing (~85%).
+
+**17.155 (2026-05-10, +1)** — Two-piece change flipping
+`interfaceImplementation1_ts`. Stacks on 17.154's
+`inferReturnTypeFromFunctionExpressionBody` foundation.
+
+(1) Var-decl chain elaboration: when fn-vs-fn call signature matches
+but target ALSO has construct signatures that source lacks, emit the
+construct-sig-missing line via `getNonConstructibleElaboration`.
+Closes the gap left by `getFunctionMismatchElaboration` returning empty
+when call sigs are compatible — the relation engine still returns
+`false` because target's `new (): T` is unsatisfied. Inserted in
+`checkVarDeclAssignability`'s chain branch (Checker.kt ~36898) with a
+gate identical to 17.111's: skip class/interface instance targets
+(their construct sigs belong to the static side). Adds chain line
+`Type '() => C2' provides no match for the signature 'new (): I3'.`
+for `var a: I4 = function(){ return new C2(); }`.
+
+(2) Multi-`implements` TS2420 emission. `checkImplementsClauses`
+(Checker.kt ~43670) had four `return` statements after each emission
+path (missing-prop, private-mismatch, missing-number-index,
+missing-string-index), exiting after the FIRST failing interface
+across ALL implements clauses. Wrapped the inner
+`for (typeExpr in clause.types)` loop in `typeExprLoop@` label and
+converted the four returns to `continue@typeExprLoop`. TypeScript
+emits one TS2420 per failing implements TARGET (per typeExpr), not
+per class. Now `class C1 implements I1, I2 { private iFn() ... }`
+emits two TS2420s — one for I1's first private member (iObj), one
+for I2's only member (iFn).
+
+Net delta: 1518 → 1517 failed (8557 → 8558 passing). Zero regressions
+across 10078-test suite.
 
 **17.154 (2026-05-10, net-zero foundation)** — `inferReturnTypeFromFunctionExpressionBody`
 now handles `return new C()` patterns. Bounded to the existing single-stmt-body
