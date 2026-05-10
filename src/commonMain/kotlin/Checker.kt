@@ -49004,6 +49004,53 @@ interface DataView {
         // Get call signatures
         val signatures = getCallSignaturesOfType(calleeType)
         if (signatures.isEmpty()) {
+            // 17.166: TS2348 — `var c = C();` where C is a class. The class
+            // value's type is `typeof C` with construct signatures only; calling
+            // it without `new` is a user error. Squiggle covers the full call
+            // expression (matches TypeScript's `C()` span in the baseline) —
+            // computed locally so the shared expressionTrueEnd helper stays
+            // unchanged (an earlier attempt to widen its empty-args fallback
+            // regressed -2 unrelated tests).
+            if (calleeExpr is Identifier) {
+                val sym = globals[calleeExpr.text]
+                // 17.166: gate TS2348 to symbols that are PURE classes — i.e. no
+                // FunctionDeclaration anywhere in any binderResult's source file with
+                // the same name (the binder's `canMerge` rejects Class+Function so the
+                // function decl lives in a separate slot or is overwritten — check the
+                // AST directly). Without this gate, `callOverloads3/4/5_ts` and
+                // `callOnInstance_ts` (which merge `function Foo(): Foo` /
+                // `declare function D()` with classes named the same) FP-fire TS2348.
+                val name = calleeExpr.text
+                val hasFunctionWithSameName = binderResults.any { br ->
+                    br.sourceFile.statements.any { st ->
+                        st is FunctionDeclaration && st.name?.text == name
+                    }
+                }
+                if (sym != null && sym.flags.hasAny(SymbolFlags.Class) && !hasFunctionWithSameName) {
+                    val start = expr.pos
+                    val end = if (expr.arguments.isNotEmpty()) {
+                        expressionTrueEnd(expr.arguments.last()) + 1
+                    } else {
+                        // empty `()` past the callee identifier
+                        calleeExpr.pos + calleeExpr.text.length + 2
+                    }
+                    val length = end - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Value of type 'typeof ${calleeExpr.text}' is not callable. Did you mean to include 'new'?",
+                            category = DiagnosticCategory.Error,
+                            code = 2348,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                    return
+                }
+            }
             // 16.4cs: TS6234 — calling a property whose only declarations are
             // `get`/`set` accessors. The property resolves to its return type
             // (e.g. `number`), which has no call signatures, so an attempted
