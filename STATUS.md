@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,621 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,625 / 10,078 tests passing (~85%).
+
+**17.206 (2026-05-10, +2)** — TS2433 for namespace split across files
+from class. Closes `cloduleSplitAcrossFiles_ts` plus one bonus. New
+`checkNamespaceSplitAcrossFiles` walker. Gates: skip ambient
+(`declare`) namespaces and ambient classes/functions; skip global
+augmentation; skip string-literal modules; only top-level
+namespaces walked.
+
+**17.205 (2026-05-10, +1)** — TS1128 for stray `case` keyword at top
+level. Closes `unexpectedStatementBlockTerminator_ts`. In
+`parseStatement`'s CaseKeyword branch, emit TS1128 with
+`overrideLength=4` BEFORE consuming the token; recovery unchanged.
+
+**17.204 (2026-05-10, +1)** — TS1264 for definite-assignment without
+type. Closes `definiteAssignmentWithErrorStillStripped_ts`. In
+`parseClassMember`, capture `!` token position before
+`parseOptional(Exclamation)`; emit TS1264 in property branch when
+`excl && type == null`.
 
 **17.203 (2026-05-10, +1)** — TS2791 for BigInt exponentiation under
 target<ES2016. Closes `bigIntWithTargetLessThanES2016_ts`. New
