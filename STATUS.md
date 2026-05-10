@@ -2,6 +2,18 @@
 
 **Phase 4 — Checker buildout.** 8,634 / 10,078 tests passing (~85%).
 
+**17.213 (2026-05-10, +0 foundation)** — TS2741 message: use displayed
+target type name for PUBLIC missing properties; use declaring class
+name only when the missing property has `private` or `protected`
+modifier. Fixes the message text in `contextualTyping_ts` line 223
+(`var x: B = {}` with `interface A { x: string }; interface B extends A {}`
+now says "...required in type 'B'" not 'A') without regressing
+`classImplementsClass4_ts` (`c2 = c` with `class A { private x = 1 }`
+correctly says "...required in type 'A'"). Net 0 tests because
+contextualTyping_ts still has an unrelated extra TS2322 at line 36
+preventing full pass; classImplementsClass4_ts was already passing
+via a different path.
+
 **17.212 (2026-05-10, +1)** — TS2304 for `typeof default` in type-query
 position. Closes `defaultIsNotVisibleInLocalScope_ts`. The `default`
 keyword parses as an Identifier in our AST and gets silently skipped

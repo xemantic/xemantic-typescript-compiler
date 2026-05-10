@@ -2918,6 +2918,38 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.213, 8634 → 8634, +0 foundation) — TS2741
+  uses displayed target name for public properties, declaring class
+  name for private/protected.** TypeScript's TS2741 ("Property X is
+  missing in type 'Y' but required in type 'Z'") chooses the Z name
+  based on the property's visibility:
+  - PUBLIC inherited property → use the displayed target type name
+    (Z = the type the source is being assigned to). Example:
+    `var x: B = {}` with `interface A { x: string }; interface B
+    extends A {}` → "missing in type '{}' but required in type 'B'".
+  - PRIVATE / PROTECTED property → use the declaring class name (Z
+    = where the modifier was set). Example: `c2 = c` with
+    `class A { private x = 1 } class C2 extends A {}` and
+    `class C { foo() {} }` → "missing in type 'C' but required in
+    type 'A'". Private members are nominally tied to A.
+
+  Refined `getDeclaringTypeDisplay` (Checker.kt ~55921): keep the
+  parent name only when ANY of the property's declarations carry
+  `Private` or `Protected` modifier; otherwise fall back to the
+  displayed target name. Replaces the previous indiscriminate
+  "use parent name when different from target" logic.
+
+  Net 0 tests this commit because (a) `contextualTyping_ts` (the
+  named test for the public→target rule) still has an unrelated
+  pre-existing extra TS2322 at line 36 preventing full pass;
+  (b) `classImplementsClass4_ts` (the named test for the private→
+  declaring rule) was already passing via a different code path.
+  Foundation: future fix to suppress / re-attribute the TS2322 at
+  contextualTyping line 36 would tip the test green; tests that
+  hit the private/protected branch are now correctly attributed.
+  Verified via 2-run before/after suite comparison: 1444 → 1444
+  failed, identical failing set, zero regressions.
+
   **Session 2026-05-10 (17.212, 8633 → 8634, +1) — TS2304 for `typeof
   default` in type-query position.** Closes
   `defaultIsNotVisibleInLocalScope_ts`. `default` parses as an

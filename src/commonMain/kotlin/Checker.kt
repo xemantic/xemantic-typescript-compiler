@@ -55932,7 +55932,25 @@ interface DataView {
             else -> null
         } ?: return fallback
         if (targetSym === parent) return fallback
-        return parentName
+        // 17.213: TypeScript's TS2741 message uses the displayed target type
+        // name for PUBLIC inherited properties (interfaces extending interfaces,
+        // classes extending other classes via public members). It uses the
+        // DECLARING class name only when the missing property is private or
+        // protected — those modifiers tie the property nominally to its
+        // declaring class. So for `var x: B = {}` with `interface A { x: string }
+        // interface B extends A {}`, the message is "...required in type 'B'"
+        // (uses target). For `c2 = c` with `class A { private x = 1 } class C2
+        // extends A {}`, the message is "...required in type 'A'" (uses
+        // declaring class because `x` is private).
+        val isPrivateOrProtected = propSymbol.declarations.any { decl ->
+            val mods = when (decl) {
+                is PropertyDeclaration -> decl.modifiers
+                is MethodDeclaration -> decl.modifiers
+                else -> emptySet()
+            }
+            ModifierFlag.Private in mods || ModifierFlag.Protected in mods
+        }
+        return if (isPrivateOrProtected) parentName else fallback
     }
 
     /**
