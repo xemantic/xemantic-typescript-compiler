@@ -42944,6 +42944,9 @@ interface DataView {
                     length = keyword.length,
                 )),
             ))
+            // TypeScript reports TS2394 once per overload group, on the first
+            // incompatible signature. Mirror the method-overload behavior.
+            break
         }
         // 17.211: TS2300 for duplicate parameter-property names across an
         // overload + impl pair. Only the IMPL position is squiggled (matches

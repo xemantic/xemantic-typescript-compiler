@@ -2918,6 +2918,15 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.211b, 8632 → 8633, +1) — Add `break` to
+  TS2394 ctor-overload loop.** Closes
+  `constructorsWithSpecializedSignatures_ts` (was regressed by 17.211).
+  After the first incompatible overload emits TS2394, break out of
+  the loop — TypeScript reports TS2394 once per overload group, on
+  the FIRST incompatible signature, not all of them. Matches the
+  existing method-overload behavior in
+  `checkMethodOverloadsInClass` (Checker.kt ~42715).
+
   **Session 2026-05-10 (17.211, 8631 → 8632, +1) — TS2394 + TS2300
   for constructor overload + impl with duplicate parameter property.**
   Closes `parameterPropertyInConstructor2_ts`. New

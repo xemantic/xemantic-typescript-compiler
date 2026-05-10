@@ -1,6 +1,13 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,632 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,633 / 10,078 tests passing (~85%).
+
+**17.211b (2026-05-10, +1)** — Add `break` after first TS2394 emission
+in `checkConstructorOverloadCompatibility` (matches the existing
+method-overload behavior: TypeScript reports TS2394 once per overload
+group, on the FIRST incompatible signature). Closes
+`constructorsWithSpecializedSignatures_ts` which was regressed by
+17.211 (3 ctors → 2 TS2394 emitted instead of 1).
 
 **17.211 (2026-05-10, +1)** — TS2394 (constructor overload-vs-impl
 arity) + TS2300 (duplicate parameter-property name across overload
