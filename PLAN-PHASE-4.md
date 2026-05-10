@@ -2918,6 +2918,24 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.207, 8625 → 8627, +2) — TS2438 for
+  reserved primitive type name as import alias.** Closes
+  `reservedNameOnInterfaceImport_ts` (both JS-emit and errors
+  baselines). In `parseImportEqualsDeclaration` (Parser.kt ~2430)
+  after the existing `parseIdentifier()` for the alias name, check
+  membership in new top-level `RESERVED_TYPE_KEYWORD_NAMES` set
+  (string/number/boolean/any/unknown/never/object/symbol/bigint/
+  undefined). When matched, emit TS2438 "Import name cannot be
+  '<name>'." at `name.pos` with length = `name.text.length`. Pure
+  parser diagnostic — no checker work required. Net +2, no FPs.
+  Anti-loop: real code lands (1 commit, +2 cumulative).
+
+  **Next-session candidates.** Continue (0,0) survey. Held over from
+  prior session: TS2708 memberScope, TS2565 enum self-ref,
+  TS2430 addMoreOverloadsToBaseSignature, TS2649 noSymbolForMergeCrash
+  (cross-file: `interface A` + `namespace A` in initial.ts vs
+  `type A = {}` in final.ts).
+
   **Session 2026-05-10 (17.204 → 17.206, 8621 → 8625, +4 cumulative,
   one FP regression caught and gated) — Three new diagnostic
   emissions across parser-level (TS1264, TS1128) and checker-level
