@@ -2918,6 +2918,85 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.192 → 17.194, 8606 → 8610, +4 cumulative,
+  one FP regression caught and gated) — Three new diagnostic
+  emissions across parser (TS1028, TS1051) and checker (TS2339)
+  layers.** Continuation /loop after 17.189-17.191. All three came
+  from re-survey of the (0,0) "none produced" bucket.
+
+  **17.192 (8606 → 8608, +2) — TS1028 for duplicate access modifier
+  on parameter property.** Closes `constructorArgsErrors3_ts` and
+  `constructorArgsErrors4_ts`. `class foo { constructor(public public
+  a: number) {} }` and `(private public a: number)` were silently
+  parsed (the second access modifier was either no-op via Set or
+  treated as the parameter name). In `parseParameterModifiers`
+  (Parser.kt ~2960), added a `hasAccess` tracker. When seeing a new
+  access modifier (public/private/protected) AND `hasAccess` already
+  true, emits TS1028 at the current token position with length
+  matching the keyword name. The modifier is still consumed (Set is
+  no-op for duplicates) so downstream parameter parsing is unaffected.
+
+  **17.193 (8608 → 8609, +1) — TS1051 for optional setter parameter.**
+  Closes `optionalSetterParam_ts`. `class foo { public set
+  bar(param?:any) { } }` was silently parsed. In `parseSetAccessor`
+  (Parser.kt ~1875), after `parseParameterList` returns, when the
+  (single) parameter has `questionToken == true`, search forward in
+  source from `name.end` for the first `?` (stopping at `:` / `)` /
+  `=` to avoid scanning past the parameter), then emit TS1051 at the
+  found `?` position with length 1.
+
+  **17.194 (8609 → 8610, +1) — TS2339 for instance-method access on
+  class identifier.** Closes `staticInstanceResolution4_ts`. `class A
+  { foo() {} } A.foo();` was emitting nothing. Calling an instance
+  method via the class identifier should fire TS2339 ("Property 'foo'
+  does not exist on type 'typeof A'."). Added a class-identifier
+  branch to `checkMemberAccessMissing` (Checker.kt ~48124). Initial
+  attempt FP-fired -6 tests (`createArray_ts`,
+  `moduleAugmentationsImports3/4_ts`, `exportAsNamespace_augment_ts`,
+  `namespaceMergedWithImportAliasNoCrash_ts`,
+  `umdGlobalAugmentationNoCrash_ts`); tightened gate to 7 conditions:
+  (1) property-access shape (keySuggestion null or starts with `.`),
+  (2) `Class` flag with NO `Module`/`Alias`/`Variable`/`Function`
+  flags, (3) declarations.size == 1 (no merge), (4) `valueDeclaration
+  === classDecl` (rules out cross-file leaks), (5) propName not
+  empty / not digit-prefixed, (6) no extends, (7) not static / not in
+  RUNTIME_PROPERTIES / not in symbol.exports.
+
+  **Discovery process.** Re-survey of (0,0) "none produced" candidates
+  ≤ 8 source lines with ≤ 2 codes, filtering Guardrails and
+  previously-attempted architectural codes. Other surveyed
+  candidates skipped:
+  - `yieldStringLiteral_ts` (TS1163) — `yield` outside generator
+    function. Parser doesn't track generator context; checker-level
+    walker would need yield-context infrastructure.
+  - `superCallFromFunction1_ts` (TS2337) — `super(...)` outside
+    class constructor; needs enclosing-context tracking similar to
+    yield/await.
+  - `undefinedTypeAssignment1_ts` (TS2457) — `type undefined =
+    string`; needs reserved-name check on type aliases.
+  - `exportAsNamespaceConflict_ts` (TS2303) — `export as namespace
+    N` conflict detection.
+  - `definiteAssignmentWithErrorStillStripped_ts` (TS1264) — `p!;`
+    field with `useDefineForClassFields`; specific.
+  - `errorForUsingPropertyOfTypeAsType02_ts` (TS2713) — `T.abc` as
+    type position (T is type param).
+  - `newFunctionImplicitAny_ts` (TS7009) — Guardrails (default-on
+    noImplicitAny).
+  - `spellingSuggestionGlobal2_ts` (TS2552) — global spelling
+    suggestion preferring local declarations.
+
+  Anti-loop check: this session lands real code (3 commits with test
+  flips, +4 cumulative). Prior session was 17.189-17.191 (+3).
+  Commit pattern unchanged (`feat(17.192)` … `feat(17.194)`).
+
+  **Next-session candidates.** The (0,0) bucket is increasingly
+  thinning at the ≤ 8-line / ≤ 2-code level after 30+ substeps
+  drained the surface. Candidates with infrastructure cost remain:
+  - TS1163 yield-context, TS2337 super-context (need enclosing-
+    function stack tracking like Parser's `inAsyncContext`).
+  - TS2457 type alias reserved name (small).
+  - TS2303 export as namespace conflict (small but specific).
+
   **Session 2026-05-10 (17.189 → 17.191, 8603 → 8606, +3 cumulative)
   — Three new diagnostic emissions across checker-level walkers.**
   Continuation /loop after 17.187-17.188. All three came from
