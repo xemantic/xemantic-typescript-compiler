@@ -1,6 +1,39 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,558 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,563 / 10,078 tests passing (~85%).
+
+**17.159 (2026-05-10, +1)** — TS1337 for generic / literal index signature
+parameter type. Closes `genericIndexTypeHasSensibleErrorMessage_ts`. Two-piece
+fix in `checkIndexSigInStatement`: (a) added a TypeAliasDeclaration branch that
+unwraps the body as `TypeLiteral` and propagates the alias's type-parameter
+names; (b) extracted the TS1268 emission into a new `checkIndexSigsInMembers`
+helper that distinguishes TS1337 (TypeReference whose name matches an outer
+type-param, OR a `LiteralType`) from TS1268 (other unsupported shapes).
+Class/interface/module paths preserved with empty outerTypeParamNames.
+
+**17.158 (2026-05-10, +3)** — TS1162 for optional object literal member.
+Closes `objectLiteralMemberWithQuestionMark1_ts` and
+`spaceBeforeQuestionMarkInPropertyAssignment_ts` plus one bonus. In
+`parseObjectLiteralElement` (Parser.kt ~4389), the silent
+`parseOptional(SyntaxKind.Question)` now captures the `?` token position,
+calls `nextToken()`, and emits `reportError(code=1162, overrideLength=1)`.
+The `?` is still consumed so downstream method-shorthand and
+PropertyAssignment parsing is unchanged.
+
+**17.157 (2026-05-10, +1)** — TS17012 for misspelled `new.target`
+meta-property. Closes `misspelledNewMetaProperty_ts`. In
+`parseNewExpression()`'s `Dot` branch (Parser.kt ~3859), after
+`parseIdentifier()`, check `name.text != "target"` and emit TS17012 via
+`reportError()` with `overrideStart = name.pos`,
+`overrideLength = name.text.length`. The MetaProperty AST node is still
+constructed.
+
+**17.156 (2026-05-10, net-zero foundation)** — Mirror 17.154's
+`return new C()` inference into the broader `inferReturnTypeFromBody`
+(used by MethodDeclaration / FunctionDeclaration / GetAccessor /
+`buildMethodType`). `class Foo { make() { return new Bar(); } }`
+now infers `() => Bar` instead of `() => any`. Foundation for
+future fix pairings.
 
 **17.155 (2026-05-10, +1)** — Two-piece change flipping
 `interfaceImplementation1_ts`. Stacks on 17.154's

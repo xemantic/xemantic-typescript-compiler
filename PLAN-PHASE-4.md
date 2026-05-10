@@ -2918,6 +2918,119 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.157 → 17.159, 8558 → 8563, +5 cumulative; one
+  attempt reverted 17.160) — Three new parser/checker diagnostic
+  emissions for small (0,0)-bucket targets surfaced by survey of "none
+  produced" failures.** Continuation /loop after 17.156. Surgical pool
+  `find_candidates.py --fresh` continued returning 0/0/0 (filtered from
+  3/73/17). Anti-loop pivot: ran a histogram of failing tests by
+  `(missing_TS_codes, extra_TS_codes)` and inspected the (0,0) bucket
+  (1064 tests) for small-source candidates with simple expected
+  baselines. Found ~16 such candidates with 1-line sources expecting a
+  single TS code — most were either Guardrails (TS7006 / TS7041 default-on)
+  or architectural (TS2352 generic, TS2345 generic, TS2739 lib comparison,
+  TS6504 build-flag).
+
+  **17.157 (8558 → 8559, +1) — TS17012 for misspelled `new.target`
+  meta-property.** Closes `misspelledNewMetaProperty_ts`. Source
+  `function foo(){ new.targ }` was previously parsed as a valid
+  MetaProperty without diagnostic. Fix: in `parseNewExpression()`'s
+  `Dot` branch (Parser.kt ~3859), after `parseIdentifier()`, check
+  `name.text != "target"` and emit TS17012 via `reportError()` with
+  `overrideStart = name.pos`, `overrideLength = name.text.length`. The
+  MetaProperty AST node is still constructed (downstream emit/transform
+  paths unchanged). Single-spot edit. Zero regressions.
+
+  **17.158 (8559 → 8562, +3) — TS1162 for optional object literal
+  member.** Closes `objectLiteralMemberWithQuestionMark1_ts` and
+  `spaceBeforeQuestionMarkInPropertyAssignment_ts` plus one bonus.
+  `var v = { foo?() {} }` and `var x = {x ?: 1}` were silently parsed.
+  Fix: in `parseObjectLiteralElement` (Parser.kt ~4389), replace silent
+  `parseOptional(SyntaxKind.Question)` with explicit token-position
+  capture + `nextToken()` + `reportError()` for code 1162 with
+  `overrideLength=1` at the `?` token position. The `?` is still
+  consumed (so downstream method-shorthand and PropertyAssignment parsing
+  is unchanged) — diagnostic emission is the only behavior change. Zero
+  regressions.
+
+  **17.159 (8562 → 8563, +1) — TS1337 for generic / literal index
+  signature parameter type.** Closes
+  `genericIndexTypeHasSensibleErrorMessage_ts`. `type Wat<T extends
+  string> = { [x: T]: string };` was previously emitting nothing because
+  `checkIndexSigInStatement` only iterated ClassDeclaration /
+  InterfaceDeclaration / ModuleDeclaration members. Two-piece fix:
+  (1) added a TypeAliasDeclaration branch that gathers the alias's
+  type-parameter names and unwraps the body as `TypeLiteral`,
+  delegating to a new `checkIndexSigsInMembers` helper; (2) extracted
+  the TS1268 emission logic into the new helper, distinguishing TS1337
+  (parameter type is a TypeReference whose name matches an outer
+  type-parameter, OR is a `LiteralType`) from TS1268 (any other
+  unsupported shape, the long-standing path). Class/interface/module
+  members go through `checkIndexSigsInMembers` with empty
+  outerTypeParamNames so the TS1268 baseline behavior is preserved.
+  Zero regressions.
+
+  **17.160 — TS7022 for self-referencing var initializer (ATTEMPTED +
+  REVERTED, -3 regressions).** Target `recursiveObjectLiteral_ts`:
+  `var a = { f: a };` expects TS7022. New `checkRecursiveVarInits`
+  walker detected VariableDeclaration with no type annotation, Identifier
+  name, and an initializer containing an Identifier reference matching
+  the same name (skipping into nested function/arrow/class bodies which
+  delay evaluation). Pure AST walk, no type machinery. The targeted test
+  itself was already failing with `NoClassDefFoundError` from a
+  pre-existing StackOverflow in `inferTypeFromInitializer`'s recursion
+  for the same self-ref pattern (so the targeted test couldn't be
+  fixed by this walker alone). Full-suite regressed -3 because the
+  walker matched legitimate cases like `var Promise = window.Promise`
+  (outer-scope same-name reference), `var x = x || defaultValue`
+  (outer-scope `x`), and similar patterns where the identifier on the
+  RHS resolves to an OUTER declaration via hoisting + scope chain.
+  Reverted same iteration. A correct implementation needs symbol
+  resolution to confirm the RHS reference resolves to THIS
+  declaration's symbol, not an outer same-name binding — that's a
+  per-scope walk on top of the binder's symbol tables, larger than
+  a single substep. Logged for future agents.
+
+  **Other tractable-looking candidates surveyed and skipped:**
+  - `topLevelLambda3_ts` (TS7041): `var f = () => {this.window;}` —
+    TS7041 emission infrastructure already exists in `checkImplicitThis`,
+    but the entire pass is gated on `options.noImplicitThis ||
+    options.strict`. TypeScript's test runner defaults to
+    `noImplicitThis=true`; ours doesn't. Same Guardrails class as the
+    TS7006 default-on policy.
+  - `arrowFunctionWithObjectLiteralBody1/2`, `contextualTyping38` (TS7006):
+    same default-on Guardrails.
+  - `redefineArray_ts` (TS2739): `Array = function(...)` requires
+    structural comparison vs lib `ArrayConstructor` interface — needs
+    lib-aware type resolution.
+  - `unterminatedStringLiteralWithBackslash1_ts` (TS1126): scanner has
+    no diagnostic infrastructure; parser-level detection would be
+    invasive.
+  - `numericIndexerConstraint5_ts`, `arrayConcatMap_ts`: need generic
+    inference / index-sig structural comparison.
+  - `inheritFromGenericTypeParameter_ts` (TS2304+TS2312): heritage
+    clause type-parameter detection — bounded but requires resolving
+    the heritage Identifier against the class/interface's own
+    typeParameters.
+
+  Anti-loop check: this session lands real code (3 commits with test
+  flips, +5 cumulative). Prior session was 17.156 (foundation, +0).
+  Commit pattern unchanged (`feat(17.157)`, `feat(17.158)`,
+  `feat(17.159)`).
+
+  **Next-session candidates.** The `(0,0)` bucket (1064 tests) is the
+  biggest unexplored failure family — most are blocked on Guardrails
+  (default-on diagnostics like TS7006/TS7041) or architectural
+  (generic inference, lib-aware comparison, scanner diagnostics).
+  Tractable remaining single-test surgical candidates from this
+  session's survey:
+  - `inheritFromGenericTypeParameter_ts` (TS2304 + TS2312 for class /
+    interface extending a type parameter — bounded heritage-clause check)
+  - `classExtendsInterface_not_ts` (TS2339 for property access on string
+    literal in heritage clause — needs heritage expression type-check)
+  - `constEnumBadPropertyNames_ts` (TS2339 on `E["B"]` for non-existent
+    const enum member — bounded element-access check)
+
   **Session 2026-05-10 (17.156, 8558 → 8558, net-zero foundation) — Mirror
   17.154's `return new C()` inference into the broader
   `inferReturnTypeFromBody`.** Continuation after 17.155. Pre-flight: full
