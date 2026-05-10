@@ -9901,24 +9901,34 @@ class Checker(
     private fun emitTs2499ForInterfaceExtendsNonEntityName(
         expr: Expression, source: String, fileName: String,
     ) {
-        // Conservative gate: only fire for ParenthesizedExpression — the
-        // narrow test-target shape `interface X extends (typeof A) {}`.
-        // Other expression shapes our parser produces for legitimate entity
-        // names (e.g. `IA<T>` may parse as a complex node depending on the
-        // type-argument resolution path) would FP-fire if we widened.
-        if (expr !is ParenthesizedExpression) return
-        if (expr.pos < 0 || expr.pos >= source.length || source[expr.pos] != '(') return
+        // Narrow gate: fire for ParenthesizedExpression and CallExpression.
+        // `interface X extends (typeof A) {}` and `interface X extends Y() {}`
+        // are the named test targets. Other shapes are not yet covered to
+        // avoid FP-firing on legitimate entity-name forms our parser produces
+        // for `IA<T>` heritage.
+        val isParenthesized = expr is ParenthesizedExpression
+        val isCall = expr is CallExpression
+        if (!isParenthesized && !isCall) return
+        // For ParenthesizedExpression, scan source forward from `expr.pos`
+        // matching paren depth so the span doesn't depend on `node.end`
+        // overshoot. For CallExpression `name(args)`, scan forward from
+        // `expr.pos` to the matching close-paren of the args list.
+        if (expr.pos < 0 || expr.pos >= source.length) return
         var depth = 0
         var i = expr.pos
+        var sawOpen = false
         while (i < source.length) {
             val c = source[i]
-            if (c == '(') depth++
-            else if (c == ')') {
+            if (c == '(') {
+                depth++
+                sawOpen = true
+            } else if (c == ')') {
                 depth--
-                if (depth == 0) { i++; break }
+                if (sawOpen && depth == 0) { i++; break }
             }
             i++
         }
+        if (!sawOpen) return
         val length = (i - expr.pos).coerceAtLeast(1)
         val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
         diagnostics.add(Diagnostic(
