@@ -1,6 +1,60 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,551 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,554 / 10,078 tests passing (~85%).
+
+**17.150 (2026-05-10, +3)** — TS2842 emission for unused destructured-property
+renames in function-TYPE positions + companion FP suppressions for `typeof
+<renamed-binding>` references. Flips
+`renamingDestructuredPropertyInFunctionType_ts`,
+`renamingDestructuredPropertyInFunctionType3_ts`, and
+`paramterDestrcuturingDeclaration_ts` (3 tests). Three-piece change in
+Checker.kt:
+
+- **Piece 1 (FP suppression in `typeof X`)**: `checkTypeQueryName` (~10822)
+  now also consults the local `NameScope` via `!scope.has(name.text)` before
+  emitting TS2693 for type-keyword names like `string` / `number`. This
+  catches the case where a parameter destructured-rename
+  (`({ a: string }) => typeof string`) shadows the keyword — `addBindingName`
+  already registers the renamed binding into the FunctionType's `fnScope`,
+  but `nameResolvesToValue` only consults `result.locals`/globals, so the
+  scope hop was missing. Safe because TYPE_ONLY_KEYWORD names are never
+  registered via `addType` — `scope.has` being true here implies a
+  value-position binding.
+- **Piece 2 (FP suppression in implementation bodies)**: extended the
+  FunctionDeclaration / FunctionExpression / ArrowFunction branches in
+  `checkTypeAsValueInStatement` / `checkTypeAsValueInExpr` to walk parameter
+  binding patterns (not just bare Identifiers) via new
+  `addParamBindingNamesToValues` helper. Without this, `function f4({ a:
+  string }: O): typeof string { return string; }` falsely flagged the inner
+  `typeof string` and `return string` as TS2693 because the destructured
+  rename `string` wasn't in `valueNames`. Mirrors `addBindingName` for the
+  type-as-value walker's name sets.
+- **Piece 3 (TS2842 emission)**: new `checkUnusedDestructuredRenames`
+  walker called from `checkUnresolvedInType`'s FunctionType /
+  ConstructorType / TypeLiteral.MethodDeclaration / TypeLiteral.Constructor
+  branches and from `checkUnresolvedInStatementCore`'s
+  InterfaceDeclaration.MethodDeclaration branch. For each parameter that's
+  an `ObjectBindingPattern`, iterates `BindingElement`s with
+  `propertyName != null`. If the local-binding identifier is not referenced
+  in any type-position scope (return type, other parameters' types — checked
+  via new `isNameReferencedInTypeQuery` that recurses through all common
+  TypeNode kinds looking for `typeof <name>`), emits TS2842 with squiggle
+  on the local-binding identifier. Companion `emitTS2842` /
+  `formatBindingPropertyName` helpers; `formatBindingPropertyName` handles
+  Identifier / StringLiteralNode (`"a"` form) / NumericLiteralNode (`2`
+  form) / ComputedPropertyName (`[expr]` form).
+- **Piece 3b (TS2843 related info)**: when the parent Parameter has no
+  explicit `type` annotation, also attaches TS2843 ("We can only write a
+  type for 'X' by adding a type for the entire parameter here.") pointing
+  at the parameter list's closing `)`. Per the CLAUDE.md `node.end`
+  overshoots-by-one-token gotcha, `param.end` is typically already past
+  the `)` and the following `=>`/`:`, so `buildTs2843RelatedInfo` scans
+  BACKWARD from `param.end - 1` for the nearest `)` (bounded by
+  `param.pos`). Forward scan would skip the correct `)` and hit a later
+  parameter list's `)` (verified mistake — initial forward-scan attempt
+  pointed TS2843 at the next `type FN` declaration's `)`).
+
+Net delta: 1524 → 1521 failed (8551 → 8554 passing). Zero regressions.
 
 **17.149 (2026-05-07, +1, closes B5.6)** — TS6205 for all-unused multi-id
 JSDoc `@template` tags + body `@type {T}` JSDoc usage tracking. Flips

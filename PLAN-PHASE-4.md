@@ -2898,6 +2898,118 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.150, 8551 → 8554, +3) — TS2842 for unused
+  destructured-property renames in function-type positions, with companion
+  FP suppression for `typeof <renamed-binding>` references and parameter
+  binding-pattern locals in implementation bodies.** Continuation /loop
+  after 17.149. `find_candidates.py --fresh` returned 0/0/0 (filtered from
+  3/74/19) per anti-loop rule; baseline 8551 (1524 failed) confirmed via
+  fresh full-suite. Per autonomous-decision policy, picked a tractable
+  new-diagnostic implementation surfaced by failure-code tally:
+  `renamingDestructuredPropertyInFunctionType_ts` was MISS 21× TS2842 +
+  EXTRA 17× TS2693 — concentrated, with one related-info-emission
+  variant (test 3) and one bonus parameter-destructuring test
+  (`paramterDestrcuturingDeclaration_ts`) gaining the same code path.
+
+  **TS2842 spec (from TypeScript baseline analysis).** In a function-TYPE
+  position (`FunctionType` / `ConstructorType` / interface
+  `MethodSignature` / `MethodDeclaration` in TypeLiteral / `CallSignature`
+  / `ConstructSignature` — note CLAUDE.md gotcha: call-/construct-sigs
+  are parsed as MethodDeclaration with name=`Identifier("")`/`("new")`),
+  destructured-property renames `{ a: string }` create a parameter-local
+  binding `string`. If unreferenced anywhere in the function-type's scope
+  (return type or sibling parameter types via `typeof <name>`),
+  TypeScript emits TS2842 with squiggle on the local-binding identifier.
+  Implementation function declarations (FunctionDeclaration, ArrowFunction,
+  FunctionExpression, MethodDeclaration in classes / object literals)
+  are NOT subject to TS2842 — those bindings are real locals; unused-binding
+  there is TS6133 territory. TS2843 ("We can only write a type for 'X' by
+  adding a type for the entire parameter here.") fires as related info
+  alongside TS2842 ONLY when the parent Parameter has no `type` annotation,
+  pointing at the parameter list's closing `)`.
+
+  **Implementation (Checker.kt).**
+  - **Piece 1 — FP suppression for `typeof <type-keyword>` shadowed by
+    parameter binding.** `checkTypeQueryName` (~10822) consults the
+    `NameScope` via `!scope.has(name.text)` before emitting TS2693 for
+    primitive type-keywords like `string` / `number`. The FunctionType /
+    ConstructorType branches in `checkUnresolvedInType` already register
+    parameter binding names (including destructured rename targets) into
+    `fnScope` via `addParamsToScope` → `addBindingName`, but
+    `nameResolvesToValue` (a sibling check) only consults
+    `result.locals`/globals, missing scope-only bindings. Safe because
+    TYPE_ONLY_KEYWORD names are never registered via `addType` —
+    `scope.has` being true here can ONLY mean a value-position binding
+    shadowed the keyword.
+  - **Piece 2 — FP suppression in implementation function bodies.**
+    Extended `checkTypeAsValueInStatement`'s FunctionDeclaration branch
+    and `checkTypeAsValueInExpr`'s FunctionExpression / ArrowFunction
+    branches to walk parameter binding patterns (not just bare Identifier
+    names) via new `addParamBindingNamesToValues` helper. Without this,
+    `function f4({ a: string }: O): typeof string { return string; }`
+    falsely flagged inner `typeof string` and `return string` as TS2693
+    because the destructured rename `string` wasn't in `valueNames`.
+    Mirrors `addBindingName` for the type-as-value walker's name sets
+    (recurses ObjectBindingPattern / ArrayBindingPattern, removes the
+    name from `innerTypeOnly` and adds to `innerValues`).
+  - **Piece 3 — TS2842 emission walker.** New
+    `checkUnusedDestructuredRenames(params, returnType, source, fileName)`
+    invoked from `checkUnresolvedInType`'s FunctionType / ConstructorType /
+    TypeLiteral.MethodDeclaration / TypeLiteral.Constructor branches and
+    from `checkUnresolvedInStatementCore`'s
+    InterfaceDeclaration.MethodDeclaration branch. Iterates each parameter's
+    name (when `is ObjectBindingPattern`), then each `BindingElement` with
+    `propertyName != null` (rename form). If `element.name` (Identifier) is
+    not referenced in any in-scope TypeNode (return type plus sibling
+    parameters' types — via new recursive `isNameReferencedInTypeQuery`
+    that handles TypeQuery / FunctionType / ConstructorType / Union /
+    Intersection / Parens / Array / Tuple / Optional / Rest /
+    NamedTupleMember / Conditional / IndexedAccess / TypeOperator / Mapped
+    / TemplateLiteral / TypeReference type-args / TypeLiteral members,
+    looking for `typeof <name>` or `typeof <name>.X` matches), emits TS2842
+    via `emitTS2842` with squiggle on the local-binding Identifier.
+  - **Piece 3b — TS2843 related info.** When the parent Parameter has no
+    explicit `type`, `emitTS2842` calls `buildTs2843RelatedInfo` to compute
+    a TS2843 related-info diagnostic pointing at the parameter list's
+    closing `)`. Per the CLAUDE.md `node.end` overshoots-by-one-token
+    gotcha, `param.end` is the scanner position AFTER `nextToken()` was
+    called past the parameter — typically already past the `)` and the
+    following `=>` / `:` token. So `buildTs2843RelatedInfo` scans BACKWARD
+    from `param.end - 1` for the nearest `)`, bounded by `param.pos`.
+    Initial forward-scan attempt was wrong: it skipped the correct `)`
+    and hit the next `type FN` declaration's `)` (off-by-one-line
+    diagnostic). The `formatBindingPropertyName` helper produces the
+    display string for the `propertyName`: Identifier `a` → `a`,
+    StringLiteralNode `"a"` → `"a"`, NumericLiteralNode `2` → `2`,
+    ComputedPropertyName `[<expr>]` → `[<rendered>]` (with rendered
+    using the expression's text or source.substring fallback).
+
+  **Verification.**
+  - Targeted: `renamingDestructuredPropertyInFunctionType_ts` (variant 1,
+    21 TS2842 + 13 TS2843 expected) flips. `renamingDestructuredPropertyInFunctionType3_ts`
+    (variant 3, 2 TS2842) flips. `paramterDestrcuturingDeclaration_ts`
+    (bonus from FP suppression — pre-existing test on parameter
+    destructuring with type-keyword binding name) flips. Variant 2
+    (`renamingDestructuredPropertyInFunctionType2_ts`) is `.d.ts`-named
+    via `@filename: a.d.ts` and not in our test corpus.
+  - Full suite: 10078 / 1521 / 3 (was 1524 / 3, +3 net). Zero regressions
+    across the 10078-test suite verified via pre/post failing-set diff.
+
+  **Wider applicability.** The TS2842 walker fires in any function-type
+  position the existing `checkUnresolvedInType` already visits, so future
+  type contexts (e.g. nested type-position bindings inside generic
+  constraints) benefit automatically. The FP suppression for
+  `typeof <renamed>` and binding-pattern locals likely also helps any
+  test that combines parameter destructuring with type-keyword-name locals
+  — the bonus `paramterDestrcuturingDeclaration_ts` flip confirms this.
+
+  **Surfaced gotcha.** The `node.end` overshoots-by-one-token gotcha
+  (already in CLAUDE.md) bit again here. The lesson reinforced: when
+  computing positions of tokens AFTER a parsed node (like a closing
+  paren that follows the last parameter), forward-scan from `node.end`
+  is unreliable; backward-scan from `node.end - 1` is robust because
+  `node.end` is typically one-token past the desired position.
+
   **Session 2026-05-07 (17.149, 8550 → 8551, +1 — closes B5.6) — TS6205
   for all-unused multi-id JSDoc `@template` tags + body `@type {T}`
   JSDoc usage tracking.** Stacks on 17.148 (B5.5 single-id case) to close
