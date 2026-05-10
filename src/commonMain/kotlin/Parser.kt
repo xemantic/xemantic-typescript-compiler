@@ -1629,7 +1629,17 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         // Error recovery: `{` after access modifiers (non-static) can't be a valid property name.
         // Return null so the class body exits early and `{}` is parsed as a block statement.
         // Only applies when modifiers were actually consumed (e.g. `public {`).
+        // Mirror TypeScript's diagnostics: TS1146 "Declaration expected." at end of modifier
+        // (zero-length squiggle, between modifier and `{`), and TS1005 "';' expected." at `{`.
+        // The TS1005 emission also pre-empts the parseExpected(CloseBrace) error in
+        // parseClassDeclaration (same position → reportError dedup suppresses it).
         if (modifiers.isNotEmpty() && !isStatic && token == SyntaxKind.OpenBrace) {
+            val modifierEnd = scanner.getPrevTokenEnd()
+            val openBracePos = getPos()
+            reportError("Declaration expected.", code = 1146,
+                overrideStart = modifierEnd, overrideLength = 0)
+            reportError("';' expected.", code = 1005,
+                overrideStart = openBracePos, overrideLength = 1)
             return null
         }
 

@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,555 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,556 / 10,078 tests passing (~85%).
+
+**17.152 (2026-05-10, +1)** — TS1146 + TS1005 for `{` after access modifier in
+class body (parser error recovery). Flips `classMemberWithMissingIdentifier_ts`
+(1 test). When `parseClassMember` detects a non-static modifier prefix
+(e.g. `public`) followed directly by `{`, the existing early-return path for
+this recovery case (Parser.kt:1632) now emits two diagnostics before
+returning null:
+
+- TS1146 "Declaration expected." at `scanner.getPrevTokenEnd()` (position
+  right after the last-consumed modifier, before whitespace) with
+  zero-length squiggle. Matches TypeScript's column-11 placement for
+  `    public {` (between the modifier `public` and the `{`).
+- TS1005 "';' expected." at the `{` position (`getPos()`) with length 1.
+
+The TS1005 emission also pre-empts the subsequent `parseExpected(CloseBrace)`
+error in `parseClassDeclaration` (Parser.kt:1477). That parseExpected would
+fire "'}' expected." at the same `{` position, but `reportError`'s same-
+position dedup (`if (lastDiag.start == start) return`) suppresses it because
+the TS1005 we just emitted is the `lastDiag` at that position. The class
+body still exits early (return null), so the `{};` falls through to top-
+level parsing as Block + EmptyStatement, and the actual closing `}` of the
+class on the next line fires TS1128 "Declaration or statement expected."
+exactly as TypeScript expects.
+
+Net delta: 1520 → 1519 failed (8555 → 8556 passing). Zero regressions.
 
 **17.151 (2026-05-10, +1)** — TS2842 for unused destructured renames in
 interface SetAccessor signatures. Flips
