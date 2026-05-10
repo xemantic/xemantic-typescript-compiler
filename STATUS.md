@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,633 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,634 / 10,078 tests passing (~85%).
+
+**17.212 (2026-05-10, +1)** — TS2304 for `typeof default` in type-query
+position. Closes `defaultIsNotVisibleInLocalScope_ts`. The `default`
+keyword parses as an Identifier in our AST and gets silently skipped
+by the KEYWORD_IDENTIFIERS guard in `checkIdentifierResolved`.
+TypeScript treats `typeof default` as TS2304 regardless of whether
+the file has an `export default`. Added a special-case in
+`checkTypeQueryName`: when the type-query name is the bare Identifier
+`default`, emit TS2304 at the identifier position with length 7.
 
 **17.211b (2026-05-10, +1)** — Add `break` after first TS2394 emission
 in `checkConstructorOverloadCompatibility` (matches the existing

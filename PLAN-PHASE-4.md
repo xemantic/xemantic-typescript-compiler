@@ -2918,6 +2918,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.212, 8633 → 8634, +1) — TS2304 for `typeof
+  default` in type-query position.** Closes
+  `defaultIsNotVisibleInLocalScope_ts`. `default` parses as an
+  Identifier in our AST (since the parser uses `parseIdentifierName`
+  which doesn't reject keywords). Then `checkIdentifierResolved` skips
+  any name in `KEYWORD_IDENTIFIERS`, which includes `default`. So
+  `typeof default` silently fires no diagnostic. TypeScript ALWAYS
+  emits TS2304 here regardless of whether the file has an
+  `export default` — `default` is not a valid identifier in
+  type-query position. Surgical fix: in `checkTypeQueryName`'s
+  Identifier branch (Checker.kt ~11168), add a special-case check
+  before `checkIdentifierResolved`: if `name.text == "default"`,
+  emit TS2304 directly with length 7.
+
   **Session 2026-05-10 (17.211b, 8632 → 8633, +1) — Add `break` to
   TS2394 ctor-overload loop.** Closes
   `constructorsWithSpecializedSignatures_ts` (was regressed by 17.211).
