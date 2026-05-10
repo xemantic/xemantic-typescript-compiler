@@ -1729,6 +1729,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             )
         }
         val question = parseOptional(SyntaxKind.Question)
+        val exclPos = if (token == SyntaxKind.Exclamation) getPos() else -1
         val excl = parseOptional(SyntaxKind.Exclamation)
 
         return if (token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan) {
@@ -1755,6 +1756,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             // Property
             var type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+            // 17.204: TS1264 — `class C { p!; }` (definite-assignment `!` without
+            // type annotation). Squiggle on the `!` token (length 1).
+            if (excl && type == null && exclPos >= 0) {
+                reportError(
+                    "Declarations with definite assignment assertions must also have type annotations.",
+                    code = 1264, overrideStart = exclPos, overrideLength = 1,
+                )
+            }
             parseSemicolon()
             val trailing = trailingComments()
             // 17.58b: in JS-like files, a missing type annotation on a class property
