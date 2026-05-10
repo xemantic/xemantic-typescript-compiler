@@ -9757,6 +9757,32 @@ class Checker(
                 }
                 stmt.heritageClauses?.forEach { clause ->
                     for (type in clause.types) {
+                        // 17.209: For `implements <bareTypeParam>` (e.g. `class C<T>
+                        // implements T {}`), TypeScript treats T as a TYPE-position
+                        // reference that resolves to the type parameter, then
+                        // rejects it with TS2422 ("class can only implement an
+                        // object type"). Skip the value-position TS2304 emission
+                        // and the typeArguments walk (none on a bare identifier),
+                        // and emit TS2422 directly.
+                        val isImplementsTypeParam = clause.token == SyntaxKind.ImplementsKeyword &&
+                            type.expression is Identifier &&
+                            classScope.isTypeParam((type.expression as Identifier).text) &&
+                            !scope.has((type.expression as Identifier).text)
+                        if (isImplementsTypeParam) {
+                            val ident = type.expression as Identifier
+                            val (line, character) = getLineAndCharacterOfPosition(source, ident.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "A class can only implement an object type or intersection of object types with statically known members.",
+                                category = DiagnosticCategory.Error,
+                                code = 2422,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = ident.pos,
+                                length = ident.text.length,
+                            ))
+                            continue
+                        }
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
                         checkHeritageTypeArgCount(type, classScope, source, fileName)
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
