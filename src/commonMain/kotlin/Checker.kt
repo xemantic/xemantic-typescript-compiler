@@ -31932,6 +31932,168 @@ interface DataView {
         }
     }
 
+    /**
+     * 17.196: TS1163 — `yield` outside a generator function body. Walks
+     * function bodies tracking generator (asterisk) state. ArrowFunction is
+     * always non-generator. Function/Method declarations + expressions track
+     * via `asteriskToken`.
+     */
+    private fun walkYieldInStmts(stmts: List<Statement>, source: String, fileName: String, isGenerator: Boolean) {
+        for (stmt in stmts) walkYieldInStmt(stmt, source, fileName, isGenerator)
+    }
+
+    private fun walkYieldInStmt(stmt: Statement, source: String, fileName: String, isGenerator: Boolean) {
+        when (stmt) {
+            is ExpressionStatement -> walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+            }
+            is ReturnStatement -> stmt.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+            is FunctionDeclaration -> {
+                stmt.body?.let { walkYieldInStmts(it.statements, source, fileName, stmt.asteriskToken) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let {
+                    walkYieldInStmts(it.statements, source, fileName, m.asteriskToken)
+                }
+                is Constructor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
+                is GetAccessor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
+                is SetAccessor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
+                is PropertyDeclaration -> m.initializer?.let { walkYieldInExpr(it, source, fileName, false) }
+                else -> {}
+            }
+            is Block -> walkYieldInStmts(stmt.statements, source, fileName, isGenerator)
+            is IfStatement -> {
+                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+                walkYieldInStmt(stmt.thenStatement, source, fileName, isGenerator)
+                stmt.elseStatement?.let { walkYieldInStmt(it, source, fileName, isGenerator) }
+            }
+            is ForStatement -> {
+                stmt.condition?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+                stmt.incrementor?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
+            }
+            is ForInStatement -> {
+                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
+            }
+            is ForOfStatement -> {
+                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
+            }
+            is WhileStatement -> {
+                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
+            }
+            is DoStatement -> {
+                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
+            }
+            is SwitchStatement -> {
+                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> {
+                        walkYieldInExpr(clause.expression, source, fileName, isGenerator)
+                        walkYieldInStmts(clause.statements, source, fileName, isGenerator)
+                    }
+                    is DefaultClause -> walkYieldInStmts(clause.statements, source, fileName, isGenerator)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                walkYieldInStmts(stmt.tryBlock.statements, source, fileName, isGenerator)
+                stmt.catchClause?.block?.let { walkYieldInStmts(it.statements, source, fileName, isGenerator) }
+                stmt.finallyBlock?.let { walkYieldInStmts(it.statements, source, fileName, isGenerator) }
+            }
+            is ThrowStatement -> stmt.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+            is LabeledStatement -> walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                walkYieldInStmts(it.statements, source, fileName, false)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkYieldInExpr(expr: Expression, source: String, fileName: String, isGenerator: Boolean) {
+        when (expr) {
+            is YieldExpression -> {
+                if (!isGenerator) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "A 'yield' expression is only allowed in a generator body.",
+                        category = DiagnosticCategory.Error,
+                        code = 1163,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = expr.pos,
+                        length = 5,
+                    ))
+                }
+                expr.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                // Arrow functions cannot be generators
+                is Block -> walkYieldInStmts(body.statements, source, fileName, false)
+                is Expression -> walkYieldInExpr(body, source, fileName, false)
+                else -> {}
+            }
+            is FunctionExpression -> {
+                expr.body.let { walkYieldInStmts(it.statements, source, fileName, expr.asteriskToken) }
+            }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let {
+                    walkYieldInStmts(it.statements, source, fileName, m.asteriskToken)
+                }
+                is Constructor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
+                else -> {}
+            }
+            is BinaryExpression -> {
+                walkYieldInExpr(expr.left, source, fileName, isGenerator)
+                walkYieldInExpr(expr.right, source, fileName, isGenerator)
+            }
+            is CallExpression -> {
+                walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+                for (arg in expr.arguments) walkYieldInExpr(arg, source, fileName, isGenerator)
+            }
+            is NewExpression -> {
+                walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+                expr.arguments?.forEach { walkYieldInExpr(it, source, fileName, isGenerator) }
+            }
+            is ParenthesizedExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is ConditionalExpression -> {
+                walkYieldInExpr(expr.condition, source, fileName, isGenerator)
+                walkYieldInExpr(expr.whenTrue, source, fileName, isGenerator)
+                walkYieldInExpr(expr.whenFalse, source, fileName, isGenerator)
+            }
+            is PropertyAccessExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is ElementAccessExpression -> {
+                walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+                walkYieldInExpr(expr.argumentExpression, source, fileName, isGenerator)
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) walkYieldInExpr(el, source, fileName, isGenerator)
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkYieldInExpr(prop.initializer, source, fileName, isGenerator)
+                is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let {
+                    walkYieldInExpr(it, source, fileName, isGenerator)
+                }
+                is SpreadAssignment -> walkYieldInExpr(prop.expression, source, fileName, isGenerator)
+                is MethodDeclaration -> prop.body?.let {
+                    walkYieldInStmts(it.statements, source, fileName, prop.asteriskToken)
+                }
+                else -> {}
+            }
+            is PrefixUnaryExpression -> walkYieldInExpr(expr.operand, source, fileName, isGenerator)
+            is PostfixUnaryExpression -> walkYieldInExpr(expr.operand, source, fileName, isGenerator)
+            is SpreadElement -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is NonNullExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is AsExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is TypeAssertionExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is AwaitExpression -> expr.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+            else -> {}
+        }
+    }
+
     private fun checkUndefinedNamesInStmts(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) {
             when (stmt) {
@@ -31985,6 +32147,11 @@ interface DataView {
                             length = stmt.name.text.length,
                         ))
                     }
+                }
+                is FunctionDeclaration -> {
+                    // 17.196: walk for yield-in-non-generator (TS1163).
+                    val isGenerator = stmt.asteriskToken
+                    stmt.body?.let { walkYieldInStmts(it.statements, source, fileName, isGenerator) }
                 }
                 is ModuleDeclaration -> {
                     (stmt.body as? ModuleBlock)?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
