@@ -2918,6 +2918,67 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.204 → 17.206, 8621 → 8625, +4 cumulative,
+  one FP regression caught and gated) — Three new diagnostic
+  emissions across parser-level (TS1264, TS1128) and checker-level
+  (TS2433) sites.** Continuation /loop after 17.202-203.
+
+  **17.204 (8621 → 8622, +1) — TS1264 for definite-assignment
+  without type.** Closes `definiteAssignmentWithErrorStillStripped_ts`.
+  `class C { p!; }` was emitting nothing. In `parseClassMember`
+  (Parser.kt ~1731), capture the `!` token position before
+  `parseOptional(SyntaxKind.Exclamation)` consumes it. In the
+  property branch, when `excl && type == null`, emit TS1264 at the
+  captured `!` position (length 1).
+
+  **17.205 (8622 → 8623, +1) — TS1128 for stray `case` keyword at
+  top level.** Closes `unexpectedStatementBlockTerminator_ts`.
+  `class Foo {} class Bar {} case` (stray `case` at top level) was
+  silently consumed by parser's CaseKeyword branch in
+  `parseStatement` (line 490) without diagnostic. Added
+  `reportError(code = 1128, overrideLength = 4)` BEFORE the existing
+  `nextToken()` consumption. Error recovery unchanged.
+
+  **17.206 (8623 → 8625, +2) — TS2433 for namespace split across
+  files.** Closes `cloduleSplitAcrossFiles_ts` plus one bonus.
+  `class D {}` in one file + `namespace D { ... }` in another was
+  emitting nothing. New `checkNamespaceSplitAcrossFiles` walker
+  called from main pipeline. For each top-level Identifier-named
+  ModuleDeclaration: look up merged symbol in globals; find its
+  ClassDeclaration/FunctionDeclaration; check if that declaration's
+  source file differs from the namespace's file via
+  `resolveDeclarationSourceFile`. Initial attempt FP-fired on 5
+  tests (`mergedClassWithNamespacePrototype_ts`,
+  `moduleAugmentationDeclarationEmit1/2_ts`,
+  `moduleAugmentationExtendFileModule1/2_ts`); tightened gates to:
+  - Skip ambient (`declare`) namespaces.
+  - Skip when the merged class/function is also `declare`d.
+  - Skip `declare global` (special-case).
+  - Skip string-literal-named modules (handled by `as? Identifier`).
+
+  **Discovery process.** Three targets came from the previous
+  session's flagged-but-skipped list. Other surveyed candidates
+  skipped:
+  - `memberScope_ts` (TS2708) — namespace-as-value detection;
+    requires receiver namespace lookup with no value exports.
+  - `enumPropertyAccessBeforeInitalisation_ts` (TS2565) — needs
+    enum-member-self-reference walker.
+  - `reservedNameOnInterfaceImport_ts` (TS2438) — `import string =
+    test.istring`; needs reserved-name check on import alias.
+  - `addMoreOverloadsToBaseSignature_ts` (TS2430) — interface
+    method override mismatch.
+
+  Anti-loop check: this session lands real code (3 commits with
+  test flips, +4 cumulative). Prior session was 17.202-17.203 (+2).
+  Commit pattern unchanged (`feat(17.204)` … `feat(17.206)`).
+
+  **Next-session candidates.** Continue surveying small (0,0) and
+  (1+, 0) bucket. Specific candidates from this session's survey:
+  - TS2438 reserved name on import alias (small).
+  - TS2649 namespace + interface + type alias merge.
+  - TS2540 readonly assignment in subclass.
+  - TS2320 multi-base interface with incompatible properties.
+
   **Session 2026-05-10 (17.202 → 17.203, 8619 → 8621, +2 cumulative)
   — Two new diagnostic emissions: TS2507 function-extends and TS2791
   BigInt exponentiation under target<ES2016.** Continuation /loop
