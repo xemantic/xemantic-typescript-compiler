@@ -2918,6 +2918,35 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.218, 8638 → 8641, +3) — TS2495 for `for-of
+  <expr>` non-iterable under @lib excluding es2015+.** Closes all 3
+  `arrayIterationLibES5TargetDifferent_ts__nolib_false_*` variants
+  (target=es5/es2015/esnext, all share `@lib: es5`). Test pattern:
+  `for (const x of aNumber)` where `aNumber: number` → TS2495 because
+  number isn't iterable (no Symbol.iterator without es2015.iterable).
+
+  New `checkForOfNonIterable` walker called from main pipeline. Two
+  gates: (1) `options.noLib == false` (with noLib, TS2318 fires for
+  missing globals — TS2495 makes no sense); (2) `options.lib`
+  non-empty AND none of the lib names start with `es2` or equal
+  `esnext` (case-insensitive). Both must be true.
+
+  Type detection is conservative — only fires for "definitely
+  non-iterable" types:
+  - `Type.Intrinsic` whose `intrinsicName` is NOT in
+    `NON_ITERABLE_SAFE_INTRINSIC_BAILOUT` (string/any/unknown/never).
+  - Anonymous `Type.Object` (symbol == null) that's NOT a
+    `Type.Reference` (rules out Array<T> and other generic refs)
+    and NOT a `Type.Interface`, with no callSignatures, no
+    constructSignatures, no tupleElementTypes.
+
+  Initial implementation FP-fired on `[1, 2, 3]` (Array<number>
+  reference) because Type.Reference inherits from Type.Object with
+  null symbol. Tightened gate to also exclude Type.Reference.
+  Also FP-fired on `nolib=true` variants (no lib loaded → TS2318
+  fires instead, no TS2495 expected); added `noLib == false` guard.
+  Net +3 after both fixes.
+
   **Session 2026-05-10 (17.217, 8638 → 8638, +0 correctness) — Skip
   TS6133 for declarations inside `declare global { ... }`.** In
   `checkUnusedInNestedScopes`'s ModuleDeclaration branch (Checker.kt
