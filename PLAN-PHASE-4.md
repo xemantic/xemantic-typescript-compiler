@@ -2918,6 +2918,66 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.200 → 17.201, 8617 → 8619, +2 cumulative,
+  one squiggle-position fix caught) — Two new diagnostic emissions
+  for parser-level (TS1016) and checker-level (TS1209) parameter /
+  optional-chain validation.** Continuation /loop after 17.197-199.
+
+  **17.200 (8617 → 8618, +1) — TS1016 for required parameter after
+  optional.** Closes `fatarrowfunctionsOptionalArgsErrors1_ts`.
+  `(arg1?, arg2) => 101` was emitting nothing on the second
+  parameter. In `parseParameterList` (Parser.kt ~4933) after the
+  closing `)`, walk parameters tracking `sawOptional`; on subsequent
+  params that are NOT rest AND have no initializer, emit TS1016 at
+  the param name. Only `?`-optional triggers — `(arg1 = 1, arg2)`
+  does NOT, because TypeScript treats the initializer as implicitly
+  required when followed by a required param.
+
+  **17.201 (8618 → 8619, +1) — TS1209 for `new A?.b()`.** Closes
+  `invalidOptionalChainFromNewExpression_ts`. The parser builds
+  `PropertyAccessExpression(NewExpression(A, args=null), b, q=true)`
+  for `new A` followed by `?.X` (no parens after A). The valid form
+  `new A()?.b()` parses with `args=[]`. In
+  `checkSinglePropertyAccess` (Checker.kt ~47688), added a top-of-
+  function branch: when `expr.questionDotToken && recv is
+  NewExpression && recv.arguments == null`, emit TS1209 with "Did
+  you mean to call '<ctor>()'?" hint. **Squiggle-position fix
+  caught**: initial attempt searched FORWARD from `recv.end` for
+  `?` and found line 6's `?` instead of line 5's (because
+  `recv.end` overshoots past the `?.` token). Fixed by searching
+  BACKWARD from `expr.name.pos` (skipping whitespace and `.`) to
+  locate the `?.` token immediately before the property name.
+
+  **Discovery process.** Both targets came from the (1+, 0) /
+  (0, 0) buckets. Other surveyed candidates skipped:
+  - `extendNonClassSymbol2_ts` (TS2507 for `class C extends Foo`
+    where Foo is a function declaration) — needs function-type
+    inference for the function declaration's signature shape.
+  - `taggedTemplatesWithIncompleteNoSubstitutionTemplate1/2_ts`
+    (TS1160 unterminated template) — scanner-level diagnostic
+    infrastructure.
+  - `enumPropertyAccessBeforeInitalisation_ts` (TS2565) — definite-
+    assignment within enum initializer chain.
+  - `regularExpressionExtendedUnicodeEscapes_ts` (TS1538) — regex
+    parser extension.
+  - `bigIntWithTargetLessThanES2016_ts` (TS2791) — BigInt target
+    compatibility check.
+  - `forInStrictNullChecksNoError_ts` (TS18049) — strictNullChecks
+    interaction.
+  - `memberScope_ts` (TS2708) — namespace member scope check.
+  - `importAnImport_ts` (TS2694) — nested namespace import.
+
+  Anti-loop check: this session lands real code (2 commits with test
+  flips, +2 cumulative). Prior session was 17.197-17.199 (+3).
+  Commit pattern unchanged (`feat(17.200)`, `feat(17.201)`).
+
+  **Next-session candidates.** Continue surveying. The (0,0) bucket
+  is increasingly thin at the simple-walker-extension level. Larger
+  opportunities remain in (1+, 0) tests where multiple expected
+  diagnostics are missing — those usually need broader checker work
+  (apparent-type comparison, generic inference, lib-aware structural
+  comparison).
+
   **Session 2026-05-10 (17.197 → 17.199, 8614 → 8617, +3 cumulative)
   — Three new diagnostic emissions extending existing checker
   walkers.** Continuation /loop after 17.195-17.196. All targets came
