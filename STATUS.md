@@ -1,6 +1,42 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,586 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,593 / 10,078 tests passing (~85%).
+
+**17.182 (2026-05-10, +2)** — TS1317 for rest parameter as parameter
+property. Closes `restParamModifier2_ts` plus one bonus. In
+`parseConstructor`'s parameter-property loop, when a parameter has
+both an access/readonly modifier AND `dotDotDotToken`, emit TS1317
+spanning from `param.pos` to the last non-whitespace character before
+`param.end` (walk-backward to compensate for `param.end` overshoot).
+
+**17.181 (2026-05-10, +1)** — TS2398 for parameter property named
+`constructor`. Closes `parameterPropertyInConstructor3_ts`. After
+`parseParameterList` in `parseConstructor`, iterate parameters and
+emit TS2398 when the name is `Identifier("constructor")` and any
+access/readonly modifier is present.
+
+**17.180 (2026-05-10, +1)** — TS1246 for initializer on interface
+property. Closes `errorOnInitializerInInterfaceProperty_ts`. In
+`parseTypeMember`'s PropertyDeclaration construction, after parsing
+the optional type annotation, check for `=`. If present, consume the
+initializer (so subsequent members parse cleanly) and emit TS1246 at
+the value position.
+
+**17.179 (2026-05-10, +1)** — TS1176 for interface implements clause.
+Closes `interfaceWithImplements1_ts`. In `parseHeritageClauses`, when
+`!isClass && !hasImplements && clauseToken == ImplementsKeyword`,
+emit TS1176 at the keyword position (length 10).
+
+**17.178 (2026-05-10, +1)** — TS2538 for array-typed index
+expression. Closes `arrayIndexWithArrayFails_ts`. In
+`checkSingleElementAccess`, when arg is ElementAccessExpression and
+its computed type is a Union containing an Array `Type.Reference`,
+emit TS2538 with the first such constituent's display.
+
+**17.177 (2026-05-10, +1)** — TS2385 for overloads with different
+access modifiers. Closes `functionOverloads5_ts`. In
+`checkMethodOverloadsInClass`, before the impl/overload pairing
+logic, compute access-level set for the group; emit TS2385 when size > 1.
 
 **17.176 (2026-05-10, +1)** — TS1313 for empty if-then statement.
 Closes `emptyThenWarning_ts`. In `parseIfStatement` (Parser.kt ~899),
