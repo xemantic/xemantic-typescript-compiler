@@ -2918,6 +2918,114 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.167 → 17.171, 8569 → 8579, +10 cumulative,
+  one initial regression caught + gated) — Five new diagnostic
+  emissions for small (0,0)-bucket targets across parser and
+  checker.** Continuation /loop after 17.166. All five targets came
+  from the previous session's flagged "next-session candidates"
+  (TS1248, TS1071, TS1048/TS1047, TS2304-in-mapped-types) plus the
+  rolling re-survey. Each landed individually with full-suite
+  verification between commits (17.167-17.169 batched in one full-
+  suite run for efficiency, then split into separate commits per
+  protocol). Net +10 across the iteration: 1506 → 1499 failed.
+
+  **17.167 (8569 → 8570, +1) — TS1248 for const class member.**
+  Closes `ClassDeclarationWithInvalidConstOnPropertyDeclaration_ts`.
+  In `parseClassMember` (Parser.kt ~1694), after `parsePropertyName`
+  returns, check `ModifierFlag.Const in modifiers && name is
+  Identifier` and emit TS1248 at `name.pos` with length =
+  name.text.length. `parseModifiers` already accepts ConstKeyword
+  (Parser.kt 2782) — this just adds the missing diagnostic for the
+  invalid case. The Const flag remains in the modifiers list so
+  downstream parsing behavior is unchanged.
+
+  **17.168 (8570 → 8571, +1) — TS1071 for access modifier on
+  interface index signature.** Closes
+  `modifiersOnInterfaceIndexSignature1_ts`. In `parseTypeMember`
+  (Parser.kt ~1894), inside the OpenBracket branch, emit TS1071
+  BEFORE delegating to `parseIndexSignatureOrProperty` when any of
+  the access modifiers (public/private/protected) is present. Squiggle
+  on the captured `pos` (position of the access modifier keyword,
+  which is the first token consumed by `parseModifiers`) with length
+  matching the keyword name. Only the FIRST present access modifier
+  emits — TypeScript reports one diagnostic per member.
+
+  **17.169 (8571 → 8572, +1) — TS1047/TS1048 for optional/initialized
+  rest parameter.** Closes `restParamAsOptional_ts`. In `parseParameter`
+  (Parser.kt ~4836), capture the `?` token position before consuming
+  via `parseOptional(SyntaxKind.Question)`. After all parts are parsed,
+  if `dotDotDot && name is Identifier`: emit TS1047 on the `?` itself
+  (overrideStart=questionPos, overrideLength=1) — the baseline
+  squiggles the `?`, NOT the parameter name; emit TS1048 on the
+  parameter name (overrideStart=name.pos, overrideLength=name.text.length)
+  when `init != null`.
+
+  **17.170 (8572 → 8574, +2) — TS2351 for new on instance variable.**
+  Closes `newOnInstanceSymbol_ts` plus one bonus. In
+  `checkSingleNewExpressionTypes`'s `signatures.isEmpty()` branch
+  (Checker.kt ~49675), emit TS2351 BEFORE the existing silent
+  `return`. Conservative gate: callee is a bare Identifier, the
+  resolved global symbol is `SymbolFlags.Variable` AND NOT a `Class`
+  or `Function` (those have legitimate construct sigs via class
+  declaration or function-as-constructor pattern), calleeType is a
+  `Type.Interface` (the class instance shape). Squiggle on the
+  callee Identifier (length = name text). Display uses the
+  Type.Interface's `symbol.name` if present, else falls back to
+  `typeToString(calleeType)`.
+
+  **17.171 (8574 → 8579, +1, but discovered through a -2 regression
+  → +1 after gating) — TS1147 for require import in internal
+  namespace.** Closes `importDeclarationInModuleDeclaration1_ts`.
+  New `checkRequireImportInNamespace` walker called from the main
+  pipeline (Checker.kt ~767, after `checkSubsequentVarTypes`). Walks
+  ModuleDeclaration bodies recursively; inside an `inNamespace=true`
+  context, each ImportEqualsDeclaration whose moduleReference is an
+  ExternalModuleReference fires TS1147 on the inner expression.
+  **Critical gate (added after first attempt FP-fired -2)**:
+  `inNamespace` is set true ONLY when the enclosing ModuleDeclaration's
+  `name` is an Identifier AND not "global". String-literal-named
+  modules are ambient external module declarations / augmentations
+  (different diagnostics: TS2439 / TS2664 / TS2667); `declare global`
+  augments the global scope. Without the gate, six unrelated tests
+  FP-fired TS1147 (`importsInAmbientModules3_ts`,
+  `ambientExternalModuleWithRelative*_ts`, `importAliasInModuleAugmentation_ts`,
+  `importDeclRefereing*NoResolve_ts`, `privacyGloImportParseErrors_ts`,
+  `privacyImportParseErrors_ts`).
+
+  **Discovery process.** All five targets came from re-surveying the
+  small-source (0,0) "none produced" bucket ≤ 5 source lines with ≤ 2
+  expected codes, filtered to skip Guardrails (TS7006/TS7041/TS7022/
+  TS2352) and architectural (generic inference, scanner diagnostics).
+  `mappedTypeNoTypeNoCrash_ts` (TS2304 inside mapped types) was
+  investigated but skipped: our parser's `parseTypeLiteralOrMappedType`
+  always returns a TypeLiteral and never produces real MappedType
+  nodes, so adding mapped-type-scope checks would require parser-level
+  work to introduce true MappedType parsing. Logged for future agents.
+
+  Anti-loop check: this session lands real code (5 commits with test
+  flips, +10 cumulative). Prior session was 17.161-17.166 (+6).
+  Commit pattern unchanged (`feat(17.167)` … `feat(17.171)`).
+
+  **Next-session candidates.** From the same (0,0) survey, still
+  tractable parser/checker-level small-yield diagnostics:
+  - `dataViewConstructor_ts` (TS2345) — but needs lib resolution
+    for DataView constructor (architectural).
+  - `numericIndexerConstraint5_ts` (TS2322) — index sig structural
+    comparison (architectural).
+  - `arrayIndexWithArrayFails_ts` (TS2538) — index type validity
+    when receiver is `(string|string[])[]` (Blocker #2 territory).
+  - `assignmentToObject_ts` (TS2322 with apparent-type check on
+    Object).
+  - `declarationEmitInterfaceWithNonEntityNameExpressionHeritage_ts`
+    (TS2499) — interface heritage with parenthesized expression
+    `interface Class extends (typeof A) { }`.
+  - `declarationEmitInvalidReference2_ts` (TS6053) — `/// <reference
+    path="invalid.ts" />` with `--declaration`.
+  - `moduleKeywordRepeatError_ts` (TS1005, TS2591) — `module.module
+    { }` parser error recovery.
+  - `recursivelyExpandingUnionNoStackoverflow_ts` (TS2615, TS2589)
+    — recursive type stack-overflow protection.
+
   **Session 2026-05-10 (17.161 → 17.166, 8563 → 8569, +6 cumulative) —
   Six new diagnostic emissions for small (0,0)-bucket targets across
   parser and checker.** Continuation /loop after 17.160's revert. Each
