@@ -47402,6 +47402,30 @@ interface DataView {
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // 17.190: TS2339 — `.prototype` on a NewExpression instance (e.g.
+        // `new Object().prototype`). Instances never have a `prototype`
+        // property; only the constructor side does. Display uses the
+        // constructor's name (Identifier) to mirror TypeScript's baseline.
+        if (expr.name.text == "prototype") {
+            val recv = expr.expression
+            if (recv is NewExpression) {
+                val ctor = recv.expression
+                if (ctor is Identifier) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, expr.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property 'prototype' does not exist on type '${ctor.text}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2339,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = expr.name.pos,
+                        length = expr.name.text.length,
+                    ))
+                    return
+                }
+            }
+        }
         // === 17.44: TS2532 "Object is possibly 'undefined'" for non-optional access
         // on a synthetic-paren receiver produced by an instantiation expression that
         // breaks an optional chain (e.g. `a?.b<c>.d`). The synthetic paren is tagged
