@@ -2918,6 +2918,70 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.197 → 17.199, 8614 → 8617, +3 cumulative)
+  — Three new diagnostic emissions extending existing checker
+  walkers.** Continuation /loop after 17.195-17.196. All targets came
+  from re-survey of the (0,0) "none produced" bucket; pattern continues
+  to favor extending existing walkers over introducing new ones.
+
+  **17.197 (8614 → 8615, +1) — TS2337 for super outside constructor
+  in top-level function.** Closes `superCallFromFunction1_ts`. The
+  existing TS2337 walker handled `super(...)` nested in class
+  constructors but didn't check top-level functions. Fix: in
+  `walkForIllegalSuperCalls`'s FunctionDeclaration branch (Checker.kt
+  ~25339), also call `findNestedSuperCalls(... inNestedFn = true)`
+  before the existing class-search recursion. Treats direct
+  `super(...)` calls in top-level function bodies as illegal.
+
+  **17.198 (8615 → 8616, +1) — TS2678 for class identifier in switch
+  case.** Closes `switchAssignmentCompat_ts`. `class Foo {} switch(0)
+  { case Foo: break; }` was emitting nothing because the existing
+  TS2678 walker only handled same-primitive-kind literal mismatches.
+  Added a class-identifier branch in `walkSwitchCaseComparable`'s
+  case-clause loop (Checker.kt ~29411). Conservative gate (mirrors
+  17.194's pure-class gate): no Module/Alias/Variable/Function flags,
+  declarations.size == 1, valueDeclaration === ClassDeclaration.
+  Display uses `typeof <ClassName>`.
+
+  **17.199 (8616 → 8617, +1) — TS2507 for class extends `Ns.var`.**
+  Closes `qualifiedName_entity-name-resolution-does-not-affect-class-heritage_ts`.
+  `namespace Alpha { export var x = 100; } class Beta extends Alpha.x
+  {}` was emitting nothing because the existing TS2507 walker only
+  handled bare-Identifier base. Added a PropertyAccessExpression
+  branch in `checkNonConstructorExtendsInStatements`'s ClassDeclaration
+  branch (Checker.kt ~43209). Resolves the receiver Identifier to a
+  Module symbol via globals (skipping class+namespace merges), looks
+  up the property name in `nsSym.exports`, reuses `inferSimpleVarType`
+  for the primitive display. Span covers the entire `Ns.x`.
+
+  **Discovery process.** All three came from re-survey of the (0,0)
+  "none produced" bucket post-17.195-196. Other surveyed candidates
+  skipped:
+  - `extendNonClassSymbol2_ts` (TS2507 for `class C extends Foo` where
+    Foo is a function declaration) — needs `Type '() => void' is not
+    a constructor function type` display, requiring function-type
+    inference for the function declaration's signature shape.
+  - `taggedTemplatesWithIncompleteNoSubstitutionTemplate1/2_ts` (TS1160
+    unterminated template literal at EOF) — scanner-level diagnostic
+    infrastructure.
+  - `declarationEmitVarInElidedBlock_ts` (TS4025) — declaration emit
+    elision check.
+  - `module_augmentExistingAmbientVariable_ts` (TS2300) — namespace +
+    ambient var conflict detection.
+  - `enumPropertyAccessBeforeInitalisation_ts` (TS2565) — definite-
+    assignment within enum initializer chain.
+  - `regularExpressionExtendedUnicodeEscapes_ts` (TS1538) — regex
+    parser extension.
+
+  Anti-loop check: this session lands real code (3 commits with test
+  flips, +3 cumulative). Prior session was 17.195-17.196 (+4).
+  Commit pattern unchanged (`feat(17.197)` … `feat(17.199)`).
+
+  **Next-session candidates.** The (0,0) bucket continues to yield
+  small wins via walker extensions. Larger opportunities remain
+  on the (1+, 0) bucket (where we miss multiple expected diagnostics
+  but emit nothing extra) — those need broader checker work.
+
   **Session 2026-05-10 (17.195 → 17.196, 8610 → 8614, +4 cumulative)
   — Two new diagnostic emissions: TS2457 reserved-name type alias and
   TS1163 yield-context tracking.** Continuation /loop after
