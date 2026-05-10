@@ -55784,7 +55784,24 @@ interface DataView {
             is StringLiteralNode -> "\"${expr.text}\""
             is Identifier -> when (expr.text) {
                 "true", "false", "null", "undefined" -> expr.text
-                else -> null
+                else -> {
+                    // 17.184: Identifier resolving to a primitive-typed variable
+                    // (e.g. `declare var expr: number`). Look up the symbol's
+                    // declared type via globals; if KeywordTypeNode and not
+                    // string/any/unknown/object, return its display.
+                    val sym = globals[expr.text] ?: return null
+                    val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+                    val typeNode = decl.type as? KeywordTypeNode ?: return null
+                    when (typeNode.kind) {
+                        SyntaxKind.NumberKeyword -> "number"
+                        SyntaxKind.BooleanKeyword -> "boolean"
+                        SyntaxKind.BigIntKeyword -> "bigint"
+                        SyntaxKind.SymbolKeyword -> "symbol"
+                        SyntaxKind.VoidKeyword -> "void"
+                        SyntaxKind.NeverKeyword -> "never"
+                        else -> null
+                    }
+                }
             }
             is PrefixUnaryExpression -> {
                 // `-1` is still a numeric literal form
