@@ -45399,6 +45399,17 @@ interface DataView {
                     is StringLiteralNode -> stringType
                     is NumericLiteralNode -> numberType
                     is PrefixUnaryExpression -> if (expr.operand is NumericLiteralNode) numberType else null
+                    is NewExpression -> {
+                        // 17.156: mirror 17.154's FunctionExpression inference into the
+                        // broader callable family (MethodDeclaration / FunctionDeclaration /
+                        // GetAccessor). `class Foo { make() { return new Bar(); } }` infers
+                        // `() => Bar` instead of `() => any`. Cycle protection in
+                        // getReturnTypeOfNewExpression is wrapped in try/catch.
+                        try {
+                            val t = getReturnTypeOfNewExpression(expr)
+                            if (t !== anyType && t !== errorType) t else null
+                        } catch (_: Throwable) { null }
+                    }
                     else -> null
                 }
             }
