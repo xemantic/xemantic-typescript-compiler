@@ -43190,11 +43190,15 @@ interface DataView {
         // Collect names declared in this scope
         val classNames = mutableSetOf<String>()
         val functionNames = mutableSetOf<String>()
+        val funcDecls = mutableMapOf<String, FunctionDeclaration>()
         val varDecls = mutableMapOf<String, VariableDeclaration>() // variable name → declaration
         for (stmt in stmts) {
             when (stmt) {
                 is ClassDeclaration -> stmt.name?.let { classNames.add(it.text) }
-                is FunctionDeclaration -> stmt.name?.let { functionNames.add(it.text) }
+                is FunctionDeclaration -> stmt.name?.let {
+                    functionNames.add(it.text)
+                    funcDecls[it.text] = stmt
+                }
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         val name = (decl.name as? Identifier)?.text ?: continue
@@ -43248,6 +43252,31 @@ interface DataView {
                         }
                     }
                     val baseName = (baseExpr as? Identifier)?.text ?: continue
+                    // 17.202: TS2507 for `class C extends Foo` where Foo is a
+                    // FunctionDeclaration. Display: `(<params>) => <returnType>`.
+                    // Only fires when the scope has a function with this name AND
+                    // no class merge (a class with the same name would be the actual
+                    // ctor target).
+                    if (baseName in functionNames && baseName !in classNames) {
+                        val funcDecl = funcDecls[baseName]
+                        if (funcDecl != null) {
+                            val typeName = formatFunctionTypeForExtends(funcDecl)
+                            val start = baseExpr.pos
+                            val length = baseName.length
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$typeName' is not a constructor function type.",
+                                category = DiagnosticCategory.Error,
+                                code = 2507,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                        continue
+                    }
                     // Only flag if this scope has a variable with this name (shadowing any outer class)
                     val varDecl = varDecls[baseName] ?: continue
                     // Skip if the scope also has a class or function with this name (merge)
@@ -43284,6 +43313,28 @@ interface DataView {
     /** Infer the simple primitive type name of a variable declaration.
      *  Only returns primitive types (number, string, boolean) to avoid FPs
      *  with named types that might be constructor interfaces. */
+    /**
+     * 17.202: Format a function's type for the TS2507 extends-function error
+     * display. Mirrors TypeScript's `(<params>) => <returnType>` format.
+     * Parameters: name + (optional `?`) + `: type` (or no type → assumed
+     * implicit any). Return type: from annotation or inferred void if body
+     * has no `return value`.
+     */
+    private fun formatFunctionTypeForExtends(decl: FunctionDeclaration): String {
+        val paramStr = decl.parameters.joinToString(", ") { p ->
+            val name = (p.name as? Identifier)?.text ?: "_"
+            val opt = if (p.questionToken) "?" else ""
+            val typeStr = p.type?.let { formatTypeForDisplay(it) ?: "any" } ?: "any"
+            "$name$opt: $typeStr"
+        }
+        val retStr = decl.type?.let { formatTypeForDisplay(it) ?: "any" } ?: run {
+            // Infer from body: void if no return-with-value, else any.
+            val body = decl.body
+            if (body == null || !bodyHasReturnValue(body)) "void" else "any"
+        }
+        return "($paramStr) => $retStr"
+    }
+
     private fun inferSimpleVarType(decl: VariableDeclaration): String? {
         // From type annotation — only primitive keywords
         val typeNode = decl.type
