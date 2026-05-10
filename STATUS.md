@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,634 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,636 / 10,078 tests passing (~85%).
+
+**17.214 (2026-05-10, +2)** — TS2307 for unresolved relative imports
+under ES module kinds (ES2015/ES2020/ES2022/ESNext/Preserve) with
+default node10 resolution and no path/root configuration. Closes
+both `shorthand-property-es5-es6_ts__target_es5__` and
+`__target_es2015__` baseline tests. New conditional branch in
+`checkUnresolvedModules` (Checker.kt ~14991): when module is
+ES module kind AND `moduleResolution`/`paths`/`baseUrl`/`rootDirs`/
+`rootDir`/`moduleSuffixes` are all unset, fire TS2307 if
+`resolveModuleSpecifierStrictRelative` returns null and no ambient
+or .d.ts module shadows the name. Narrow gate intentionally —
+bundler/node16/nodenext/commonjs use richer resolution rules our
+resolver doesn't model reliably.
 
 **17.213 (2026-05-10, +0 foundation)** — TS2741 message: use displayed
 target type name for PUBLIC missing properties; use declaring class

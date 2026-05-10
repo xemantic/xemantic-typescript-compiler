@@ -2918,6 +2918,24 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.214, 8634 → 8636, +2) — TS2307 for
+  unresolved relative imports under ES module kinds.** Closes both
+  `shorthand-property-es5-es6_ts__target_es5__` and
+  `shorthand-property-es5-es6_ts__target_es2015__` baselines. The test
+  is `import {foo} from './foo'` where `./foo` doesn't exist; with
+  `module: ES6` (= ES2015 module kind) and default `moduleResolution`
+  (= node10), the existing logic fell into the
+  `else if (isClassicResolution && options.paths.isNullOrEmpty()...)`
+  branch, but `isClassicResolution = false` for ES module kinds, so
+  no diagnostic fired. Added a new branch right above the
+  json-import branch: gates on `module in ES_MODULE_KINDS`
+  (ES2015/ES2020/ES2022/ESNext/Preserve), `moduleResolution == null`,
+  and no `paths`/`baseUrl`/`rootDirs`/`rootDir`/`moduleSuffixes`
+  configured. When matched and `resolveModuleSpecifierStrictRelative`
+  returns null and no ambient/dts shadow, emit TS2307. Narrow gate
+  to avoid Bundler/Node16/NodeNext (richer resolution our resolver
+  doesn't model). Net +2, no regressions.
+
   **Session 2026-05-10 (17.213, 8634 → 8634, +0 foundation) — TS2741
   uses displayed target name for public properties, declaring class
   name for private/protected.** TypeScript's TS2741 ("Property X is

@@ -15015,6 +15015,28 @@ class Checker(
                         if (resolveWithModuleSuffixes(moduleName, fileName, options.moduleSuffixes!!) == null) {
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
+                    } else if (isRelative && !moduleName.endsWith(".json")
+                        && options.module in ES_MODULE_KINDS
+                        && options.moduleResolution == null
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                    ) {
+                        // 17.214: ES module kinds (module: ES6 / ES2015 / ES2020 /
+                        // ESNext / Preserve) with no explicit moduleResolution and no
+                        // path/root configuration: relative specifiers must resolve
+                        // strictly within the compilation. When no file matches and
+                        // no ambient module / .d.ts shadows it, emit TS2307. Narrow
+                        // gate intentionally — bundler/node16/nodenext/commonjs all
+                        // use richer resolution rules our resolver doesn't model.
+                        if (resolveModuleSpecifierStrictRelative(moduleName, fileName) == null
+                            && moduleName !in ambientModuleNames
+                            && moduleName !in dtsFileBaseNames
+                        ) {
+                            emitTS2307(specifier, moduleName, source, fileName)
+                        }
                     } else if (moduleName.endsWith(".json") && !options.resolveJsonModule && !isRelative) {
                         // Non-relative .json imports (resolved via node_modules or path mapping)
                         // require `resolveJsonModule: true`; without it, TypeScript emits TS2732.
@@ -17704,6 +17726,15 @@ class Checker(
         private val PREDEFINED_TYPE_NAMES = setOf(
             "any", "number", "boolean", "string", "void", "never", "object",
             "unknown", "undefined", "null", "bigint", "symbol",
+        )
+
+        /** 17.214: ES module kinds (excluding Node16+ which use richer node
+         *  resolution). Used to gate TS2307 emission for unresolved relative
+         *  imports under default node10 resolution where our resolver is
+         *  reliable enough to detect missing files. */
+        private val ES_MODULE_KINDS = setOf(
+            ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022,
+            ModuleKind.ESNext, ModuleKind.Preserve,
         )
 
         /** 17.210: Node.js built-in module names. Unresolved imports of these
