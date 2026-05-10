@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,569 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,579 / 10,078 tests passing (~85%).
+
+**17.171 (2026-05-10, +1)** — TS1147 for require import in internal
+namespace. Closes `importDeclarationInModuleDeclaration1_ts`. New
+`checkRequireImportInNamespace` walker. Critical gate: only fires when
+the enclosing ModuleDeclaration's `name` is an Identifier AND not
+"global" — string-literal modules / module augmentations / declare
+global use different diagnostics (TS2439 / TS2664 / TS2667).
+
+**17.170 (2026-05-10, +2)** — TS2351 for `new x()` where x is a plain
+instance variable. Closes `newOnInstanceSymbol_ts` plus one bonus.
+In `checkSingleNewExpressionTypes`'s `signatures.isEmpty()` branch,
+emits TS2351 with "Type 'X' has no construct signatures." chain when
+callee is a bare Identifier resolving to a `Variable` symbol (not
+Class/Function) and calleeType is a `Type.Interface`.
+
+**17.169 (2026-05-10, +1)** — TS1047/TS1048 for optional/initialized
+rest parameter. Closes `restParamAsOptional_ts`. In `parseParameter`,
+captures the `?` token position before `parseOptional(Question)` and
+emits TS1047 on `?` itself (length 1) + TS1048 on the parameter name
+when `dotDotDot && (question || init != null)`.
+
+**17.168 (2026-05-10, +1)** — TS1071 for access modifier on interface
+index signature. Closes `modifiersOnInterfaceIndexSignature1_ts`. In
+`parseTypeMember`'s OpenBracket branch, emits TS1071 BEFORE delegating
+to `parseIndexSignatureOrProperty` when public/private/protected is
+present in modifiers. Squiggle on the modifier keyword via captured
+`pos` and keyword-length.
+
+**17.167 (2026-05-10, +1)** — TS1248 for const class member. Closes
+`ClassDeclarationWithInvalidConstOnPropertyDeclaration_ts`. In
+`parseClassMember` after `parsePropertyName`, emits TS1248 at the
+member name when `ModifierFlag.Const in modifiers`.
 
 **17.166 (2026-05-10, +1)** — TS2348 for calling a class without `new`.
 Closes `callOnClass_ts`. In `checkSingleCallExpressionTypes`'s
