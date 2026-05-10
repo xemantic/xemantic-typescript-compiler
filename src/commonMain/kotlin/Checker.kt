@@ -13501,6 +13501,33 @@ class Checker(
     }
 
     /**
+     * 17.164: TS2431 — "Enum name cannot be 'X'." Fires when an enum's name
+     * is one of the reserved primitive type keywords. Mirrors TypeScript's
+     * baseline list (`enumWithPrimitiveName_ts`): the parser allows these as
+     * Identifier nodes (since they're contextual keywords), but they're
+     * reserved in type space.
+     */
+    private fun checkEnumPrimitiveName(
+        decl: EnumDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        val name = decl.name.text
+        if (name !in PREDEFINED_TYPE_NAMES) return
+        val (line, character) = getLineAndCharacterOfPosition(source, decl.name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Enum name cannot be '$name'.",
+            category = DiagnosticCategory.Error,
+            code = 2431,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = decl.name.pos,
+            length = name.length,
+        ))
+    }
+
+    /**
      * Check for duplicate enum members: members with the same name.
      */
     private fun checkDuplicateEnumMembers(
@@ -13528,6 +13555,7 @@ class Checker(
             }
         }
         checkEnumMemberInitializers(decl, source, fileName)
+        checkEnumPrimitiveName(decl, source, fileName)
     }
 
     /**
