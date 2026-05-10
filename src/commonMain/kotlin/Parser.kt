@@ -3859,6 +3859,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         if (token == Dot) {
             nextToken()
             val name = parseIdentifier()
+            // 17.157: TS17012 — only `new.target` is a valid meta-property
+            if (name.text != "target") {
+                reportError(
+                    "'${name.text}' is not a valid meta-property for keyword 'new'. Did you mean 'target'?",
+                    code = 17012,
+                    overrideStart = name.pos,
+                    overrideLength = name.text.length,
+                )
+            }
             return MetaProperty(keywordToken = NewKeyword, name = name, pos = pos, end = getEnd())
         }
         // `new <T>Expr` — TypeScript parses `<T>` as leading type arguments (not a type assertion)
