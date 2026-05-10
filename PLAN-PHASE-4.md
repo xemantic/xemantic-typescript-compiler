@@ -2918,6 +2918,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.208, 8627 → 8630, +3) — TS2384/2383/2386
+  for overload modifier consistency.** Closes
+  `overloadModifiersMustAgree_ts` (errors baseline) plus 2 bonus
+  (likely related test files exercising the same diagnostic codes).
+  Extended existing `checkOverloadsInStatements` (Checker.kt ~42670)
+  to compute `implAmbient`/`implExported` from impl's modifiers, then
+  iterate overloads emitting TS2384 / TS2383 on each whose
+  `Declare`/`Export` modifier disagrees with impl. New
+  `checkInterfaceMemberOptionalOverloads` (Checker.kt ~42770) walks
+  interface ClassElement members, groups MethodDeclarations by name,
+  and emits TS2386 on each method after the first whose
+  `questionToken` differs from the first. Wired into the recursive
+  switch via `is InterfaceDeclaration ->`. No FP regressions.
+
   **Session 2026-05-10 (17.207, 8625 → 8627, +2) — TS2438 for
   reserved primitive type name as import alias.** Closes
   `reservedNameOnInterfaceImport_ts` (both JS-emit and errors
