@@ -49672,7 +49672,36 @@ interface DataView {
         if (calleeType === anyType || calleeType === errorType) return
         // Get construct signatures
         val signatures = getConstructSignaturesOfType(calleeType)
-        if (signatures.isEmpty()) return
+        if (signatures.isEmpty()) {
+            // 17.170: TS2351 — `new x()` where x is a plain instance variable (not
+            // a class identifier). Class-instance Type.Interface has no construct
+            // signatures (those live on the static side). Squiggle on the callee.
+            // Conservative gate: only fire when the callee is a bare Identifier
+            // resolving to a Variable symbol whose type is a Type.Interface with a
+            // class symbol — definitively a "new on instance" case.
+            val ce = expr.expression
+            if (ce is Identifier) {
+                val sym = globals[ce.text]
+                val isVarOrParam = sym != null && sym.flags.hasAny(SymbolFlags.Variable) &&
+                    !sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function)
+                if (isVarOrParam && calleeType is Type.Interface) {
+                    val typeName = calleeType.symbol?.name ?: typeToString(calleeType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, ce.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error,
+                        code = 2351,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = ce.pos,
+                        length = ce.text.length,
+                        messageChain = listOf("  Type '$typeName' has no construct signatures."),
+                    ))
+                }
+            }
+            return
+        }
         // 17.21: When the class has its own TypeParameters (e.g. `class List<T>`)
         // AND the call site has explicit type arguments (e.g. `new List<T>(...)`),
         // build a fresh signature with each param's type re-resolved under the
