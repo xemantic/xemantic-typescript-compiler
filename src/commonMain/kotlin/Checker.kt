@@ -47689,6 +47689,39 @@ interface DataView {
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // 17.201: TS1209 — `new A?.b()` where the `?.` chains off a NewExpression
+        // with NO arguments list. Parser shape: PropertyAccessExpression with
+        // `questionDotToken == true`, expression == `NewExpression(arguments == null)`.
+        // Squiggle on the `?.` token (length 2), located by searching forward
+        // from the receiver expression's source position.
+        if (expr.questionDotToken && expr.expression is NewExpression) {
+            val recv = expr.expression as NewExpression
+            if (recv.arguments == null) {
+                val ctor = recv.expression
+                val ctorName = (ctor as? Identifier)?.text
+                val didYouMean = if (ctorName != null) " Did you mean to call '$ctorName()'?" else ""
+                // Search backward from `expr.name.pos` for the `?.` token (always
+                // immediately precedes the property name, possibly with whitespace).
+                var i = (expr.name.pos - 1).coerceAtMost(source.length - 1)
+                while (i >= 0 && source[i] != '?') {
+                    if (!source[i].isWhitespace() && source[i] != '.') break
+                    i--
+                }
+                if (i >= 0 && source[i] == '?') {
+                    val (line, character) = getLineAndCharacterOfPosition(source, i)
+                    diagnostics.add(Diagnostic(
+                        message = "Invalid optional chain from new expression.$didYouMean",
+                        category = DiagnosticCategory.Error,
+                        code = 1209,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = i,
+                        length = 2,
+                    ))
+                }
+            }
+        }
         // 17.190: TS2339 — `.prototype` on a NewExpression instance (e.g.
         // `new Object().prototype`). Instances never have a `prototype`
         // property; only the constructor side does. Display uses the
