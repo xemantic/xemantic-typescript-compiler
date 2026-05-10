@@ -3969,6 +3969,23 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
                 NoSubstitutionTemplateLiteral, TemplateHead -> {
                     val template = parseTemplateLiteral()
+                    // 17.185: TS2796 — tagging a template literal with another
+                    // template literal is almost always a missing-comma error
+                    // (e.g. inside an array literal). Squiggle on the tag (the
+                    // first template literal). Length covers the literal text.
+                    if (result is NoSubstitutionTemplateLiteralNode || result is TemplateExpression) {
+                        val tagLen = (template.pos - result.pos).coerceAtLeast(1).let { len ->
+                            // Trim trailing whitespace (the tag's own end + leading
+                            // trivia of the second template).
+                            var e = result.pos + len - 1
+                            while (e > result.pos && source[e].isWhitespace()) e--
+                            (e - result.pos + 1).coerceAtLeast(1)
+                        }
+                        reportError(
+                            "It is likely that you are missing a comma to separate these two template expressions. They form a tagged template expression which cannot be invoked.",
+                            code = 2796, overrideStart = result.pos, overrideLength = tagLen,
+                        )
+                    }
                     TaggedTemplateExpression(tag = result, template = template, pos = result.pos, end = getEnd())
                 }
 
