@@ -2,6 +2,14 @@
 
 **Phase 4 — Checker buildout.** 8,637 / 10,078 tests passing (~85%).
 
+**17.215 (2026-05-10, +0 foundation)** — Optional method declarations
+in TypeLiteral display now include the `?` token: `k?(a: any): any`
+instead of `k(a: any): any`. Matches TypeScript's display convention.
+Net 0 tests because the named test (`assignmentCompatBug2_ts`) also
+needs contextual typing of arrow function expressions in object
+literals — the source-side display still shows `(n: any) => any`
+instead of `(n: number) => number`.
+
 **17.214b (2026-05-10, +1)** — Fix `resolveModuleSpecifierStrictRelative`
 to preserve leading `/` from absolute contextFileName paths. Closes
 `exportAssignmentWithoutAllowSyntheticDefaultImportsError_ts` which

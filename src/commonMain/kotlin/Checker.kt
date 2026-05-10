@@ -55797,7 +55797,10 @@ interface DataView {
                             val methodName = (member.name as? Identifier)?.text ?: continue
                             val params = member.parameters.joinToString(", ") { formatParameterDecl(it) }
                             val retType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
-                            parts.add("$methodName($params): $retType")
+                            // 17.215: include `?` for optional method declarations
+                            // (e.g. `k?(a: any): any` in `interface { k?(a: any): any }`).
+                            val opt = if (member.questionToken) "?" else ""
+                            parts.add("$methodName$opt($params): $retType")
                         }
                         else -> return null // unsupported member type
                     }
