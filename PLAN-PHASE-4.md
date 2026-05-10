@@ -2918,6 +2918,23 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.211, 8631 → 8632, +1) — TS2394 + TS2300
+  for constructor overload + impl with duplicate parameter property.**
+  Closes `parameterPropertyInConstructor2_ts`. New
+  `checkConstructorOverloadCompatibility` walker called from the
+  ClassDeclaration dispatch branch (Checker.kt ~42810). Two emissions:
+  (1) TS2394 when an overload ctor's signature is incompatible with
+  the impl's (uses existing `isSignatureCompatible` helper, comparing
+  overload total params vs impl required-arg count). Squiggle on the
+  overload's `constructor` keyword (length 11), with TS2750 related
+  info pointing at the impl's `constructor` keyword. (2) TS2300 when
+  the same parameter-property name appears in both an overload and
+  the impl. Squiggle on the IMPL's parameter name (matching
+  TypeScript's "second declaration gets the diagnostic" convention).
+  No regressions across 10,078 suite. Foundation: the same arity
+  check on `Constructor` could extend to TS2384/TS2383 (ambient/
+  export modifier disagreement) if any test gates on it.
+
   **Session 2026-05-10 (17.210, 8631 → 8631, +0 foundation) — TS2591
   for `import = require('<node-builtin>')`.** New `NODE_BUILTIN_MODULES`
   set on Checker companion (fs, path, http, …, plus `node:` prefix

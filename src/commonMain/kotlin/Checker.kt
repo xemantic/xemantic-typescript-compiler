@@ -42811,6 +42811,7 @@ interface DataView {
                     // Check method overloads in classes
                     checkMethodOverloadsInClass(stmt.members, source, fileName)
                     checkMultipleConstructorImpls(stmt.members, source, fileName)
+                    checkConstructorOverloadCompatibility(stmt.members, source, fileName)
                 }
                 is Block -> checkOverloadsInStatements(stmt.statements, source, fileName)
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
@@ -42892,6 +42893,83 @@ interface DataView {
                 start = kwStart,
                 length = keyword.length,
             ))
+        }
+    }
+
+    /**
+     * 17.211: TS2394 — overload constructor signature must be compatible with
+     * the implementation. Mirrors `checkMethodOverloadsInClass`'s arity check
+     * (impl's required-arg count ≤ overload's total params) but for ctors.
+     * Squiggle covers the `constructor` keyword on the overload (length 11).
+     * Skip when there's no impl or when there are 2+ impls (TS2392 fires).
+     *
+     * Also handles TS2300 for duplicate parameter-property names: when the
+     * overload AND the impl both declare a parameter property with the same
+     * name, the parameter property creates a class field both times. The
+     * resulting duplicate field declaration emits TS2300 on the impl's
+     * parameter name (TypeScript's chosen position for the second
+     * declaration).
+     */
+    private fun checkConstructorOverloadCompatibility(members: List<ClassElement>, source: String, fileName: String) {
+        val ctors = members.filterIsInstance<Constructor>()
+        val impls = ctors.filter { it.body != null }
+        if (impls.size != 1) return
+        val impl = impls[0]
+        val overloads = ctors.filter { it.body == null }
+        if (overloads.isEmpty()) return
+        val keyword = "constructor"
+        for (overload in overloads) {
+            if (isSignatureCompatible(overload.parameters, null, impl.parameters, null)) continue
+            val kwStart = source.indexOf(keyword, startIndex = overload.pos).takeIf { it >= 0 && it < overload.end } ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, kwStart)
+            val implKwStart = source.indexOf(keyword, startIndex = impl.pos).takeIf { it >= 0 && it < impl.end } ?: continue
+            val (implLine, implChar) = getLineAndCharacterOfPosition(source, implKwStart)
+            diagnostics.add(Diagnostic(
+                message = "This overload signature is not compatible with its implementation signature.",
+                category = DiagnosticCategory.Error,
+                code = 2394,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = kwStart,
+                length = keyword.length,
+                relatedInformation = listOf(Diagnostic(
+                    message = "The implementation signature is declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 2750,
+                    fileName = fileName,
+                    line = implLine,
+                    character = implChar,
+                    start = implKwStart,
+                    length = keyword.length,
+                )),
+            ))
+        }
+        // 17.211: TS2300 for duplicate parameter-property names across an
+        // overload + impl pair. Only the IMPL position is squiggled (matches
+        // TypeScript's baseline behavior: second declaration gets the
+        // diagnostic).
+        for (overload in overloads) {
+            val overloadPropNames = overload.parameters
+                .filter { isParameterProperty(it) && it.name is Identifier }
+                .map { (it.name as Identifier).text }
+                .toSet()
+            for (implParam in impl.parameters) {
+                if (!isParameterProperty(implParam)) continue
+                val implName = implParam.name as? Identifier ?: continue
+                if (implName.text !in overloadPropNames) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, implName.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Duplicate identifier '${implName.text}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2300,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = implName.pos,
+                    length = implName.text.length,
+                ))
+            }
         }
     }
 
