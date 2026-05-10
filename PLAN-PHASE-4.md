@@ -2918,6 +2918,76 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.189 → 17.191, 8603 → 8606, +3 cumulative)
+  — Three new diagnostic emissions across checker-level walkers.**
+  Continuation /loop after 17.187-17.188. All three came from
+  re-survey of the (0,0) "none produced" bucket.
+
+  **17.189 (8603 → 8604, +1) — TS6133 for unused infer type
+  parameter.** Closes `unusedTypeParameters_infer_ts`. `type Length<T>
+  = T extends ArrayLike<infer U> ? number : never;` under
+  `noUnusedParameters: true` was emitting nothing. New
+  `checkUnusedInferParameters` walker called from main pipeline (gated
+  on `noUnusedParameters`). Walks TypeAliasDeclaration /
+  InterfaceDeclaration / ModuleDeclaration bodies recursively. For
+  each ConditionalType: collects InferType decls from extendsType,
+  collects TypeReference identifier names from trueType. For each
+  declared infer name not in the references set, emits TS6133 with
+  squiggle covering `infer U` (from inferType.pos to typeParameter
+  name's end).
+
+  **17.190 (8604 → 8605, +1) — TS2339 for .prototype on new
+  instance.** Closes `prototypes_ts`. `new Object().prototype` was
+  emitting nothing. Instances never have a `prototype` property —
+  only the constructor side does. In `checkSinglePropertyAccess`
+  (Checker.kt ~47401), added a narrow top-of-function branch: when
+  `expr.name.text == "prototype"` AND the receiver is a
+  `NewExpression` with an Identifier constructor name, emit TS2339
+  with display = constructor name and squiggle on the property name.
+  Other `.prototype` access patterns (`Object.prototype` constructor-
+  side, `f.prototype` function declaration) are unaffected.
+
+  **17.191 (8605 → 8606, +1) — TS2411 for numeric-name property vs
+  number index signature.** Closes `numericIndexerConstraint_ts`.
+  The existing TS2411 walker only handled string-index sigs. Added
+  a number-index branch BEFORE the string-index logic in
+  `checkIndexSignatureProperties` (Checker.kt ~43581). Conservative
+  gate: only fires for `PropertyDeclaration` whose name is a
+  `NumericLiteralNode` and whose property type isn't assignable to
+  the number index value type. Display follows the standard "'number'
+  index type 'X'" format. Squiggle on the numeric name.
+
+  **Discovery process.** Re-survey of (0,0) "none produced" candidates
+  ≤ 8 source lines with ≤ 2 codes, filtering Guardrails (TS7006/
+  TS7041/TS7039/TS7022/TS2352) and architectural codes (TS2589/
+  TS6053/TS5009). Other surveyed candidates skipped:
+  - `computedPropertiesInDestructuring2_ts` (TS2537) — needs
+    destructuring + computed property + index sig.
+  - `mappedTypeWithAsClauseAndLateBoundProperty_ts` (TS2741) —
+    needs mapped type structural property-missing.
+  - `numericIndexerConstraint2_ts` (TS2322) — object-literal vs
+    indexed-type structural comparison.
+  - `redefineArray_ts` (TS2739) — `Array = ...` requires lib
+    `ArrayConstructor` structural comparison.
+  - `typeInferenceTypePredicate_ts` (TS2677) — type predicate
+    structural inference.
+
+  Anti-loop check: this session lands real code (3 commits with
+  test flips, +3 cumulative). Prior session was 17.187-17.188 (+3).
+  Commit pattern unchanged (`feat(17.189)` … `feat(17.191)`).
+
+  **Next-session candidates.** Pattern is sustainable — the (0,0)
+  bucket continues to yield 1-3 wins per iteration. Continue
+  surveying for parser-level error recovery diagnostics and
+  checker-level walker extensions. Larger targets remaining
+  (architectural):
+  - Generic argument inference for the remaining MISS-bucket cases
+    (Blocker #2 follow-on).
+  - Cross-file scope refinement for the remaining cross-file cases
+    (Blocker #3 follow-on).
+  - Lib-aware structural comparison for `ArrayConstructor` /
+    `Array<T>` overload-method patterns (Blocker #4 follow-on).
+
   **Session 2026-05-10 (17.187 → 17.188, 8600 → 8603, +3 cumulative)
   — Two new diagnostic emissions extending existing checker walkers
   for related-but-uncovered cases.** Continuation /loop after

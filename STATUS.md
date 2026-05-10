@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,603 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,606 / 10,078 tests passing (~85%).
+
+**17.191 (2026-05-10, +1)** — TS2411 for numeric-name property vs
+number index signature. Closes `numericIndexerConstraint_ts`. Added
+a number-index branch BEFORE the existing string-index logic in
+`checkIndexSignatureProperties`. Conservative gate: only fires for
+`PropertyDeclaration` whose name is a `NumericLiteralNode` and whose
+property type isn't assignable to the number index value type.
+
+**17.190 (2026-05-10, +1)** — TS2339 for `.prototype` on new
+instance. Closes `prototypes_ts`. In `checkSinglePropertyAccess`,
+when `expr.name.text == "prototype"` AND the receiver is a
+`NewExpression` with an Identifier constructor name, emit TS2339
+with display = constructor's name and squiggle on the property name.
+
+**17.189 (2026-05-10, +1)** — TS6133 for unused infer type
+parameter. Closes `unusedTypeParameters_infer_ts`. New
+`checkUnusedInferParameters` walker called from main pipeline when
+`noUnusedParameters` is true. Walks TypeAliasDeclaration /
+InterfaceDeclaration / ModuleDeclaration bodies; for each
+ConditionalType, collects InferType decls from extendsType and
+checks references in trueType. Squiggle covers `infer U`.
 
 **17.188 (2026-05-10, +1)** — TS2558 for Array.map with multiple
 type args. Closes `thisExpressionInCallExpressionWithTypeArguments_ts`.
