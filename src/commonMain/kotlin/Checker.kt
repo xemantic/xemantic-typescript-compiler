@@ -57192,6 +57192,42 @@ interface DataView {
         // Only check if type arguments are provided and non-empty
         if (typeArguments == null || typeArguments.isEmpty()) return
 
+        // 17.188: PropertyAccessExpression with ArrayLiteralExpression receiver
+        // for known fixed-arity Array methods (e.g. `[1,2,3].map<any,any>(...)`
+        // where Array.map takes exactly 1 type arg). Conservative gate: only
+        // fires for hardcoded method names with array-literal receivers.
+        if (callee is PropertyAccessExpression && callee.expression is ArrayLiteralExpression) {
+            val methodName = callee.name.text
+            val expectedTypeParams = when (methodName) {
+                "map", "flatMap" -> 1
+                else -> -1
+            }
+            if (expectedTypeParams > 0 && typeArguments.size != expectedTypeParams) {
+                val firstArg = typeArguments.first()
+                val lastArg = typeArguments.last()
+                val start = firstArg.pos
+                var endPos = lastArg.end
+                while (endPos > start && endPos < source.length) {
+                    val ch = source[endPos - 1]
+                    if (ch == '>' || ch == ')' || ch.isWhitespace()) endPos--
+                    else break
+                }
+                val length = (endPos - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Expected $expectedTypeParams type arguments, but got ${typeArguments.size}.",
+                    category = DiagnosticCategory.Error,
+                    code = 2558,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                return
+            }
+        }
+
         // Resolve the callee to a symbol
         val name = when (callee) {
             is Identifier -> callee.text
