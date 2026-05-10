@@ -1796,6 +1796,23 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         val rawParams = parseParameterList()
         // 17.140: JSDoc `@param {primitive} name` bridge for Constructor.
         val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
+        // 17.181: TS2398 — `constructor(public constructor: string)` — name
+        // `constructor` is reserved on parameter properties (would conflict
+        // with the synthesized class member named `constructor`).
+        for (param in params) {
+            val isParamProperty = ModifierFlag.Public in param.modifiers ||
+                ModifierFlag.Private in param.modifiers ||
+                ModifierFlag.Protected in param.modifiers ||
+                ModifierFlag.Readonly in param.modifiers
+            if (!isParamProperty) continue
+            val nm = param.name
+            if (nm is Identifier && nm.text == "constructor") {
+                reportError(
+                    "'constructor' cannot be used as a parameter property name.",
+                    code = 2398, overrideStart = nm.pos, overrideLength = nm.text.length,
+                )
+            }
+        }
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
         }
