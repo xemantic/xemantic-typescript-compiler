@@ -29556,6 +29556,25 @@ interface DataView {
                 checkAwaitInExpr(current, source, fileName, isAsync, enclosingFunc)
             }
             is CallExpression -> {
+                // 17.175: TS2311 — `await(...)` in a sync function parses as
+                // CallExpression with Identifier "await" as callee. The `await`
+                // keyword is reserved only in async/module contexts; outside,
+                // it's a regular identifier — but referencing it here is almost
+                // certainly a missing-async mistake.
+                val callee = expr.expression
+                if (!isAsync && callee is Identifier && callee.text == "await") {
+                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find name 'await'. Did you mean to write this in an async function?",
+                        category = DiagnosticCategory.Error,
+                        code = 2311,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = callee.pos,
+                        length = 5,
+                    ))
+                }
                 checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
                 for (arg in expr.arguments) checkAwaitInExpr(arg, source, fileName, isAsync, enclosingFunc)
             }
