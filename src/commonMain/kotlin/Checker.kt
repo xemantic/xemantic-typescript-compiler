@@ -43051,6 +43051,16 @@ interface DataView {
     }
 
     private fun checkIndexSigInStatement(stmt: Statement, source: String, fileName: String) {
+        // 17.159: Handle TypeAliasDeclaration whose body is a TypeLiteral — surface
+        // index-sig diagnostics for `type X<T> = { [k: T]: ... }` patterns. The
+        // outer typeParameter names propagate so we can distinguish TS1337
+        // (generic type-parameter param type) from TS1268 (other invalid kinds).
+        if (stmt is TypeAliasDeclaration) {
+            val typeParamNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+            val literal = stmt.type as? TypeLiteral ?: return
+            checkIndexSigsInMembers(literal.members, typeParamNames, source, fileName)
+            return
+        }
         val members: List<ClassElement> = when (stmt) {
             is ClassDeclaration -> stmt.members
             is InterfaceDeclaration -> stmt.members.filterIsInstance<ClassElement>()
@@ -43060,39 +43070,7 @@ interface DataView {
             }
             else -> return
         }
-        // TS1268: Check index signature parameter types
-        // Only check single-parameter, non-rest index signatures (multi-param and rest get other errors)
-        val allowedIndexTypes = setOf(SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword, SyntaxKind.SymbolKeyword)
-        for (sig in members.filterIsInstance<IndexSignature>()) {
-            if (sig.parameters.size != 1) continue
-            val param = sig.parameters[0]
-            if (param.dotDotDotToken || param.questionToken) continue
-            val pType = param.type ?: continue
-            val isAllowed = when (pType) {
-                is KeywordTypeNode -> pType.kind in allowedIndexTypes
-                is TemplateLiteralType -> true
-                is ArrayType -> true // rest params have array types; TS1017 covers the error
-                else -> false
-            }
-            if (!isAllowed) {
-                val start = param.name.pos
-                val nameLen = when (val n = param.name) {
-                    is Identifier -> n.text.length
-                    else -> param.name.end - param.name.pos
-                }
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.",
-                    category = DiagnosticCategory.Error,
-                    code = 1268,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = nameLen,
-                ))
-            }
-        }
+        checkIndexSigsInMembers(members, emptySet(), source, fileName)
 
         // TS2374: Duplicate index signatures by key type (string/number/symbol).
         // Emit once per each duplicate (including the first) — matches TypeScript.
@@ -43304,6 +43282,60 @@ interface DataView {
                     length = length,
                 ))
             }
+        }
+    }
+
+    /**
+     * 17.159: TS1268 / TS1337 emission for index-signature parameter types.
+     * Shared between class/interface/module members (with `outerTypeParamNames` empty)
+     * and TypeAliasDeclaration TypeLiteral members (with the alias's type-param names).
+     * When the param type is a TypeReference whose name matches an outer type param,
+     * emits TS1337 ("cannot be a literal type or generic type"). Otherwise emits
+     * TS1268 (the long-standing path, "must be string/number/symbol/template literal").
+     */
+    private fun checkIndexSigsInMembers(
+        members: List<ClassElement>, outerTypeParamNames: Set<String>,
+        source: String, fileName: String,
+    ) {
+        val allowedIndexTypes = setOf(SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword, SyntaxKind.SymbolKeyword)
+        for (sig in members.filterIsInstance<IndexSignature>()) {
+            if (sig.parameters.size != 1) continue
+            val param = sig.parameters[0]
+            if (param.dotDotDotToken || param.questionToken) continue
+            val pType = param.type ?: continue
+            val isAllowed = when (pType) {
+                is KeywordTypeNode -> pType.kind in allowedIndexTypes
+                is TemplateLiteralType -> true
+                is ArrayType -> true
+                else -> false
+            }
+            if (isAllowed) continue
+            // TS1337: parameter type is a generic (TypeReference to a TypeParameter)
+            // or a literal type — TypeScript suggests using a mapped object type instead.
+            val isGeneric = pType is TypeReference && pType.typeName is Identifier &&
+                outerTypeParamNames.contains((pType.typeName as Identifier).text)
+            val isLiteral = pType is LiteralType
+            val (code, message) = if (isGeneric || isLiteral) {
+                1337 to "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead."
+            } else {
+                1268 to "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type."
+            }
+            val start = param.name.pos
+            val nameLen = when (val n = param.name) {
+                is Identifier -> n.text.length
+                else -> param.name.end - param.name.pos
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = nameLen,
+            ))
         }
     }
 
