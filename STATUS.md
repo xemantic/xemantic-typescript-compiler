@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,619 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,621 / 10,078 tests passing (~85%).
+
+**17.203 (2026-05-10, +1)** — TS2791 for BigInt exponentiation under
+target<ES2016. Closes `bigIntWithTargetLessThanES2016_ts`. New
+`checkBigIntExponentiation` walker gated on `effectiveTarget < ES2016`.
+For each BinaryExpression with `**` or `**=`, fires when either
+operand is a bare `BigInt(...)` call.
+
+**17.202 (2026-05-10, +1)** — TS2507 for class extends function
+declaration. Closes `extendNonClassSymbol2_ts`. Track `funcDecls` map
+in `checkNonConstructorExtendsInStatements`; when heritage names a
+function (no class merge), emit TS2507 with `(<params>) => <returnType>`
+display via new `formatFunctionTypeForExtends` helper.
 
 **17.201 (2026-05-10, +1)** — TS1209 for `new A?.b()` (optional chain
 on new expression with no parens). Closes
