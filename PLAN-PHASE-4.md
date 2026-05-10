@@ -2918,6 +2918,83 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.183 → 17.186, 8593 → 8600, +7 cumulative)
+  — Four new diagnostic emissions, crossing the 8600-passing
+  milestone.** Continuation /loop after 17.177-17.182. All four came
+  from the (0,0) "none produced" bucket survey, focused on
+  parser-level (TS2452, TS2796) and checker-level (TS2407, TS2394)
+  small-yield diagnostics.
+
+  **17.183 (8593 → 8595, +2) — TS2452 for enum member with
+  numeric/bigint name.** Closes `enumWithBigint_ts` plus one bonus.
+  In `parseEnumDeclaration` (Parser.kt ~2280), after `parsePropertyName`
+  returns, check if the result is `NumericLiteralNode` or
+  `BigIntLiteralNode` and emit TS2452 at the name position with
+  length matching the literal text. ComputedPropertyName / Identifier /
+  StringLiteralNode are unaffected.
+
+  **17.184 (8595 → 8596, +1) — TS2407 for for-in over identifier-
+  typed primitive.** Closes `forInStatement2_ts`. The existing TS2407
+  walker only handled literal RHS (numeric/string/boolean/null/
+  undefined). Extended `simpleRhsNonObjectDisplay`'s Identifier branch
+  (Checker.kt ~55780) to look up the symbol's value declaration via
+  globals; if the symbol is a `VariableDeclaration` with a
+  `KeywordTypeNode` annotation, return the appropriate display for
+  primitive kinds (number / boolean / bigint / symbol / void / never).
+  Conservative gate: only handles var declarations with explicit
+  primitive keyword annotations — no inferred-type lookup.
+
+  **17.185 (8596 → 8597, +1) — TS2796 for adjacent template
+  literals.** Closes `missingCommaInTemplateStringsArray_ts`. The
+  parser silently constructed a tagged template expression when one
+  template literal was followed by another (e.g. inside an array
+  literal). In `parseLeftHandSideExpression`'s
+  NoSubstitutionTemplateLiteral/TemplateHead branch (Parser.kt
+  ~3970), when the tag (`result`) is itself a
+  `NoSubstitutionTemplateLiteralNode` or `TemplateExpression`, emit
+  TS2796 BEFORE constructing the TaggedTemplateExpression. Span
+  covers the tag literal — computed from `result.pos` to one before
+  `template.pos`, then walked back to the last non-whitespace char.
+
+  **17.186 (8597 → 8600, +3) — TS2394 for TypeLiteral overload
+  mismatch.** Closes `functionOverloads17_ts`, `functionOverloads18_ts`
+  plus one bonus. The overload-vs-impl compatibility check
+  (`isTypeNodeCompatible`, Checker.kt ~42393) only handled
+  Keyword↔Keyword, Literal↔Literal, Literal↔Keyword, Keyword↔Literal,
+  and FunctionType↔FunctionType. TypeLiteral fell through to the
+  catch-all `return true`. Added a TypeLiteral↔TypeLiteral branch
+  that structurally compares PropertyDeclaration members by name +
+  type. Returns false only when confident: different name sets, or
+  same name with recursively-incompatible types. Bails to true for
+  non-PropertyDeclaration members (MethodDeclaration, IndexSignature,
+  etc.) — incompatibility there isn't reliably detectable without
+  full structural comparison.
+
+  **Discovery process.** All four targets came from the previous
+  session's flagged "next-session candidates" list (TS2452, TS2407,
+  TS2394, TS2796). Other surveyed candidates skipped:
+  - `mappedTypeWithAsClauseAndLateBoundProperty_ts` (TS2741) — needs
+    structural property-missing on mapped type result.
+  - `moduleAugmentationGlobal6_ts` (TS2669) — augmenting global
+    interface from module.
+  - `thisExpressionInCallExpressionWithTypeArguments_ts` (TS2558) —
+    type argument count check.
+  - `typeInferenceTypePredicate_ts` (TS2677) — type predicate
+    structural check.
+
+  Anti-loop check: this session lands real code (4 commits with test
+  flips, +7 cumulative). Prior session was 17.177-17.182 (+7).
+  Commit pattern unchanged (`feat(17.183)` … `feat(17.186)`).
+
+  **Next-session candidates.** From the same (0,0) survey, still
+  tractable parser/checker-level small-yield diagnostics:
+  - Continue with the four flagged-but-skipped above (TS2741, TS2669,
+    TS2558, TS2677).
+  - Re-survey for new candidates that have surfaced after the recent
+    fixes — each small-source (0,0) test flip can stack additional
+    bonuses elsewhere in the corpus (17.182, 17.183, 17.186 each
+    gained +1 bonus alongside the named target).
+
   **Session 2026-05-10 (17.177 → 17.182, 8586 → 8593, +7 cumulative,
   one squiggle-length fix caught) — Six new diagnostic emissions
   across parser-level (TS1176, TS1246, TS2398, TS1317) and
