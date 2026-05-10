@@ -764,6 +764,8 @@ class Checker(
         checkForInLhsTypes()
         // 65b. Check subsequent var declaration type mismatch (TS2403)
         checkSubsequentVarTypes()
+        // 65c. Check `import x = require(...)` inside namespace bodies (TS1147)
+        checkRequireImportInNamespace()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
         // 67. Check export specifiers for non-local declarations (TS2661)
@@ -12086,6 +12088,74 @@ class Checker(
             }
             // Check function-level and namespace-level vars
             checkSubsequentVarTypesInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * 17.171: TS1147 — `import x = require("...")` inside a namespace body is
+     * invalid. TypeScript emits the diagnostic on the require argument
+     * expression. Walk every ModuleDeclaration body recursively (nested
+     * namespaces too); for each ImportEqualsDeclaration whose
+     * `moduleReference` is an `ExternalModuleReference`, emit TS1147 on the
+     * inner `expression` (typically a StringLiteralNode — squiggle covers the
+     * literal including quotes).
+     */
+    private fun checkRequireImportInNamespace() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                walkRequireImportInNamespace(stmt, inNamespace = false, source = source, fileName = fileName)
+            }
+        }
+    }
+
+    private fun walkRequireImportInNamespace(
+        stmt: Statement, inNamespace: Boolean, source: String, fileName: String,
+    ) {
+        when (stmt) {
+            is ModuleDeclaration -> {
+                // Only an Identifier-named, non-global namespace counts as "inside a
+                // namespace" for TS1147. String-literal names mark ambient external
+                // module declarations / augmentations (different diagnostics:
+                // TS2439, TS2664, TS2667). `declare global` augments the global
+                // scope and is also exempt.
+                val nm = stmt.name
+                val isInternalNamespace = nm is Identifier && nm.text != "global"
+                val nestedInNamespace = inNamespace || isInternalNamespace
+                when (val body = stmt.body) {
+                    is ModuleBlock -> body.statements.forEach {
+                        walkRequireImportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                    }
+                    is ModuleDeclaration -> walkRequireImportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                    else -> {}
+                }
+            }
+            is ImportEqualsDeclaration -> {
+                if (!inNamespace) return
+                val ref = stmt.moduleReference as? ExternalModuleReference ?: return
+                val expr = ref.expression
+                val (start, length) = when (expr) {
+                    is StringLiteralNode -> {
+                        val len = (expr.rawText?.length ?: expr.text.length) + 2
+                        expr.pos to len
+                    }
+                    else -> expr.pos to (expr.end - expr.pos).coerceAtLeast(1)
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Import declarations in a namespace cannot reference a module.",
+                    category = DiagnosticCategory.Error,
+                    code = 1147,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            else -> {}
         }
     }
 
