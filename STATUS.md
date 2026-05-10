@@ -2,6 +2,14 @@
 
 **Phase 4 — Checker buildout.** 8,638 / 10,078 tests passing (~85%).
 
+**17.217 (2026-05-10, +0 correctness)** — Skip TS6133 for declarations
+inside `declare global { ... }` blocks. Variables declared in such
+blocks are intentional ambient globals exposed to other code, not
+"unused locals". Net 0 because the named test
+(`checkJsTypeDefNoUnusedLocalMarked_ts`) also needs TS2352 emission
+in a `.js` file with JSDoc — out of scope. Detection: ModuleDeclaration
+with `name = Identifier("global")` and `Declare` modifier.
+
 **17.216 (2026-05-10, +1)** — Suppress TS2322 when assigning a function
 expression / arrow to an anonymous multi-overload target. Closes
 `contextualTyping_ts`. The pattern: `var c3t7: { (n: number): number;

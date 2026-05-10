@@ -2918,6 +2918,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.217, 8638 → 8638, +0 correctness) — Skip
+  TS6133 for declarations inside `declare global { ... }`.** In
+  `checkUnusedInNestedScopes`'s ModuleDeclaration branch (Checker.kt
+  ~4271), early-return when the name is `Identifier("global")` AND
+  the `Declare` modifier is set. Variables declared inside `declare
+  global { var module: any }` are intentional ambient globals exposed
+  to other code, not "locally unused". Net 0 because the named test
+  `checkJsTypeDefNoUnusedLocalMarked_ts` also needs TS2352 emission
+  in a `.js` file with JSDoc — out of scope. Verified zero
+  regressions via 2-run before/after comparison: 1440 → 1440
+  failed, identical failing set.
+
   **Session 2026-05-10 (17.216, 8637 → 8638, +1) — Suppress TS2322 for
   fn-expression/arrow assigned to anonymous multi-overload target.**
   Closes `contextualTyping_ts`. The pattern: `var c3t7: { (n: number):

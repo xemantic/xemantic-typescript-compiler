@@ -4269,6 +4269,16 @@ class Checker(
                 checkUnusedTypeAliasTypeParams(stmt, source, fileName)
             }
             is ModuleDeclaration -> {
+                // 17.217: `declare global { ... }` adds AMBIENT globals — they're
+                // intentionally exposed to other code, never "locally unused".
+                // TypeScript suppresses TS6133 for declarations inside such blocks.
+                // Detect by: identifier name "global" + Declare modifier on the
+                // outer module decl (or any ancestor — this branch is also reached
+                // when the global block is nested inside a `declare module "X" { ... }`
+                // augmentation). Skip the unused check entirely for the body.
+                val isGlobalAug = (stmt.name as? Identifier)?.text == "global" &&
+                    ModifierFlag.Declare in stmt.modifiers
+                if (isGlobalAug) return
                 when (val body = stmt.body) {
                     is ModuleBlock -> checkUnusedInStatements(
                         body.statements, source, fileName, isTopLevel = false,
