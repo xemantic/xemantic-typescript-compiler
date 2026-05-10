@@ -43578,6 +43578,42 @@ interface DataView {
             }
         }
 
+        // 17.191: TS2411 for numeric-name properties incompatible with a
+        // number index signature. `class C { 0: number; [x:number]: RegExp; }`
+        // — the property `0` matches the number index sig but its type
+        // (number) isn't assignable to the index value type (RegExp).
+        // Conservative gate: only fires for PropertyDeclaration with a
+        // NumericLiteralNode name (the test target shape) and a non-any
+        // index value type.
+        val numberIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+            sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true
+        }
+        val numberIndexType = numberIndexSig?.type?.let { getTypeFromTypeNode(it) }
+        if (numberIndexType != null && numberIndexType !== anyType && numberIndexType !== errorType) {
+            for (member in members) {
+                if (member !is PropertyDeclaration) continue
+                val nameNode = member.name as? NumericLiteralNode ?: continue
+                val propTypeNode = member.type ?: continue
+                val propType = getTypeFromTypeNode(propTypeNode)
+                if (propType === anyType || propType === errorType) continue
+                if (!checkTypeRelatedTo(propType, numberIndexType, assignableRelation)) {
+                    val propTypeDisplay = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
+                    val indexTypeDisplay = typeToString(numberIndexType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '${nameNode.text}' of type '$propTypeDisplay' is not assignable to 'number' index type '$indexTypeDisplay'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2411,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameNode.pos,
+                        length = nameNode.text.length,
+                    ))
+                }
+            }
+        }
+
         // Find string index signature: [s: string]: T (also check base class)
         var stringIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
             sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
