@@ -29410,6 +29410,31 @@ interface DataView {
                     if (binding != null) {
                         for (c in stmt.caseBlock) {
                             if (c !is CaseClause) continue
+                            // 17.198: TS2678 for `case <ClassIdent>` — class identifier
+                            // resolves to `typeof Class`, never comparable to a literal
+                            // type. Display: `typeof <ClassName>`.
+                            val caseExpr = c.expression
+                            if (caseExpr is Identifier) {
+                                val sym = globals[caseExpr.text]
+                                val isPureClass = sym != null && sym.flags.hasAny(SymbolFlags.Class) &&
+                                    !sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable or SymbolFlags.Function) &&
+                                    sym.declarations.size == 1 &&
+                                    sym.valueDeclaration is ClassDeclaration
+                                if (isPureClass) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, caseExpr.pos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Type 'typeof ${caseExpr.text}' is not comparable to type '${binding.display}'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2678,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = caseExpr.pos,
+                                        length = caseExpr.text.length,
+                                    ))
+                                    continue
+                                }
+                            }
                             val caseBinding = literalKindDisplay(c.expression) ?: continue
                             // Same kind + different display → incompatible literal types
                             if (caseBinding.kind == binding.kind && caseBinding.display != binding.display) {
