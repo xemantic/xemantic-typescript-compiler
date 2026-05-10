@@ -2910,6 +2910,64 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.154, 8557 → 8557, net-zero foundation) — Extend
+  `inferReturnTypeFromFunctionExpressionBody` to handle `return new C()`.**
+  Continuation /loop after 17.153. Pre-flight: `find_candidates.py --fresh`
+  returned 0/0/0 (filtered from 3/73/18); baseline 8557 (1518 failed)
+  confirmed via fresh full-suite. Anti-loop check: last 10 commits all real
+  feature commits (17.144–17.153, +10 cumulative over the 17.144–17.153
+  cluster). Per protocol step 6, surgical pool empty, MUST land code or
+  promote a Blocker substep.
+
+  Spot-checked 8+ candidates from the SKIP buckets — `interfaceImplementation1_ts`,
+  `errorWithSameNameType_ts`, `deeplyNestedAssignabilityErrorsCombined_ts`,
+  `intersectionWithConflictingPrivates_ts`, `relationComplexityError_ts`,
+  `conditionalAnyCheckTypePicksBothBranches_ts`, `elaboratedErrorsOnNullableTargets01_ts`,
+  `namespaceDisambiguationInUnion_ts`, `newMap_ts`, `undeclaredModuleError_ts` —
+  all still failing as documented in their existing skip-log entries. No
+  stale entries surfaced this round.
+
+  **Implementation (Checker.kt).** Single-piece extension of the 17.10a
+  helper at line ~40613. After the existing `is Identifier ->` param-match
+  branch (returns `symbolTypes[match.id]` for parameter-typed identifier
+  returns), a new `is NewExpression -> getReturnTypeOfNewExpression(retExpr)`
+  branch returns the constructed instance type when non-error / non-any.
+  Wrapped in try/catch so cycle protection in `getReturnTypeOfNewExpression`
+  doesn't propagate. The outer single-stmt-body single-return gate from
+  17.10a stays unchanged — only FunctionExpressions whose body is exactly
+  `{ return <expr>; }` are affected. `inferReturnTypeFromBody` (the broader
+  callee used by MethodDeclaration / FunctionDeclaration / GetAccessor
+  paths) is NOT extended this session — risk of regression is broader for
+  named functions.
+
+  **Verification.** Full suite: 10078 / 1518 / 3 (was 10078 / 1518 / 3,
+  net-zero). Zero regressions across the 10078-test suite. The candidate
+  target `interfaceImplementation1_ts` does NOT flip — its TS2322 source
+  display improves from `() => any` to `() => C2` post-fix, but the test
+  ALSO requires (a) multi-interface TS2420 emission for `class C1 implements
+  I1, I2` (currently we emit only the I1 interface diagnostic, not I2), and
+  (b) the `Type '() => C2' provides no match for the signature 'new (): I3'.`
+  construct-sig elaboration line on the TS2322. Each of (a) and (b) is a
+  separate gap (multi-interface error walking + construct-sig-mismatch
+  elaboration in `getFunctionMismatchElaboration`). Foundation for those
+  follow-ons; no other failing test in the corpus has `function() { return
+  new C() }` as its only gap.
+
+  **Surfaced gotcha.** None new — the existing `getReturnTypeOfNewExpression`
+  cycle protection covers the chain.
+
+  **Next-session candidates.** Surgical pool genuinely exhausted (191 in
+  skip-log, all characterized as multi-piece or architectural). Recommended:
+  (a) extend the `inferReturnTypeFromBody` family to handle Identifier returns
+  (e.g. `return this.field`) — same Blocker #4 sub-case, slightly broader
+  blast radius; (b) Blocker #2 follow-on for multi-arg single-TypeParam
+  best-common-type inference (~3-5 tests); (c) Blocker #3 per-file scope
+  expansion (~30 tests, high regression risk).
+
+  Anti-loop check: this session lands real code (foundation, +0 but bounded
+  blast radius). Prior session was 17.153 (+1). Commit pattern unchanged
+  (`feat(17.154): ...`).
+
   **Session 2026-05-10 (17.150, 8551 → 8554, +3) — TS2842 for unused
   destructured-property renames in function-type positions, with companion
   FP suppression for `typeof <renamed-binding>` references and parameter

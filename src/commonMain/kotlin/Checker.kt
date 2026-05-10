@@ -40626,6 +40626,16 @@ interface DataView {
             }
             // Fall through to literal inference for non-param identifier returns.
         }
+        // 17.154: `return new C()` infers the constructed instance type. Bounded to
+        // FunctionExpression single-stmt-body single-return case so regression risk
+        // stays narrow. Improves display from `() => any` to `() => C` for patterns
+        // like `var a: I4 = function() { return new C2(); }` (interfaceImplementation1).
+        if (retExpr is NewExpression) {
+            try {
+                val t = getReturnTypeOfNewExpression(retExpr)
+                if (t !== anyType && t !== errorType) return t
+            } catch (_: Throwable) { /* fall through */ }
+        }
         return inferReturnTypeFromBody(body)
     }
 

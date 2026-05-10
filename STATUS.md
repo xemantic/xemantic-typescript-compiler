@@ -2,6 +2,18 @@
 
 **Phase 4 — Checker buildout.** 8,557 / 10,078 tests passing (~85%).
 
+**17.154 (2026-05-10, net-zero foundation)** — `inferReturnTypeFromFunctionExpressionBody`
+now handles `return new C()` patterns. Bounded to the existing single-stmt-body
+single-return gate; calls `getReturnTypeOfNewExpression` for the retExpr and
+returns the constructed instance type when non-error / non-any. Improves display
+for `var a: I4 = function(){ return new C2(); }` (interfaceImplementation1) from
+`() => any` to `() => C2`. Net-zero on the 10078-test suite (1518/3 unchanged) —
+no test in the corpus gates SOLELY on this single missing inference: the lone
+match `interfaceImplementation1_ts` also requires (a) multi-interface TS2420
+emission for `implements I1, I2` and (b) the `Type '() => C2' provides no match
+for the signature 'new (): I3'.` construct-sig elaboration line. Foundation for
+those follow-ons.
+
 **17.153 (2026-05-10, +1)** — Push interface typeParameters into scope for
 call/construct signature resolution + TS2345 for null/undefined arg vs
 concrete `Type.Reference` parameter. Flips
