@@ -42391,6 +42391,29 @@ interface DataView {
             if (!isTypeNodeCompatible(overloadType.type, implType.type)) return false
             return true
         }
+        // 17.186: TypeLiteral↔TypeLiteral — structurally compare PropertyDeclaration
+        // members by name + type. Returns false only when we're confident there's a
+        // mismatch (different member sets, or matching name with incompatible type
+        // recursively). Other member kinds (MethodDeclaration, IndexSignature, etc.)
+        // bail to true (conservative — incompatibility there isn't reliably
+        // detectable without full structural comparison).
+        if (overloadType is TypeLiteral && implType is TypeLiteral) {
+            val overloadProps = overloadType.members.filterIsInstance<PropertyDeclaration>()
+            val implProps = implType.members.filterIsInstance<PropertyDeclaration>()
+            if (overloadProps.size != overloadType.members.size ||
+                implProps.size != implType.members.size) return true
+            if (overloadProps.size != implProps.size) return false
+            val overloadByName = overloadProps.associateBy { (it.name as? Identifier)?.text ?: return true }
+            val implByName = implProps.associateBy { (it.name as? Identifier)?.text ?: return true }
+            if (overloadByName.keys != implByName.keys) return false
+            for ((name, oProp) in overloadByName) {
+                val iProp = implByName[name]!!
+                val oT = oProp.type ?: continue
+                val iT = iProp.type ?: continue
+                if (!isTypeNodeCompatible(oT, iT)) return false
+            }
+            return true
+        }
         // Keyword vs Keyword (existing keyword-only logic)
         if (overloadType !is KeywordTypeNode || implType !is KeywordTypeNode) return true
         val overloadKind = overloadType.kind
