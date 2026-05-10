@@ -2918,6 +2918,63 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.202 → 17.203, 8619 → 8621, +2 cumulative)
+  — Two new diagnostic emissions: TS2507 function-extends and TS2791
+  BigInt exponentiation under target<ES2016.** Continuation /loop
+  after 17.200-201.
+
+  **17.202 (8619 → 8620, +1) — TS2507 for class extends function
+  declaration.** Closes `extendNonClassSymbol2_ts`. The existing
+  TS2507 walker only handled class extending a primitive var or
+  `Ns.var`; function-as-base fell through. Tracked `funcDecls` map
+  alongside the existing `varDecls`; when the heritage base names a
+  function (no class merge), emit TS2507 with display formatted by
+  new `formatFunctionTypeForExtends` helper: `(<params>) =>
+  <returnType>`. Param strings use Identifier name + optional `?` +
+  annotation (or `any`). Return type from annotation, else `void` if
+  body has no return-with-value, else `any`.
+
+  **17.203 (8620 → 8621, +1) — TS2791 for BigInt exponentiation
+  under target<ES2016.** Closes `bigIntWithTargetLessThanES2016_ts`.
+  `BigInt(1) ** BigInt(1)` and `bigint **= BigInt(2)` were emitting
+  nothing under target=es2015. The native `**` operator only landed
+  in ES2016; for older targets the Transformer downlevels to
+  `Math.pow`, which doesn't work for bigint operands. New
+  `checkBigIntExponentiation` walker called from main pipeline
+  (Checker.kt ~775) gated on `options.effectiveTarget < ES2016`.
+  For each BinaryExpression with `**` or `**=`, checks via new
+  `isBigIntCall` helper if either operand is a bare `BigInt(...)`
+  call. Conservative gate (only the bare-Identifier `BigInt(...)`
+  call form) — broader detection (any bigint-typed operand via
+  inferred type) would need full type resolution.
+
+  **Discovery process.** Both targets came from the previous session's
+  flagged-but-skipped list. Other surveyed candidates skipped:
+  - `taggedTemplatesWithIncompleteNoSubstitutionTemplate1/2_ts`
+    (TS1160) — scanner-level diagnostic infrastructure.
+  - `enumPropertyAccessBeforeInitalisation_ts` (TS2565) — definite-
+    assignment within enum initializer chain.
+  - `regularExpressionExtendedUnicodeEscapes_ts` (TS1538) — regex
+    parser extension.
+  - `forInStrictNullChecksNoError_ts` (TS18049) — strictNullChecks
+    interaction.
+  - `memberScope_ts` (TS2708) — namespace member scope check.
+  - `importAnImport_ts` (TS2694) — nested namespace import.
+  - `definiteAssignmentWithErrorStillStripped_ts` (TS1264) —
+    `useDefineForClassFields` field check.
+
+  Anti-loop check: this session lands real code (2 commits with test
+  flips, +2 cumulative). Prior session was 17.200-17.201 (+2).
+  Commit pattern unchanged (`feat(17.202)`, `feat(17.203)`).
+
+  **Next-session candidates.** The (0,0) bucket continues to thin.
+  Remaining candidates require either scanner-level infrastructure
+  (TS1160 unterminated template, TS1538 regex extensions), or
+  larger architectural pieces. The (1+, 0) bucket (where multiple
+  expected diagnostics are missing) may now be the highest-yield
+  direction — those typically need apparent-type comparison, generic
+  inference, or lib-aware structural comparison.
+
   **Session 2026-05-10 (17.200 → 17.201, 8617 → 8619, +2 cumulative,
   one squiggle-position fix caught) — Two new diagnostic emissions
   for parser-level (TS1016) and checker-level (TS1209) parameter /
