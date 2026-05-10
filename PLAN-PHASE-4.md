@@ -2918,6 +2918,28 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.216, 8637 → 8638, +1) — Suppress TS2322 for
+  fn-expression/arrow assigned to anonymous multi-overload target.**
+  Closes `contextualTyping_ts`. The pattern: `var c3t7: { (n: number):
+  number; (s1: string): number; } = function(n) { return n; };`.
+  TypeScript contextually types the function expression with one of
+  the overloads and skips strict multi-overload structural comparison.
+  Our `checkVarDeclAssignability` did the strict compare (source's
+  single signature must satisfy ALL target overloads) and emitted
+  TS2322 because the source `(n: number) => any` couldn't satisfy
+  the second overload `(s1: string): number` (number→string param
+  fails contravariantly).
+
+  Added a narrow guard in `checkVarDeclAssignability` (Checker.kt
+  ~37718) that skips TS2322 when ALL of: `init` is FunctionExpression
+  or ArrowFunction; target is `Type.Object` with `symbol == null`
+  (anonymous, not a named interface); target has no construct sigs;
+  target has no/empty properties; target has 2+ call signatures.
+  Net +1, no regressions across 10,078 suite. The earlier
+  position-string mystery (summary said `(36,5)` while squiggle
+  rendered under c3t7 at line 39) was a red herring — once the
+  emission is suppressed, the test passes regardless.
+
   **Session 2026-05-10 (17.215, 8637 → 8637, +0 foundation) — Add `?`
   to optional method declarations in TypeLiteral display.** In
   `formatTypeForDisplay`'s TypeLiteral → MethodDeclaration branch

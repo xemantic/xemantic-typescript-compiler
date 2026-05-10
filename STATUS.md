@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,637 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,638 / 10,078 tests passing (~85%).
+
+**17.216 (2026-05-10, +1)** — Suppress TS2322 when assigning a function
+expression / arrow to an anonymous multi-overload target. Closes
+`contextualTyping_ts`. The pattern: `var c3t7: { (n: number): number;
+(s1: string): number; } = function(n) { return n; };`. TypeScript
+contextually types the function with one overload and skips strict
+multi-overload structural compare. Our checker did the strict compare
+(source's single sig must satisfy ALL target overloads) and rejected.
+Narrow gate: `init` is FunctionExpression/ArrowFunction, target is
+anonymous Type.Object (no symbol) with 2+ call signatures, no construct
+sigs, no properties.
 
 **17.215 (2026-05-10, +0 foundation)** — Optional method declarations
 in TypeLiteral display now include the `?` token: `k?(a: any): any`
