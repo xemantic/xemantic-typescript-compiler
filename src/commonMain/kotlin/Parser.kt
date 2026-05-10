@@ -4385,8 +4385,19 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
         val name = parsePropertyName()
 
-        // Skip optional '?' (TypeScript optional property marker; erased in JS output)
-        parseOptional(SyntaxKind.Question)
+        // 17.158: TS1162 — object literal members cannot be declared optional.
+        // The `?` is still consumed (so downstream parsing stays the same), but a
+        // diagnostic with squiggle on the `?` token is emitted.
+        if (token == SyntaxKind.Question) {
+            val qPos = scanner.getTokenPos()
+            nextToken()
+            reportError(
+                "An object member cannot be declared optional.",
+                code = 1162,
+                overrideStart = qPos,
+                overrideLength = 1,
+            )
+        }
 
         // Method shorthand: foo() { ... }  or *foo() { ... } or async foo() { ... }
         if (asterisk || token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan) {
