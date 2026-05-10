@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,614 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,617 / 10,078 tests passing (~85%).
+
+**17.199 (2026-05-10, +1)** — TS2507 for class extends `Ns.var`.
+Closes `qualifiedName_entity-name-resolution-does-not-affect-class-heritage_ts`.
+Extended `checkNonConstructorExtendsInStatements` with a
+PropertyAccessExpression heritage branch. Resolves receiver via
+globals as a Module symbol, finds the property in `nsSym.exports`,
+reuses `inferSimpleVarType` for the primitive type display.
+
+**17.198 (2026-05-10, +1)** — TS2678 for class identifier in switch
+case. Closes `switchAssignmentCompat_ts`. In `walkSwitchCaseComparable`,
+detect `caseExpr is Identifier` resolving to a pure class symbol and
+emit TS2678 with display `typeof <ClassName>` BEFORE the existing
+literal-kind comparison.
+
+**17.197 (2026-05-10, +1)** — TS2337 for super outside constructor
+in top-level function. Closes `superCallFromFunction1_ts`. In
+`walkForIllegalSuperCalls`'s FunctionDeclaration branch, also call
+`findNestedSuperCalls` with `inNestedFn = true` to flag direct
+`super(...)` calls in top-level function bodies.
 
 **17.196 (2026-05-10, +1)** — TS1163 for yield outside generator
 function. Closes `yieldStringLiteral_ts`. New `walkYieldInStmts`/
