@@ -1,6 +1,50 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,563 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,569 / 10,078 tests passing (~85%).
+
+**17.166 (2026-05-10, +1)** — TS2348 for calling a class without `new`.
+Closes `callOnClass_ts`. In `checkSingleCallExpressionTypes`'s
+`signatures.isEmpty()` branch (Checker.kt ~49006), emit TS2348 when the
+callee is an Identifier resolving to a `SymbolFlags.Class` symbol AND
+no FunctionDeclaration with the same name exists in any binderResult's
+source-file statements (the function-name gate handles `function Foo`
++ `class Foo` merges that the binder's `canMerge` rejects). Squiggle
+length computed locally to avoid regressing the shared
+`expressionTrueEnd` helper.
+
+**17.165 (2026-05-10, +1)** — TS1211 for `export class { }` without
+`default`. Closes `exportClassWithoutName_ts`. In
+`parseExportDeclaration`'s ClassKeyword branch (Parser.kt ~2552),
+inspect the returned `ClassDeclaration.name` and emit TS1211 with
+squiggle on the outer `export` keyword (length 6) when null.
+
+**17.164 (2026-05-10, +1)** — TS2431 for enum with primitive name.
+Closes `enumWithPrimitiveName_ts`. New `checkEnumPrimitiveName` helper
+(reuses `PREDEFINED_TYPE_NAMES` companion-set: any/number/boolean/
+string/void/never/object/unknown/undefined/null/bigint/symbol) called
+from `checkDuplicateEnumMembers`.
+
+**17.163 (2026-05-10, +1)** — TS2304 / TS2312 for heritage extending
+bare type parameter. Closes `inheritFromGenericTypeParameter_ts`. Two
+helpers (`emitTs2304ForHeritageExtendsTypeParam`,
+`emitTs2312ForInterfaceExtendsTypeParam`) called after the existing
+`checkUnresolvedInExpr` for class/interface heritage clauses. Fires
+when the heritage Identifier resolves only to a type parameter in the
+inner scope AND the parent scope has no value-side binding for the
+same name.
+
+**17.162 (2026-05-10, +1)** — TS2339 for missing enum member via
+element access. Closes `constEnumBadPropertyNames_ts`. The existing
+`checkSingleElementAccess` StringLiteralNode-on-enum branch dropped its
+strict-mode gate; under non-strict it now emits TS2339 with display
+`typeof <enumName>` instead of the strict-only TS7015.
+
+**17.161 (2026-05-10, +1)** — TS2339 for property access on string
+literal receiver. Closes `classExtendsInterface_not_ts`. Added a
+`StringLiteralNode` receiver branch near the top of
+`checkMemberAccessMissing` (Checker.kt ~47284). Resolves to the String
+wrapper apparent type, emits TS2339 with `"<literal>"` display when
+the property isn't a String wrapper member.
 
 **17.159 (2026-05-10, +1)** — TS1337 for generic / literal index signature
 parameter type. Closes `genericIndexTypeHasSensibleErrorMessage_ts`. Two-piece

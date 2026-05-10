@@ -2918,6 +2918,113 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.161 → 17.166, 8563 → 8569, +6 cumulative) —
+  Six new diagnostic emissions for small (0,0)-bucket targets across
+  parser and checker.** Continuation /loop after 17.160's revert. Each
+  substep targets a specific failing test from the previous session's
+  "tractable remaining" candidate list (or surfaced via re-survey of
+  the (0,0) "none produced" bucket post-17.160). All six landed
+  individually with full-suite verification between commits; zero
+  cumulative regressions across 10078-test suite.
+
+  **17.161 (8563 → 8564, +1) — TS2339 for property access on string
+  literal receiver.** Closes `classExtendsInterface_not_ts`. The
+  existing heritage-clause walker (Checker.kt:46129) feeds receiver
+  expressions to `checkMemberAccessMissing`, but the function had no
+  branch for StringLiteralNode receivers. Added near the top (after
+  the empty-`{}` ObjectLiteralExpression case): resolves to the String
+  wrapper apparent type via `getApparentType(stringType)`, calls
+  `getPropertyOfType(apparent, propName)`, emits TS2339 with display
+  `"<literal>"` (verbatim string content wrapped in quotes — matches
+  TypeScript's "Property 'X' does not exist on type '\"\"'." baseline
+  format) when the property isn't a String wrapper member and isn't in
+  `RUNTIME_PROPERTIES`. Both cycle-protection and lookups wrapped in
+  try/catch.
+
+  **17.162 (8564 → 8565, +1) — TS2339 for missing enum member via
+  element access.** Closes `constEnumBadPropertyNames_ts`. The existing
+  TS7015 emission in `checkSingleElementAccess`'s StringLiteralNode-on-
+  enum branch was gated on `noImplicitAny || strict`. Under non-strict,
+  the branch now emits TS2339 instead with display `typeof <enumName>`
+  and propName from the string literal text. Squiggle length unchanged
+  (covers `"X"` including quotes). Strict mode preserved with TS7015.
+
+  **17.163 (8565 → 8566, +1) — TS2304 / TS2312 for heritage extending
+  bare type parameter.** Closes `inheritFromGenericTypeParameter_ts`.
+  `class C<T> extends T {}` / `interface I<T> extends T {}` were
+  emitting nothing because `addTypeParam` adds the name to BOTH
+  `names` (value scope) and `typeParamNames`, so `scope.has("T")`
+  returns true and TS2304 is suppressed. Real semantics: type
+  parameters live in the type space; they have no value-side existence.
+  Two new helpers called AFTER the existing `checkUnresolvedInExpr` in
+  the class / interface heritage walkers. Fires when the heritage
+  Identifier resolves only to a type parameter in the inner scope AND
+  the parent scope has no value-side binding for the same name.
+
+  **17.164 (8566 → 8567, +1) — TS2431 for enum with primitive name.**
+  Closes `enumWithPrimitiveName_ts`. `enum string {}`, `enum number
+  {}`, `enum any {}` were emitting nothing. New
+  `checkEnumPrimitiveName` helper called from `checkDuplicateEnumMembers`
+  reuses the existing `PREDEFINED_TYPE_NAMES` companion-set
+  (any/number/boolean/string/void/never/object/unknown/undefined/null/
+  bigint/symbol). Squiggle on `decl.name.pos` with length = name text.
+
+  **17.165 (8567 → 8568, +1) — TS1211 for export class without name.**
+  Closes `exportClassWithoutName_ts`. `export class { }` (no
+  `default`, no name) was parsed silently. In
+  `parseExportDeclaration`'s ClassKeyword branch (Parser.kt ~2552),
+  wrapped the `parseClassDeclaration(modifiers, comments)` call to
+  inspect the returned `ClassDeclaration.name` and emit TS1211 with
+  squiggle on the outer `export` keyword (overrideStart=pos,
+  overrideLength=6) when null. The `export default class { }` branch
+  is separate and unaffected.
+
+  **17.166 (8568 → 8569, +1) — TS2348 for calling a class without
+  `new`.** Closes `callOnClass_ts`. `var c = C();` where `C` is a
+  class was emitting nothing. In `checkSingleCallExpressionTypes`'s
+  `signatures.isEmpty()` branch (Checker.kt ~49006), emits TS2348
+  before the existing TS6234 / TS2349 checks. Critical gate: not
+  every same-name function declaration is in the symbol's
+  `declarations` list because the binder's `canMerge` rejects
+  Class+Function (`callOverloads3/4/5_ts`, `callOnInstance_ts` test
+  this exact pattern — function declared first, then class with same
+  name overwrites). Walk binderResults' AST directly for any
+  FunctionDeclaration matching the name. Squiggle covers `C()`
+  (length 3) computed locally as `expr.pos` to
+  `calleeExpr.pos + calleeExpr.text.length + 2` for empty-args calls.
+  An earlier attempt to widen the shared `expressionTrueEnd` helper's
+  empty-args fallback regressed -2 unrelated tests; reverted to keep
+  the helper unchanged and computed locally instead.
+
+  **Discovery process.** All six targets came from the previous
+  session's spot-check list (`inheritFromGenericTypeParameter_ts`,
+  `classExtendsInterface_not_ts`, `constEnumBadPropertyNames_ts`) plus
+  a re-survey of small-source (0,0) "none produced" candidates ≤ 3
+  source lines with ≤ 2 expected codes (`enumWithPrimitiveName_ts`,
+  `exportClassWithoutName_ts`, `callOnClass_ts`). Most other (0,0)
+  candidates remain blocked on Guardrails (TS7006/TS7041 default-on),
+  architectural (generic inference, lib-aware comparison, scanner
+  diagnostics), or already-implemented patterns (TS2349 currently
+  fires for primitive callees but not for class-Identifier callees —
+  17.166 addresses the gap).
+
+  Anti-loop check: this session lands real code (6 commits with test
+  flips, +6 cumulative). Prior session was 17.157-17.160 (+5 with one
+  revert). Commit pattern unchanged (`feat(17.161)` … `feat(17.166)`).
+
+  **Next-session candidates.** From the same (0,0) survey, still
+  tractable:
+  - `ClassDeclarationWithInvalidConstOnPropertyDeclaration_ts` (TS1248
+    "A class member cannot have the 'const' keyword.") — parser-level
+    check on class member modifiers.
+  - `modifiersOnInterfaceIndexSignature1_ts` (TS1071 "'public'
+    modifier cannot appear on a type member.") — parser-level check
+    on interface IndexSignature modifiers.
+  - `restParamAsOptional_ts` (TS1048 / TS1047 — rest param with `?` /
+    initializer) — parser-level rest-param validation.
+  - `mappedTypeNoTypeNoCrash_ts` (TS2304 inside mapped type body) —
+    likely already partially handled.
+
   **Session 2026-05-10 (17.157 → 17.159, 8558 → 8563, +5 cumulative; one
   attempt reverted 17.160) — Three new parser/checker diagnostic
   emissions for small (0,0)-bucket targets surfaced by survey of "none
