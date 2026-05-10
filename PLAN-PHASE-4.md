@@ -2918,6 +2918,111 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.172 → 17.176, 8579 → 8586, +7 cumulative,
+  one initial regression caught + gated) — Five new diagnostic
+  emissions.** Continuation /loop after 17.167-17.171. All five came
+  from re-survey of the (0,0) "none produced" bucket, focused on
+  parser-level error recovery diagnostics (TS1172, TS1175, TS1313)
+  and checker-level heritage / await diagnostics (TS2499, TS2311).
+
+  **17.172 (8579 → 8580, +1) — TS2499 for interface extends
+  parenthesized expression.** Closes
+  `declarationEmitInterfaceWithNonEntityNameExpressionHeritage_ts`.
+  `interface Class extends (typeof A) { }` was emitting nothing.
+  TypeScript emits TS2499 ("An interface can only extend an
+  identifier/qualified-name with optional type arguments.") on the
+  parenthesized expression. New `emitTs2499ForInterfaceExtendsNonEntityName`
+  helper called from the InterfaceDeclaration branch of
+  `checkUnresolvedInStatementCore`. Conservative gate: only fires for
+  `ParenthesizedExpression` initially. Forward-scans source from
+  `expr.pos` matching paren depth so the span doesn't depend on
+  `node.end` overshoot. The first attempt widened to
+  "anything not Identifier/PropertyAccessExpression-with-Identifier-chain"
+  which FP-fired on `genericTypeWithMultipleBases3_ts` and
+  `multipleBaseInterfaesWithIncompatibleProperties_ts` because our
+  parser produces a non-Identifier node for `IA<T>` heritage when the
+  type-argument resolution path takes a different branch — narrowed
+  back to ParenthesizedExpression-only.
+
+  **17.173 (8580 → 8583, +3) — TS1172 / TS1175 for duplicate
+  extends/implements clauses.** Closes `extendsClauseAlreadySeen_ts`,
+  `extendsClauseAlreadySeen2_ts`, `implementsClauseAlreadySeen_ts`.
+  `class D extends C extends C` and `class D implements C implements
+  C` were silently accepted. In `parseHeritageClauses` (Parser.kt
+  ~1494), added a `hasExtends` tracker alongside the existing
+  `hasImplements`. Before consuming each clause keyword, if the same
+  kind of clause was already seen, emit TS1172 (`extends`) or TS1175
+  (`implements`) at the keyword position with length matching the
+  keyword text (7 / 10).
+
+  **17.174 (8583 → 8584, +1) — Widen TS2499 to CallExpression
+  heritage.** Closes `interfaceMayNotBeExtendedWitACall_ts`.
+  `interface blue extends color() { }` parses the heritage expression
+  as `CallExpression(color, [])`. In
+  `emitTs2499ForInterfaceExtendsNonEntityName`, widened the gate from
+  `expr is ParenthesizedExpression` to ALSO accept
+  `expr is CallExpression`. The shared paren-scanning logic handles
+  both shapes via a `sawOpen` flag (defensive against unexpected
+  expression shapes that could pass the type check but lack actual
+  parens in source).
+
+  **17.175 (8584 → 8585, +1) — TS2311 for await as identifier in
+  sync function.** Closes `awaitCallExpressionInSyncFunction_ts`.
+  `function foo() { const foo = await(Promise.resolve(1)); }` parses
+  `await(...)` as `CallExpression(callee=Identifier("await"))` because
+  `await` is reserved only in async/module contexts. Our
+  `checkIdentifierResolved` early-returns for keyword-class identifiers,
+  so TS2304 doesn't fire either. In `checkAwaitInExpr`'s CallExpression
+  branch (Checker.kt ~29558), before recursing into the callee, check
+  `!isAsync && callee is Identifier && callee.text == "await"` and emit
+  TS2311 on the callee Identifier (length 5).
+
+  **17.176 (8585 → 8586, +1) — TS1313 for empty if-then statement.**
+  Closes `emptyThenWarning_ts`. `if(1);` was silently parsed. In
+  `parseIfStatement` (Parser.kt ~899), after `parseStatement()`
+  returns, check if the result is a real EmptyStatement (parser
+  produced from a `;` token, so `pos > 0`) and emit TS1313 on the `;`
+  with length 1. Guard against the synthetic
+  `?: EmptyStatement()` fallback (created when `parseStatement` returns
+  null) which has `pos = 0`.
+
+  **Discovery process.** All five targets came from re-surveying small-
+  source (0,0) "none produced" candidates ≤ 10 source lines with ≤ 2
+  expected codes, filtered to skip Guardrails (TS7006/TS7041/TS7022/
+  TS2352) and architectural (generic inference, scanner diagnostics,
+  TS2589 deep instantiation). Other surveyed candidates skipped:
+  - `extendNonClassSymbol2_ts` (TS2507) — class extending function;
+    needs class heritage type-checking against constructor signatures.
+  - `deleteReadonlyInStrictNullChecks_ts` (TS2704) — needs property
+    type resolution + readonly-flag detection on Function interface
+    members.
+  - `duplicateLocalVariable4_ts` (TS2403) — needs `typeof E` vs `E`
+    type comparison.
+  - `moduleKeywordRepeatError_ts` (TS2591 + TS1005) — TS2591
+    requires Node-specific globals list (NODE_GLOBALS); TS1005 needs
+    ASI behavior change between expression and `{`.
+  - `declarationEmitInvalidReference2_ts` (TS6053) — requires file
+    system / module resolution access threaded through.
+  - `recursivelyExpandingUnionNoStackoverflow_ts` (TS2615 + TS2589) —
+    deep type system features.
+
+  Anti-loop check: this session lands real code (5 commits with test
+  flips, +7 cumulative, one initial -1 narrowed-and-recovered).
+  Prior session was 17.167-17.171 (+10). Commit pattern unchanged
+  (`feat(17.172)` … `feat(17.176)`).
+
+  **Next-session candidates.** From the same (0,0) survey, still
+  tractable parser/checker-level small-yield diagnostics:
+  - `arrayIndexWithArrayFails_ts` (TS2538) — index type validity
+    when receiver is `(string|string[])[]`.
+  - `assignmentToObject_ts` (TS2322 with apparent-type check on
+    Object).
+  - `destructuringFromUnionSpread_ts` (TS2339) — destructuring from
+    union spread.
+  - `functionCall18_ts` (TS2554) — generic argument count check.
+  - `functionOverloads5_ts` (TS2385) — overload signature visibility
+    (public + private in same overload group).
+
   **Session 2026-05-10 (17.167 → 17.171, 8569 → 8579, +10 cumulative,
   one initial regression caught + gated) — Five new diagnostic
   emissions for small (0,0)-bucket targets across parser and

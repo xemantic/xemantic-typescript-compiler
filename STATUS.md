@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,579 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,586 / 10,078 tests passing (~85%).
+
+**17.176 (2026-05-10, +1)** — TS1313 for empty if-then statement.
+Closes `emptyThenWarning_ts`. In `parseIfStatement` (Parser.kt ~899),
+detect when the then-body is a real EmptyStatement (`pos > 0`, NOT
+the `?: EmptyStatement()` synthetic fallback) and emit TS1313 on the
+`;` token (length 1).
+
+**17.175 (2026-05-10, +1)** — TS2311 for `await(...)` in sync function.
+Closes `awaitCallExpressionInSyncFunction_ts`. In `checkAwaitInExpr`'s
+CallExpression branch, when `!isAsync && callee is Identifier && callee.text == "await"`,
+emit TS2311 on the callee Identifier (length 5). The keyword is
+otherwise an unresolved identifier in sync context — TypeScript
+specializes the diagnostic with the "did you mean async function?" hint.
+
+**17.174 (2026-05-10, +1)** — Widen TS2499 to CallExpression heritage.
+Closes `interfaceMayNotBeExtendedWitACall_ts`. In
+`emitTs2499ForInterfaceExtendsNonEntityName`, accept CallExpression in
+addition to ParenthesizedExpression. The shared paren-scanning logic
+handles both shapes correctly via a `sawOpen` flag.
+
+**17.173 (2026-05-10, +3)** — TS1172 / TS1175 for duplicate
+extends/implements clauses. Closes `extendsClauseAlreadySeen_ts`,
+`extendsClauseAlreadySeen2_ts`, `implementsClauseAlreadySeen_ts`. In
+`parseHeritageClauses`, track `hasExtends` alongside `hasImplements`
+and emit on duplicate keywords with length 7/10.
+
+**17.172 (2026-05-10, +1)** — TS2499 for interface extends parenthesized
+expression. Closes `declarationEmitInterfaceWithNonEntityNameExpressionHeritage_ts`.
+New `emitTs2499ForInterfaceExtendsNonEntityName` helper called from
+the InterfaceDeclaration heritage walker; ParenthesizedExpression-only
+gate (initially), with paren-scan source forward from `expr.pos`
+matching paren depth.
 
 **17.171 (2026-05-10, +1)** — TS1147 for require import in internal
 namespace. Closes `importDeclarationInModuleDeclaration1_ts`. New
