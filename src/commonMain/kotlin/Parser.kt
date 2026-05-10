@@ -2281,6 +2281,21 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val mPos = getPos()
             val mLeading = leadingComments()
             val mName = parsePropertyName()
+            // 17.183: TS2452 — enum member cannot have a numeric (or bigint)
+            // name. `parsePropertyName` returns NumericLiteralNode for `0` /
+            // `1.5` / etc. and BigIntLiteralNode for `0n`. Squiggle on the
+            // literal text length.
+            when (mName) {
+                is NumericLiteralNode -> reportError(
+                    "An enum member cannot have a numeric name.",
+                    code = 2452, overrideStart = mName.pos, overrideLength = mName.text.length,
+                )
+                is BigIntLiteralNode -> reportError(
+                    "An enum member cannot have a numeric name.",
+                    code = 2452, overrideStart = mName.pos, overrideLength = mName.text.length,
+                )
+                else -> { /* Identifier / StringLiteralNode / ComputedPropertyName ok */ }
+            }
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
             val mTrailing = scanner.getTrailingComments()
             members.add(EnumMember(
