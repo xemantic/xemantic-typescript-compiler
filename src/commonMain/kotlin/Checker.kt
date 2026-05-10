@@ -9591,6 +9591,10 @@ class Checker(
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
                         checkHeritageTypeArgCount(type, classScope, source, fileName)
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
+                        // 17.163: TS2304 for `class C<T> extends T {}` — heritage clause
+                        // requires a value, but T resolves only to an enclosing type
+                        // parameter (no value-side binding in any outer scope).
+                        emitTs2304ForHeritageExtendsTypeParam(type.expression, classScope, scope, source, fileName)
                     }
                 }
                 val ctorParamNames = extractCtorParamNames(stmt.members)
@@ -9610,6 +9614,9 @@ class Checker(
                         checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
                         checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
                         type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                        // 17.163: TS2312 for `interface I<T> extends T {}` — interface
+                        // can only extend an object type, not a bare type parameter.
+                        emitTs2312ForInterfaceExtendsTypeParam(type.expression, ifaceScope, scope, source, fileName)
                     }
                 }
                 for (member in stmt.members) {
@@ -9840,6 +9847,65 @@ class Checker(
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    /**
+     * 17.163: Emit TS2304 "Cannot find name 'T'." when a class heritage clause
+     * extends a bare Identifier whose only resolution is a type parameter in
+     * the enclosing class scope. Type parameters live in the type space; they
+     * have no value-side existence, so they can't appear in `extends` of a
+     * value-position class declaration.
+     *
+     * @param parentScope scope BEFORE class type parameters were added — used to
+     *   detect whether the name has a value-side binding outside the class.
+     */
+    private fun emitTs2304ForHeritageExtendsTypeParam(
+        expr: Expression, classScope: NameScope, parentScope: NameScope,
+        source: String, fileName: String,
+    ) {
+        if (expr !is Identifier) return
+        if (!classScope.isTypeParam(expr.text)) return
+        // If the name ALSO has a value-side binding in the parent scope (e.g. an
+        // outer var/class with the same name shadowed by the type param), defer
+        // to the existing TS2304 path which handles bona fide unresolved names.
+        if (parentScope.has(expr.text)) return
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find name '${expr.text}'.",
+            category = DiagnosticCategory.Error,
+            code = 2304,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = expr.text.length,
+        ))
+    }
+
+    /**
+     * 17.163: Emit TS2312 "An interface can only extend an object type or
+     * intersection of object types with statically known members." when an
+     * interface heritage clause extends a bare Identifier resolving only to a
+     * type parameter in the enclosing interface scope.
+     */
+    private fun emitTs2312ForInterfaceExtendsTypeParam(
+        expr: Expression, ifaceScope: NameScope, parentScope: NameScope,
+        source: String, fileName: String,
+    ) {
+        if (expr !is Identifier) return
+        if (!ifaceScope.isTypeParam(expr.text)) return
+        if (parentScope.has(expr.text)) return
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "An interface can only extend an object type or intersection of object types with statically known members.",
+            category = DiagnosticCategory.Error,
+            code = 2312,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = expr.text.length,
         ))
     }
 
