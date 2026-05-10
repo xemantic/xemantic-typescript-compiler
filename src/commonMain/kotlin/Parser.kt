@@ -488,7 +488,10 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             if (isDeclare) parseDeclareDeclaration() else parseExpressionStatement()
         }
         CaseKeyword -> {
-            // `case` without `switch` — error recovery: skip the token and return null
+            // 17.205: TS1128 — `case` outside a switch is a stray keyword.
+            // Report at the keyword position with length 4 then skip it for
+            // error recovery so subsequent statements parse.
+            reportError("Declaration or statement expected.", code = 1128, overrideLength = 4)
             nextToken()
             null
         }
