@@ -31968,6 +31968,24 @@ interface DataView {
                         ))
                     }
                 }
+                is TypeAliasDeclaration -> {
+                    // 17.195: TS2457 — type alias name cannot be a reserved
+                    // type keyword (e.g. `type undefined = string`).
+                    if (stmt.name.text in PREDEFINED_TYPE_NAMES) {
+                        val start = stmt.name.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type alias name cannot be '${stmt.name.text}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2457,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = stmt.name.text.length,
+                        ))
+                    }
+                }
                 is ModuleDeclaration -> {
                     (stmt.body as? ModuleBlock)?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
                 }
