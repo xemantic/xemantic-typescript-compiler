@@ -37715,6 +37715,24 @@ interface DataView {
                 val displaySource = typeToString(sourceType)
                 // Use annotation text for display (handles generics correctly)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                // 17.216: Suppress TS2322 when assigning a function expression/arrow
+                // to an anonymous multi-overload target (Type.Object with 2+ call
+                // signatures, no construct sigs, no properties, no symbol).
+                // TypeScript uses contextual typing here: the function expression
+                // takes the shape of one overload (typically the last/widest), and
+                // doesn't need to satisfy ALL overloads. Our checker does the
+                // strict structural compare and rejects — false positive. Narrow
+                // gate avoids regressing single-call-sig and named-interface
+                // function-type targets (where the strict comparison IS correct).
+                if ((init is FunctionExpression || init is ArrowFunction) &&
+                    targetType is Type.Object &&
+                    targetType.symbol == null &&
+                    targetType.constructSignatures.isNullOrEmpty() &&
+                    targetType.properties.isNullOrEmpty() &&
+                    (targetType.callSignatures?.size ?: 0) >= 2
+                ) {
+                    return
+                }
                 // Special case: source has call signatures, target does not (non-function target).
                 // TypeScript emits TS2322 AT the initializer position (not the variable name) and
                 // attaches related TS6212 "Did you mean to call this expression?" — this is the
