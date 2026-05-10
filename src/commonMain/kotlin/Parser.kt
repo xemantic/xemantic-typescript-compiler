@@ -897,6 +897,15 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
         val afterCloseParen = trailingComments()
         val thenStmt = parseStatement() ?: EmptyStatement()
+        // 17.176: TS1313 — `if (cond);` (then-body is `;`). Distinguish a real
+        // EmptyStatement (parseEmptyStatement set pos to the `;` position) from
+        // the `?: EmptyStatement()` fallback above (synthetic, pos=0).
+        if (thenStmt is EmptyStatement && thenStmt.pos > 0) {
+            reportError(
+                "The body of an 'if' statement cannot be the empty statement.",
+                code = 1313, overrideStart = thenStmt.pos, overrideLength = 1,
+            )
+        }
         // Capture trailing comments from the then-block's closing brace BEFORE checking for else.
         // This way `if (p) { } // err` captures the comment even when `else` follows on the next line.
         // We must read now because nextToken() in parseOptional/ElseKeyword will reset trailingComments.
