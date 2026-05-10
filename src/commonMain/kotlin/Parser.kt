@@ -1493,9 +1493,21 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
 
     private fun parseHeritageClauses(isClass: Boolean = false): List<HeritageClause>? {
         val clauses = mutableListOf<HeritageClause>()
+        var hasExtends = false
         var hasImplements = false
         while (token == SyntaxKind.ExtendsKeyword || token == SyntaxKind.ImplementsKeyword) {
             val clauseToken = token
+            // 17.173: TS1172 / TS1175 — duplicate `extends` / `implements` clause.
+            // Squiggle on the duplicate keyword itself (length 7 / 10).
+            if (clauseToken == SyntaxKind.ExtendsKeyword && hasExtends) {
+                reportError("'extends' clause already seen.", code = 1172,
+                    overrideStart = getPos(), overrideLength = "extends".length)
+            }
+            if (clauseToken == SyntaxKind.ImplementsKeyword && hasImplements) {
+                reportError("'implements' clause already seen.", code = 1175,
+                    overrideStart = getPos(), overrideLength = "implements".length)
+            }
+            if (clauseToken == SyntaxKind.ExtendsKeyword) hasExtends = true
             if (clauseToken == SyntaxKind.ImplementsKeyword) hasImplements = true
             if (clauseToken == SyntaxKind.ExtendsKeyword && hasImplements) {
                 reportError("'extends' clause must precede 'implements' clause.", code = 1173)
