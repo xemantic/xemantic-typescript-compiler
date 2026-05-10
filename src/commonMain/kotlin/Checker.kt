@@ -47986,7 +47986,15 @@ interface DataView {
         // numeric-looking string. Enums have implicit number-index sigs (member name
         // string -> number for forward, number -> name for reverse); a non-numeric string
         // key bypasses both. Gated on noImplicitAny/strict.
-        if (arg is StringLiteralNode && (options.noImplicitAny || options.strict)) {
+        //
+        // 17.162: When NOT in strict mode, the same shape (enum + non-numeric string key
+        // not matching a known member) emits TS2339 "Property 'X' does not exist on
+        // type 'typeof E'." instead — TypeScript's behavior for `const enum E { A }; E["B"]`
+        // and equivalent regular-enum cases. The const-enum case is the primary target
+        // (`constEnumBadPropertyNames_ts`); regular enums get the same diagnostic for
+        // non-member non-numeric string keys because the property still doesn't exist on
+        // the enum's static shape.
+        if (arg is StringLiteralNode) {
             val recvIdent = expr.expression as? Identifier
             if (recvIdent != null) {
                 val recvSym = globals[recvIdent.text]
@@ -47995,16 +48003,29 @@ interface DataView {
                     val isKnownMember = recvSym.exports?.containsKey(arg.text) == true
                     if (!isNumericKey && !isKnownMember) {
                         val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Element implicitly has an 'any' type because index expression is not of type 'number'.",
-                            category = DiagnosticCategory.Error,
-                            code = 7015,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = arg.pos,
-                            length = (arg.rawText?.length ?: arg.text.length) + 2,
-                        ))
+                        if (options.noImplicitAny || options.strict) {
+                            diagnostics.add(Diagnostic(
+                                message = "Element implicitly has an 'any' type because index expression is not of type 'number'.",
+                                category = DiagnosticCategory.Error,
+                                code = 7015,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = arg.pos,
+                                length = (arg.rawText?.length ?: arg.text.length) + 2,
+                            ))
+                        } else {
+                            diagnostics.add(Diagnostic(
+                                message = "Property '${arg.text}' does not exist on type 'typeof ${recvIdent.text}'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2339,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = arg.pos,
+                                length = (arg.rawText?.length ?: arg.text.length) + 2,
+                            ))
+                        }
                         return
                     }
                 }
