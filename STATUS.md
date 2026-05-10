@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,554 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,555 / 10,078 tests passing (~85%).
+
+**17.151 (2026-05-10, +1)** — TS2842 for unused destructured renames in
+interface SetAccessor signatures. Flips
+`declarationEmitBindingPatternsUnused_ts` (1 test). Closes the residual gap
+left by 17.150: that walker covered FunctionType / ConstructorType /
+TypeLiteral.MethodDeclaration / TypeLiteral.Constructor and
+InterfaceDeclaration.MethodDeclaration members, but missed
+`InterfaceDeclaration.SetAccessor` (e.g. `interface I { set x({ name:
+alias }: Named); }`). Fix: extend the InterfaceDeclaration member-iteration
+in `checkUnresolvedInStatementCore` (Checker.kt ~9638) with `is SetAccessor`
+and `is GetAccessor` branches. The SetAccessor branch builds a child scope,
+adds parameters to it, walks param `type` annotations, and calls
+`checkUnusedDestructuredRenames(member.parameters, null, ...)` (no return
+type — setters are void by definition). The GetAccessor branch is added for
+parity but only walks the return type (getters never have parameters with
+destructured renames).
+
+Net delta: 1521 → 1520 failed (8554 → 8555 passing). Zero regressions.
 
 **17.150 (2026-05-10, +3)** — TS2842 emission for unused destructured-property
 renames in function-TYPE positions + companion FP suppressions for `typeof

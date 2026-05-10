@@ -9641,6 +9641,17 @@ class Checker(
                                 param.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                             }
                         }
+                        is SetAccessor -> {
+                            val setScope = ifaceScope.child()
+                            addParamsToScope(member.parameters, setScope)
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
+                            }
+                            checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
+                        }
+                        is GetAccessor -> {
+                            member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                        }
                         else -> {}
                     }
                 }
