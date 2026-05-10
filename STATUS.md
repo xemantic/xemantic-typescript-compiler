@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,630 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,631 / 10,078 tests passing (~85%).
+
+**17.209 (2026-05-10, +1)** — TS2422 instead of TS2304 for `class
+C<T> implements T`. Closes `typeParameterAsBaseClass_ts`. In the
+ClassDeclaration heritage walk (Checker.kt ~9758), check
+`clause.token == ImplementsKeyword` and the type expression is a
+bare Identifier matching a type parameter (and not also bound in
+the parent value scope). When matched, emit TS2422 directly and
+`continue`; skips the value-position TS2304 emission and the
+typeArguments walk that don't apply to a bare identifier.
 
 **17.208 (2026-05-10, +3)** — TS2384/TS2383/TS2386 for overload modifier
 mismatch. Closes `overloadModifiersMustAgree_ts` plus 2 bonus.

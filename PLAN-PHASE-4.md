@@ -2918,6 +2918,21 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-10 (17.209, 8630 → 8631, +1) — TS2422 swap for
+  `class C<T> implements T`.** Closes `typeParameterAsBaseClass_ts`.
+  Currently emits TS2304 "Cannot find name 'T'" because
+  `checkUnresolvedInExpr` treats the heritage expression as a value
+  reference and the type parameter doesn't have a value-side binding.
+  TypeScript instead resolves T as a TYPE in this position (it IS a
+  type parameter) and rejects with TS2422 because type parameters
+  aren't object types. In the ClassDeclaration heritage walk
+  (Checker.kt ~9758), guard the existing
+  `checkUnresolvedInExpr`/`emitTs2304ForHeritageExtendsTypeParam`
+  pair with: `if (ImplementsKeyword && Identifier && isTypeParam(text)
+  && !parentScope.has(text))` then emit TS2422 directly and
+  `continue`. The `extends` branch is unchanged (T as value is still
+  TS2304). No FP regressions.
+
   **Session 2026-05-10 (17.208, 8627 → 8630, +3) — TS2384/2383/2386
   for overload modifier consistency.** Closes
   `overloadModifiersMustAgree_ts` (errors baseline) plus 2 bonus
