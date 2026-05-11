@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,644 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,645 / 10,078 tests passing (~85%).
+
+**17.222 (2026-05-11, +1)** — TS2306 "File 'X' is not a module." for
+`import * as Y from 'pkg'` where the bare specifier resolves via
+node_modules walk-up to a script-shaped `.d.ts` (no imports/exports).
+Closes `duplicatePackage_globalMerge_ts`. Two emissions per test file:
+one for each `import * as React from 'react'` resolving through
+`/node_modules/@types/react/index.d.ts` and
+`/tests/node_modules/@types/react/index.d.ts` respectively.
+
+New `checkNamespaceImportOfNonModule()` (Checker.kt ~15500) mirrors
+the existing `checkImportEqualsRequireOfNonModule` flow but is scoped
+to `ImportDeclaration` with `NamespaceImport` clause and bare
+(non-relative) specifiers. New helper
+`resolveBareSpecifierViaNodeModules(specifier, contextFileName)` walks
+up from the importing file's directory, checking at each level for
+`node_modules/<spec>/index.{d.ts,ts}` and
+`node_modules/@types/<spec>/index.{d.ts,ts}` — closer node_modules
+directories win. When the resolved file is not a module (per
+`isModuleFile`), emits TS2306 with the absolute resolved path as the
+display name. Multi-file mode only (gated same as the sibling
+function). Squiggle covers the full quoted specifier
+(`moduleName.length + 2` for the quotes).
 
 **17.221 (2026-05-11, +1)** — TS2674 "Constructor of class 'X' is
 protected and only accessible within the class declaration." for
