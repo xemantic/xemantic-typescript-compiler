@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,641 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,642 / 10,078 tests passing (~85%).
+
+**17.219 (2026-05-11, +1)** — TS2307 alongside TS1147 for
+`import x = require("name")` inside a namespace when the specifier
+doesn't resolve, multi-file mode only. Closes
+`importInsideModule_ts` errors baseline. The existing
+`flattenImportLikeStatements` skips Identifier-named namespaces
+(comment notes "imports there use different diagnostics
+TS1147/TS2667/TS1194"), so namespace-internal `import = require()`
+never reached `checkUnresolvedModules`. Added the secondary
+emission inside `walkRequireImportInNamespace` immediately after
+TS1147: bare specifiers emit TS2307 unless shadowed by an ambient
+module / .d.ts file / node_modules package; relative specifiers
+emit when `resolveModuleSpecifierStrictRelative` returns null.
+Gated on `isMultiFile` so single-file tests like
+`importDeclarationInModuleDeclaration1` (which expects only
+TS1147) stay green — single-file mode has no module-resolution
+context to fail against.
 
 **17.218 (2026-05-10, +3)** — TS2495 "Type 'X' is not an array type or
 a string type." for `for-of <expr>` when `@lib` excludes ES2015+

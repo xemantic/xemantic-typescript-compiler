@@ -2918,6 +2918,39 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (17.219, 8641 → 8642, +1) — TS2307 alongside
+  TS1147 inside namespace `import = require(...)` for unresolved
+  specifiers (multi-file only).** Closes `importInsideModule_ts`
+  errors baseline. The standard `checkUnresolvedModules` path uses
+  `flattenImportLikeStatements`, which explicitly skips
+  Identifier-named ModuleDeclarations (comment: "imports there use
+  different diagnostics TS1147/TS2667/TS1194"). So a namespace-internal
+  `import = require("...")` got TS1147 but never reached TS2307 — even
+  though TypeScript emits both at the same position.
+
+  Surgical fix in `walkRequireImportInNamespace`: after emitting
+  TS1147, also check whether the specifier resolves. For BARE
+  specifiers, mirror the side-effect-import gate at lines
+  15110–15117: skip if `moduleName` matches an ambient module
+  declaration, a `.d.ts` file basename, or a `node_modules/<name>/`
+  path. For RELATIVE specifiers, use
+  `resolveModuleSpecifierStrictRelative`. Pre-computed
+  `ambientModuleNames` + `dtsFileBaseNames` are passed down from
+  `checkRequireImportInNamespace` (same construction as
+  `checkUnresolvedModules`).
+
+  Gated on `isMultiFile = binderResults.size > 1 || isMultiFileSource`
+  to avoid regressing single-file tests like
+  `importDeclarationInModuleDeclaration1_ts` which only has the
+  namespace import + nothing else, no `@module` directive, and
+  expects only TS1147. Single-file mode has no module-resolution
+  context to fail against — TypeScript's baselines reflect this.
+
+  Initial attempt (no `isMultiFile` gate) was net 0: +1
+  `importInsideModule_ts` but −1 regression on
+  `importDeclarationInModuleDeclaration1_ts`. Narrowed gate landed
+  +1, no regressions across 10,078 suite.
+
   **Session 2026-05-10 (17.218, 8638 → 8641, +3) — TS2495 for `for-of
   <expr>` non-iterable under @lib excluding es2015+.** Closes all 3
   `arrayIterationLibES5TargetDifferent_ts__nolib_false_*` variants

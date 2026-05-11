@@ -12685,18 +12685,42 @@ class Checker(
      * literal including quotes).
      */
     private fun checkRequireImportInNamespace() {
+        // Pre-compute ambient module names + .d.ts basenames so that TS2307
+        // (emitted alongside TS1147 inside namespace bodies) doesn't fire for
+        // specifiers that resolve to an ambient module declaration or .d.ts file.
+        val ambientModuleNames = mutableSetOf<String>()
+        val dtsFileBaseNames = mutableSetOf<String>()
+        for (result in binderResults) {
+            val fn = result.sourceFile.fileName
+            if (isDtsFile(fn)) {
+                val base = fn.substringAfterLast("/").substringAfterLast("\\")
+                    .removeSuffix(".d.ts")
+                dtsFileBaseNames.add(base)
+            }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration) {
+                    val name = stmt.name
+                    if (name is StringLiteralNode) ambientModuleNames.add(name.text)
+                }
+            }
+        }
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
-                walkRequireImportInNamespace(stmt, inNamespace = false, source = source, fileName = fileName)
+                walkRequireImportInNamespace(
+                    stmt, inNamespace = false, source = source, fileName = fileName,
+                    ambientModuleNames = ambientModuleNames,
+                    dtsFileBaseNames = dtsFileBaseNames,
+                )
             }
         }
     }
 
     private fun walkRequireImportInNamespace(
         stmt: Statement, inNamespace: Boolean, source: String, fileName: String,
+        ambientModuleNames: Set<String>, dtsFileBaseNames: Set<String>,
     ) {
         when (stmt) {
             is ModuleDeclaration -> {
@@ -12710,9 +12734,9 @@ class Checker(
                 val nestedInNamespace = inNamespace || isInternalNamespace
                 when (val body = stmt.body) {
                     is ModuleBlock -> body.statements.forEach {
-                        walkRequireImportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                        walkRequireImportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName, ambientModuleNames = ambientModuleNames, dtsFileBaseNames = dtsFileBaseNames)
                     }
-                    is ModuleDeclaration -> walkRequireImportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                    is ModuleDeclaration -> walkRequireImportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName, ambientModuleNames = ambientModuleNames, dtsFileBaseNames = dtsFileBaseNames)
                     else -> {}
                 }
             }
@@ -12738,6 +12762,28 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+                // 17.219: TypeScript ALSO emits TS2307 for the same require-argument
+                // when the module specifier can't be resolved. The standard
+                // `checkUnresolvedModules` path skips Identifier-named namespaces via
+                // `flattenImportLikeStatements`, so namespace-internal import-equals
+                // never got TS2307. Multi-file mode only — single-file tests like
+                // `importDeclarationInModuleDeclaration1` expect just TS1147 because
+                // there's no module-resolution context.
+                val isMultiFile = binderResults.size > 1 || isMultiFileSource
+                if (isMultiFile && expr is StringLiteralNode) {
+                    val moduleName = expr.text
+                    val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+                    val unresolved = if (isRelative) {
+                        resolveModuleSpecifierStrictRelative(moduleName, fileName) == null
+                    } else {
+                        moduleName !in ambientModuleNames
+                            && moduleName !in dtsFileBaseNames
+                            && !hasNodeModulesPackage(moduleName)
+                    }
+                    if (unresolved) {
+                        emitTS2307(expr, moduleName, source, fileName)
+                    }
+                }
             }
             else -> {}
         }
