@@ -2918,6 +2918,37 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (17.220, 8642 → 8643, +1) — TS2538 for
+  class-instance-typed index via the `new Foo[a, b, c]` syntax
+  artifact.** Closes `objectCreationOfElementAccessExpression_ts`.
+  TypeScript parses `new Foo[X]` as `new (Foo[X])` — an
+  ElementAccessExpression as the constructor callee, with `X` (here
+  a comma expression `new IceCream(...), Cookie(...), new Cookie(...)`)
+  as the index. We already emitted TS2348 for the bare `Cookie(...)`
+  call inside the comma but missed the TS2538 for the index type
+  ("Type 'Cookie' cannot be used as an index type.").
+
+  Surgical addition in `checkSingleElementAccess` between the existing
+  array-typed-index TS2538 branch and the TS7053 branch. Narrow gate:
+  arg is a `BinaryExpression(Comma)`, AND its rightmost operand
+  (walked iteratively through nested comma BinaryExpressions) is a
+  `NewExpression` whose callee is an `Identifier` resolving via
+  `globals[text]` to a symbol with a `ClassDeclaration` in its
+  declarations. Squiggle covers the full arg span via
+  `expressionTrueEnd`.
+
+  Display name uses the class identifier text directly rather than
+  routing through `getReturnTypeOfNewExpression` + `typeToString`.
+  Reason: for derived classes (Cookie extends MonsterFood extends
+  Food), the inherited construct signature's `resolvedReturnType`
+  resolves to the base class (`Food`), so `typeToString` would
+  display "Food" not "Cookie". The user's intent (and TypeScript's
+  display) is the directly-referenced class name, which we already
+  have from the parsed Identifier node — no type-system roundtrip
+  needed.
+
+  Verified +1 with zero regressions across 10,078 suite.
+
   **Session 2026-05-11 (17.219, 8641 → 8642, +1) — TS2307 alongside
   TS1147 inside namespace `import = require(...)` for unresolved
   specifiers (multi-file only).** Closes `importInsideModule_ts`

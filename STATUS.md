@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,642 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,643 / 10,078 tests passing (~85%).
+
+**17.220 (2026-05-11, +1)** — TS2538 "Type 'X' cannot be used as an
+index type." for the `new Foo[a, b, c]` syntax artifact. Closes
+`objectCreationOfElementAccessExpression_ts`. The TS parser treats
+`new Foo[X]` as `new (Foo[X])` — an ElementAccessExpression as the
+constructor callee, with `X` (a comma expression) as the index. We
+were emitting TS2348 for the bare `Cookie(...)` call inside the comma
+but missing the TS2538 for the index type. Narrow gate in
+`checkSingleElementAccess`: arg is a `BinaryExpression(Comma)` whose
+rightmost operand is a `NewExpression` on a class identifier (looked
+up directly via `globals[ident.text]` for `ClassDeclaration` in
+declarations). Display name uses the class identifier text directly
+to dodge `getReturnTypeOfNewExpression`'s base-class-return-type
+quirk for derived classes. Squiggle covers the entire arg span via
+`expressionTrueEnd`.
 
 **17.219 (2026-05-11, +1)** — TS2307 alongside TS1147 for
 `import x = require("name")` inside a namespace when the specifier

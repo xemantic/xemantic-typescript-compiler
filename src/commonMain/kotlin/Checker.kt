@@ -49509,6 +49509,39 @@ interface DataView {
                 }
             }
         }
+        // 17.220: TS2538 — class-instance-typed index via comma expression. Targets the
+        // `new Foo[a, b, c]` syntax artifact (parsed as `new (Foo[<comma-expr>])`),
+        // where the rightmost operand is `new ClassName(...)`. Narrow gate: arg is a
+        // comma BinaryExpression whose rightmost operand is a NewExpression on a
+        // class identifier. Type display uses the class identifier text directly
+        // (avoids `getReturnTypeOfNewExpression`'s base-class-return-type quirk
+        // for derived classes). Squiggle covers full arg span.
+        if (arg is BinaryExpression && arg.operator == SyntaxKind.Comma) {
+            var rightmost: Expression = arg
+            while (rightmost is BinaryExpression && rightmost.operator == SyntaxKind.Comma) {
+                rightmost = rightmost.right
+            }
+            val rightmostNew = rightmost as? NewExpression
+            val ctorIdent = rightmostNew?.expression as? Identifier
+            val ctorSym = ctorIdent?.let { globals[it.text] }
+            val isClass = ctorSym?.declarations?.any { it is ClassDeclaration } == true
+            if (ctorIdent != null && isClass) {
+                val argEnd = expressionTrueEnd(arg)
+                val length = (argEnd - arg.pos).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${ctorIdent.text}' cannot be used as an index type.",
+                    category = DiagnosticCategory.Error,
+                    code = 2538,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = arg.pos,
+                    length = length,
+                ))
+                return
+            }
+        }
         // 17.116: TS7053 "Element implicitly has an 'any' type because expression of
         // type 'any' can't be used to index type 'X'." Fires when the key expression
         // resolves to `any` AND the receiver is an empty `{}`-typed value (Type.Object
