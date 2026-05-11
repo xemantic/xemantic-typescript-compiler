@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,643 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,644 / 10,078 tests passing (~85%).
+
+**17.224 (2026-05-11, +1)** — TS1005 ";' expected." at stray `)` / `]` in
+statement-start position (instead of TS1109 "Expression expected."). Closes
+`parserUnparsedTokenCrash1_ts`. Pattern: `( y = 1 ; 2 )` in `.js` file —
+after the broken paren-expr recovery emits TS1005 `)' expected at the `;`
+position, statement-loop parses `2` as ExpressionStatement, parseSemicolon
+silently returns at `)`, then statement loop is at `)` (col 13). Previously
+fell through to the else branch → parseExpressionStatement →
+parsePrimaryExpression's catch-all → TS1109 "Expression expected."
+TypeScript emits TS1005 ";' expected" here — the closing delimiter signals
+a missing statement terminator, not a missing expression.
+
+Fix: new `CloseParen, CloseBracket` arm in `parseStatement` (Parser.kt
+~500) that emits TS1005 at the delimiter (length 1), advances past the
+token, and returns null. The `parseStatements` loop sees progress
+(savedPos != tokenPos) and continues without double-skip. Narrow scope —
+only fires when stray `)` / `]` is in statement-start position; nested
+expression contexts (`(+)` etc.) still route through parsePrimaryExpression
+as before. Earlier broad parseSemicolon-level attempt (queue item 10.2)
+regressed 7 tests; this statement-level approach avoids those because
+parseSemicolon's quiet-return behavior on `)` is preserved — only the
+follow-up "what to do with that `)`" changes.
+
+Net delta: 1432 → 1431 failed (8643 → 8644 passing). Zero regressions
+across 10078-test suite. Closes the `parserUnparsedTokenCrash1_ts` skip-log
+entry (which item 10.2 had skipped citing the parseSemicolon regression).
 
 **MAINT-2 (2026-05-11, count reconciliation, no code change)** — Full-suite
 re-measurement: 10,078 / 1,432 failed / 3 skipped → 8,643 passing. STATUS.md
