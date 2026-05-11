@@ -537,6 +537,8 @@ class Checker(
         checkSameTargetReferenceCastOverlap()
         // 14''c. Check array-source -> class-target cast non-overlap for TS2352
         checkArrayToClassCastOverlap()
+        // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
+        checkJSDocVoidCastNonOverlap()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -18016,6 +18018,16 @@ class Checker(
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
 
         /**
+         * Names that look uppercase but are primitive/nullish types whose JSDoc
+         * `/** @type {T} */ (void 0)` casts are NOT TS2352 candidates. Used by
+         * [checkJSDocVoidCastNonOverlap] to skip primitive wrapper types and
+         * `Object`-like types that legitimately accept `undefined`.
+         */
+        private val JSDOC_VOID_CAST_SKIP_NAMES = setOf(
+            "Object", "Function", "Any", "Unknown",
+        )
+
+        /**
          * Properties inherited by all objects from Object prototype.
          * Not considered "missing" in TS2740 because all objects have them.
          */
@@ -30999,6 +31011,87 @@ interface DataView {
             start = start,
             length = length,
             relatedInformation = related,
+        ))
+    }
+
+    /**
+     * TS2352: "Conversion of type 'undefined' to type 'T' may be a mistake..."
+     * for `/** @type {T} */ (void 0)` casts in JS-like files where the target
+     * type is a named non-primitive (uppercase identifier). The cast source
+     * is `void 0` (or any `VoidExpression`) which evaluates to `undefined`;
+     * casting to a non-overlapping type prompts TypeScript's "convert to
+     * unknown first" diagnostic.
+     *
+     * Squiggle is positioned at the type name inside the JSDoc comment text
+     * (not on the cast expression itself), matching TypeScript's baseline.
+     * Position is computed by scanning the source backwards from the
+     * ParenthesizedExpression's `(` for the most recent `@type {NAME` pattern.
+     */
+    private fun checkJSDocVoidCastNonOverlap() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val isJsLike = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+            if (!isJsLike) continue
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                walkJSDocVoidCastInStmt(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun walkJSDocVoidCastInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> walkJSDocVoidCastInExpr(stmt.expression, source, fileName)
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkJSDocVoidCastInExpr(it, source, fileName) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkJSDocVoidCastInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ParenthesizedExpression -> emitTS2352IfJSDocVoidCast(expr, source, fileName)
+            is BinaryExpression -> {
+                // Assignment RHS — e.g. `module.exports = /** @type {T} */(void 0)`.
+                walkJSDocVoidCastInExpr(expr.right, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS2352IfJSDocVoidCast(
+        expr: ParenthesizedExpression, source: String, fileName: String,
+    ) {
+        val castType = expr.jsdocCastType ?: return
+        if (expr.expression !is VoidExpression) return
+        val typeName = (castType as? TypeReference)?.typeName as? Identifier ?: return
+        val name = typeName.text
+        if (name.isEmpty() || !name[0].isUpperCase()) return
+        if (name in JSDOC_VOID_CAST_SKIP_NAMES) return
+        // Find the name's source position by scanning backwards from `(` for `@type {NAME`.
+        val parenPos = expr.pos
+        val searchStart = (parenPos - 256).coerceAtLeast(0)
+        if (searchStart >= parenPos) return
+        val searchText = source.substring(searchStart, parenPos)
+        val pattern = "@type {$name"
+        val idxInSearch = searchText.lastIndexOf(pattern)
+        if (idxInSearch < 0) return
+        val nameStart = searchStart + idxInSearch + "@type {".length
+        val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type 'undefined' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error,
+            code = 2352,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = nameStart,
+            length = name.length,
         ))
     }
 

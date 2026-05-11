@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,645 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,646 / 10,078 tests passing (~85%).
+
+**17.223 (2026-05-11, +1)** — TS2352 "Conversion of type 'undefined' to
+type 'T' may be a mistake..." for `/** @type {T} */ (void 0)` casts in
+JS-like files where the cast target is a named non-primitive
+(uppercase-leading Identifier). Closes
+`checkJsTypeDefNoUnusedLocalMarked_ts`. Pattern:
+`module.exports = /** @type {FooFun} */(void 0);` — TS2352 fires at
+the position of the type name `FooFun` INSIDE the JSDoc comment,
+6-char squiggle. The parser was already capturing `jsdocCastType` on
+`ParenthesizedExpression` (17.140b infrastructure); the new walker
+emits the diagnostic when the inner expression is a `VoidExpression`.
+
+New `checkJSDocVoidCastNonOverlap()` (Checker.kt ~30930): iterates
+JS-like binderResults' top-level `ExpressionStatement` (recurses into
+`BinaryExpression.right` for `module.exports = ...` patterns) and
+`VariableStatement` initializers. Emits TS2352 when the
+`ParenthesizedExpression` has a non-null `jsdocCastType` resolving to
+a single-Identifier `TypeReference` whose name starts uppercase and
+isn't in a skip set (`Object`, `Function`, `Any`, `Unknown`). Position
+computed by scanning source backwards 256 chars from the
+ParenthesizedExpression's `(` for the most recent `@type {NAME`
+substring, then `nameStart = match + "@type {".length`.
 
 **17.222 (2026-05-11, +1)** — TS2306 "File 'X' is not a module." for
 `import * as Y from 'pkg'` where the bare specifier resolves via
