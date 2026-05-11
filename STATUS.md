@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,646 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,643 / 10,078 tests passing (~85%).
+
+**MAINT-2 (2026-05-11, count reconciliation, no code change)** — Full-suite
+re-measurement: 10,078 / 1,432 failed / 3 skipped → 8,643 passing. STATUS.md
+had drifted +3 from reality. Tracing the chain via subsequent commits'
+"failed" measurements: 17.220 left the suite at 1,432 failed (8,643). 17.221
+claimed +1 without explicitly recording the failed count; 17.222 then
+measured 1,434 failed pre-commit, implying 17.221's net was actually -2
+(1 target flipped + 3 unrelated regressions). 17.222 and 17.223 each +1
+from their measured baselines, landing the actual current state at 1,432 /
+8,643. The 3 regressions introduced by 17.221 are not surfaced by
+`find_candidates.py --fresh` (returns 0/0/0), meaning they have diff > 3
+from baseline or are in tests not yet in the candidate-finder corpus.
+17.221's TS2674 walker uses `globals[ident.text]` for the class symbol
+lookup — if the regression source is identified in a future session, the
+likely root cause is cross-file class-name collision in `globals` (the
+walker fires on the wrong class). Logged here so future agents have an
+accurate baseline.
 
 **17.223 (2026-05-11, +1)** — TS2352 "Conversion of type 'undefined' to
 type 'T' may be a mistake..." for `/** @type {T} */ (void 0)` casts in
